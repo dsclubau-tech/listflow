@@ -1,0 +1,105 @@
+import { auth } from "@/auth";
+import { prisma } from "@/lib/prisma";
+import { NextResponse } from "next/server";
+
+export async function POST(request: Request) {
+  const session = await auth();
+
+  if (!session?.user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const {
+    title,
+    description,
+    price,
+    quantity,
+    category,
+    condition,
+    images,
+    itemSpecifics,
+    storeId,
+    asin,
+  } = body;
+
+  // Validate required fields
+  if (!title?.trim()) {
+    return NextResponse.json({ error: "Title is required" }, { status: 400 });
+  }
+  if (!description?.trim()) {
+    return NextResponse.json(
+      { error: "Description is required" },
+      { status: 400 }
+    );
+  }
+  if (price === undefined || price === null || price < 0) {
+    return NextResponse.json(
+      { error: "Valid price is required" },
+      { status: 400 }
+    );
+  }
+  if (!quantity || quantity < 1) {
+    return NextResponse.json(
+      { error: "Quantity must be at least 1" },
+      { status: 400 }
+    );
+  }
+  if (!category?.trim()) {
+    return NextResponse.json(
+      { error: "Category is required" },
+      { status: 400 }
+    );
+  }
+  if (!storeId) {
+    return NextResponse.json(
+      { error: "Store is required" },
+      { status: 400 }
+    );
+  }
+  if (!images || !Array.isArray(images) || images.length === 0) {
+    return NextResponse.json(
+      { error: "At least one image is required" },
+      { status: 400 }
+    );
+  }
+
+  // Validate store exists
+  const store = await prisma.store.findUnique({
+    where: { id: storeId },
+  });
+
+  if (!store) {
+    return NextResponse.json({ error: "Store not found" }, { status: 400 });
+  }
+
+  // Create product
+  const product = await prisma.product.create({
+    data: {
+      title: title.trim(),
+      description: description.trim(),
+      price,
+      quantity,
+      category: category.trim(),
+      condition: condition || "New",
+      images,
+      itemSpecifics: itemSpecifics || {},
+      status: "DRAFT",
+      storeId,
+      createdById: session.user.id,
+      asin: asin || null,
+    },
+    include: {
+      store: true,
+      createdBy: true,
+    },
+  });
+
+  return NextResponse.json(product, { status: 201 });
+}

@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "postinstall": "playwright install chromium"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"
@@ -17,11 +18,14 @@
     "@types/bcryptjs": "^2.4.6",
     "bcryptjs": "^3.0.3",
     "dotenv": "^16.4.7",
+    "fast-xml-parser": "^5.5.8",
     "next": "16.1.6",
     "next-auth": "^5.0.0-beta.30",
+    "playwright": "^1.58.2",
     "prisma": "^7.5.0",
     "react": "19.2.3",
-    "react-dom": "19.2.3"
+    "react-dom": "19.2.3",
+    "react-quill-new": "^3.8.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
