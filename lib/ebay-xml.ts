@@ -16,9 +16,43 @@ function escapeXml(str: string): string {
 
 /**
  * Builds a valid eBay AddItem XML request body for the Trading API.
+ * Throws if any business policy ID is missing.
+ *
+ * Location/country/currency/site are read from itemSpecifics using _-prefixed
+ * internal keys set by InlineEditForm. These keys are NOT emitted as ItemSpecifics.
  */
-export function buildAddItemXML(product: ProductWithStore, token: string): string {
+export function buildAddItemXML(product: ProductWithStore): string {
+  // Validate policy IDs before building XML
+  if (!product.shippingPolicyId) {
+    throw new Error("Shipping Policy is required — please select one on the Product tab.");
+  }
+  if (!product.returnPolicyId) {
+    throw new Error("Return Policy is required — please select one on the Product tab.");
+  }
+  if (!product.paymentPolicyId) {
+    throw new Error("Payment Policy is required — please select one on the Product tab.");
+  }
+
   const conditionId = product.condition === "New" ? "1000" : "3000";
+
+  // Read internal location metadata from itemSpecifics (set by InlineEditForm)
+  const specifics = product.itemSpecifics as Record<string, string> | null;
+  const country = specifics?.["_Country"] || "AU";
+  const currency = specifics?.["_Currency"] || "AUD";
+  const site = specifics?.["_Site"] || "Australia";
+  const location = specifics?.["_Location"] || "Australia";
+  const postalCode = specifics?.["_PostalCode"] || "3000";
+
+  // Use product.category as the eBay CategoryID
+  const categoryId = (product.category || "").trim();
+  if (!categoryId) {
+    throw new Error("Category is required — please enter a numeric eBay Category ID on the Product tab.");
+  }
+
+  // Ensure category is numeric
+  if (!/^\d+$/.test(categoryId)) {
+    throw new Error(`Invalid Category: "${categoryId}". eBay requires a numeric Category ID (e.g., 171114). Please update it on the Product tab.`);
+  }
 
   // Build PictureURL tags (max 12)
   const pictureUrls = product.images
@@ -26,12 +60,14 @@ export function buildAddItemXML(product: ProductWithStore, token: string): strin
     .map((url) => `      <PictureURL>${escapeXml(url)}</PictureURL>`)
     .join("\n");
 
-  // Build ItemSpecifics tags from JSON object
-  const specifics = product.itemSpecifics as Record<string, string> | null;
+  // Build ItemSpecifics tags — exclude _-prefixed internal metadata keys
   let itemSpecificsXml = "";
   if (specifics && typeof specifics === "object") {
     const entries = Object.entries(specifics).filter(
-      ([key, value]) => key.trim() !== "" && value.trim() !== ""
+      ([key, value]) =>
+        !key.startsWith("_") &&
+        key.trim() !== "" &&
+        value.trim() !== ""
     );
     if (entries.length > 0) {
       const nameValueLists = entries
@@ -46,21 +82,18 @@ export function buildAddItemXML(product: ProductWithStore, token: string): strin
 
   return `<?xml version="1.0" encoding="utf-8"?>
 <AddItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-  <RequesterCredentials>
-    <eBayAuthToken>${token}</eBayAuthToken>
-  </RequesterCredentials>
   <ErrorLanguage>en_US</ErrorLanguage>
   <WarningLevel>High</WarningLevel>
   <Item>
     <Title>${escapeXml(product.title)}</Title>
     <Description><![CDATA[${product.description}]]></Description>
     <PrimaryCategory>
-      <CategoryID>58058</CategoryID>
+      <CategoryID>${escapeXml(categoryId)}</CategoryID>
     </PrimaryCategory>
     <StartPrice>${product.price.toString()}</StartPrice>
     <CategoryMappingAllowed>true</CategoryMappingAllowed>
-    <Country>AU</Country>
-    <Currency>AUD</Currency>
+    <Country>${escapeXml(country)}</Country>
+    <Currency>${escapeXml(currency)}</Currency>
     <DispatchTimeMax>3</DispatchTimeMax>
     <ListingDuration>GTC</ListingDuration>
     <ListingType>FixedPriceItem</ListingType>
@@ -70,21 +103,20 @@ export function buildAddItemXML(product: ProductWithStore, token: string): strin
 ${pictureUrls}
     </PictureDetails>
 ${itemSpecificsXml}
-    <ReturnPolicy>
-      <ReturnsAcceptedOption>ReturnsAccepted</ReturnsAcceptedOption>
-      <RefundOption>MoneyBack</RefundOption>
-      <ReturnsWithinOption>Days_30</ReturnsWithinOption>
-      <ShippingCostPaidByOption>Buyer</ShippingCostPaidByOption>
-    </ReturnPolicy>
-    <ShippingDetails>
-      <ShippingType>Flat</ShippingType>
-      <ShippingServiceOptions>
-        <ShippingServicePriority>1</ShippingServicePriority>
-        <ShippingService>AU_Regular</ShippingService>
-        <ShippingServiceCost>0.00</ShippingServiceCost>
-      </ShippingServiceOptions>
-    </ShippingDetails>
-    <Site>Australia</Site>
+    <SellerProfiles>
+      <SellerShippingProfile>
+        <ShippingProfileID>${product.shippingPolicyId}</ShippingProfileID>
+      </SellerShippingProfile>
+      <SellerReturnProfile>
+        <ReturnProfileID>${product.returnPolicyId}</ReturnProfileID>
+      </SellerReturnProfile>
+      <SellerPaymentProfile>
+        <PaymentProfileID>${product.paymentPolicyId}</PaymentProfileID>
+      </SellerPaymentProfile>
+    </SellerProfiles>
+    <Location>${escapeXml(location)}</Location>
+    <PostalCode>${escapeXml(postalCode)}</PostalCode>
+    <Site>${escapeXml(site)}</Site>
   </Item>
 </AddItemRequest>`;
 }

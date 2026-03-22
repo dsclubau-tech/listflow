@@ -7,6 +7,8 @@ export interface ScrapedProduct {
   price: null; // always null — user sets price manually
   condition: "New"; // Amazon products are always new
   category: string;
+  categoryId: string;
+  categoryName: string;
   itemSpecifics: Record<string, string>;
   variantName: string | null;
   asin: string;
@@ -154,6 +156,8 @@ export async function scrapeAmazonProduct(url: string): Promise<ScrapedProduct> 
       price,
       condition: "New",
       category,
+      categoryId: "",
+      categoryName: "",
       itemSpecifics,
       variantName,
       asin,

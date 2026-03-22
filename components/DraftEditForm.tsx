@@ -26,6 +26,17 @@ interface Store {
   name: string;
 }
 
+interface PolicyEntry {
+  profileId: string;
+  profileName: string;
+}
+
+interface Policies {
+  shipping: PolicyEntry[];
+  returns: PolicyEntry[];
+  payment: PolicyEntry[];
+}
+
 interface DraftEditFormProps {
   isOpen: boolean;
   scrapedData: ScrapedProduct;
@@ -57,14 +68,27 @@ export default function DraftEditForm({
   const [storesLoading, setStoresLoading] = useState(true);
   const [storeId, setStoreId] = useState("");
 
+  // Policies
+  const [policies, setPolicies] = useState<Policies | null>(null);
+  const [policiesLoading, setPoliciesLoading] = useState(false);
+  const [shippingPolicyId, setShippingPolicyId] = useState("");
+  const [returnPolicyId, setReturnPolicyId] = useState("");
+  const [paymentPolicyId, setPaymentPolicyId] = useState("");
+
   // Product fields
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState("");
+  const [categoryName, setCategoryName] = useState("");
   const [condition, setCondition] = useState("New");
   const [price, setPrice] = useState("");
   const [quantity, setQuantity] = useState("1");
   const [brand, setBrand] = useState("");
   const [variant, setVariant] = useState("");
+
+  // Category suggestions
+  const [catSuggestions, setCatSuggestions] = useState<Array<{ categoryId: string; categoryName: string }>>([]);
+  const [catLoading, setCatLoading] = useState(false);
+  const [showCatDropdown, setShowCatDropdown] = useState(false);
 
   // Description
   const [description, setDescription] = useState("");
@@ -86,7 +110,8 @@ export default function DraftEditForm({
   useEffect(() => {
     if (scrapedData) {
       setTitle(scrapedData.title);
-      setCategory(scrapedData.category);
+      setCategory(scrapedData.categoryId || scrapedData.category || "");
+      setCategoryName(scrapedData.categoryName || "");
       setCondition(scrapedData.condition);
       setPrice("");
       setQuantity("1");
@@ -124,6 +149,40 @@ export default function DraftEditForm({
     fetchStores();
   }, []);
 
+  // Fetch policies when store changes
+  useEffect(() => {
+    if (!storeId) {
+      setPolicies(null);
+      setShippingPolicyId("");
+      setReturnPolicyId("");
+      setPaymentPolicyId("");
+      return;
+    }
+
+    async function fetchPolicies() {
+      setPoliciesLoading(true);
+      try {
+        const res = await fetch(`/api/policies?store=${storeId}`);
+        if (res.ok) {
+          const data = await res.json();
+          setPolicies(data);
+          // Auto-select first option if only one exists
+          if (data.shipping.length === 1) setShippingPolicyId(data.shipping[0].profileId);
+          if (data.returns.length === 1) setReturnPolicyId(data.returns[0].profileId);
+          if (data.payment.length === 1) setPaymentPolicyId(data.payment[0].profileId);
+        } else {
+          setPolicies(null);
+        }
+      } catch {
+        console.error("Failed to fetch policies");
+        setPolicies(null);
+      } finally {
+        setPoliciesLoading(false);
+      }
+    }
+    fetchPolicies();
+  }, [storeId]);
+
   // Derived
   const isSaveDisabled =
     !storeId || !price || parseFloat(price) === 0 || isSubmitting;
@@ -159,10 +218,14 @@ export default function DraftEditForm({
       quantity: parseInt(quantity),
       condition,
       category: category.trim(),
+      categoryName: categoryName.trim() || null,
       images,
       itemSpecifics: specificsObj,
       storeId,
       asin: scrapedData.asin || undefined,
+      shippingPolicyId: shippingPolicyId || undefined,
+      returnPolicyId: returnPolicyId || undefined,
+      paymentPolicyId: paymentPolicyId || undefined,
     };
 
     try {
@@ -264,6 +327,74 @@ export default function DraftEditForm({
                 )}
               </div>
 
+              {/* Policies */}
+              {storeId && (
+                <div className="space-y-3">
+                  {policiesLoading ? (
+                    <p className="text-sm text-gray-500 animate-pulse">Loading policies…</p>
+                  ) : policies ? (
+                    <>
+                      {/* Shipping Policy */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Shipping Policy
+                        </label>
+                        <select
+                          value={shippingPolicyId}
+                          onChange={(e) => setShippingPolicyId(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        >
+                          <option value="">Select shipping policy</option>
+                          {policies.shipping.map((p) => (
+                            <option key={p.profileId} value={p.profileId}>
+                              {p.profileName}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Return Policy */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Return Policy
+                        </label>
+                        <select
+                          value={returnPolicyId}
+                          onChange={(e) => setReturnPolicyId(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        >
+                          <option value="">Select return policy</option>
+                          {policies.returns.map((p) => (
+                            <option key={p.profileId} value={p.profileId}>
+                              {p.profileName}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {/* Payment Policy */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">
+                          Payment Policy
+                        </label>
+                        <select
+                          value={paymentPolicyId}
+                          onChange={(e) => setPaymentPolicyId(e.target.value)}
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        >
+                          <option value="">Select payment policy</option>
+                          {policies.payment.map((p) => (
+                            <option key={p.profileId} value={p.profileId}>
+                              {p.profileName}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </>
+                  ) : null}
+                </div>
+              )}
+
               {/* Title */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -287,18 +418,86 @@ export default function DraftEditForm({
                 )}
               </div>
 
-              {/* Category */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Category
-                </label>
-                <input
-                  type="text"
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                />
+              {/* Category — split into Name + ID */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Category Name</label>
+                  <input
+                    type="text"
+                    value={categoryName}
+                    onChange={(e) => setCategoryName(e.target.value)}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    placeholder="e.g. Charging Equipment"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">eBay Category ID</label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={category}
+                      onChange={(e) => setCategory(e.target.value)}
+                      className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      placeholder="e.g. 171114"
+                    />
+                    <button
+                      type="button"
+                      disabled={catLoading || !title.trim()}
+                      onClick={async () => {
+                        setCatLoading(true);
+                        setShowCatDropdown(false);
+                        try {
+                          const selectedStore = stores.find((s) => s.id === storeId);
+                          const storeNum = selectedStore?.name === "Store 2" ? 2 : selectedStore?.name === "Store 3" ? 3 : 1;
+                          const res = await fetch("/api/suggest-category", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ title: title.trim(), storeNumber: storeNum }),
+                          });
+                          if (res.ok) {
+                            const data = await res.json();
+                            setCatSuggestions(data);
+                            setShowCatDropdown(true);
+                          }
+                        } catch { /* silent */ }
+                        finally { setCatLoading(false); }
+                      }}
+                      className="px-3 py-2 border border-orange-500 text-orange-600 text-sm font-medium rounded-md hover:bg-orange-50 disabled:opacity-40 transition-colors whitespace-nowrap"
+                    >
+                      {catLoading ? (
+                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" /><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" /></svg>
+                      ) : "Re-suggest"}
+                    </button>
+                  </div>
+                </div>
               </div>
+              {/* Suggestion Dropdown */}
+              {showCatDropdown && (
+                <div className="mt-1 bg-white border border-gray-200 rounded-md shadow-sm divide-y divide-gray-100 max-h-48 overflow-y-auto">
+                  {catSuggestions.length === 0 ? (
+                    <p className="px-3 py-2 text-sm text-gray-500">No suggestions found — please enter the ID manually</p>
+                  ) : (
+                    catSuggestions.map((s) => (
+                      <button
+                        key={s.categoryId}
+                        type="button"
+                        onClick={() => {
+                          setCategory(s.categoryId);
+                          setCategoryName(s.categoryName);
+                          setShowCatDropdown(false);
+                        }}
+                        className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-orange-50 hover:text-orange-700 transition-colors"
+                      >
+                        {s.categoryName} <span className="text-gray-400">({s.categoryId})</span>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+              <p className="mt-1 text-xs text-gray-400">
+                Not sure of the ID? Use the Re-suggest button or find it at{" "}
+                <a href="https://www.ebay.com.au/sch/categories" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-600">ebay.com.au/sch/categories</a>
+              </p>
 
               {/* Condition */}
               <div>

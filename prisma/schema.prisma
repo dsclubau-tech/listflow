@@ -52,6 +52,7 @@ model Product {
   price         Decimal       @db.Decimal(10, 2)
   quantity      Int           @default(1)
   category      String
+  categoryName  String?
   condition     String        @default("New")
   images        String[]
   itemSpecifics Json          @default("{}")
@@ -59,6 +60,9 @@ model Product {
   ebayItemId    String?
   errorMessage  String?       @db.Text
   asin          String?
+  shippingPolicyId String?
+  returnPolicyId   String?
+  paymentPolicyId  String?
   storeId       String
   createdById   String
   createdAt     DateTime      @default(now())

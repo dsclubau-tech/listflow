@@ -2,7 +2,8 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { buildAddItemXML } from "@/lib/ebay-xml";
-import { callEbayAddItem, getStoreNumber, getEbayToken } from "@/lib/ebay";
+import { callEbayAddItem, getStoreNumber } from "@/lib/ebay";
+import { logger } from "@/lib/logger";
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -27,6 +28,8 @@ export async function POST(request: Request) {
     );
   }
 
+  logger.info("upload/route", "Upload request received", { productId, userId: session.user.id });
+
   // Fetch product with store relation
   const product = await prisma.product.findUnique({
     where: { id: productId },
@@ -45,15 +48,27 @@ export async function POST(request: Request) {
   }
 
   try {
-    // Resolve store number and get token
+    // Resolve store number
     const storeNumber = await getStoreNumber(product.storeId);
-    const token = getEbayToken(product.store.name);
 
-    // Build XML and call eBay
-    const xml = buildAddItemXML(product, token);
+    // Build XML and call eBay (token exchange happens inside callEbayAddItem)
+    const xml = buildAddItemXML(product);
+
+    logger.info("upload/route", "Sending AddItem request to eBay", {
+      productId,
+      storeNumber,
+      productTitle: product.title,
+    });
+
     const result = await callEbayAddItem(xml, storeNumber);
 
     if (result.success) {
+      logger.info("upload/route", "eBay AddItem succeeded", {
+        productId,
+        ebayItemId: result.itemId,
+        storeNumber,
+      });
+
       // Update product status
       await prisma.product.update({
         where: { id: productId },
@@ -73,6 +88,12 @@ export async function POST(request: Request) {
 
       return NextResponse.json({ success: true, itemId: result.itemId });
     } else {
+      logger.error("upload/route", "eBay AddItem failed", undefined, {
+        productId,
+        storeNumber,
+        ebayError: result.errorMessage,
+      });
+
       // Update product status
       await prisma.product.update({
         where: { id: productId },
@@ -98,7 +119,9 @@ export async function POST(request: Request) {
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
 
-    // Log the error
+    logger.error("upload/route", "Unhandled error in upload route", err, { productId });
+
+    // Persist error to DB
     await prisma.uploadLog.create({
       data: {
         productId,
@@ -109,9 +132,12 @@ export async function POST(request: Request) {
       },
     });
 
+    // Check if this was a validation error (throws from buildAddItemXML)
+    const isValidationError = message.includes("Policy") || message.includes("Category");
+
     return NextResponse.json(
       { success: false, error: message },
-      { status: 500 }
+      { status: isValidationError ? 422 : 500 }
     );
   }
 }

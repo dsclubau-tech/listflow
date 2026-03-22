@@ -22,11 +22,15 @@ export async function POST(request: Request) {
     price,
     quantity,
     category,
+    categoryName,
     condition,
     images,
     itemSpecifics,
     storeId,
     asin,
+    shippingPolicyId,
+    returnPolicyId,
+    paymentPolicyId,
   } = body;
 
   // Validate required fields
@@ -87,6 +91,7 @@ export async function POST(request: Request) {
       price,
       quantity,
       category: category.trim(),
+      categoryName: categoryName || null,
       condition: condition || "New",
       images,
       itemSpecifics: itemSpecifics || {},
@@ -94,6 +99,9 @@ export async function POST(request: Request) {
       storeId,
       createdById: session.user.id,
       asin: asin || null,
+      shippingPolicyId: shippingPolicyId || null,
+      returnPolicyId: returnPolicyId || null,
+      paymentPolicyId: paymentPolicyId || null,
     },
     include: {
       store: true,

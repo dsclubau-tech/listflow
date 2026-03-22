@@ -15,6 +15,8 @@ export interface ScrapedProduct {
   price: null;
   condition: "New";
   category: string;
+  categoryId: string;
+  categoryName: string;
   itemSpecifics: Record<string, string>;
   variantName: string | null;
   asin: string;
