@@ -167,6 +167,13 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
     setIsSaving(true);
     setSaveMessage(null);
 
+    // Validate category is numeric before saving
+    if (!category.trim() || !/^\d+$/.test(category.trim())) {
+      setSaveMessage({ variant: "error", text: "eBay requires a numeric Category ID (e.g. 171114). Please update the Category ID field." });
+      setIsSaving(false);
+      return false;
+    }
+
     // Country → eBay codes
     const countryCodeMap: Record<string, string> = {
       Australia: "AU",

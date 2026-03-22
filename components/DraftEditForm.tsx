@@ -110,8 +110,8 @@ export default function DraftEditForm({
   useEffect(() => {
     if (scrapedData) {
       setTitle(scrapedData.title);
-      setCategory(scrapedData.categoryId || scrapedData.category || "");
-      setCategoryName(scrapedData.categoryName || "");
+      setCategory(scrapedData.categoryId || "");
+      setCategoryName(scrapedData.categoryName || scrapedData.category || "");
       setCondition(scrapedData.condition);
       setPrice("");
       setQuantity("1");
@@ -194,6 +194,8 @@ export default function DraftEditForm({
       newErrors.price = "Please enter a selling price";
     if (title.length > 80)
       newErrors.title = "Title must be 80 characters or less";
+    if (!category.trim() || !/^\d+$/.test(category.trim()))
+      newErrors.category = "eBay requires a numeric Category ID (e.g. 171114)";
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   }
@@ -498,6 +500,9 @@ export default function DraftEditForm({
                 Not sure of the ID? Use the Re-suggest button or find it at{" "}
                 <a href="https://www.ebay.com.au/sch/categories" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-600">ebay.com.au/sch/categories</a>
               </p>
+              {errors.category && (
+                <p className="mt-1 text-xs text-red-600">{errors.category}</p>
+              )}
 
               {/* Condition */}
               <div>
