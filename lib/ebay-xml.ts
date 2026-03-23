@@ -99,7 +99,7 @@ export function buildAddItemXML(product: ProductWithStore): string {
   <ErrorLanguage>en_US</ErrorLanguage>
   <WarningLevel>High</WarningLevel>
   <Item>
-    <Title>${escapeXml(product.title)}</Title>
+    <Title>${escapeXml(product.title.slice(0, 80))}</Title>
     <Description><![CDATA[${product.description}]]></Description>
     <PrimaryCategory>
       <CategoryID>${escapeXml(categoryId)}</CategoryID>
@@ -136,4 +136,18 @@ ${itemSpecificsXml}
     <Site>${escapeXml(site)}</Site>
   </Item>
 </AddItemRequest>`;
+}
+
+/**
+ * Builds a valid eBay EndItem XML request body for the Trading API.
+ * EndingReason "NotAvailable" = seller chose to end the listing early.
+ */
+export function buildEndItemXML(ebayItemId: string, reason = "NotAvailable"): string {
+  return `<?xml version="1.0" encoding="utf-8"?>
+<EndItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <ErrorLanguage>en_US</ErrorLanguage>
+  <WarningLevel>High</WarningLevel>
+  <ItemID>${escapeXml(ebayItemId)}</ItemID>
+  <EndingReason>${escapeXml(reason)}</EndingReason>
+</EndItemRequest>`;
 }

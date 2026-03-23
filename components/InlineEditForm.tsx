@@ -101,6 +101,26 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
 
   // Description
   const [description, setDescription] = useState(product.description);
+  const [templates, setTemplates] = useState<{ id: string; name: string; content: string; isDefault: boolean }[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
+
+  // Fetch templates on mount
+  useEffect(() => {
+    fetch("/api/templates")
+      .then((res) => res.json())
+      .then((data) => {
+        setTemplates(data);
+        const defaultTemplate = data.find((t: { isDefault: boolean }) => t.isDefault);
+        if (defaultTemplate) setSelectedTemplateId(defaultTemplate.id);
+      })
+      .catch(() => {});
+  }, []);
+
+  function handleApplyTemplate() {
+    const template = templates.find((t) => t.id === selectedTemplateId);
+    if (!template) return;
+    setDescription((prev) => prev + template.content);
+  }
 
   // Images
   const [images, setImages] = useState<string[]>([...product.images]);
@@ -234,7 +254,16 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
       });
 
       if (res.ok) {
-        setSaveMessage({ text: "Saved", variant: "success" });
+        const data = await res.json();
+        // Show keyword removal toast if applicable
+        if (data.removedKeywords && data.removedKeywords.length > 0) {
+          setSaveMessage({
+            text: `The following keywords were automatically removed: ${data.removedKeywords.join(", ")}. Check your title and description.`,
+            variant: "error",
+          });
+        } else {
+          setSaveMessage({ text: "Saved", variant: "success" });
+        }
         router.refresh();
         return true;
       } else {
@@ -426,6 +455,7 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
+                maxLength={80}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
               />
               <p className={`mt-1 text-xs ${title.length > 80 ? "text-red-600 font-medium" : "text-gray-400"}`}>
@@ -693,6 +723,30 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
               </div>
             )}
             <label className="block text-sm font-medium text-gray-700 mb-2">Description</label>
+            {/* Template selector */}
+            <div className="flex items-center gap-3 text-sm text-gray-600 mb-3">
+              <span>Selected Template:</span>
+              <select
+                value={selectedTemplateId}
+                onChange={(e) => setSelectedTemplateId(e.target.value)}
+                className="border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+              >
+                <option value="">— None —</option>
+                {templates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}{t.isDefault ? " (Default)" : ""}
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                onClick={handleApplyTemplate}
+                disabled={!selectedTemplateId}
+                className="bg-orange-500 hover:bg-orange-600 text-white text-xs px-3 py-1 rounded transition-colors disabled:opacity-40"
+              >
+                Apply
+              </button>
+            </div>
             <div className="min-h-[300px]">
               <ReactQuill
                 theme="snow"

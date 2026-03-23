@@ -2,6 +2,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { logger } from "@/lib/logger";
+import { applyKeywordFilter } from "@/lib/keyword-filter";
 
 export async function PATCH(
   request: Request,
@@ -65,6 +66,21 @@ export async function PATCH(
   }
 
   try {
+    // Apply keyword blacklist filter before saving
+    const titleStr = typeof data.title === "string" ? data.title : undefined;
+    const descStr = typeof data.description === "string" ? data.description : undefined;
+    let removedKeywords: string[] = [];
+
+    if (titleStr || descStr) {
+      const filtered = await applyKeywordFilter(
+        titleStr || product.title,
+        descStr || product.description
+      );
+      if (titleStr) data.title = filtered.title;
+      if (descStr) data.description = filtered.description;
+      removedKeywords = filtered.removedKeywords;
+    }
+
     const updated = await prisma.product.update({
       where: { id },
       data,
@@ -72,7 +88,7 @@ export async function PATCH(
     });
 
     logger.info("api/products/PATCH", "Update successful", { id });
-    return NextResponse.json(updated);
+    return NextResponse.json({ ...updated, removedKeywords });
   } catch (err) {
     logger.error("api/products/PATCH", "Database update failed", err, { id });
     return NextResponse.json({ error: "Database update failed" }, { status: 500 });

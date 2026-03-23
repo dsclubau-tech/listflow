@@ -1,6 +1,7 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { applyKeywordFilter } from "@/lib/keyword-filter";
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -83,11 +84,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Store not found" }, { status: 400 });
   }
 
+  // Apply keyword blacklist filter
+  const filtered = await applyKeywordFilter(title.trim(), description.trim());
+
   // Create product
   const product = await prisma.product.create({
     data: {
-      title: title.trim(),
-      description: description.trim(),
+      title: filtered.title,
+      description: filtered.description,
       price,
       quantity,
       category: category.trim(),
@@ -109,5 +113,5 @@ export async function POST(request: Request) {
     },
   });
 
-  return NextResponse.json(product, { status: 201 });
+  return NextResponse.json({ ...product, removedKeywords: filtered.removedKeywords }, { status: 201 });
 }

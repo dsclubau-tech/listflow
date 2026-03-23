@@ -149,8 +149,13 @@ export async function scrapeAmazonProduct(url: string): Promise<ScrapedProduct> 
       return specs;
     });
 
+    // Truncate title to eBay's 80-character limit at a word boundary
+    const truncatedTitle = title.length > 80
+      ? title.slice(0, 80).replace(/\s+\S*$/, "")
+      : title;
+
     return {
-      title,
+      title: truncatedTitle,
       description,
       images,
       price,

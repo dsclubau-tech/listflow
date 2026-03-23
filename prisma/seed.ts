@@ -139,6 +139,79 @@ async function main() {
   });
   console.log(`Seeded product: ${product2.title}`);
 
+  // --- Seed Description Templates ---
+  const templates = [
+    {
+      name: "RK Ecom, 30 Day Free Return",
+      content: `<div style="font-family:Arial,sans-serif;font-size:13px;color:#333;border-top:1px solid #eee;margin-top:20px;padding-top:16px;">
+<p><strong>FREE FAST SHIPPING!</strong> (*T&Cs apply)</p>
+<p>To the best of our ability, RK ECOMMERCE endeavours to cover the shipping cost of up to $25 on every item. However, please note that this does not guarantee free shipping on every item. If the Shipping cost comes to greater than $25, you may be required to pay the difference. If this happens, you will be automatically contacted by our logistics team with further details.</p>
+<p>Are there any exemptions to the free shipping policy?</p>
+<p>In certain situations, RK ECOMMERCE may encounter difficulties in securing a courier willing to deliver to the customer's address, especially in remote and rural areas. In these cases, a shipping charge may apply.</p>
+<p><strong>Returns:</strong> We accept returns within 30 days of delivery. Item must be in original condition. Return shipping is FREE.</p>
+</div>`,
+      isDefault: true,
+    },
+    {
+      name: "RK Ecom, Buyer Pay For Return 30 Days",
+      content: `<div style="font-family:Arial,sans-serif;font-size:13px;color:#333;border-top:1px solid #eee;margin-top:20px;padding-top:16px;">
+<p><strong>FREE FAST SHIPPING!</strong> (*T&Cs apply)</p>
+<p>To the best of our ability, RK ECOMMERCE endeavours to cover the shipping cost of up to $25 on every item. However, please note that this does not guarantee free shipping on every item. If the Shipping cost comes to greater than $25, you may be required to pay the difference. If this happens, you will be automatically contacted by our logistics team with further details.</p>
+<p>Are there any exemptions to the free shipping policy?</p>
+<p>In certain situations, RK ECOMMERCE may encounter difficulties in securing a courier willing to deliver to the customer's address, especially in remote and rural areas. In these cases, a shipping charge may apply.</p>
+<p><strong>Returns:</strong> We accept returns within 30 days. Buyer pays return shipping.</p>
+</div>`,
+      isDefault: false,
+    },
+    {
+      name: "No Return",
+      content: `<div style="font-family:Arial,sans-serif;font-size:13px;color:#333;border-top:1px solid #eee;margin-top:20px;padding-top:16px;">
+<p><strong>FREE FAST SHIPPING!</strong> (*T&Cs apply)</p>
+<p>To the best of our ability, RK ECOMMERCE endeavours to cover the shipping cost of up to $25 on every item. However, please note that this does not guarantee free shipping on every item. If the Shipping cost comes to greater than $25, you may be required to pay the difference. If this happens, you will be automatically contacted by our logistics team with further details.</p>
+<p>Are there any exemptions to the free shipping policy?</p>
+<p>In certain situations, RK ECOMMERCE may encounter difficulties in securing a courier willing to deliver to the customer's address, especially in remote and rural areas. In these cases, a shipping charge may apply.</p>
+<p><strong>Returns:</strong> All sales are final. We do not accept returns.</p>
+</div>`,
+      isDefault: false,
+    },
+  ];
+
+  for (const t of templates) {
+    await prisma.descriptionTemplate.upsert({
+      where: { id: `seed-template-${t.name.replace(/\s+/g, "-").toLowerCase()}` },
+      update: {},
+      create: {
+        id: `seed-template-${t.name.replace(/\s+/g, "-").toLowerCase()}`,
+        name: t.name,
+        content: t.content,
+        isDefault: t.isDefault,
+      },
+    });
+    console.log(`Seeded template: ${t.name}`);
+  }
+
+  // --- Seed Keyword Blacklist ---
+  const keywords = [
+    { keyword: "Amazon", removeFromTitle: false, removeFromDescription: true },
+    { keyword: "amazon", removeFromTitle: false, removeFromDescription: true },
+    { keyword: "amazon.", removeFromTitle: true, removeFromDescription: true },
+    { keyword: "Amazon.", removeFromTitle: true, removeFromDescription: true },
+  ];
+
+  for (const k of keywords) {
+    await prisma.keywordBlacklist.upsert({
+      where: { id: `seed-keyword-${k.keyword.replace(/\W/g, "_")}` },
+      update: {},
+      create: {
+        id: `seed-keyword-${k.keyword.replace(/\W/g, "_")}`,
+        keyword: k.keyword,
+        removeFromTitle: k.removeFromTitle,
+        removeFromDescription: k.removeFromDescription,
+      },
+    });
+    console.log(`Seeded keyword: ${k.keyword}`);
+  }
+
   console.log("Seeding complete!");
 }
 

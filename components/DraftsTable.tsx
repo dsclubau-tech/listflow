@@ -30,6 +30,7 @@ const statusBadgeColors: Record<string, string> = {
 export default function DraftsTable({ products, onToast }: DraftsTableProps) {
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [endingId, setEndingId] = useState<string | null>(null);
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkImporting, setBulkImporting] = useState(false);
@@ -86,6 +87,30 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
       onToast("Failed to delete product.", "error");
     } finally {
       setDeletingId(null);
+    }
+  }
+
+  // --- End Listing ---
+  async function handleEndListing(productId: string) {
+    const confirmed = window.confirm(
+      "Are you sure you want to end this listing on eBay? The product will return to DRAFT status."
+    );
+    if (!confirmed) return;
+
+    setEndingId(productId);
+    try {
+      const res = await fetch(`/api/products/${productId}/end`, { method: "POST" });
+      const data = await res.json();
+      if (res.ok) {
+        onToast("Listing ended on eBay", "success");
+        router.refresh();
+      } else {
+        onToast(data.error || "Failed to end listing.", "error");
+      }
+    } catch {
+      onToast("Network error while ending listing.", "error");
+    } finally {
+      setEndingId(null);
     }
   }
 
@@ -353,6 +378,26 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
                             className="bg-orange-500 hover:bg-orange-600 text-white text-sm px-3 py-1 rounded transition-colors"
                           >
                             Import
+                          </button>
+                        )}
+
+                        {/* End Listing button — show for imported products */}
+                        {product.status === "IMPORTED" && (
+                          <button
+                            onClick={() => handleEndListing(product.id)}
+                            disabled={endingId === product.id}
+                            className="bg-red-500 hover:bg-red-600 text-white text-sm px-3 py-1 rounded transition-colors disabled:opacity-40 flex items-center gap-1.5"
+                            title="End listing on eBay"
+                          >
+                            {endingId === product.id ? (
+                              <>
+                                <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
+                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                                </svg>
+                                Ending…
+                              </>
+                            ) : "End"}
                           </button>
                         )}
 

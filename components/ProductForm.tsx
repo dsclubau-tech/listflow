@@ -103,7 +103,7 @@ export default function ProductForm({
     });
 
     const body = {
-      title: title.trim(),
+      title: title.trim().slice(0, 80),
       description: description.trim(),
       price: parseFloat(price),
       quantity: parseInt(quantity),
