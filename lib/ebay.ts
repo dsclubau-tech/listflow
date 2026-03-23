@@ -314,84 +314,100 @@ export async function getEbayBusinessPolicies(storeNumber: 1 | 2 | 3): Promise<{
 }
 
 /**
- * Calls eBay GetSuggestedCategories to find the best category for a product title.
- * Returns up to 5 suggestions sorted by PercentItemFound (highest first).
- * Never throws — returns an empty array on any failure.
+ * Calls the eBay Taxonomy REST API to find suggested categories for a product title.
+ * Uses the modern /commerce/taxonomy/v1 endpoint instead of the legacy Trading API
+ * (which returns 503 from Akamai CDN).
+ *
+ * category_tree_id 15 = eBay Australia.
+ * Returns up to 5 suggestions. Never throws — returns an empty array on failure.
  */
 export async function getEbaySuggestedCategories(
   title: string,
   storeNumber: 1 | 2 | 3
 ): Promise<Array<{ categoryId: string; categoryName: string }>> {
   try {
-    const creds = getStoreCredentials(storeNumber);
+    // Truncate long titles at a word boundary (max 80 chars)
+    let query = title.trim();
+    if (query.length > 80) {
+      const shortened = query.slice(0, 80);
+      const lastSpace = shortened.lastIndexOf(" ");
+      query = lastSpace > 20 ? shortened.slice(0, lastSpace) : shortened;
+    }
+
     const accessToken = await getOAuthAccessToken(storeNumber);
 
-    const xmlBody = `<?xml version="1.0" encoding="utf-8"?>
-<GetSuggestedCategoriesRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-  <Query>${title.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")}</Query>
-</GetSuggestedCategoriesRequest>`;
+    // eBay Australia category_tree_id = 15
+    const taxonomyUrl = `${EBAY_API_BASE_URL}/commerce/taxonomy/v1/category_tree/15/get_category_suggestions?q=${encodeURIComponent(query)}`;
 
-    const response = await fetch(EBAY_API_ENDPOINT, {
-      method: "POST",
+    const response = await fetch(taxonomyUrl, {
+      method: "GET",
       headers: {
-        "X-EBAY-API-SITEID": "15",
-        "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
-        "X-EBAY-API-CALL-NAME": "GetSuggestedCategories",
-        "X-EBAY-API-APP-NAME": creds.appId,
-        "X-EBAY-API-DEV-NAME": creds.devId,
-        "X-EBAY-API-CERT-NAME": creds.certId,
-        "Content-Type": "text/xml",
-        "X-EBAY-API-IAF-TOKEN": accessToken,
         Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
       },
-      body: xmlBody,
     });
 
-    const xmlText = await response.text();
+    const responseText = await response.text();
 
-    logger.info("ebay/getEbaySuggestedCategories", "GetSuggestedCategories response received", {
+    logger.info("ebay/getEbaySuggestedCategories", "Taxonomy API response received", {
       storeNumber,
       httpStatus: response.status,
-      titleQuery: title.slice(0, 60),
+      queryLength: query.length,
+      titleQuery: query.slice(0, 60),
     });
 
-    const parser = new XMLParser({
-      ignoreAttributes: false,
-      removeNSPrefix: true,
-    });
-    const parsed = parser.parse(xmlText);
-
-    const res = parsed.GetSuggestedCategoriesResponse;
-    if (!res || res.Ack === "Failure") {
-      logger.error("ebay/getEbaySuggestedCategories", "eBay returned failure or no response", undefined, {
+    if (!response.ok) {
+      logger.error("ebay/getEbaySuggestedCategories", `Taxonomy API returned HTTP ${response.status}`, undefined, {
         storeNumber,
-        ack: res?.Ack,
+        responseBody: responseText.slice(0, 500),
       });
       return [];
     }
 
-    let suggestions = res.SuggestedCategoryArray?.SuggestedCategory;
-    if (!suggestions) return [];
+    const data = JSON.parse(responseText) as {
+      categorySuggestions?: Array<{
+        category: { categoryId: string; categoryName: string };
+        categoryTreeNodeAncestors?: Array<{ categoryName: string }>;
+      }>;
+    };
 
-    // Ensure it's always an array
-    if (!Array.isArray(suggestions)) {
-      suggestions = [suggestions];
+    if (!data.categorySuggestions || data.categorySuggestions.length === 0) {
+      logger.info("ebay/getEbaySuggestedCategories", "No category suggestions returned", {
+        storeNumber,
+        query: query.slice(0, 60),
+      });
+      return [];
     }
 
-    // Map and sort by PercentItemFound (highest first)
-    const mapped = suggestions
-      .map((s: { Category?: { CategoryID?: string | number; CategoryName?: string }; PercentItemFound?: number }) => ({
-        categoryId: String(s.Category?.CategoryID ?? ""),
-        categoryName: String(s.Category?.CategoryName ?? ""),
-        percent: Number(s.PercentItemFound ?? 0),
-      }))
-      .filter((s: { categoryId: string }) => s.categoryId !== "")
-      .sort((a: { percent: number }, b: { percent: number }) => b.percent - a.percent)
-      .slice(0, 5)
-      .map((s: { categoryId: string; categoryName: string }) => ({
-        categoryId: s.categoryId,
-        categoryName: s.categoryName,
-      }));
+    // Map and deduplicate categories
+    const seen = new Set<string>();
+    const mapped: Array<{ categoryId: string; categoryName: string }> = [];
+
+    for (const suggestion of data.categorySuggestions) {
+      const id = suggestion.category.categoryId;
+      if (seen.has(id)) continue;
+      seen.add(id);
+
+      // Build a full path like "Electronics > Tablets & eReaders"
+      const ancestors = suggestion.categoryTreeNodeAncestors || [];
+      const pathParts = ancestors.map((a) => a.categoryName).reverse();
+      pathParts.push(suggestion.category.categoryName);
+      const fullPath = pathParts.length > 1 ? pathParts.join(" > ") : suggestion.category.categoryName;
+
+      mapped.push({
+        categoryId: id,
+        categoryName: fullPath,
+      });
+
+      if (mapped.length >= 5) break;
+    }
+
+    logger.info("ebay/getEbaySuggestedCategories", "Category suggestions mapped", {
+      storeNumber,
+      count: mapped.length,
+      topCategory: mapped[0]?.categoryName,
+    });
 
     return mapped;
   } catch (err) {

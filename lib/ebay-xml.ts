@@ -63,7 +63,17 @@ export function buildAddItemXML(product: ProductWithStore): string {
   // Build ItemSpecifics tags — exclude _-prefixed internal metadata keys
   let itemSpecificsXml = "";
   if (specifics && typeof specifics === "object") {
-    const entries = Object.entries(specifics).filter(
+    // Ensure "Type" is present (eBay often requires it)
+    const normalizedSpecifics = { ...specifics };
+    const hasType = Object.keys(normalizedSpecifics).some(k => k.toLowerCase() === "type");
+    
+    if (!hasType) {
+      // Use the last part of categoryName (e.g., "Pressure Washers") or a default
+      const defaultType = product.categoryName?.split(">").pop()?.trim() || "Other";
+      normalizedSpecifics["Type"] = defaultType;
+    }
+
+    const entries = Object.entries(normalizedSpecifics).filter(
       ([key, value]) =>
         !key.startsWith("_") &&
         key.trim() !== "" &&
@@ -78,6 +88,10 @@ export function buildAddItemXML(product: ProductWithStore): string {
         .join("\n");
       itemSpecificsXml = `    <ItemSpecifics>\n${nameValueLists}\n    </ItemSpecifics>`;
     }
+  } else {
+    // No specifics at all? At least add Type
+    const defaultType = product.categoryName?.split(">").pop()?.trim() || "Other";
+    itemSpecificsXml = `    <ItemSpecifics>\n      <NameValueList>\n        <Name>Type</Name>\n        <Value>${escapeXml(defaultType)}</Value>\n      </NameValueList>\n    </ItemSpecifics>`;
   }
 
   return `<?xml version="1.0" encoding="utf-8"?>
@@ -99,6 +113,9 @@ export function buildAddItemXML(product: ProductWithStore): string {
     <ListingType>FixedPriceItem</ListingType>
     <Quantity>${product.quantity.toString()}</Quantity>
     <ConditionID>${conditionId}</ConditionID>
+    <ProductListingDetails>
+      <UPC>${escapeXml(specifics?.["UPC"] || specifics?.["EAN"] || "Does not apply")}</UPC>
+    </ProductListingDetails>
     <PictureDetails>
 ${pictureUrls}
     </PictureDetails>

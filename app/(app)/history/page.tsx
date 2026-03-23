@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import ClearHistoryButton from "@/components/ClearHistoryButton";
 
 const storeBadgeColors: Record<string, string> = {
   "Store 1": "bg-blue-100 text-blue-800",
@@ -42,13 +43,7 @@ export default async function HistoryPage() {
             ({logs.length} uploads)
           </span>
         </div>
-        <button
-          // TODO: Part 5 — wire Clear History functionality
-          disabled
-          className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 transition-colors"
-        >
-          Clear History
-        </button>
+        <ClearHistoryButton />
       </div>
 
       {logs.length === 0 ? (

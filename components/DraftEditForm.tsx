@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import dynamic from "next/dynamic";
 import SlideOver from "@/components/SlideOver";
@@ -200,9 +200,21 @@ export default function DraftEditForm({
     return Object.keys(newErrors).length === 0;
   }
 
+  // Amazon keyword detection
+  const descriptionContainsAmazon = useMemo(() => {
+    const plainText = description.replace(/<[^>]*>/g, "");
+    return /amazon/i.test(plainText);
+  }, [description]);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!validate()) return;
+
+    // Block import if Amazon keyword is in description
+    if (descriptionContainsAmazon) {
+      onError("Import blocked — description contains the word 'Amazon'. Edit your description and remove all mentions before importing.");
+      return;
+    }
 
     setIsSubmitting(true);
 
@@ -589,6 +601,16 @@ export default function DraftEditForm({
           {/* ===================== Tab 2 — Description ===================== */}
           {activeTab === 1 && (
             <div>
+              {descriptionContainsAmazon && (
+                <div className="mb-3 flex items-start gap-3 p-3 bg-red-50 border border-red-200 rounded-md">
+                  <svg className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <p className="text-sm text-red-700">
+                    <strong>Warning:</strong> Your description contains the word &ldquo;Amazon&rdquo;. eBay may remove your listing for referencing a competitor. Remove all mentions of Amazon before importing.
+                  </p>
+                </div>
+              )}
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Description
               </label>

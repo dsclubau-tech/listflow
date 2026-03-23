@@ -78,3 +78,33 @@ export async function PATCH(
     return NextResponse.json({ error: "Database update failed" }, { status: 500 });
   }
 }
+
+export async function DELETE(
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const session = await auth();
+  const { id } = await params;
+
+  if (!session?.user) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const product = await prisma.product.findUnique({ where: { id } });
+
+  if (!product) {
+    return NextResponse.json({ error: "Product not found" }, { status: 404 });
+  }
+
+  try {
+    // Delete related UploadLogs first to avoid FK constraint errors
+    await prisma.uploadLog.deleteMany({ where: { productId: id } });
+    await prisma.product.delete({ where: { id } });
+
+    logger.info("api/products/DELETE", "Product deleted", { id, userId: session.user.id });
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    logger.error("api/products/DELETE", "Delete failed", err, { id });
+    return NextResponse.json({ error: "Failed to delete product" }, { status: 500 });
+  }
+}
