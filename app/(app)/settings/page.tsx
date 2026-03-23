@@ -1,14 +1,15 @@
 "use client";
 
 import { useState } from "react";
+import SupplierSettingsTab from "@/components/settings/SupplierSettingsTab";
 import TemplatesTab from "@/components/settings/TemplatesTab";
 import KeywordsTab from "@/components/settings/KeywordsTab";
 
-const tabs = ["Templates", "Keywords"] as const;
+const tabs = ["Supplier Settings", "Templates", "Keywords"] as const;
 type Tab = (typeof tabs)[number];
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<Tab>("Templates");
+  const [activeTab, setActiveTab] = useState<Tab>("Supplier Settings");
 
   return (
     <div className="p-8">
@@ -34,6 +35,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Tab content */}
+      {activeTab === "Supplier Settings" && <SupplierSettingsTab />}
       {activeTab === "Templates" && <TemplatesTab />}
       {activeTab === "Keywords" && <KeywordsTab />}
     </div>

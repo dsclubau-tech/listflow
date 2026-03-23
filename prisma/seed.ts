@@ -211,6 +211,13 @@ async function main() {
     });
     console.log(`Seeded keyword: ${k.keyword}`);
   }
+  // --- Seed Supplier Settings ---
+  await prisma.supplierSettings.upsert({
+    where: { supplierName: "Amazon AU" },
+    update: {},
+    create: { supplierName: "Amazon AU" },
+  });
+  console.log("Seeded supplier settings: Amazon AU");
 
   console.log("Seeding complete!");
 }

@@ -13,6 +13,17 @@ export interface ScrapedProduct {
   variantName: string | null;
   asin: string;
   brand: string;
+  supplierDefaults?: {
+    quantity: number;
+    country: string;
+    zipcode: string;
+    shippingMethod: string;
+    templateId: string | null;
+    shippingPolicyId: string | null;
+    paymentPolicyId: string | null;
+    returnPolicyId: string | null;
+    capitalizeTitle: boolean;
+  };
 }
 
 export async function scrapeAmazonProduct(url: string): Promise<ScrapedProduct> {

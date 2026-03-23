@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { scrapeAmazonProduct } from "@/lib/amazon-scraper";
 import { getEbaySuggestedCategories } from "@/lib/ebay";
 import { logger } from "@/lib/logger";
+import { prisma } from "@/lib/prisma";
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -61,10 +62,28 @@ export async function POST(request: Request) {
       logger.error("scrape/route", "Category detection failed (non-blocking)", undefined, { title: product.title });
     }
 
+    // Fetch supplier settings defaults
+    const supplierSettings = await prisma.supplierSettings.findFirst({
+      where: { supplierName: "Amazon AU" },
+    });
+
+    const supplierDefaults = {
+      quantity: supplierSettings?.defaultQuantity ?? 1,
+      country: supplierSettings?.defaultCountry ?? "Australia",
+      zipcode: supplierSettings?.defaultZipcode ?? "3170",
+      shippingMethod: supplierSettings?.defaultShippingMethod ?? "Cheapest with tracking",
+      templateId: supplierSettings?.defaultTemplateId ?? null,
+      shippingPolicyId: supplierSettings?.defaultShippingPolicyId ?? null,
+      paymentPolicyId: supplierSettings?.defaultPaymentPolicyId ?? null,
+      returnPolicyId: supplierSettings?.defaultReturnPolicyId ?? null,
+      capitalizeTitle: supplierSettings?.capitalizeTitle ?? false,
+    };
+
     return NextResponse.json({
       ...product,
       categoryId,
       categoryName,
+      supplierDefaults,
     });
   } catch (err) {
     logger.error("scrape/route", "Scrape failed", err, { url });

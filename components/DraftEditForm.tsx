@@ -129,12 +129,23 @@ export default function DraftEditForm({
   // Pre-fill from scraped data
   useEffect(() => {
     if (scrapedData) {
-      setTitle(scrapedData.title);
+      const defaults = scrapedData.supplierDefaults;
+
+      // Apply title — capitalize if supplier setting is enabled
+      let scrapedTitle = scrapedData.title;
+      if (defaults?.capitalizeTitle) {
+        scrapedTitle = scrapedTitle
+          .split(" ")
+          .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
+          .join(" ");
+      }
+      setTitle(scrapedTitle);
+
       setCategory(scrapedData.categoryId || "");
       setCategoryName(scrapedData.categoryName || scrapedData.category || "");
       setCondition(scrapedData.condition);
       setPrice("");
-      setQuantity("1");
+      setQuantity(String(defaults?.quantity ?? 1));
       setBrand(scrapedData.brand);
       setVariant(scrapedData.variantName || "");
       setDescription(scrapedData.description);
@@ -148,6 +159,14 @@ export default function DraftEditForm({
       );
       setActiveTab(0);
       setErrors({});
+
+      // Pre-fill policies from supplier defaults
+      if (defaults?.shippingPolicyId) setShippingPolicyId(defaults.shippingPolicyId);
+      if (defaults?.paymentPolicyId) setPaymentPolicyId(defaults.paymentPolicyId);
+      if (defaults?.returnPolicyId) setReturnPolicyId(defaults.returnPolicyId);
+
+      // Pre-select template from supplier defaults
+      if (defaults?.templateId) setSelectedTemplateId(defaults.templateId);
     }
   }, [scrapedData]);
 
