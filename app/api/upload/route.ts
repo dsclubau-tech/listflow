@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { buildAddItemXML } from "@/lib/ebay-xml";
 import { callEbayAddItem, getStoreNumber } from "@/lib/ebay";
+import { resolveDescriptionTemplate } from "@/lib/template-resolver";
 import { logger } from "@/lib/logger";
 
 export async function POST(request: Request) {
@@ -51,8 +52,12 @@ export async function POST(request: Request) {
     // Resolve store number
     const storeNumber = await getStoreNumber(product.storeId);
 
-    // Build XML and call eBay (token exchange happens inside callEbayAddItem)
-    const xml = buildAddItemXML(product);
+    // Resolve template placeholders
+    const finalDescription = await resolveDescriptionTemplate(product);
+
+    // Build XML with resolved description
+    const productWithResolvedDesc = { ...product, description: finalDescription };
+    const xml = buildAddItemXML(productWithResolvedDesc);
 
     logger.info("upload/route", "Sending AddItem request to eBay", {
       productId,

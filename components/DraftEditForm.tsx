@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import dynamic from "next/dynamic";
 import SlideOver from "@/components/SlideOver";
 import type { ScrapedProduct } from "@/components/AddProductModal";
@@ -95,6 +96,15 @@ export default function DraftEditForm({
   const [templates, setTemplates] = useState<{ id: string; name: string; content: string; isDefault: boolean }[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
 
+  // Images
+  const [images, setImages] = useState<string[]>([]);
+  const [hoveredImage, setHoveredImage] = useState<number | null>(null);
+
+  // Item specifics
+  const [itemSpecifics, setItemSpecifics] = useState<
+    { key: string; value: string }[]
+  >([]);
+
   // Fetch templates on mount
   useEffect(() => {
     fetch("/api/templates")
@@ -106,21 +116,6 @@ export default function DraftEditForm({
       })
       .catch(() => {});
   }, []);
-
-  function handleApplyTemplate() {
-    const template = templates.find((t) => t.id === selectedTemplateId);
-    if (!template) return;
-    setDescription((prev) => prev + template.content);
-  }
-
-  // Images
-  const [images, setImages] = useState<string[]>([]);
-  const [hoveredImage, setHoveredImage] = useState<number | null>(null);
-
-  // Item specifics
-  const [itemSpecifics, setItemSpecifics] = useState<
-    { key: string; value: string }[]
-  >([]);
 
   // Form state
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -279,6 +274,7 @@ export default function DraftEditForm({
       shippingPolicyId: shippingPolicyId || undefined,
       returnPolicyId: returnPolicyId || undefined,
       paymentPolicyId: paymentPolicyId || undefined,
+      templateId: selectedTemplateId || undefined,
     };
 
     try {
@@ -661,7 +657,7 @@ export default function DraftEditForm({
               </label>
               {/* Template selector */}
               <div className="flex items-center gap-3 text-sm text-gray-600 mb-3">
-                <span>Selected Template:</span>
+                <span className="text-sm text-gray-500">Selected Template:</span>
                 <select
                   value={selectedTemplateId}
                   onChange={(e) => setSelectedTemplateId(e.target.value)}
@@ -674,14 +670,10 @@ export default function DraftEditForm({
                     </option>
                   ))}
                 </select>
-                <button
-                  type="button"
-                  onClick={handleApplyTemplate}
-                  disabled={!selectedTemplateId}
-                  className="bg-orange-500 hover:bg-orange-600 text-white text-xs px-3 py-1 rounded transition-colors disabled:opacity-40"
-                >
-                  Apply
-                </button>
+                <span className="text-gray-300">|</span>
+                <Link href="/settings" className="text-orange-500 hover:text-orange-600 text-sm hover:underline">
+                  Edit Templates
+                </Link>
               </div>
               <div className="min-h-64">
                 <ReactQuill

@@ -26,6 +26,43 @@ export interface ScrapedProduct {
   };
 }
 
+/**
+ * Clean Amazon description HTML for safe eBay rendering.
+ * Strips Amazon CSS classes, scripts, styles, and wraps in a clean container.
+ */
+function cleanDescriptionHtml(html: string): string {
+  try {
+    let cleaned = html;
+    // 1. Remove <h1> tags and contents (Amazon product title)
+    cleaned = cleaned.replace(/<h1[^>]*>[\s\S]*?<\/h1>/gi, '');
+    // 2. Remove <script> tags and contents
+    cleaned = cleaned.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+    // 3. Remove <style> tags and contents
+    cleaned = cleaned.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+    // 4. Remove class attributes
+    cleaned = cleaned.replace(/\s+class="[^"]*"/g, '');
+    // 5. Remove id attributes
+    cleaned = cleaned.replace(/\s+id="[^"]*"/g, '');
+    // 6. Remove style attributes
+    cleaned = cleaned.replace(/\s+style="[^"]*"/g, '');
+    // 7. Remove data-* attributes
+    cleaned = cleaned.replace(/\s+data-[a-z-]+="[^"]*"/g, '');
+    // 8. Remove Amazon CDN image tags
+    cleaned = cleaned.replace(/<img[^>]*amazon[^>]*>/gi, '');
+    // 9. Remove <hr> dividers
+    cleaned = cleaned.replace(/<hr[^>]*\/?>/gi, '');
+    // 10. Replace &amp; with &
+    cleaned = cleaned.replace(/&amp;/g, '&');
+    // 11. Collapse excessive <br> tags
+    cleaned = cleaned.replace(/(\s*<br\s*\/?>\s*){3,}/gi, '<br><br>');
+    // 12. Wrap in a clean container div
+    cleaned = `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#333;max-width:800px;margin:0 auto;">${cleaned}</div>`;
+    return cleaned;
+  } catch {
+    return html;
+  }
+}
+
 export async function scrapeAmazonProduct(url: string): Promise<ScrapedProduct> {
   // Validate URL
   if (!url.includes("amazon.com.au")) {
@@ -167,7 +204,7 @@ export async function scrapeAmazonProduct(url: string): Promise<ScrapedProduct> 
 
     return {
       title: truncatedTitle,
-      description,
+      description: cleanDescriptionHtml(description),
       images,
       price,
       condition: "New",

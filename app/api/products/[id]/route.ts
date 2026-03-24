@@ -48,6 +48,7 @@ export async function PATCH(
     "shippingPolicyId",
     "returnPolicyId",
     "paymentPolicyId",
+    "templateId",
   ];
 
   const data: Record<string, unknown> = {};

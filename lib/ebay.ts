@@ -302,6 +302,82 @@ export async function callEbayEndItem(
 }
 
 /**
+ * Sends a ReviseItem XML request to the eBay Trading API to update a listing's description.
+ */
+export async function callEbayReviseItem(
+  xmlBody: string,
+  storeNumber: 1 | 2 | 3
+): Promise<{ success: boolean; errorMessage?: string }> {
+  const creds = getStoreCredentials(storeNumber);
+
+  let accessToken: string;
+  try {
+    accessToken = await getOAuthAccessToken(storeNumber);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Token exchange failed";
+    return { success: false, errorMessage: message };
+  }
+
+  try {
+    const response = await fetch(EBAY_API_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "X-EBAY-API-SITEID": "15",
+        "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
+        "X-EBAY-API-CALL-NAME": "ReviseItem",
+        "X-EBAY-API-APP-NAME": creds.appId,
+        "X-EBAY-API-DEV-NAME": creds.devId,
+        "X-EBAY-API-CERT-NAME": creds.certId,
+        "Content-Type": "text/xml",
+        "X-EBAY-API-IAF-TOKEN": accessToken,
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: xmlBody,
+    });
+
+    const xmlText = await response.text();
+
+    logger.ebayResponse("ebay/callEbayReviseItem", "Raw eBay ReviseItem response received", xmlText, {
+      storeNumber,
+      httpStatus: response.status,
+    });
+
+    const parser = new XMLParser({
+      ignoreAttributes: false,
+      removeNSPrefix: true,
+    });
+    const parsed = parser.parse(xmlText);
+
+    const reviseItemResponse = parsed.ReviseItemResponse;
+    if (!reviseItemResponse) {
+      return { success: false, errorMessage: "Invalid response from eBay API" };
+    }
+
+    const ack = reviseItemResponse.Ack;
+
+    if (ack === "Success" || ack === "Warning") {
+      return { success: true };
+    }
+
+    const errors = reviseItemResponse.Errors;
+    let errorMessage = "Unknown eBay error";
+
+    if (errors) {
+      if (Array.isArray(errors)) {
+        errorMessage = errors.map((e: { ShortMessage?: string }) => e.ShortMessage || "Unknown error").join("; ");
+      } else {
+        errorMessage = errors.ShortMessage || errors.LongMessage || "Unknown error";
+      }
+    }
+
+    return { success: false, errorMessage };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error";
+    return { success: false, errorMessage: message };
+  }
+}
+
+/**
  * Fetches the seller's Business Policies (shipping, returns, payment) from eBay.
  */
 export async function getEbayBusinessPolicies(storeNumber: 1 | 2 | 3): Promise<{

@@ -151,3 +151,18 @@ export function buildEndItemXML(ebayItemId: string, reason = "NotAvailable"): st
   <EndingReason>${escapeXml(reason)}</EndingReason>
 </EndItemRequest>`;
 }
+
+/**
+ * Builds a valid eBay ReviseItem XML request body to update only the description.
+ */
+export function buildReviseItemXML(ebayItemId: string, description: string): string {
+  return `<?xml version="1.0" encoding="utf-8"?>
+<ReviseItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <ErrorLanguage>en_US</ErrorLanguage>
+  <WarningLevel>High</WarningLevel>
+  <Item>
+    <ItemID>${escapeXml(ebayItemId)}</ItemID>
+    <Description><![CDATA[${description}]]></Description>
+  </Item>
+</ReviseItemRequest>`;
+}

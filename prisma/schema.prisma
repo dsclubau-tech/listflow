@@ -63,6 +63,7 @@ model Product {
   shippingPolicyId String?
   returnPolicyId   String?
   paymentPolicyId  String?
+  templateId       String?
   storeId       String
   createdById   String
   createdAt     DateTime      @default(now())

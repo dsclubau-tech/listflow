@@ -32,6 +32,7 @@ export async function POST(request: Request) {
     shippingPolicyId,
     returnPolicyId,
     paymentPolicyId,
+    templateId,
   } = body;
 
   // Validate required fields
@@ -106,6 +107,7 @@ export async function POST(request: Request) {
       shippingPolicyId: shippingPolicyId || null,
       returnPolicyId: returnPolicyId || null,
       paymentPolicyId: paymentPolicyId || null,
+      templateId: templateId || null,
     },
     include: {
       store: true,

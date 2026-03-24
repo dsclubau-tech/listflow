@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import dynamic from "next/dynamic";
 import type { Product, Store, User } from "@/app/generated/prisma/client";
 
@@ -102,25 +103,7 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
   // Description
   const [description, setDescription] = useState(product.description);
   const [templates, setTemplates] = useState<{ id: string; name: string; content: string; isDefault: boolean }[]>([]);
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string>("");
-
-  // Fetch templates on mount
-  useEffect(() => {
-    fetch("/api/templates")
-      .then((res) => res.json())
-      .then((data) => {
-        setTemplates(data);
-        const defaultTemplate = data.find((t: { isDefault: boolean }) => t.isDefault);
-        if (defaultTemplate) setSelectedTemplateId(defaultTemplate.id);
-      })
-      .catch(() => {});
-  }, []);
-
-  function handleApplyTemplate() {
-    const template = templates.find((t) => t.id === selectedTemplateId);
-    if (!template) return;
-    setDescription((prev) => prev + template.content);
-  }
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string>(product.templateId || "");
 
   // Images
   const [images, setImages] = useState<string[]>([...product.images]);
@@ -128,6 +111,22 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
 
   // Item Specifics
   const [itemSpecifics, setItemSpecifics] = useState<{ key: string; value: string }[]>([]);
+
+  // Fetch templates on mount
+  useEffect(() => {
+    fetch("/api/templates")
+      .then((res) => res.json())
+      .then((data) => {
+        setTemplates(data);
+        // If product has no templateId, select the default template
+        if (!selectedTemplateId) {
+          const defaultTemplate = data.find((t: { isDefault: boolean }) => t.isDefault);
+          if (defaultTemplate) setSelectedTemplateId(defaultTemplate.id);
+        }
+      })
+      .catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Save state
   const [isSaving, setIsSaving] = useState(false);
@@ -242,6 +241,7 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
       shippingPolicyId: shippingPolicyId || null,
       returnPolicyId: returnPolicyId || null,
       paymentPolicyId: paymentPolicyId || null,
+      templateId: selectedTemplateId || null,
     };
 
     console.log("Saving product data:", body);
@@ -327,6 +327,40 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
     }
   }
 
+  // ----- Revise eBay Description -----
+  const [isRevising, setIsRevising] = useState(false);
+
+  async function handleReviseDescription() {
+    setIsRevising(true);
+    setSaveMessage(null);
+
+    const saved = await handleSave();
+    if (!saved) {
+      setIsRevising(false);
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/revise", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productId: product.id }),
+      });
+
+      if (res.ok) {
+        setSaveMessage({ text: "eBay description updated ✓", variant: "success" });
+      } else {
+        const data = await res.json();
+        setSaveMessage({ text: data.error || "Revise failed", variant: "error" });
+      }
+    } catch (err) {
+      console.error("Revise error:", err);
+      setSaveMessage({ text: "Network error during revise", variant: "error" });
+    } finally {
+      setIsRevising(false);
+    }
+  }
+
   // ----- Item specifics -----
 
   function addSpecific() {
@@ -400,11 +434,21 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
           <button
             type="button"
             onClick={handleSaveAndImport}
-            disabled={isSaving || isImporting}
+            disabled={isSaving || isImporting || isRevising}
             className="px-4 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-md disabled:opacity-40 transition-colors"
           >
             {isImporting ? "Importing…" : "Save & Import"}
           </button>
+          {product.ebayItemId && (
+            <button
+              type="button"
+              onClick={handleReviseDescription}
+              disabled={isSaving || isImporting || isRevising}
+              className="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-md disabled:opacity-40 transition-colors"
+            >
+              {isRevising ? "Updating…" : "Update eBay Description"}
+            </button>
+          )}
         </div>
       </div>
 
@@ -723,30 +767,25 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
               </div>
             )}
             <label className="block text-sm font-medium text-gray-700 mb-2">Description</label>
-            {/* Template selector */}
             <div className="flex items-center gap-3 text-sm text-gray-600 mb-3">
-              <span>Selected Template:</span>
-              <select
-                value={selectedTemplateId}
-                onChange={(e) => setSelectedTemplateId(e.target.value)}
-                className="border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
-              >
-                <option value="">— None —</option>
-                {templates.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name}{t.isDefault ? " (Default)" : ""}
-                  </option>
-                ))}
-              </select>
-              <button
-                type="button"
-                onClick={handleApplyTemplate}
-                disabled={!selectedTemplateId}
-                className="bg-orange-500 hover:bg-orange-600 text-white text-xs px-3 py-1 rounded transition-colors disabled:opacity-40"
-              >
-                Apply
-              </button>
-            </div>
+                <span className="text-sm text-gray-500">Selected Template:</span>
+                <select
+                  value={selectedTemplateId}
+                  onChange={(e) => setSelectedTemplateId(e.target.value)}
+                  className="border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                >
+                  <option value="">— None —</option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name}{t.isDefault ? " (Default)" : ""}
+                    </option>
+                  ))}
+                </select>
+                <span className="text-gray-300">|</span>
+                <Link href="/settings" className="text-orange-500 hover:text-orange-600 text-sm hover:underline">
+                  Edit Templates
+                </Link>
+              </div>
             <div className="min-h-[300px]">
               <ReactQuill
                 theme="snow"
