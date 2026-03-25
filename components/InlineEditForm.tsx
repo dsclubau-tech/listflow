@@ -3,23 +3,8 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import dynamic from "next/dynamic";
 import type { Product, Store, User } from "@/app/generated/prisma/client";
-
-const ReactQuill = dynamic(() => import("react-quill-new"), { ssr: false });
-import "react-quill-new/dist/quill.snow.css";
-
-const quillModules = {
-  toolbar: [
-    [{ header: [1, 2, 3, false] }],
-    ["bold", "italic", "underline", "strike"],
-    [{ list: "ordered" }, { list: "bullet" }],
-    [{ align: [] }],
-    ["link", "image"],
-    [{ color: [] }, { background: [] }],
-    ["clean"],
-  ],
-};
+import RichTextEditor from "@/components/RichTextEditor";
 
 // ----- Types -----
 
@@ -787,12 +772,7 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
                 </Link>
               </div>
             <div className="min-h-[300px]">
-              <ReactQuill
-                theme="snow"
-                value={description}
-                onChange={setDescription}
-                modules={quillModules}
-              />
+              <RichTextEditor value={description} onChange={setDescription} minHeight="300px" />
             </div>
           </div>
         )}

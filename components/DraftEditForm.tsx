@@ -3,24 +3,9 @@
 import { useState, useEffect, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import dynamic from "next/dynamic";
 import SlideOver from "@/components/SlideOver";
+import RichTextEditor from "@/components/RichTextEditor";
 import type { ScrapedProduct } from "@/components/AddProductModal";
-
-const ReactQuill = dynamic(() => import("react-quill-new"), { ssr: false });
-import "react-quill-new/dist/quill.snow.css";
-
-const quillModules = {
-  toolbar: [
-    [{ header: [1, 2, 3, false] }],
-    ["bold", "italic", "underline", "strike"],
-    [{ list: "ordered" }, { list: "bullet" }],
-    [{ align: [] }],
-    ["link", "image"],
-    [{ color: [] }, { background: [] }],
-    ["clean"],
-  ],
-};
 
 interface Store {
   id: string;
@@ -676,12 +661,7 @@ export default function DraftEditForm({
                 </Link>
               </div>
               <div className="min-h-64">
-                <ReactQuill
-                  theme="snow"
-                  value={description}
-                  onChange={setDescription}
-                  modules={quillModules}
-                />
+                <RichTextEditor value={description} onChange={setDescription} minHeight="256px" />
               </div>
             </div>
           )}

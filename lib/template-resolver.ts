@@ -56,7 +56,7 @@ export async function resolveDescriptionTemplate(product: ProductForTemplate): P
 
   // Decode common HTML entities in template content that editors may produce
   // CRITICAL: Quill editor converts spaces to &nbsp; — must decode BEFORE regex matching
-  let content = template.content
+  const content = template.content
     .replace(/&nbsp;/g, ' ')
     .replace(/&lbrace;/g, '{')
     .replace(/&rbrace;/g, '}')

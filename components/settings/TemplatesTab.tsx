@@ -1,10 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import dynamic from "next/dynamic";
-
-const ReactQuill = dynamic(() => import("react-quill-new"), { ssr: false });
-import "react-quill-new/dist/quill.snow.css";
+import RichTextEditor from "@/components/RichTextEditor";
 
 interface Template {
   id: string;
@@ -110,12 +107,19 @@ export default function TemplatesTab() {
             key={t.id}
             className="group relative bg-white rounded-lg border border-gray-200 overflow-hidden hover:shadow-md transition-shadow"
           >
-            {/* Miniature preview */}
+            {/* Miniature preview (sandboxed to prevent template CSS leaking into page UI) */}
             <div className="h-40 overflow-hidden relative bg-gray-50 p-2">
-              <div
-                className="origin-top-left"
-                style={{ transform: "scale(0.3)", width: "333%", height: "333%" }}
-                dangerouslySetInnerHTML={{ __html: t.content }}
+              <iframe
+                title={`Template preview: ${t.name}`}
+                srcDoc={t.content || "<div></div>"}
+                sandbox=""
+                className="origin-top-left pointer-events-none bg-white"
+                style={{
+                  transform: "scale(0.3)",
+                  width: "333%",
+                  height: "333%",
+                  border: "0",
+                }}
               />
             </div>
 
@@ -178,13 +182,7 @@ export default function TemplatesTab() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Content</label>
-                <ReactQuill
-                  theme="snow"
-                  value={formContent}
-                  onChange={setFormContent}
-                  className="bg-white"
-                  style={{ minHeight: "200px" }}
-                />
+                <RichTextEditor value={formContent} onChange={setFormContent} minHeight="200px" />
               </div>
               <label className="flex items-center gap-2 text-sm text-gray-700 mt-2">
                 <input

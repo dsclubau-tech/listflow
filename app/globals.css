@@ -16,3 +16,80 @@ body {
   color: var(--foreground);
   font-family: var(--font-sans), Arial, Helvetica, sans-serif;
 }
+
+.listflow-rich-text .ql-toolbar.ql-snow {
+  border-color: #d1d5db;
+  border-radius: 0.5rem 0.5rem 0 0;
+  background: #f9fafb;
+}
+
+.listflow-rich-text .ql-container.ql-snow {
+  border-color: #d1d5db;
+  border-radius: 0 0 0.5rem 0.5rem;
+}
+
+.listflow-rich-text .ql-editor {
+  min-height: var(--listflow-quill-min-height, 18rem);
+  font-size: 0.875rem;
+}
+
+.listflow-rich-text .ql-editor hr {
+  margin: 0.75rem 0;
+  border: 0;
+  border-top: 1px solid #d1d5db;
+}
+
+.listflow-rich-text .listflow-quill-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 2rem;
+  height: 1.5rem;
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: 0.25rem;
+  background: transparent;
+  color: #374151;
+  font-size: 0.75rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.listflow-rich-text .ql-toolbar.ql-snow .listflow-quill-action {
+  width: auto;
+  float: left;
+}
+
+.listflow-rich-text .listflow-quill-action:hover:not(:disabled) {
+  background: #f3f4f6;
+}
+
+.listflow-rich-text .listflow-quill-action[data-active="true"] {
+  background: #111827;
+  color: #ffffff;
+}
+
+.listflow-rich-text .listflow-quill-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.listflow-rich-text .listflow-quill-source {
+  width: 100%;
+  min-height: var(--listflow-quill-min-height, 18rem);
+  padding: 0.875rem 1rem;
+  border: 1px solid #d1d5db;
+  border-top: 0;
+  border-radius: 0 0 0.5rem 0.5rem;
+  resize: vertical;
+  outline: none;
+  background: #ffffff;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+  color: #111827;
+}
+
+.listflow-rich-text .listflow-quill-source:focus {
+  box-shadow: inset 0 0 0 2px #f97316;
+}
