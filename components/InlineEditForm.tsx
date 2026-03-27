@@ -772,7 +772,7 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
                 </Link>
               </div>
             <div className="min-h-[300px]">
-              <RichTextEditor value={description} onChange={setDescription} minHeight="300px" />
+              <RichTextEditor value={description} onChange={setDescription} minHeight="300px" toolbarVariant="compact" />
             </div>
           </div>
         )}

@@ -2,6 +2,11 @@ import "dotenv/config";
 import { PrismaClient } from "../app/generated/prisma/client.js";
 import { PrismaNeon } from "@prisma/adapter-neon";
 import bcrypt from "bcryptjs";
+import {
+  RK_ECOM_30_DAY_FREE_RETURN_TEMPLATE_CONTENT,
+  RK_ECOM_30_DAY_FREE_RETURN_TEMPLATE_NAME,
+  RK_ECOM_30_DAY_FREE_RETURN_TEMPLATE_ID,
+} from "../lib/builtin-description-templates";
 
 const adapter = new PrismaNeon({
   connectionString: process.env.DATABASE_URL!,
@@ -142,14 +147,9 @@ async function main() {
   // --- Seed Description Templates ---
   const templates = [
     {
-      name: "RK Ecom, 30 Day Free Return",
-      content: `<div style="font-family:Arial,sans-serif;font-size:13px;color:#333;border-top:1px solid #eee;margin-top:20px;padding-top:16px;">
-<p><strong>FREE FAST SHIPPING!</strong> (*T&Cs apply)</p>
-<p>To the best of our ability, RK ECOMMERCE endeavours to cover the shipping cost of up to $25 on every item. However, please note that this does not guarantee free shipping on every item. If the Shipping cost comes to greater than $25, you may be required to pay the difference. If this happens, you will be automatically contacted by our logistics team with further details.</p>
-<p>Are there any exemptions to the free shipping policy?</p>
-<p>In certain situations, RK ECOMMERCE may encounter difficulties in securing a courier willing to deliver to the customer's address, especially in remote and rural areas. In these cases, a shipping charge may apply.</p>
-<p><strong>Returns:</strong> We accept returns within 30 days of delivery. Item must be in original condition. Return shipping is FREE.</p>
-</div>`,
+      id: RK_ECOM_30_DAY_FREE_RETURN_TEMPLATE_ID,
+      name: RK_ECOM_30_DAY_FREE_RETURN_TEMPLATE_NAME,
+      content: RK_ECOM_30_DAY_FREE_RETURN_TEMPLATE_CONTENT,
       isDefault: true,
     },
     {
@@ -177,11 +177,17 @@ async function main() {
   ];
 
   for (const t of templates) {
+    const templateId = "id" in t ? t.id : `seed-template-${t.name.replace(/\s+/g, "-").toLowerCase()}`;
+
     await prisma.descriptionTemplate.upsert({
-      where: { id: `seed-template-${t.name.replace(/\s+/g, "-").toLowerCase()}` },
-      update: {},
+      where: { id: templateId },
+      update: {
+        name: t.name,
+        content: t.content,
+        isDefault: t.isDefault,
+      },
       create: {
-        id: `seed-template-${t.name.replace(/\s+/g, "-").toLowerCase()}`,
+        id: templateId,
         name: t.name,
         content: t.content,
         isDefault: t.isDefault,

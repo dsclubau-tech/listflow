@@ -10,6 +10,16 @@ interface Template {
   isDefault: boolean;
 }
 
+const placeholderTokens = [
+  "title",
+  "description",
+  "store_name",
+  "main_image_with_tag",
+  "main_image",
+  "product_dimension",
+  "item_specifics",
+];
+
 export default function TemplatesTab() {
   const [templates, setTemplates] = useState<Template[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,6 +57,10 @@ export default function TemplatesTab() {
     setFormContent(t.content);
     setFormIsDefault(t.isDefault);
     setModalOpen(true);
+  }
+
+  function insertPlaceholder(token: string) {
+    setFormContent((current) => `${current}${current ? "\n" : ""}{{ ${token} }}`);
   }
 
   async function handleSave() {
@@ -163,13 +177,13 @@ export default function TemplatesTab() {
       {/* Modal */}
       {modalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-white rounded-lg shadow-xl w-full max-w-2xl mx-4 max-h-[90vh] overflow-y-auto">
+          <div className="bg-white rounded-lg shadow-xl w-full max-w-5xl mx-4 max-h-[92vh] overflow-hidden">
             <div className="px-6 py-4 border-b border-gray-200">
               <h2 className="text-lg font-semibold text-gray-900">
                 {editingId ? "Edit Template" : "Add Template"}
               </h2>
             </div>
-            <div className="px-6 py-4 space-y-4">
+            <div className="px-6 py-4 space-y-4 overflow-y-auto max-h-[calc(92vh-84px)]">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Template Name</label>
                 <input
@@ -180,9 +194,40 @@ export default function TemplatesTab() {
                   placeholder="e.g. RK Ecom, 30 Day Free Return"
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Content</label>
-                <RichTextEditor value={formContent} onChange={setFormContent} minHeight="200px" />
+              <div className="rounded-md border border-gray-200 overflow-hidden bg-white">
+                <div className="flex flex-col gap-3 border-b border-gray-200 bg-white px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
+                  <div className="flex items-center gap-3 text-sm">
+                    <span className="font-medium text-gray-700 truncate">{formName || "Untitled template"}</span>
+                    <span className="text-xs font-semibold text-blue-600">Preview</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-y-1 text-xs text-gray-500">
+                    <span className="mr-1">Insert:</span>
+                    {placeholderTokens.map((token, index) => (
+                      <span key={token} className="inline-flex items-center">
+                        <button
+                          type="button"
+                          onClick={() => insertPlaceholder(token)}
+                          className="font-medium text-[11px] text-gray-700 hover:text-orange-600"
+                        >
+                          {token}
+                        </button>
+                        {index < placeholderTokens.length - 1 ? (
+                          <span className="pr-1 text-gray-400">,&nbsp;</span>
+                        ) : null}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-white">
+                  <RichTextEditor
+                    value={formContent}
+                    onChange={setFormContent}
+                    minHeight="560px"
+                    placeholder="Paste the full AutoDS HTML template here"
+                    toolbarVariant="compact"
+                  />
+                </div>
               </div>
               <label className="flex items-center gap-2 text-sm text-gray-700 mt-2">
                 <input

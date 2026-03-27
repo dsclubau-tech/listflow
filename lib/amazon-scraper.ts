@@ -26,9 +26,76 @@ export interface ScrapedProduct {
   };
 }
 
+function decodeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&apos;/gi, "'")
+    .replace(/&amp;/gi, "&")
+    .replace(/\\u0026/gi, "&")
+    .replace(/\\\//g, "/");
+}
+
+function escapeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function extractAttribute(tag: string, name: string): string | null {
+  const match = tag.match(new RegExp(`${name}=(["'])([\\s\\S]*?)\\1`, "i"));
+  return match ? match[2] : null;
+}
+
+function extractDescriptionImageUrl(tag: string): string | null {
+  const directAttributes = ["src", "data-old-hires", "data-src"];
+
+  for (const attribute of directAttributes) {
+    const value = extractAttribute(tag, attribute);
+    if (!value) continue;
+
+    const decoded = decodeHtmlAttribute(value.trim());
+    if (/^https?:\/\//i.test(decoded)) {
+      return decoded;
+    }
+  }
+
+  const dynamicImage = extractAttribute(tag, "data-a-dynamic-image");
+  if (!dynamicImage) return null;
+
+  const decoded = decodeHtmlAttribute(dynamicImage);
+  const match = decoded.match(/https?:\/\/[^"'}\],\s]+/i);
+  return match ? match[0] : null;
+}
+
+function replaceDescriptionImagesWithTokens(html: string): {
+  html: string;
+  images: string[];
+} {
+  const images: string[] = [];
+
+  const tokenizedHtml = html.replace(/<img\b[^>]*>/gi, (tag) => {
+    const src = extractDescriptionImageUrl(tag);
+    if (!src || /play-button|spinner|loading|transparent|pixel/i.test(src)) {
+      return "";
+    }
+
+    const alt = decodeHtmlAttribute(extractAttribute(tag, "alt") ?? "");
+    const imageTag = `<img src="${escapeHtmlAttribute(src)}" alt="${escapeHtmlAttribute(alt)}" style="max-width:100%;height:auto;display:block;margin:12px auto;" />`;
+    const token = `__LISTFLOW_DESC_IMAGE_${images.length}__`;
+    images.push(imageTag);
+    return token;
+  });
+
+  return { html: tokenizedHtml, images };
+}
+
 /**
  * Clean Amazon description HTML for safe eBay rendering.
  * Strips Amazon CSS classes, scripts, styles, and wraps in a clean container.
+ * Description images are preserved as simple responsive <img> tags.
  */
 function cleanDescriptionHtml(html: string): string {
   try {
@@ -39,23 +106,31 @@ function cleanDescriptionHtml(html: string): string {
     cleaned = cleaned.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
     // 3. Remove <style> tags and contents
     cleaned = cleaned.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
-    // 4. Remove class attributes
+    // 4. Preserve image sources before stripping the original tag attributes.
+    const tokenizedImages = replaceDescriptionImagesWithTokens(cleaned);
+    cleaned = tokenizedImages.html;
+    // 5. Remove class attributes
     cleaned = cleaned.replace(/\s+class="[^"]*"/g, '');
-    // 5. Remove id attributes
+    // 6. Remove id attributes
     cleaned = cleaned.replace(/\s+id="[^"]*"/g, '');
-    // 6. Remove style attributes
+    // 7. Remove style attributes
     cleaned = cleaned.replace(/\s+style="[^"]*"/g, '');
-    // 7. Remove data-* attributes
+    // 8. Remove data-* attributes
     cleaned = cleaned.replace(/\s+data-[a-z-]+="[^"]*"/g, '');
-    // 8. Remove Amazon CDN image tags
-    cleaned = cleaned.replace(/<img[^>]*amazon[^>]*>/gi, '');
-    // 9. Remove <hr> dividers
+    // 9. Remove layout attributes that can force fixed-width or no-wrap sections.
+    cleaned = cleaned.replace(/\s+(width|height|align|valign|border|cellpadding|cellspacing)=("[^"]*"|'[^']*')/gi, '');
+    cleaned = cleaned.replace(/\s+nowrap(=("[^"]*"|'[^']*'))?/gi, '');
+    // 10. Reinsert sanitized description images.
+    cleaned = cleaned.replace(/__LISTFLOW_DESC_IMAGE_(\d+)__/g, (_, index) => {
+      return tokenizedImages.images[Number(index)] ?? "";
+    });
+    // 11. Remove <hr> dividers
     cleaned = cleaned.replace(/<hr[^>]*\/?>/gi, '');
-    // 10. Replace &amp; with &
+    // 12. Replace &amp; with &
     cleaned = cleaned.replace(/&amp;/g, '&');
-    // 11. Collapse excessive <br> tags
+    // 13. Collapse excessive <br> tags
     cleaned = cleaned.replace(/(\s*<br\s*\/?>\s*){3,}/gi, '<br><br>');
-    // 12. Wrap in a clean container div
+    // 14. Wrap in a clean container div
     cleaned = `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#333;max-width:800px;margin:0 auto;">${cleaned}</div>`;
     return cleaned;
   } catch {
@@ -163,17 +238,306 @@ export async function scrapeAmazonProduct(url: string): Promise<ScrapedProduct> 
       )
       .catch(() => "General");
 
-    // Description — extract full product description HTML
+    // Description — flatten Amazon multi-column/A+ content into stacked eBay-safe blocks
     const description = await page.evaluate(() => {
+      function normalizeText(value: string | null | undefined): string {
+        return (value ?? "")
+          .replace(/\u200e/g, "")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function escapeHtml(value: string): string {
+        return value
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;")
+          .replace(/"/g, "&quot;")
+          .replace(/'/g, "&#39;");
+      }
+
+      function isVisible(element: Element): boolean {
+        if (
+          element.closest(
+            "script,style,noscript,template,[hidden],[aria-hidden='true']"
+          )
+        ) {
+          return false;
+        }
+
+        const style = window.getComputedStyle(element as HTMLElement);
+        return style.display !== "none" && style.visibility !== "hidden";
+      }
+
+      function uniqueItems(items: string[]): string[] {
+        const seen = new Set<string>();
+        const result: string[] = [];
+
+        items.forEach((item) => {
+          const key = item.toLowerCase();
+          if (seen.has(key)) return;
+          seen.add(key);
+          result.push(item);
+        });
+
+        return result;
+      }
+
+      function extractImageUrl(element: HTMLImageElement): string {
+        const candidates = [
+          element.getAttribute("data-old-hires"),
+          element.getAttribute("data-src"),
+          element.currentSrc,
+          element.src,
+        ];
+
+        for (const candidate of candidates) {
+          const value = normalizeText(candidate);
+          if (/^https?:\/\//i.test(value)) {
+            return value;
+          }
+        }
+
+        const dynamicImage = element.getAttribute("data-a-dynamic-image") ?? "";
+        const match = dynamicImage.match(/https?:\/\/[^"'}\],\s]+/i);
+        return match ? match[0] : "";
+      }
+
+      type DescriptionBlock =
+        | { type: "heading"; text: string; level: number }
+        | { type: "paragraph"; text: string }
+        | { type: "list"; items: string[] }
+        | { type: "image"; src: string; alt: string };
+
+      const blocks: DescriptionBlock[] = [];
+      const seenTexts = new Set<string>();
+      const seenLists = new Set<string>();
+      const seenImages = new Set<string>();
+
+      function pushHeading(text: string, level = 2): void {
+        const normalized = normalizeText(text);
+        if (!normalized) return;
+
+        const key = `heading:${normalized.toLowerCase()}`;
+        if (seenTexts.has(key)) return;
+        seenTexts.add(key);
+
+        blocks.push({
+          type: "heading",
+          text: normalized,
+          level: Math.min(Math.max(level, 2), 4),
+        });
+      }
+
+      function pushParagraph(text: string): void {
+        const normalized = normalizeText(text);
+        if (!normalized) return;
+
+        const key = `paragraph:${normalized.toLowerCase()}`;
+        if (seenTexts.has(key)) return;
+        seenTexts.add(key);
+
+        blocks.push({ type: "paragraph", text: normalized });
+      }
+
+      function pushList(items: string[]): void {
+        const normalizedItems = uniqueItems(
+          items.map((item) => normalizeText(item)).filter(Boolean)
+        );
+
+        if (normalizedItems.length === 0) return;
+
+        const key = normalizedItems.map((item) => item.toLowerCase()).join("||");
+        if (seenLists.has(key)) return;
+        seenLists.add(key);
+
+        blocks.push({ type: "list", items: normalizedItems });
+      }
+
+      function pushImage(src: string, alt: string): void {
+        const normalizedSrc = normalizeText(src);
+        if (
+          !/^https?:\/\//i.test(normalizedSrc) ||
+          /play-button|spinner|loading|transparent|pixel/i.test(normalizedSrc)
+        ) {
+          return;
+        }
+
+        if (seenImages.has(normalizedSrc)) return;
+        seenImages.add(normalizedSrc);
+
+        blocks.push({
+          type: "image",
+          src: normalizedSrc,
+          alt: normalizeText(alt),
+        });
+      }
+
+      function collectListItems(list: Element): string[] {
+        return uniqueItems(
+          Array.from(list.querySelectorAll("li"))
+            .map((item) => normalizeText(item.textContent))
+            .filter(Boolean)
+        );
+      }
+
+      function collectBlocks(root: Element | null): void {
+        if (!root) return;
+
+        const walk = (node: Element): void => {
+          Array.from(node.children).forEach((child) => {
+            if (!isVisible(child)) return;
+
+            const tagName = child.tagName.toLowerCase();
+
+            if (tagName === "img") {
+              const image = child as HTMLImageElement;
+              pushImage(extractImageUrl(image), image.alt ?? "");
+              return;
+            }
+
+            if (/^h[1-6]$/.test(tagName)) {
+              pushHeading(child.textContent ?? "", Number(tagName.slice(1)));
+              return;
+            }
+
+            if (tagName === "p") {
+              pushParagraph(child.textContent ?? "");
+              return;
+            }
+
+            if (tagName === "ul" || tagName === "ol") {
+              pushList(collectListItems(child));
+              return;
+            }
+
+            if (tagName === "br" || tagName === "hr") {
+              return;
+            }
+
+            const hasNestedSemanticBlocks = Boolean(
+              child.querySelector("img,h1,h2,h3,h4,h5,h6,p,ul,ol")
+            );
+
+            if (!hasNestedSemanticBlocks) {
+              const text = normalizeText(child.textContent);
+              if (text) {
+                pushParagraph(text);
+                return;
+              }
+            }
+
+            walk(child);
+          });
+        };
+
+        walk(root);
+      }
+
       const featureBullets = document.querySelector("#feature-bullets");
       const productDescription = document.querySelector("#productDescription");
       const aplus = document.querySelector("#aplus, #aplus_feature_div");
 
-      let html = "";
-      if (featureBullets) html += featureBullets.outerHTML;
-      if (productDescription) html += productDescription.outerHTML;
-      if (aplus) html += aplus.outerHTML;
-      return html;
+      const featureItems = featureBullets ? collectListItems(featureBullets) : [];
+      if (featureItems.length > 0) {
+        pushHeading("About this item", 2);
+        pushList(featureItems);
+      }
+
+      collectBlocks(productDescription);
+      collectBlocks(aplus);
+
+      if (blocks.length === 0) {
+        let html = "";
+        if (featureBullets) html += featureBullets.outerHTML;
+        if (productDescription) html += productDescription.outerHTML;
+        if (aplus) html += aplus.outerHTML;
+        return html;
+      }
+
+      const sections: DescriptionBlock[][] = [];
+      let currentSection: DescriptionBlock[] = [];
+
+      const flushSection = () => {
+        if (currentSection.length > 0) {
+          sections.push(currentSection);
+          currentSection = [];
+        }
+      };
+
+      blocks.forEach((block) => {
+        if (block.type === "image") {
+          flushSection();
+          currentSection.push(block);
+          return;
+        }
+
+        if (block.type === "heading" && currentSection.length > 0) {
+          flushSection();
+        }
+
+        currentSection.push(block);
+      });
+
+      flushSection();
+
+      const renderBlock = (
+        block: DescriptionBlock,
+        index: number,
+        section: DescriptionBlock[]
+      ): string => {
+        const textBlockStyle =
+          "margin:0 0 14px;font-size:16px;line-height:1.75;color:#333;white-space:normal;overflow-wrap:anywhere;word-break:break-word;";
+
+        if (
+          block.type === "paragraph" &&
+          index === 1 &&
+          section[0]?.type === "image" &&
+          block.text.length <= 120
+        ) {
+          return `<div style="margin:16px 0 10px;font-size:28px;font-weight:700;line-height:1.35;color:#ef3b2d;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${escapeHtml(
+            block.text
+          )}</div>`;
+        }
+
+        if (block.type === "heading") {
+          const fontSize =
+            block.level <= 2 ? "24px" : block.level === 3 ? "20px" : "18px";
+          return `<div style="margin:16px 0 10px;font-size:${fontSize};font-weight:700;line-height:1.35;color:#ef3b2d;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${escapeHtml(
+            block.text
+          )}</div>`;
+        }
+
+        if (block.type === "paragraph") {
+          return `<div style="${textBlockStyle}">${escapeHtml(block.text)}</div>`;
+        }
+
+        if (block.type === "list") {
+          return `<div style="margin:0 0 16px;">${block.items
+            .map(
+              (item) =>
+                `<div style="margin:0 0 8px;padding-left:18px;text-indent:-18px;font-size:16px;line-height:1.8;color:#333;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">&#8226; ${escapeHtml(
+                  item
+                )}</div>`
+            )
+            .join("")}</div>`;
+        }
+
+        return `<div style="margin:18px 0;text-align:center;"><img src="${escapeHtml(
+          block.src
+        )}" alt="${escapeHtml(
+          block.alt
+        )}" style="max-width:100%;height:auto;display:block;margin:0 auto;" /></div>`;
+      };
+
+      return sections
+        .map(
+          (section) =>
+            `<div style="margin:0 0 18px;">${section
+              .map((block, index) => renderBlock(block, index, section))
+              .join("")}</div>`
+        )
+        .join("");
     });
 
     // Item Specifics — extract from product information table

@@ -17,12 +17,6 @@ body {
   font-family: var(--font-sans), Arial, Helvetica, sans-serif;
 }
 
-.listflow-rich-text .ql-toolbar.ql-snow {
-  border-color: #d1d5db;
-  border-radius: 0.5rem 0.5rem 0 0;
-  background: #f9fafb;
-}
-
 .listflow-rich-text .ql-container.ql-snow {
   border-color: #d1d5db;
   border-radius: 0 0 0.5rem 0.5rem;
@@ -37,6 +31,152 @@ body {
   margin: 0.75rem 0;
   border: 0;
   border-top: 1px solid #d1d5db;
+}
+
+/* ── Quill Snow toolbar — clean & spaced ── */
+
+.ql-toolbar.ql-snow {
+  border: 1px solid #d1d5db;
+  border-radius: 0.5rem 0.5rem 0 0;
+  background: #fafafa;
+  padding: 6px 8px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+}
+
+/* Group separators */
+.ql-toolbar.ql-snow .ql-formats {
+  margin-right: 0;
+  padding-right: 8px;
+  border-right: 1px solid #e5e7eb;
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+}
+
+.ql-toolbar.ql-snow .ql-formats:last-child {
+  border-right: none;
+  padding-right: 0;
+}
+
+/* Buttons */
+.ql-toolbar.ql-snow button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  border: 1px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.ql-toolbar.ql-snow button:hover {
+  background: #e5e7eb;
+  border-color: #d1d5db;
+}
+
+.ql-toolbar.ql-snow button.ql-active {
+  background: #fff7ed;
+  border-color: #fb923c;
+  color: #c2410c;
+}
+
+.ql-toolbar.ql-snow button.ql-active .ql-stroke {
+  stroke: #c2410c;
+}
+
+.ql-toolbar.ql-snow button.ql-active .ql-fill {
+  fill: #c2410c;
+}
+
+/* SVG icons */
+.ql-toolbar.ql-snow button svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* Dropdowns (Font, Size, Color, Header) */
+.ql-toolbar.ql-snow .ql-picker {
+  height: 28px;
+}
+
+.ql-toolbar.ql-snow .ql-picker-label {
+  border: 1px solid #d1d5db;
+  border-radius: 4px;
+  padding: 0 20px 0 8px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  color: #374151;
+  background: #fff;
+  transition: all 0.15s ease;
+}
+
+.ql-toolbar.ql-snow .ql-picker-label:hover,
+.ql-toolbar.ql-snow .ql-picker.ql-expanded .ql-picker-label {
+  border-color: #9ca3af;
+  background: #f3f4f6;
+}
+
+.ql-toolbar.ql-snow .ql-picker-options {
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  padding: 4px;
+  background: #fff;
+  z-index: 100;
+}
+
+.ql-toolbar.ql-snow .ql-picker-item {
+  padding: 4px 8px;
+  border-radius: 3px;
+}
+
+.ql-toolbar.ql-snow .ql-picker-item:hover {
+  background: #f3f4f6;
+}
+
+/* Font dropdown wider */
+.ql-toolbar.ql-snow .ql-font .ql-picker-label {
+  min-width: 80px;
+}
+
+/* Size dropdown */
+.ql-toolbar.ql-snow .ql-size .ql-picker-label {
+  min-width: 55px;
+}
+
+/* Header dropdown */
+.ql-toolbar.ql-snow .ql-header .ql-picker-label {
+  min-width: 50px;
+}
+
+/* Color pickers */
+.ql-toolbar.ql-snow .ql-color-picker .ql-picker-label,
+.ql-toolbar.ql-snow .ql-icon-picker .ql-picker-label {
+  padding: 0;
+  width: 28px;
+  min-width: 28px;
+  justify-content: center;
+}
+
+/* Color picker dropdown */
+.ql-toolbar.ql-snow .ql-color-picker .ql-picker-options {
+  width: 152px;
+  padding: 6px;
+}
+
+.ql-toolbar.ql-snow .ql-color-picker .ql-picker-item {
+  width: 16px;
+  height: 16px;
+  border-radius: 2px;
+  margin: 1px;
+  padding: 0;
 }
 
 .listflow-rich-text .listflow-quill-action {
@@ -55,18 +195,9 @@ body {
   cursor: pointer;
 }
 
-.listflow-rich-text .ql-toolbar.ql-snow .listflow-quill-action {
-  width: auto;
-  float: left;
-}
-
-.listflow-rich-text .listflow-quill-action:hover:not(:disabled) {
-  background: #f3f4f6;
-}
-
 .listflow-rich-text .listflow-quill-action[data-active="true"] {
-  background: #111827;
-  color: #ffffff;
+  background: #fff7ed;
+  color: #c2410c;
 }
 
 .listflow-rich-text .listflow-quill-action:disabled {
@@ -92,4 +223,321 @@ body {
 
 .listflow-rich-text .listflow-quill-source:focus {
   box-shadow: inset 0 0 0 2px #f97316;
+}
+
+[data-toolbar-variant="grouped"] .ql-toolbar.ql-snow {
+  border-color: #d1d5db;
+  border-radius: 0.5rem 0.5rem 0 0;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  padding: 0.875rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.875rem;
+}
+
+[data-toolbar-variant="grouped"] .listflow-quill-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  min-width: 0;
+  padding: 0.7rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.75rem;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+[data-toolbar-variant="grouped"] .listflow-quill-section-label {
+  font-size: 0.68rem;
+  line-height: 1;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+
+[data-toolbar-variant="grouped"] .ql-toolbar.ql-snow .ql-formats.listflow-quill-controls {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+[data-toolbar-variant="grouped"] .ql-toolbar.ql-snow button,
+[data-toolbar-variant="grouped"] .ql-toolbar.ql-snow .listflow-quill-action {
+  float: none;
+  width: auto;
+  min-width: 2.25rem;
+  height: 2rem;
+  margin: 0;
+  padding: 0 0.65rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 0.55rem;
+  color: #334155;
+  background: transparent;
+  font-size: 0.78rem;
+  line-height: 1;
+}
+
+[data-toolbar-variant="grouped"] .ql-toolbar.ql-snow button:hover:not(:disabled),
+[data-toolbar-variant="grouped"] .ql-toolbar.ql-snow .listflow-quill-action:hover:not(:disabled) {
+  border-color: #cbd5e1;
+  background: #f8fafc;
+}
+
+[data-toolbar-variant="grouped"] .ql-toolbar.ql-snow button.ql-active,
+[data-toolbar-variant="grouped"] .ql-toolbar.ql-snow .listflow-quill-action[data-active="true"] {
+  border-color: #fb923c;
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+[data-toolbar-variant="grouped"] .ql-toolbar.ql-snow button svg {
+  display: none;
+}
+
+[data-toolbar-variant="grouped"] .ql-toolbar.ql-snow button sub,
+[data-toolbar-variant="grouped"] .ql-toolbar.ql-snow button sup {
+  font-size: 0.62rem;
+}
+
+[data-toolbar-variant="grouped"] .ql-toolbar.ql-snow select {
+  float: none;
+  width: auto;
+  min-width: 4.75rem;
+  height: 2rem;
+  margin: 0;
+  padding: 0 2rem 0 0.65rem;
+  border: 1px solid #d1d5db;
+  border-radius: 0.55rem;
+  background-color: #ffffff;
+  color: #334155;
+  font-size: 0.78rem;
+}
+
+[data-toolbar-variant="grouped"] .ql-toolbar.ql-snow .ql-color,
+[data-toolbar-variant="grouped"] .ql-toolbar.ql-snow .ql-background {
+  min-width: 3.5rem;
+}
+
+[data-toolbar-variant="grouped"] .listflow-quill-action[data-active="true"] {
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow {
+  border: 0;
+  border-bottom: 1px solid #d9d9d9;
+  border-radius: 0;
+  background: #f5f5f5;
+  padding: 0.4rem 0.6rem;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow .ql-formats {
+  margin: 0;
+  padding: 0 6px;
+  border-right: 1px solid #d6d6d6;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex: 0 0 auto;
+}
+
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow .ql-formats:last-child {
+  border-right: none;
+  padding-right: 0;
+}
+
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow button,
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow .listflow-quill-action {
+  float: none;
+  width: 1.75rem;
+  min-width: 1.75rem;
+  height: 1.75rem;
+  margin: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid transparent;
+  border-radius: 0.25rem;
+  color: #374151;
+  background: transparent;
+  font-size: 0.8rem;
+  font-weight: 700;
+  line-height: 1;
+  position: relative;
+  transition: all 0.15s ease;
+}
+
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow button svg {
+  display: block;
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow button svg .ql-stroke {
+  stroke-width: 2.2;
+}
+
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow button svg path,
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow button svg rect,
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow button svg line,
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow button svg polyline,
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow button svg polygon {
+  vector-effect: non-scaling-stroke;
+  stroke-width: 1.8;
+}
+
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow button:hover:not(:disabled),
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow .listflow-quill-action:hover:not(:disabled) {
+  border-color: #d1d5db;
+  background: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow button.ql-active,
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow .listflow-quill-action[data-active="true"] {
+  border-color: #fb923c;
+  background: #fff7ed;
+  color: #c2410c;
+}
+
+[data-toolbar-variant="compact"] .listflow-quill-action[data-active="true"] {
+  color: #c2410c;
+}
+
+/* ── Styled tooltip on hover ── */
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow button[aria-label]:hover::after,
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow .listflow-quill-action[aria-label]:hover::after,
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow .listflow-quill-action[title]:hover::after {
+  content: attr(aria-label);
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  font-size: 0.68rem;
+  font-weight: 500;
+  line-height: 1.3;
+  color: #1f2937;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 4px;
+  padding: 4px 8px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  z-index: 1000;
+  pointer-events: none;
+}
+
+/* Small arrow triangle */
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow button[aria-label]:hover::before,
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow .listflow-quill-action[aria-label]:hover::before,
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow .listflow-quill-action[title]:hover::before {
+  content: "";
+  position: absolute;
+  top: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  border: 4px solid transparent;
+  border-bottom-color: #e5e7eb;
+  z-index: 1001;
+  pointer-events: none;
+}
+
+[data-toolbar-variant="compact"] .listflow-quill-action-compact {
+  width: auto;
+  min-width: 1.75rem;
+  padding: 0 0.3rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+}
+
+[data-toolbar-variant="compact"] .listflow-quill-action-compact-label {
+  min-width: 2.8rem;
+  padding: 0 0.45rem;
+}
+
+[data-toolbar-variant="compact"] .listflow-quill-compact-glyph {
+  font-size: 0.68rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow .ql-picker {
+  color: #6b7280;
+}
+
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow .ql-picker-label {
+  border: 1px solid transparent;
+  border-radius: 0.2rem;
+  padding-left: 0.25rem;
+  padding-right: 1rem;
+}
+
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow .ql-picker-label:hover,
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow .ql-picker.ql-expanded .ql-picker-label {
+  border-color: #d6d6d6;
+  background: #ffffff;
+}
+
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow select {
+  float: none;
+  width: auto;
+  min-width: 2.65rem;
+  height: 1.45rem;
+  margin: 0;
+  padding: 0 1rem 0 0.25rem;
+  border: 1px solid transparent;
+  border-radius: 0.2rem;
+  background-color: transparent;
+  color: #6b7280;
+  font-size: 0.66rem;
+}
+
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow .ql-color,
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow .ql-background {
+  min-width: 2rem;
+}
+
+[data-toolbar-variant="compact"] .ql-container.ql-snow,
+[data-toolbar-variant="compact"] .listflow-quill-source {
+  border: 0;
+  border-radius: 0;
+}
+
+[data-toolbar-variant="compact"] .ql-editor,
+[data-toolbar-variant="compact"] .listflow-quill-source {
+  padding: 1rem 1.2rem;
+  font-size: 0.9rem;
+  line-height: 1.6;
+}
+
+@media (max-width: 768px) {
+  [data-toolbar-variant="grouped"] .ql-toolbar.ql-snow {
+    padding: 0.75rem;
+    gap: 0.65rem;
+  }
+
+  [data-toolbar-variant="grouped"] .listflow-quill-section {
+    width: 100%;
+  }
+
+  [data-toolbar-variant="compact"] .ql-toolbar.ql-snow {
+    padding: 0.3rem;
+  }
+
+  [data-toolbar-variant="compact"] .ql-toolbar.ql-snow .ql-formats {
+    margin-right: 0.15rem;
+  }
 }

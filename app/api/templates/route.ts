@@ -1,6 +1,7 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { normalizeBuiltinDescriptionTemplate } from "@/lib/builtin-description-templates";
 
 export async function GET() {
   const session = await auth();
@@ -12,7 +13,29 @@ export async function GET() {
     orderBy: { createdAt: "asc" },
   });
 
-  return NextResponse.json(templates);
+  const normalizedTemplates = templates.map((template) => {
+    const normalized = normalizeBuiltinDescriptionTemplate(template);
+    return normalized;
+  });
+
+  const updates = templates
+    .map((template, index) => ({
+      original: template,
+      normalized: normalizedTemplates[index],
+    }))
+    .filter(({ original, normalized }) => normalized.content !== original.content)
+    .map(({ original, normalized }) =>
+      prisma.descriptionTemplate.update({
+        where: { id: original.id },
+        data: { content: normalized.content },
+      }),
+    );
+
+  if (updates.length > 0) {
+    await Promise.all(updates);
+  }
+
+  return NextResponse.json(normalizedTemplates);
 }
 
 export async function POST(request: Request) {

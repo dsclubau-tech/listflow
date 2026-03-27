@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { ComponentType, CSSProperties } from "react";
+import type { ComponentType, CSSProperties, ReactNode } from "react";
 import "react-quill-new/dist/quill.snow.css";
 import { quillFormats } from "@/lib/quill-config";
 
@@ -45,6 +45,7 @@ const COLOR_OPTIONS = [
 ];
 
 type ReactQuillComponent = ComponentType<Record<string, unknown>>;
+type ToolbarVariant = "grouped" | "compact";
 
 interface RichTextEditorProps {
   value: string;
@@ -52,16 +53,63 @@ interface RichTextEditorProps {
   placeholder?: string;
   minHeight?: string;
   className?: string;
+  toolbarVariant?: ToolbarVariant;
+}
+
+interface ToolbarSectionProps {
+  label: string;
+  children: ReactNode;
+}
+
+interface CompactToolbarButtonProps {
+  ariaLabel: string;
+  disabled: boolean;
+  onClick: () => void;
+  isActive?: boolean;
+  className?: string;
+  children: ReactNode;
 }
 
 let quillConfigured = false;
 
 type QuillRegistrar = {
-  import: (path: string) => unknown;
-  register: (...args: unknown[]) => void;
+  import: (...args: any[]) => any;
+  register: (...args: any[]) => void;
 };
 
 type BlotBaseCtor = new (...args: never[]) => Record<string, unknown>;
+
+function ToolbarSection({ label, children }: ToolbarSectionProps) {
+  return (
+    <div className="listflow-quill-section">
+      <div className="listflow-quill-section-label">{label}</div>
+      <span className="ql-formats listflow-quill-controls">{children}</span>
+    </div>
+  );
+}
+
+function CompactToolbarButton({
+  ariaLabel,
+  disabled,
+  onClick,
+  isActive = false,
+  className = "",
+  children,
+}: CompactToolbarButtonProps) {
+  return (
+    <button
+      type="button"
+      className={`listflow-quill-action listflow-quill-action-compact ${className}`.trim()}
+      onClick={onClick}
+      disabled={disabled}
+      aria-label={ariaLabel}
+      title={ariaLabel}
+      data-active={isActive}
+    >
+      {children}
+    </button>
+  );
+}
 
 function registerCustomFormats(Quill: QuillRegistrar) {
   if (quillConfigured) return;
@@ -95,6 +143,7 @@ export default function RichTextEditor({
   placeholder,
   minHeight = "18rem",
   className = "",
+  toolbarVariant = "grouped",
 }: RichTextEditorProps) {
   const toolbarId = `rich-text-toolbar-${useId().replace(/:/g, "")}`;
   const editorRef = useRef<{
@@ -177,14 +226,8 @@ export default function RichTextEditor({
   );
 
   const handleUnlink = useCallback(() => {
-    withEditorSelection((editor, index, length) => {
-      if (length > 0) {
-        editor.format("link", false, "user");
-        return;
-      }
-
+    withEditorSelection((editor) => {
       editor.format("link", false, "user");
-      editor.setSelection(index, 0, "silent");
     });
   }, [withEditorSelection]);
 
@@ -212,13 +255,13 @@ export default function RichTextEditor({
   }, [withEditorSelection]);
 
   const handleInsertEmoji = useCallback(() => {
-    const text = window.prompt("Enter an emoji or special character", "🙂");
+    const text = window.prompt("Enter an emoji or special character", "\u{1F642}");
     if (!text) return;
     insertTextAtCursor(text);
   }, [insertTextAtCursor]);
 
   const handleInsertSymbol = useCallback(() => {
-    const text = window.prompt("Enter a symbol", "Ω");
+    const text = window.prompt("Enter a symbol", "\u03A9");
     if (!text) return;
     insertTextAtCursor(text);
   }, [insertTextAtCursor]);
@@ -239,9 +282,81 @@ export default function RichTextEditor({
     "--listflow-quill-min-height": minHeight,
   } as CSSProperties;
 
-  return (
-    <div className={`listflow-rich-text ${className}`.trim()} style={rootStyle}>
-      <div id={toolbarId} className="listflow-quill-toolbar" role="toolbar" aria-label="Rich text editor toolbar">
+  function renderGroupedToolbar() {
+    return (
+      <>
+        <ToolbarSection label="Text Formatting">
+          <button type="button" className="ql-bold" aria-label="Bold" disabled={quillToolbarDisabled}>B</button>
+          <button type="button" className="ql-italic" aria-label="Italic" disabled={quillToolbarDisabled}>I</button>
+          <button type="button" className="ql-underline" aria-label="Underline" disabled={quillToolbarDisabled}>U</button>
+          <button type="button" className="ql-strike" aria-label="Strikethrough" disabled={quillToolbarDisabled}>S</button>
+          <button type="button" className="ql-script" value="sub" aria-label="Subscript" disabled={quillToolbarDisabled}>
+            x<sub>2</sub>
+          </button>
+          <button type="button" className="ql-script" value="super" aria-label="Superscript" disabled={quillToolbarDisabled}>
+            x<sup>2</sup>
+          </button>
+          <button type="button" className="ql-clean" aria-label="Clear formatting" disabled={quillToolbarDisabled}>Tx</button>
+        </ToolbarSection>
+
+        <ToolbarSection label="Lists & Indentation">
+          <button type="button" className="ql-list" value="ordered" aria-label="Ordered list" disabled={quillToolbarDisabled}>1.</button>
+          <button type="button" className="ql-list" value="bullet" aria-label="Bullet list" disabled={quillToolbarDisabled}>{"\u2022"}</button>
+          <button type="button" className="ql-blockquote" aria-label="Blockquote" disabled={quillToolbarDisabled}>&quot;</button>
+          <button type="button" className="ql-align" value="" aria-label="Align left" disabled={quillToolbarDisabled}>Left</button>
+          <button type="button" className="ql-align" value="center" aria-label="Align center" disabled={quillToolbarDisabled}>Center</button>
+          <button type="button" className="ql-align" value="right" aria-label="Align right" disabled={quillToolbarDisabled}>Right</button>
+          <button type="button" className="ql-align" value="justify" aria-label="Justify" disabled={quillToolbarDisabled}>Justify</button>
+          <button type="button" className="ql-indent" value="-1" aria-label="Decrease indent" disabled={quillToolbarDisabled}>-</button>
+          <button type="button" className="ql-indent" value="+1" aria-label="Increase indent" disabled={quillToolbarDisabled}>+</button>
+        </ToolbarSection>
+
+        <ToolbarSection label="Insert">
+          <button type="button" className="ql-link" aria-label="Insert link" disabled={quillToolbarDisabled}>Link</button>
+          <button type="button" className="listflow-quill-action" onClick={handleUnlink} disabled={quillToolbarDisabled}>Unlink</button>
+          <button type="button" className="ql-image" aria-label="Insert image" disabled={quillToolbarDisabled}>Image</button>
+          <button type="button" className="listflow-quill-action" onClick={handleInsertTable} disabled={quillToolbarDisabled}>Table</button>
+          <button type="button" className="listflow-quill-action" onClick={handleInsertDivider} disabled={quillToolbarDisabled}>HR</button>
+          <button type="button" className="listflow-quill-action" onClick={handleInsertEmoji} disabled={quillToolbarDisabled}>Emoji</button>
+          <button type="button" className="listflow-quill-action" onClick={handleInsertSymbol} disabled={quillToolbarDisabled}>{"\u03A9"}</button>
+        </ToolbarSection>
+
+        <ToolbarSection label="Text Style">
+          <select className="ql-font" defaultValue="" aria-label="Font family" disabled={quillToolbarDisabled}>
+            <option value="">Font</option>
+            <option value="serif">Serif</option>
+            <option value="monospace">Monospace</option>
+          </select>
+          <select className="ql-size" defaultValue="" aria-label="Font size" disabled={quillToolbarDisabled}>
+            <option value="">Size</option>
+            <option value="small">Small</option>
+            <option value="large">Large</option>
+            <option value="huge">Huge</option>
+          </select>
+          <select className="ql-color" defaultValue="" aria-label="Text color" disabled={quillToolbarDisabled}>
+            {COLOR_OPTIONS.map((color) => (
+              <option key={`color-${color || "default"}`} value={color} />
+            ))}
+          </select>
+          <select className="ql-background" defaultValue="" aria-label="Highlight color" disabled={quillToolbarDisabled}>
+            {COLOR_OPTIONS.map((color) => (
+              <option key={`background-${color || "default"}`} value={color} />
+            ))}
+          </select>
+        </ToolbarSection>
+
+        <ToolbarSection label="View">
+          <button type="button" className="listflow-quill-action" data-active={isSourceMode} onClick={() => setIsSourceMode((current) => !current)} disabled={!EditorComponent}>Source</button>
+          <button type="button" className="listflow-quill-action" onClick={handleUndo} disabled={quillToolbarDisabled}>Undo</button>
+          <button type="button" className="listflow-quill-action" onClick={handleRedo} disabled={quillToolbarDisabled}>Redo</button>
+        </ToolbarSection>
+      </>
+    );
+  }
+
+  function renderCompactToolbar() {
+    return (
+      <>
         <span className="ql-formats">
           <button type="button" className="ql-bold" aria-label="Bold" disabled={quillToolbarDisabled} />
           <button type="button" className="ql-italic" aria-label="Italic" disabled={quillToolbarDisabled} />
@@ -266,60 +381,44 @@ export default function RichTextEditor({
 
         <span className="ql-formats">
           <button type="button" className="ql-link" aria-label="Insert link" disabled={quillToolbarDisabled} />
-          <button
-            type="button"
-            className="listflow-quill-action"
-            onClick={handleUnlink}
-            disabled={quillToolbarDisabled}
-          >
-            Unlink
-          </button>
+          <CompactToolbarButton ariaLabel="Remove link" onClick={handleUnlink} disabled={quillToolbarDisabled}>
+            <svg viewBox="0 0 18 18" aria-hidden="true">
+              <path d="M7 6.5H5.75a3.25 3.25 0 0 0 0 6.5H8" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M11 11.5h1.25a3.25 3.25 0 1 0 0-6.5H10" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="m6 12 6-6" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </CompactToolbarButton>
           <button type="button" className="ql-image" aria-label="Insert image" disabled={quillToolbarDisabled} />
-          <button
-            type="button"
-            className="listflow-quill-action"
-            onClick={handleInsertTable}
-            disabled={quillToolbarDisabled}
-          >
-            Table
-          </button>
-          <button
-            type="button"
-            className="listflow-quill-action"
-            onClick={handleInsertDivider}
-            disabled={quillToolbarDisabled}
-          >
-            HR
-          </button>
-          <button
-            type="button"
-            className="listflow-quill-action"
-            onClick={handleInsertEmoji}
-            disabled={quillToolbarDisabled}
-          >
-            Emoji
-          </button>
-          <button
-            type="button"
-            className="listflow-quill-action"
-            onClick={handleInsertSymbol}
-            disabled={quillToolbarDisabled}
-          >
-            Ω
-          </button>
+          <CompactToolbarButton ariaLabel="Insert table" onClick={handleInsertTable} disabled={quillToolbarDisabled}>
+            <svg viewBox="0 0 18 18" aria-hidden="true">
+              <rect x="3" y="4" width="12" height="10" rx="1" fill="none" stroke="currentColor" />
+              <path d="M7 4v10M11 4v10M3 7.5h12M3 10.5h12" fill="none" stroke="currentColor" />
+            </svg>
+          </CompactToolbarButton>
+          <CompactToolbarButton ariaLabel="Insert horizontal line" onClick={handleInsertDivider} disabled={quillToolbarDisabled}>
+            <svg viewBox="0 0 18 18" aria-hidden="true">
+              <path d="M4 9h10" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="1.6" />
+            </svg>
+          </CompactToolbarButton>
+          <CompactToolbarButton ariaLabel="Insert special character" onClick={handleInsertEmoji} disabled={quillToolbarDisabled}>
+            <span className="listflow-quill-compact-glyph">@</span>
+          </CompactToolbarButton>
+          <CompactToolbarButton ariaLabel="Insert special symbol" onClick={handleInsertSymbol} disabled={quillToolbarDisabled}>
+            <span className="listflow-quill-compact-glyph">O</span>
+          </CompactToolbarButton>
         </span>
 
         <span className="ql-formats">
           <select className="ql-font" defaultValue="" aria-label="Font family" disabled={quillToolbarDisabled}>
-            <option value="" />
-            <option value="serif" />
-            <option value="monospace" />
+            <option value="">Font</option>
+            <option value="serif">Serif</option>
+            <option value="monospace">Monospace</option>
           </select>
           <select className="ql-size" defaultValue="" aria-label="Font size" disabled={quillToolbarDisabled}>
-            <option value="small" />
-            <option value="" />
-            <option value="large" />
-            <option value="huge" />
+            <option value="">Size</option>
+            <option value="small">Small</option>
+            <option value="large">Large</option>
+            <option value="huge">Huge</option>
           </select>
           <select className="ql-color" defaultValue="" aria-label="Text color" disabled={quillToolbarDisabled}>
             {COLOR_OPTIONS.map((color) => (
@@ -331,40 +430,45 @@ export default function RichTextEditor({
               <option key={`background-${color || "default"}`} value={color} />
             ))}
           </select>
-        </span>
-
-        <span className="ql-formats">
-          <button
-            type="button"
-            className="listflow-quill-action"
-            data-active={isSourceMode}
+          <CompactToolbarButton
+            ariaLabel="Toggle source mode"
             onClick={() => setIsSourceMode((current) => !current)}
             disabled={!EditorComponent}
+            isActive={isSourceMode}
+            className="listflow-quill-action-compact-label"
           >
             Source
-          </button>
-          <button
-            type="button"
-            className="listflow-quill-action"
-            onClick={handleUndo}
-            disabled={quillToolbarDisabled}
-          >
-            Undo
-          </button>
-          <button
-            type="button"
-            className="listflow-quill-action"
-            onClick={handleRedo}
-            disabled={quillToolbarDisabled}
-          >
-            Redo
-          </button>
+          </CompactToolbarButton>
+          <CompactToolbarButton ariaLabel="Undo" onClick={handleUndo} disabled={quillToolbarDisabled}>
+            <svg viewBox="0 0 18 18" aria-hidden="true">
+              <path d="M7 5 3.5 8.5 7 12" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M4 8.5h6a4 4 0 1 1 0 8" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </CompactToolbarButton>
+          <CompactToolbarButton ariaLabel="Redo" onClick={handleRedo} disabled={quillToolbarDisabled}>
+            <svg viewBox="0 0 18 18" aria-hidden="true">
+              <path d="m11 5 3.5 3.5L11 12" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M14 8.5H8a4 4 0 1 0 0 8" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </CompactToolbarButton>
         </span>
+      </>
+    );
+  }
+
+  return (
+    <div
+      className={`listflow-rich-text ${className}`.trim()}
+      style={rootStyle}
+      data-toolbar-variant={toolbarVariant}
+    >
+      <div id={toolbarId} className="listflow-quill-toolbar" role="toolbar" aria-label="Rich text editor toolbar">
+        {toolbarVariant === "compact" ? renderCompactToolbar() : renderGroupedToolbar()}
       </div>
 
       {!EditorComponent ? (
         <div className="listflow-quill-loading border border-gray-300 border-t-0 rounded-b-md px-4 py-3 text-sm text-gray-500 bg-white">
-          Loading editor…
+          Loading editor...
         </div>
       ) : (
         <>
