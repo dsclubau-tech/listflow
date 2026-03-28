@@ -1,6 +1,7 @@
 import type { Product, Store } from "@/app/generated/prisma/client";
 
 type ProductWithStore = Product & { store: Store };
+type ProductSpecifics = Record<string, string>;
 
 /**
  * Escapes XML special characters in text content.
@@ -14,63 +15,107 @@ function escapeXml(str: string): string {
     .replace(/'/g, "&apos;");
 }
 
-/**
- * Builds a valid eBay AddItem XML request body for the Trading API.
- * Throws if any business policy ID is missing.
- *
- * Location/country/currency/site are read from itemSpecifics using _-prefixed
- * internal keys set by InlineEditForm. These keys are NOT emitted as ItemSpecifics.
- */
-export function buildAddItemXML(product: ProductWithStore): string {
-  // Validate policy IDs before building XML
+function getProductSpecifics(product: Product): ProductSpecifics | null {
+  const rawSpecifics = product.itemSpecifics;
+
+  if (!rawSpecifics || typeof rawSpecifics !== "object" || Array.isArray(rawSpecifics)) {
+    return null;
+  }
+
+  const specifics: ProductSpecifics = {};
+
+  for (const [key, value] of Object.entries(rawSpecifics as Record<string, unknown>)) {
+    if (value === null || value === undefined) {
+      continue;
+    }
+
+    specifics[key] = typeof value === "string" ? value : String(value);
+  }
+
+  return specifics;
+}
+
+function getValidatedPolicyIds(product: Product) {
   if (!product.shippingPolicyId) {
-    throw new Error("Shipping Policy is required — please select one on the Product tab.");
+    throw new Error("Shipping Policy is required - please select one on the Product tab.");
   }
   if (!product.returnPolicyId) {
-    throw new Error("Return Policy is required — please select one on the Product tab.");
+    throw new Error("Return Policy is required - please select one on the Product tab.");
   }
   if (!product.paymentPolicyId) {
-    throw new Error("Payment Policy is required — please select one on the Product tab.");
+    throw new Error("Payment Policy is required - please select one on the Product tab.");
   }
 
-  const conditionId = product.condition === "New" ? "1000" : "3000";
+  return {
+    shippingPolicyId: product.shippingPolicyId,
+    returnPolicyId: product.returnPolicyId,
+    paymentPolicyId: product.paymentPolicyId,
+  };
+}
 
-  // Read internal location metadata from itemSpecifics (set by InlineEditForm)
-  const specifics = product.itemSpecifics as Record<string, string> | null;
-  const country = specifics?.["_Country"] || "AU";
-  const currency = specifics?.["_Currency"] || "AUD";
-  const site = specifics?.["_Site"] || "Australia";
-  const location = specifics?.["_Location"] || "Australia";
-  const postalCode = specifics?.["_PostalCode"] || "3000";
+function getValidatedPrice(product: Product): string {
+  const numericPrice = Number(product.price);
 
-  // Use product.category as the eBay CategoryID
+  if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
+    throw new Error("Price must be greater than 0 before sending the listing to eBay.");
+  }
+
+  return product.price.toString();
+}
+
+function getValidatedQuantity(product: Product): string {
+  if (!Number.isInteger(product.quantity) || product.quantity < 1) {
+    throw new Error("Quantity must be at least 1 before sending the listing to eBay.");
+  }
+
+  return product.quantity.toString();
+}
+
+function getValidatedCategoryId(product: Product): string {
   const categoryId = (product.category || "").trim();
+
   if (!categoryId) {
-    throw new Error("Category is required — please enter a numeric eBay Category ID on the Product tab.");
+    throw new Error("Category is required - please enter a numeric eBay Category ID on the Product tab.");
   }
 
-  // Ensure category is numeric
   if (!/^\d+$/.test(categoryId)) {
-    throw new Error(`Invalid Category: "${categoryId}". eBay requires a numeric Category ID (e.g., 171114). Please update it on the Product tab.`);
+    throw new Error(
+      `Invalid Category: "${categoryId}". eBay requires a numeric Category ID (e.g. 171114). Please update it on the Product tab.`
+    );
   }
 
-  // Build PictureURL tags (max 12)
-  const pictureUrls = product.images
+  return categoryId;
+}
+
+function getLocationMetadata(specifics: ProductSpecifics | null) {
+  return {
+    country: specifics?.["_Country"] || "AU",
+    currency: specifics?.["_Currency"] || "AUD",
+    site: specifics?.["_Site"] || "Australia",
+    location: specifics?.["_Location"] || "Australia",
+    postalCode: specifics?.["_PostalCode"] || "3000",
+  };
+}
+
+function buildPictureDetailsXml(images: string[]): string {
+  const pictureUrls = images
     .slice(0, 12)
     .map((url) => `      <PictureURL>${escapeXml(url)}</PictureURL>`)
     .join("\n");
 
-  // Build ItemSpecifics tags — exclude _-prefixed internal metadata keys
-  let itemSpecificsXml = "";
-  if (specifics && typeof specifics === "object") {
-    // Ensure "Type" is present (eBay often requires it)
+  return `    <PictureDetails>\n${pictureUrls}\n    </PictureDetails>`;
+}
+
+function buildItemSpecificsXml(product: Product, specifics: ProductSpecifics | null): string {
+  if (specifics) {
     const normalizedSpecifics = { ...specifics };
-    const hasType = Object.keys(normalizedSpecifics).some(k => k.toLowerCase() === "type");
-    
+    const hasType = Object.keys(normalizedSpecifics).some(
+      (key) => key.toLowerCase() === "type"
+    );
+
     if (!hasType) {
-      // Use the last part of categoryName (e.g., "Pressure Washers") or a default
       const defaultType = product.categoryName?.split(">").pop()?.trim() || "Other";
-      normalizedSpecifics["Type"] = defaultType;
+      normalizedSpecifics.Type = defaultType;
     }
 
     const entries = Object.entries(normalizedSpecifics).filter(
@@ -79,6 +124,7 @@ export function buildAddItemXML(product: ProductWithStore): string {
         key.trim() !== "" &&
         value.trim() !== ""
     );
+
     if (entries.length > 0) {
       const nameValueLists = entries
         .map(
@@ -86,13 +132,45 @@ export function buildAddItemXML(product: ProductWithStore): string {
             `      <NameValueList>\n        <Name>${escapeXml(key)}</Name>\n        <Value>${escapeXml(value)}</Value>\n      </NameValueList>`
         )
         .join("\n");
-      itemSpecificsXml = `    <ItemSpecifics>\n${nameValueLists}\n    </ItemSpecifics>`;
+
+      return `    <ItemSpecifics>\n${nameValueLists}\n    </ItemSpecifics>`;
     }
-  } else {
-    // No specifics at all? At least add Type
-    const defaultType = product.categoryName?.split(">").pop()?.trim() || "Other";
-    itemSpecificsXml = `    <ItemSpecifics>\n      <NameValueList>\n        <Name>Type</Name>\n        <Value>${escapeXml(defaultType)}</Value>\n      </NameValueList>\n    </ItemSpecifics>`;
   }
+
+  const defaultType = product.categoryName?.split(">").pop()?.trim() || "Other";
+  return `    <ItemSpecifics>\n      <NameValueList>\n        <Name>Type</Name>\n        <Value>${escapeXml(defaultType)}</Value>\n      </NameValueList>\n    </ItemSpecifics>`;
+}
+
+function buildProductListingDetailsXml(specifics: ProductSpecifics | null): string {
+  const upc = specifics?.UPC || specifics?.EAN || "Does not apply";
+
+  return `    <ProductListingDetails>\n      <UPC>${escapeXml(upc)}</UPC>\n    </ProductListingDetails>`;
+}
+
+function buildSellerProfilesXml(product: Product): string {
+  const { shippingPolicyId, returnPolicyId, paymentPolicyId } = getValidatedPolicyIds(product);
+
+  return `    <SellerProfiles>\n      <SellerShippingProfile>\n        <ShippingProfileID>${shippingPolicyId}</ShippingProfileID>\n      </SellerShippingProfile>\n      <SellerReturnProfile>\n        <ReturnProfileID>${returnPolicyId}</ReturnProfileID>\n      </SellerReturnProfile>\n      <SellerPaymentProfile>\n        <PaymentProfileID>${paymentPolicyId}</PaymentProfileID>\n      </SellerPaymentProfile>\n    </SellerProfiles>`;
+}
+
+/**
+ * Builds a valid eBay AddItem XML request body for the Trading API.
+ * Throws if required business policy, pricing, quantity, or category data is missing.
+ *
+ * Location/country/currency/site are read from itemSpecifics using _-prefixed
+ * internal keys set by InlineEditForm. These keys are NOT emitted as ItemSpecifics.
+ */
+export function buildAddItemXML(product: ProductWithStore): string {
+  const specifics = getProductSpecifics(product);
+  const { country, currency, site, location, postalCode } = getLocationMetadata(specifics);
+  const categoryId = getValidatedCategoryId(product);
+  const startPrice = getValidatedPrice(product);
+  const quantity = getValidatedQuantity(product);
+  const conditionId = product.condition === "New" ? "1000" : "3000";
+  const pictureDetailsXml = buildPictureDetailsXml(product.images);
+  const itemSpecificsXml = buildItemSpecificsXml(product, specifics);
+  const productListingDetailsXml = buildProductListingDetailsXml(specifics);
+  const sellerProfilesXml = buildSellerProfilesXml(product);
 
   return `<?xml version="1.0" encoding="utf-8"?>
 <AddItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
@@ -104,33 +182,19 @@ export function buildAddItemXML(product: ProductWithStore): string {
     <PrimaryCategory>
       <CategoryID>${escapeXml(categoryId)}</CategoryID>
     </PrimaryCategory>
-    <StartPrice>${product.price.toString()}</StartPrice>
+    <StartPrice>${startPrice}</StartPrice>
     <CategoryMappingAllowed>true</CategoryMappingAllowed>
     <Country>${escapeXml(country)}</Country>
     <Currency>${escapeXml(currency)}</Currency>
     <DispatchTimeMax>3</DispatchTimeMax>
     <ListingDuration>GTC</ListingDuration>
     <ListingType>FixedPriceItem</ListingType>
-    <Quantity>${product.quantity.toString()}</Quantity>
+    <Quantity>${quantity}</Quantity>
     <ConditionID>${conditionId}</ConditionID>
-    <ProductListingDetails>
-      <UPC>${escapeXml(specifics?.["UPC"] || specifics?.["EAN"] || "Does not apply")}</UPC>
-    </ProductListingDetails>
-    <PictureDetails>
-${pictureUrls}
-    </PictureDetails>
+${productListingDetailsXml}
+${pictureDetailsXml}
 ${itemSpecificsXml}
-    <SellerProfiles>
-      <SellerShippingProfile>
-        <ShippingProfileID>${product.shippingPolicyId}</ShippingProfileID>
-      </SellerShippingProfile>
-      <SellerReturnProfile>
-        <ReturnProfileID>${product.returnPolicyId}</ReturnProfileID>
-      </SellerReturnProfile>
-      <SellerPaymentProfile>
-        <PaymentProfileID>${product.paymentPolicyId}</PaymentProfileID>
-      </SellerPaymentProfile>
-    </SellerProfiles>
+${sellerProfilesXml}
     <Location>${escapeXml(location)}</Location>
     <PostalCode>${escapeXml(postalCode)}</PostalCode>
     <Site>${escapeXml(site)}</Site>
@@ -153,16 +217,32 @@ export function buildEndItemXML(ebayItemId: string, reason = "NotAvailable"): st
 }
 
 /**
- * Builds a valid eBay ReviseItem XML request body to update only the description.
+ * Builds a valid eBay ReviseItem XML request body to update editable live-listing fields.
  */
-export function buildReviseItemXML(ebayItemId: string, description: string): string {
+export function buildReviseItemXML(product: ProductWithStore): string {
+  if (!product.ebayItemId) {
+    throw new Error("Product has not been uploaded to eBay yet.");
+  }
+
+  const specifics = getProductSpecifics(product);
+  const { location, postalCode } = getLocationMetadata(specifics);
+  const startPrice = getValidatedPrice(product);
+  const quantity = getValidatedQuantity(product);
+  const sellerProfilesXml = buildSellerProfilesXml(product);
+
   return `<?xml version="1.0" encoding="utf-8"?>
 <ReviseItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
   <ErrorLanguage>en_US</ErrorLanguage>
   <WarningLevel>High</WarningLevel>
   <Item>
-    <ItemID>${escapeXml(ebayItemId)}</ItemID>
-    <Description><![CDATA[${description}]]></Description>
+    <ItemID>${escapeXml(product.ebayItemId)}</ItemID>
+    <Title>${escapeXml(product.title.slice(0, 80))}</Title>
+    <Description><![CDATA[${product.description}]]></Description>
+    <StartPrice>${startPrice}</StartPrice>
+    <Quantity>${quantity}</Quantity>
+${sellerProfilesXml}
+    <Location>${escapeXml(location)}</Location>
+    <PostalCode>${escapeXml(postalCode)}</PostalCode>
   </Item>
 </ReviseItemRequest>`;
 }

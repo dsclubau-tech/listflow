@@ -302,7 +302,7 @@ export async function callEbayEndItem(
 }
 
 /**
- * Sends a ReviseItem XML request to the eBay Trading API to update a listing's description.
+ * Sends a ReviseItem XML request to the eBay Trading API to update a live listing.
  */
 export async function callEbayReviseItem(
   xmlBody: string,

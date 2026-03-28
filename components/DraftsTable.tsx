@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, Fragment } from "react";
+import { Fragment, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Product, Store, User } from "@/app/generated/prisma/client";
 import InlineEditForm from "@/components/InlineEditForm";
@@ -13,6 +13,7 @@ type ProductWithRelations = Product & {
 interface DraftsTableProps {
   products: ProductWithRelations[];
   onToast: (message: string, variant: "success" | "error") => void;
+  view?: "drafts" | "products";
 }
 
 const storeBadgeColors: Record<string, string> = {
@@ -21,13 +22,17 @@ const storeBadgeColors: Record<string, string> = {
   "Store 3": "bg-orange-100 text-orange-800",
 };
 
-const statusBadgeColors: Record<string, string> = {
-  DRAFT: "bg-gray-100 text-gray-600",
-  IMPORTED: "bg-green-100 text-green-700",
-  FAILED: "bg-red-100 text-red-700",
+const statusBadgeLabels: Record<string, string> = {
+  DRAFT: "Draft",
+  IMPORTED: "Imported",
+  FAILED: "Failed",
 };
 
-export default function DraftsTable({ products, onToast }: DraftsTableProps) {
+export default function DraftsTable({
+  products,
+  onToast,
+  view = "drafts",
+}: DraftsTableProps) {
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [endingId, setEndingId] = useState<string | null>(null);
@@ -38,13 +43,32 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
   const [bulkTotal, setBulkTotal] = useState(0);
   const router = useRouter();
 
+  const isDraftsView = view === "drafts";
+  const isProductsView = view === "products";
+
+  function getStatusBadgeClasses(status: string) {
+    if (status === "FAILED" && isDraftsView) {
+      return "bg-red-100 text-red-800 ring-1 ring-inset ring-red-200";
+    }
+
+    if (status === "IMPORTED") {
+      return "bg-green-100 text-green-700";
+    }
+
+    if (status === "FAILED") {
+      return "bg-red-100 text-red-700";
+    }
+
+    return "bg-gray-100 text-gray-600";
+  }
+
   function toggleExpand(productId: string) {
     setExpandedProductId((prev) => (prev === productId ? null : productId));
   }
 
-  // --- Single import ---
   async function handleImport(productId: string) {
     setLoadingId(productId);
+
     try {
       const res = await fetch("/api/upload", {
         method: "POST",
@@ -52,6 +76,7 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
         body: JSON.stringify({ productId }),
       });
       const data = await res.json();
+
       if (res.ok) {
         onToast("Product imported to eBay successfully!", "success");
         router.refresh();
@@ -66,16 +91,20 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
     }
   }
 
-  // --- Delete ---
   async function handleDelete(productId: string) {
     const confirmed = window.confirm(
       "Are you sure you want to delete this product? This cannot be undone."
     );
-    if (!confirmed) return;
+
+    if (!confirmed) {
+      return;
+    }
 
     setDeletingId(productId);
+
     try {
       const res = await fetch(`/api/products/${productId}`, { method: "DELETE" });
+
       if (res.ok) {
         onToast("Product deleted", "success");
         setSelectedIds((prev) => prev.filter((id) => id !== productId));
@@ -90,17 +119,21 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
     }
   }
 
-  // --- End Listing ---
   async function handleEndListing(productId: string) {
     const confirmed = window.confirm(
       "Are you sure you want to end this listing on eBay? The product will return to DRAFT status."
     );
-    if (!confirmed) return;
+
+    if (!confirmed) {
+      return;
+    }
 
     setEndingId(productId);
+
     try {
       const res = await fetch(`/api/products/${productId}/end`, { method: "POST" });
       const data = await res.json();
+
       if (res.ok) {
         onToast("Listing ended on eBay", "success");
         router.refresh();
@@ -114,10 +147,13 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
     }
   }
 
-  // --- Checkbox selection ---
-  const selectableProducts = products.filter((p) => p.status !== "IMPORTED");
-  const allSelectableIds = selectableProducts.map((p) => p.id);
-  const allSelected = allSelectableIds.length > 0 && allSelectableIds.every((id) => selectedIds.includes(id));
+  const selectableProducts = isDraftsView
+    ? products.filter((product) => product.status !== "IMPORTED")
+    : [];
+  const allSelectableIds = selectableProducts.map((product) => product.id);
+  const allSelected =
+    allSelectableIds.length > 0 &&
+    allSelectableIds.every((id) => selectedIds.includes(id));
 
   function toggleSelect(productId: string) {
     setSelectedIds((prev) =>
@@ -130,24 +166,35 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
   function toggleSelectAll() {
     if (allSelected) {
       setSelectedIds([]);
-    } else {
-      setSelectedIds(allSelectableIds);
+      return;
     }
+
+    setSelectedIds(allSelectableIds);
   }
 
-  // --- Bulk import ---
   async function handleBulkImport() {
-    // Validate selected products
-    const selected = products.filter((p) => selectedIds.includes(p.id));
+    const selected = products.filter((product) => selectedIds.includes(product.id));
 
     for (const product of selected) {
       const categoryId = (product.category || "").trim();
+
       if (!categoryId || !/^\d+$/.test(categoryId)) {
-        onToast("Some products are missing required fields (category ID or policies). Please edit them before bulk importing.", "error");
+        onToast(
+          "Some products are missing required fields (category ID or policies). Please edit them before bulk importing.",
+          "error"
+        );
         return;
       }
-      if (!product.shippingPolicyId || !product.returnPolicyId || !product.paymentPolicyId) {
-        onToast("Some products are missing required fields (category ID or policies). Please edit them before bulk importing.", "error");
+
+      if (
+        !product.shippingPolicyId ||
+        !product.returnPolicyId ||
+        !product.paymentPolicyId
+      ) {
+        onToast(
+          "Some products are missing required fields (category ID or policies). Please edit them before bulk importing.",
+          "error"
+        );
         return;
       }
     }
@@ -160,14 +207,13 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
     let failed = 0;
     let skippedAmazon = 0;
 
-    for (let i = 0; i < selected.length; i++) {
+    for (let i = 0; i < selected.length; i += 1) {
       const product = selected[i];
-
-      // Check for Amazon keyword in description
       const plainText = product.description.replace(/<[^>]*>/g, "");
+
       if (/amazon/i.test(plainText)) {
-        skippedAmazon++;
-        failed++;
+        skippedAmazon += 1;
+        failed += 1;
         setBulkProgress(i + 1);
         continue;
       }
@@ -178,14 +224,16 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ productId: product.id }),
         });
+
         if (res.ok) {
-          succeeded++;
+          succeeded += 1;
         } else {
-          failed++;
+          failed += 1;
         }
       } catch {
-        failed++;
+        failed += 1;
       }
+
       setBulkProgress(i + 1);
     }
 
@@ -193,9 +241,16 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
     setSelectedIds([]);
     setBulkImporting(false);
 
-    onToast(`Import complete — ${succeeded} succeeded, ${failed} failed`, succeeded > 0 ? "success" : "error");
+    onToast(
+      `Import complete - ${succeeded} succeeded, ${failed} failed`,
+      succeeded > 0 ? "success" : "error"
+    );
+
     if (skippedAmazon > 0) {
-      onToast(`${skippedAmazon} product(s) skipped — description contains 'Amazon'. Edit and retry.`, "error");
+      onToast(
+        `${skippedAmazon} product(s) skipped - description contains 'Amazon'. Edit and retry.`,
+        "error"
+      );
     }
   }
 
@@ -216,18 +271,19 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
           />
         </svg>
         <p className="text-gray-500 text-sm">
-          No drafts yet. Click &lsquo;Add Product&rsquo; to get started.
+          {isDraftsView
+            ? "No drafts yet. Click 'Add Product' to get started."
+            : "No active listings yet. Import a draft to publish it on eBay."}
         </p>
       </div>
     );
   }
 
-  const columnCount = 8;
+  const columnCount = isDraftsView ? 8 : 7;
 
   return (
     <>
-      {/* Selection count */}
-      {selectedIds.length > 0 && (
+      {isDraftsView && selectedIds.length > 0 && (
         <p className="text-sm text-gray-500 mb-2">{selectedIds.length} selected</p>
       )}
 
@@ -235,14 +291,16 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
         <table className="w-full">
           <thead>
             <tr className="bg-gray-50 border-b text-xs font-medium text-gray-500 uppercase tracking-wide">
-              <th className="px-4 py-3 text-left w-10">
-                <input
-                  type="checkbox"
-                  checked={allSelected}
-                  onChange={toggleSelectAll}
-                  className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
-                />
-              </th>
+              {isDraftsView && (
+                <th className="px-4 py-3 text-left w-10">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleSelectAll}
+                    className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                  />
+                </th>
+              )}
               <th className="px-4 py-3 text-left w-10" />
               <th className="px-4 py-3 text-left w-14">Image</th>
               <th className="px-4 py-3 text-left">Title</th>
@@ -255,29 +313,33 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
           <tbody>
             {products.map((product) => {
               const isExpanded = expandedProductId === product.id;
-              const isSelectable = product.status !== "IMPORTED";
               const isSelected = selectedIds.includes(product.id);
+              const isFailedDraft =
+                isDraftsView && product.status === "FAILED";
 
               return (
                 <Fragment key={product.id}>
                   <tr
-                    className={`border-b hover:bg-gray-50 transition-colors cursor-pointer ${
-                      isExpanded ? "bg-orange-50" : "bg-white"
+                    className={`border-b transition-colors cursor-pointer ${
+                      isExpanded
+                        ? "bg-orange-50"
+                        : isFailedDraft
+                          ? "bg-red-50 hover:bg-red-100"
+                          : "bg-white hover:bg-gray-50"
                     }`}
                     onClick={() => toggleExpand(product.id)}
                   >
-                    {/* Checkbox */}
-                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        disabled={!isSelectable}
-                        onChange={() => toggleSelect(product.id)}
-                        className="rounded border-gray-300 text-orange-500 focus:ring-orange-500 disabled:opacity-30"
-                      />
-                    </td>
+                    {isDraftsView && (
+                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => toggleSelect(product.id)}
+                          className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                        />
+                      </td>
+                    )}
 
-                    {/* Chevron */}
                     <td className="px-4 py-3">
                       <svg
                         className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${
@@ -291,7 +353,6 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
                       </svg>
                     </td>
 
-                    {/* Image */}
                     <td className="px-4 py-3">
                       {product.images && product.images.length > 0 ? (
                         <img
@@ -308,17 +369,25 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
                       )}
                     </td>
 
-                    {/* Title */}
                     <td className="px-4 py-3">
-                      <span
-                        className="text-sm font-medium text-gray-900 truncate max-w-xs block"
-                        title={product.title}
-                      >
-                        {product.title}
-                      </span>
+                      <div className="max-w-xs">
+                        <span
+                          className="text-sm font-medium text-gray-900 truncate block"
+                          title={product.title}
+                        >
+                          {product.title}
+                        </span>
+                        {isFailedDraft && product.errorMessage && (
+                          <span
+                            className="mt-1 block truncate text-xs text-red-600"
+                            title={product.errorMessage}
+                          >
+                            {product.errorMessage}
+                          </span>
+                        )}
+                      </div>
                     </td>
 
-                    {/* Store badge */}
                     <td className="px-4 py-3">
                       <span
                         className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
@@ -329,25 +398,20 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
                       </span>
                     </td>
 
-                    {/* Created by */}
                     <td className="px-4 py-3">
                       <span className="text-sm text-gray-500">
                         {product.createdBy.name}
                       </span>
                     </td>
 
-                    {/* Status badge */}
                     <td className="px-4 py-3">
                       <span
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                          statusBadgeColors[product.status] || "bg-gray-100 text-gray-600"
-                        }`}
+                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusBadgeClasses(product.status)}`}
                       >
-                        {product.status}
+                        {statusBadgeLabels[product.status] || product.status}
                       </span>
                     </td>
 
-                    {/* Actions */}
                     <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-2">
                         {loadingId === product.id ? (
@@ -359,30 +423,29 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
                               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                             </svg>
-                            Uploading…
+                            Uploading...
                           </button>
-                        ) : product.status === "IMPORTED" ? (
-                          <span className="inline-flex items-center px-3 py-1 rounded text-sm font-medium bg-green-100 text-green-700">
-                            Imported ✓
-                          </span>
-                        ) : product.status === "FAILED" ? (
+                        ) : product.status === "FAILED" && isDraftsView ? (
                           <button
                             onClick={() => handleImport(product.id)}
                             className="bg-red-500 hover:bg-red-600 text-white text-sm px-3 py-1 rounded transition-colors"
                           >
                             Retry
                           </button>
-                        ) : (
+                        ) : product.status === "DRAFT" && isDraftsView ? (
                           <button
                             onClick={() => handleImport(product.id)}
                             className="bg-orange-500 hover:bg-orange-600 text-white text-sm px-3 py-1 rounded transition-colors"
                           >
                             Import
                           </button>
-                        )}
+                        ) : product.status === "IMPORTED" && !isProductsView ? (
+                          <span className="inline-flex items-center px-3 py-1 rounded text-sm font-medium bg-green-100 text-green-700">
+                            Imported
+                          </span>
+                        ) : null}
 
-                        {/* End Listing button — show for imported products */}
-                        {product.status === "IMPORTED" && (
+                        {isProductsView && product.status === "IMPORTED" && (
                           <button
                             onClick={() => handleEndListing(product.id)}
                             disabled={endingId === product.id}
@@ -395,14 +458,13 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
                                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                                 </svg>
-                                Ending…
+                                Ending...
                               </>
                             ) : "End"}
                           </button>
                         )}
 
-                        {/* Delete button — show for non-imported products */}
-                        {product.status !== "IMPORTED" && (
+                        {isDraftsView && product.status !== "IMPORTED" && (
                           <button
                             onClick={() => handleDelete(product.id)}
                             disabled={deletingId === product.id}
@@ -415,7 +477,6 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
                           </button>
                         )}
 
-                        {/* Go to Amazon — show when product has an ASIN */}
                         {product.asin && (
                           <a
                             href={`https://www.amazon.com.au/dp/${product.asin}`}
@@ -433,9 +494,8 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
                     </td>
                   </tr>
 
-                  {/* Expanded inline edit panel */}
                   {isExpanded && (
-                    <tr key={`${product.id}-edit`}>
+                    <tr>
                       <td colSpan={columnCount} className="p-0">
                         <InlineEditForm
                           product={product}
@@ -451,8 +511,7 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
         </table>
       </div>
 
-      {/* Bulk Action Bar */}
-      {selectedIds.length > 0 && (
+      {isDraftsView && selectedIds.length > 0 && (
         <div className="fixed bottom-0 left-64 right-0 bg-white border-t border-gray-200 shadow-lg p-4 z-30 flex items-center justify-between">
           <span className="text-sm text-gray-500">
             {selectedIds.length} product(s) selected
@@ -475,7 +534,7 @@ export default function DraftsTable({ products, onToast }: DraftsTableProps) {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
-                  Importing {bulkProgress}/{bulkTotal}…
+                  Importing {bulkProgress}/{bulkTotal}...
                 </>
               ) : (
                 "Import Selected"

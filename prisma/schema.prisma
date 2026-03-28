@@ -45,6 +45,11 @@ enum ProductStatus {
   FAILED
 }
 
+enum VariantStatus {
+  IN_STOCK
+  OUT_OF_STOCK
+}
+
 model Product {
   id            String        @id @default(cuid())
   title         String
@@ -72,6 +77,34 @@ model Product {
   store         Store         @relation(fields: [storeId], references: [id])
   createdBy     User          @relation(fields: [createdById], references: [id])
   uploadLogs    UploadLog[]
+  variants      Variant[]
+}
+
+model Variant {
+  id               String        @id @default(cuid())
+  sku              String?
+  title            String
+  images           String[]
+  buyPrice         Decimal       @db.Decimal(10, 2)
+  feesPercent      Float         @default(0)
+  feesFixed        Float         @default(0)
+  profitPercent    Float         @default(0)
+  profitFixed      Float         @default(0)
+  sellPrice        Decimal       @db.Decimal(10, 2)
+  quantity         Int           @default(1)
+  status           VariantStatus @default(IN_STOCK)
+  automation       String?
+  includeShipping  Boolean       @default(true)
+  allowMarketplace Boolean       @default(true)
+  roundCents       Float?
+  itemSpecifics    Json          @default("{}")
+  productId        String
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId])
 }
 
 enum UploadStatus {

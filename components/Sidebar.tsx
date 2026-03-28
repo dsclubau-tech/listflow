@@ -14,11 +14,30 @@ export default function Sidebar({ userName, userEmail }: SidebarProps) {
 
   const links = [
     {
-      href: "/dashboard",
-      label: "Dashboard",
+      href: "/products",
+      label: "Products",
       icon: (
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zM14 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zM14 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M20.25 7.5 12 3 3.75 7.5m16.5 0V16.5L12 21m8.25-13.5L12 12m0 9V12m0 0L3.75 7.5"
+          />
+        </svg>
+      ),
+    },
+    {
+      href: "/drafts",
+      label: "Drafts",
+      icon: (
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M7.5 18.75A4.5 4.5 0 1 1 8.96 9.99a5.25 5.25 0 0 1 10.29 1.26A3.75 3.75 0 1 1 18 18.75H7.5Zm4.5-6v4.5m0 0 2.25-2.25M12 17.25l-2.25-2.25"
+          />
         </svg>
       ),
     },
@@ -45,16 +64,16 @@ export default function Sidebar({ userName, userEmail }: SidebarProps) {
 
   return (
     <aside className="fixed inset-y-0 left-0 w-64 bg-gray-900 flex flex-col">
-      {/* Logo */}
       <div className="px-6 py-5 border-b border-gray-800">
         <h1 className="text-xl font-bold text-white">ListFlow</h1>
         <p className="text-xs text-gray-400">eBay listing tool</p>
       </div>
 
-      {/* Navigation */}
       <nav className="flex-1 px-3 py-4 space-y-1">
         {links.map((link) => {
-          const isActive = pathname === link.href;
+          const isActive =
+            pathname === link.href || pathname.startsWith(`${link.href}/`);
+
           return (
             <Link
               key={link.href}
@@ -72,7 +91,6 @@ export default function Sidebar({ userName, userEmail }: SidebarProps) {
         })}
       </nav>
 
-      {/* User section */}
       <div className="px-4 py-4 border-t border-gray-800">
         <p className="text-sm font-medium text-white truncate">{userName}</p>
         <p className="text-xs text-gray-400 truncate">{userEmail}</p>

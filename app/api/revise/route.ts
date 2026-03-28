@@ -36,9 +36,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Product not found" }, { status: 404 });
   }
 
-  if (!product.ebayItemId) {
+  if (product.status !== "IMPORTED" || !product.ebayItemId) {
     return NextResponse.json(
-      { error: "Product has not been uploaded to eBay yet" },
+      { error: "Product is not currently listed on eBay" },
       { status: 400 }
     );
   }
@@ -48,8 +48,8 @@ export async function POST(request: Request) {
 
     // Resolve template placeholders
     const finalDescription = await resolveDescriptionTemplate(product);
-
-    const xml = buildReviseItemXML(product.ebayItemId, finalDescription);
+    const productWithResolvedDesc = { ...product, description: finalDescription };
+    const xml = buildReviseItemXML(productWithResolvedDesc);
 
     logger.info("revise/route", "Sending ReviseItem request to eBay", {
       productId,
@@ -60,12 +60,27 @@ export async function POST(request: Request) {
     const result = await callEbayReviseItem(xml, storeNumber);
 
     if (result.success) {
+      await prisma.product.update({
+        where: { id: productId },
+        data: {
+          status: "IMPORTED",
+          errorMessage: null,
+        },
+      });
+
       logger.info("revise/route", "eBay ReviseItem succeeded", {
         productId,
         ebayItemId: product.ebayItemId,
       });
       return NextResponse.json({ success: true });
     } else {
+      await prisma.product.update({
+        where: { id: productId },
+        data: {
+          errorMessage: result.errorMessage || "Revise failed",
+        },
+      });
+
       logger.error("revise/route", "eBay ReviseItem failed", undefined, {
         productId,
         ebayError: result.errorMessage,
@@ -77,10 +92,24 @@ export async function POST(request: Request) {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
+
+    await prisma.product.update({
+      where: { id: productId },
+      data: {
+        errorMessage: message,
+      },
+    });
+
     logger.error("revise/route", "Unhandled error in revise route", err, { productId });
+    const isValidationError =
+      message.includes("Policy") ||
+      message.includes("Category") ||
+      message.includes("Price") ||
+      message.includes("Quantity");
+
     return NextResponse.json(
       { success: false, error: message },
-      { status: 500 }
+      { status: isValidationError ? 422 : 500 }
     );
   }
 }

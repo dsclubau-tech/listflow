@@ -1,0 +1,74 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  applyRoundCents,
+  calculateProfitFixedFromSellPrice,
+  calculateSellPrice,
+  calculateTotalFees,
+  calculateTotalProfit,
+} from "@/lib/variant-pricing";
+
+test("calculateSellPrice returns buy price when fees and profit are zero", () => {
+  assert.equal(
+    calculateSellPrice({
+      buyPrice: 24.5,
+      feesPercent: 0,
+      feesFixed: 0,
+      profitPercent: 0,
+      profitFixed: 0,
+      roundCents: null,
+    }),
+    24.5
+  );
+});
+
+test("calculateSellPrice handles mixed fixed fees and profit", () => {
+  assert.equal(
+    calculateSellPrice({
+      buyPrice: 10,
+      feesPercent: 13,
+      feesFixed: 0.33,
+      profitPercent: 0,
+      profitFixed: 1,
+      roundCents: null,
+    }),
+    13.02
+  );
+});
+
+test("applyRoundCents rounds upward to .99", () => {
+  assert.equal(applyRoundCents(13.02, 0.99), 13.99);
+});
+
+test("calculateProfitFixedFromSellPrice inverts the sell-price formula", () => {
+  assert.equal(
+    calculateProfitFixedFromSellPrice({
+      buyPrice: 10,
+      sellPrice: 13.02,
+      feesPercent: 13,
+      feesFixed: 0.33,
+      profitPercent: 0,
+    }),
+    1
+  );
+});
+
+test("calculateTotalFees and calculateTotalProfit derive display totals", () => {
+  assert.equal(
+    calculateTotalFees({
+      sellPrice: 50,
+      feesPercent: 12,
+      feesFixed: 1.5,
+    }),
+    7.5
+  );
+
+  assert.equal(
+    calculateTotalProfit({
+      sellPrice: 50,
+      profitPercent: 10,
+      profitFixed: 2,
+    }),
+    7
+  );
+});

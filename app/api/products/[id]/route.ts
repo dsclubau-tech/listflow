@@ -66,6 +66,60 @@ export async function PATCH(
     );
   }
 
+  if (data.title !== undefined) {
+    if (typeof data.title !== "string" || !data.title.trim()) {
+      return NextResponse.json({ error: "Title is required" }, { status: 400 });
+    }
+    data.title = data.title.trim();
+  }
+
+  if (data.description !== undefined) {
+    if (typeof data.description !== "string" || !data.description.trim()) {
+      return NextResponse.json({ error: "Description is required" }, { status: 400 });
+    }
+  }
+
+  if (data.price !== undefined) {
+    const numericPrice = Number(data.price);
+    if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
+      return NextResponse.json({ error: "Price must be greater than 0" }, { status: 400 });
+    }
+    data.price = numericPrice;
+  }
+
+  if (data.quantity !== undefined) {
+    const numericQuantity = Number(data.quantity);
+    if (!Number.isInteger(numericQuantity) || numericQuantity < 1) {
+      return NextResponse.json({ error: "Quantity must be at least 1" }, { status: 400 });
+    }
+    data.quantity = numericQuantity;
+  }
+
+  if (data.category !== undefined) {
+    if (typeof data.category !== "string" || !/^\d+$/.test(data.category.trim())) {
+      return NextResponse.json(
+        { error: "Category must be a numeric eBay Category ID" },
+        { status: 400 }
+      );
+    }
+    data.category = data.category.trim();
+  }
+
+  if (data.images !== undefined) {
+    if (
+      !Array.isArray(data.images) ||
+      data.images.length === 0 ||
+      data.images.some((image) => typeof image !== "string" || !image.trim())
+    ) {
+      return NextResponse.json(
+        { error: "At least one valid image URL is required" },
+        { status: 400 }
+      );
+    }
+
+    data.images = data.images.map((image) => image.trim());
+  }
+
   try {
     // Apply keyword blacklist filter before saving
     const titleStr = typeof data.title === "string" ? data.title : undefined;
@@ -116,6 +170,7 @@ export async function DELETE(
   try {
     // Delete related UploadLogs first to avoid FK constraint errors
     await prisma.uploadLog.deleteMany({ where: { productId: id } });
+    await prisma.variant.deleteMany({ where: { productId: id } });
     await prisma.product.delete({ where: { id } });
 
     logger.info("api/products/DELETE", "Product deleted", { id, userId: session.user.id });

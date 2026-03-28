@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Product, Store, User } from "@/app/generated/prisma/client";
+import ProductVariantsEditor from "@/components/ProductVariantsEditor";
 import RichTextEditor from "@/components/RichTextEditor";
 
 // ----- Types -----
@@ -56,7 +57,7 @@ const tabs = ["Product", "Description", "Variants", "Images", "Item Specificatio
 
 // ===== Component =====
 
-export default function InlineEditForm({ product, onCollapse }: InlineEditFormProps) {
+export default function InlineEditForm({ product }: InlineEditFormProps) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState(0);
 
@@ -165,9 +166,13 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
     }
   }, [saveMessage]);
 
+  const isImported = product.status === "IMPORTED" && Boolean(product.ebayItemId);
+
   // ----- Save -----
 
-  async function handleSave(): Promise<boolean> {
+  async function handleSave(options?: { showSuccessMessage?: boolean }): Promise<boolean> {
+    const { showSuccessMessage = true } = options ?? {};
+
     setIsSaving(true);
     setSaveMessage(null);
 
@@ -246,8 +251,11 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
             text: `The following keywords were automatically removed: ${data.removedKeywords.join(", ")}. Check your title and description.`,
             variant: "error",
           });
-        } else {
-          setSaveMessage({ text: "Saved", variant: "success" });
+        } else if (showSuccessMessage) {
+          setSaveMessage({
+            text: isImported ? "Saved locally. Update eBay to sync the live listing." : "Saved",
+            variant: "success",
+          });
         }
         router.refresh();
         return true;
@@ -275,16 +283,27 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
   // ----- Save & Import -----
 
   async function handleSaveAndImport() {
+    if (isImported) {
+      setSaveMessage({
+        variant: "error",
+        text: "This product is already imported. Use Save & Update eBay instead.",
+      });
+      return;
+    }
+
     // Block import if Amazon keyword is in description
     if (descriptionContainsAmazon) {
-      setSaveMessage({ variant: "error", text: "Import blocked — description contains the word 'Amazon'. Edit your description and remove all mentions before importing." });
+      setSaveMessage({
+        variant: "error",
+        text: "Import blocked - description contains the word 'Amazon'. Edit your description and remove all mentions before importing.",
+      });
       return;
     }
 
     setIsImporting(true);
     setSaveMessage(null);
 
-    const saved = await handleSave();
+    const saved = await handleSave({ showSuccessMessage: false });
     if (!saved) {
       setIsImporting(false);
       return;
@@ -298,7 +317,7 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
       });
 
       if (res.ok) {
-        setSaveMessage({ text: "Imported ✓", variant: "success" });
+        setSaveMessage({ text: "Imported", variant: "success" });
         router.refresh();
       } else {
         const data = await res.json();
@@ -312,14 +331,30 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
     }
   }
 
-  // ----- Revise eBay Description -----
+  // ----- Save & Update eBay -----
   const [isRevising, setIsRevising] = useState(false);
 
-  async function handleReviseDescription() {
+  async function handleSaveAndUpdateEbay() {
+    if (!isImported) {
+      setSaveMessage({
+        variant: "error",
+        text: "This product must be imported before it can be updated on eBay.",
+      });
+      return;
+    }
+
+    if (descriptionContainsAmazon) {
+      setSaveMessage({
+        variant: "error",
+        text: "Update blocked - description contains the word 'Amazon'. Edit your description and remove all mentions before updating eBay.",
+      });
+      return;
+    }
+
     setIsRevising(true);
     setSaveMessage(null);
 
-    const saved = await handleSave();
+    const saved = await handleSave({ showSuccessMessage: false });
     if (!saved) {
       setIsRevising(false);
       return;
@@ -333,14 +368,15 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
       });
 
       if (res.ok) {
-        setSaveMessage({ text: "eBay description updated ✓", variant: "success" });
+        setSaveMessage({ text: "eBay listing updated", variant: "success" });
+        router.refresh();
       } else {
         const data = await res.json();
-        setSaveMessage({ text: data.error || "Revise failed", variant: "error" });
+        setSaveMessage({ text: data.error || "Update failed", variant: "error" });
       }
     } catch (err) {
       console.error("Revise error:", err);
-      setSaveMessage({ text: "Network error during revise", variant: "error" });
+      setSaveMessage({ text: "Network error during update", variant: "error" });
     } finally {
       setIsRevising(false);
     }
@@ -410,28 +446,30 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
           )}
           <button
             type="button"
-            onClick={handleSave}
-            disabled={isSaving || isImporting}
+            onClick={() => void handleSave()}
+            disabled={isSaving || isImporting || isRevising}
             className="px-4 py-1.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 disabled:opacity-40 transition-colors"
           >
-            {isSaving ? "Saving…" : "Save"}
+            {isSaving ? "Saving..." : isImported ? "Save Locally" : "Save"}
           </button>
-          <button
-            type="button"
-            onClick={handleSaveAndImport}
-            disabled={isSaving || isImporting || isRevising}
-            className="px-4 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-md disabled:opacity-40 transition-colors"
-          >
-            {isImporting ? "Importing…" : "Save & Import"}
-          </button>
-          {product.ebayItemId && (
+          {!isImported && (
             <button
               type="button"
-              onClick={handleReviseDescription}
+              onClick={handleSaveAndImport}
+              disabled={isSaving || isImporting || isRevising}
+              className="px-4 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-md disabled:opacity-40 transition-colors"
+            >
+              {isImporting ? "Importing..." : "Save & Import"}
+            </button>
+          )}
+          {isImported && (
+            <button
+              type="button"
+              onClick={handleSaveAndUpdateEbay}
               disabled={isSaving || isImporting || isRevising}
               className="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-md disabled:opacity-40 transition-colors"
             >
-              {isRevising ? "Updating…" : "Update eBay Description"}
+              {isRevising ? "Updating..." : "Save & Update eBay"}
             </button>
           )}
         </div>
@@ -735,7 +773,7 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
               />
             </div>
-          </div>
+            </div>
         )}
 
         {/* ===== Tab 2 — Description ===== */}
@@ -779,7 +817,18 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
 
         {/* ===== Tab 3 — Variants ===== */}
         {activeTab === 2 && (
-          <div>
+          <>
+            <ProductVariantsEditor
+              product={{
+                id: product.id,
+                title: product.title,
+                price: product.price.toString(),
+                quantity: product.quantity,
+                images: product.images,
+                asin: product.asin,
+              }}
+            />
+            <div className="hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-100 text-xs font-medium text-gray-500 uppercase tracking-wide">
@@ -832,7 +881,8 @@ export default function InlineEditForm({ product, onCollapse }: InlineEditFormPr
             >
               + Add Variant
             </button>
-          </div>
+            </div>
+          </>
         )}
 
         {/* ===== Tab 4 — Images ===== */}
