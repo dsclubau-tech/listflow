@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
+import AppErrorBoundary from "@/components/AppErrorBoundary";
+import ClientErrorMonitor from "@/components/ClientErrorMonitor";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -19,10 +21,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body
-        className={`${geistSans.variable} antialiased`}
-      >
-        {children}
+      <body className={`${geistSans.variable} antialiased`}>
+        <ClientErrorMonitor />
+        <AppErrorBoundary>{children}</AppErrorBoundary>
       </body>
     </html>
   );

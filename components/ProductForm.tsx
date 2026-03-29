@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { reportClientError } from "@/lib/client-logger";
 
 interface Store {
   id: string;
@@ -57,9 +58,26 @@ export default function ProductForm({
         if (res.ok) {
           const data = await res.json();
           setStores(data);
+        } else {
+          void reportClientError(
+            "product-form/stores",
+            "Failed to fetch stores",
+            undefined,
+            { status: res.status },
+            {
+              requestId: res.headers.get("x-request-id") ?? undefined,
+              tags: ["bootstrap"],
+            },
+          );
         }
-      } catch {
-        console.error("Failed to fetch stores");
+      } catch (error) {
+        void reportClientError(
+          "product-form/stores",
+          "Failed to fetch stores",
+          error,
+          undefined,
+          { tags: ["bootstrap"] },
+        );
       } finally {
         setStoresLoading(false);
       }

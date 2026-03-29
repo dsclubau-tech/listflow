@@ -6,6 +6,7 @@ import Link from "next/link";
 import type { Product, Store, User } from "@/app/generated/prisma/client";
 import ProductVariantsEditor from "@/components/ProductVariantsEditor";
 import RichTextEditor from "@/components/RichTextEditor";
+import { reportClientError } from "@/lib/client-logger";
 
 // ----- Types -----
 
@@ -146,13 +147,30 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       if (res.ok) {
         const data = await res.json();
         setPolicies(data);
+      } else {
+        void reportClientError(
+          "inline-edit/policies",
+          "Failed to fetch policies",
+          undefined,
+          { status: res.status, productId: product.id, storeNum },
+          {
+            requestId: res.headers.get("x-request-id") ?? undefined,
+            tags: ["policies"],
+          },
+        );
       }
-    } catch {
-      console.error("Failed to fetch policies");
+    } catch (error) {
+      void reportClientError(
+        "inline-edit/policies",
+        "Failed to fetch policies",
+        error,
+        { productId: product.id },
+        { tags: ["policies"] },
+      );
     } finally {
       setPoliciesLoading(false);
     }
-  }, [product.store.name]);
+  }, [product.id, product.store.name]);
 
   useEffect(() => {
     fetchPolicies();
@@ -234,8 +252,6 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       templateId: selectedTemplateId || null,
     };
 
-    console.log("Saving product data:", body);
-
     try {
       const res = await fetch(`/api/products/${product.id}`, {
         method: "PATCH",
@@ -261,12 +277,32 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
         return true;
       } else {
         const data = await res.json();
+        void reportClientError(
+          "inline-edit/save",
+          "Product save failed",
+          undefined,
+          {
+            productId: product.id,
+            status: res.status,
+            error: data.error,
+          },
+          {
+            requestId: res.headers.get("x-request-id") ?? undefined,
+            tags: ["save"],
+          },
+        );
         setSaveMessage({ text: data.error || "Save failed", variant: "error" });
         return false;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Network error";
-      console.error("Save error:", err);
+      void reportClientError(
+        "inline-edit/save",
+        "Product save request failed",
+        err,
+        { productId: product.id },
+        { tags: ["save"] },
+      );
       setSaveMessage({ text: msg, variant: "error" });
       return false;
     } finally {
@@ -321,10 +357,30 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
         router.refresh();
       } else {
         const data = await res.json();
+        void reportClientError(
+          "inline-edit/import",
+          "Product import failed",
+          undefined,
+          {
+            productId: product.id,
+            status: res.status,
+            error: data.error,
+          },
+          {
+            requestId: res.headers.get("x-request-id") ?? undefined,
+            tags: ["import"],
+          },
+        );
         setSaveMessage({ text: data.error || "Import failed", variant: "error" });
       }
     } catch (err) {
-      console.error("Import error:", err);
+      void reportClientError(
+        "inline-edit/import",
+        "Product import request failed",
+        err,
+        { productId: product.id },
+        { tags: ["import"] },
+      );
       setSaveMessage({ text: "Network error during import", variant: "error" });
     } finally {
       setIsImporting(false);
@@ -372,10 +428,30 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
         router.refresh();
       } else {
         const data = await res.json();
+        void reportClientError(
+          "inline-edit/revise",
+          "Product revise failed",
+          undefined,
+          {
+            productId: product.id,
+            status: res.status,
+            error: data.error,
+          },
+          {
+            requestId: res.headers.get("x-request-id") ?? undefined,
+            tags: ["revise"],
+          },
+        );
         setSaveMessage({ text: data.error || "Update failed", variant: "error" });
       }
     } catch (err) {
-      console.error("Revise error:", err);
+      void reportClientError(
+        "inline-edit/revise",
+        "Product revise request failed",
+        err,
+        { productId: product.id },
+        { tags: ["revise"] },
+      );
       setSaveMessage({ text: "Network error during update", variant: "error" });
     } finally {
       setIsRevising(false);

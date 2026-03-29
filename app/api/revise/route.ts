@@ -4,54 +4,59 @@ import { NextResponse } from "next/server";
 import { buildReviseItemXML } from "@/lib/ebay-xml";
 import { callEbayReviseItem, getStoreNumber } from "@/lib/ebay";
 import { resolveDescriptionTemplate } from "@/lib/template-resolver";
-import { logger } from "@/lib/logger";
+import { createRequestLogger } from "@/lib/logger";
 
 export async function POST(request: Request) {
   const session = await auth();
+  const log = createRequestLogger(request, session?.user ? { userId: session.user.id } : {});
 
   if (!session?.user) {
+    log.warn("revise/route", "Unauthorized revise attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   let body;
   try {
     body = await request.json();
-  } catch {
+  } catch (error) {
+    log.error("revise/route", "Invalid JSON body", error);
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
   const { productId } = body;
 
   if (!productId) {
+    log.warn("revise/route", "Revise request missing productId");
     return NextResponse.json({ error: "productId is required" }, { status: 400 });
   }
 
-  // Fetch product with store relation
   const product = await prisma.product.findUnique({
     where: { id: productId },
     include: { store: true },
   });
 
   if (!product) {
+    log.warn("revise/route", "Product not found for revise", { productId });
     return NextResponse.json({ error: "Product not found" }, { status: 404 });
   }
 
   if (product.status !== "IMPORTED" || !product.ebayItemId) {
+    log.warn("revise/route", "Rejected revise for product not listed on eBay", {
+      productId,
+    });
     return NextResponse.json(
       { error: "Product is not currently listed on eBay" },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
   try {
     const storeNumber = await getStoreNumber(product.storeId);
-
-    // Resolve template placeholders
     const finalDescription = await resolveDescriptionTemplate(product);
     const productWithResolvedDesc = { ...product, description: finalDescription };
     const xml = buildReviseItemXML(productWithResolvedDesc);
 
-    logger.info("revise/route", "Sending ReviseItem request to eBay", {
+    log.info("revise/route", "Sending ReviseItem request to eBay", {
       productId,
       ebayItemId: product.ebayItemId,
       storeNumber,
@@ -68,30 +73,30 @@ export async function POST(request: Request) {
         },
       });
 
-      logger.info("revise/route", "eBay ReviseItem succeeded", {
+      log.info("revise/route", "eBay ReviseItem succeeded", {
         productId,
         ebayItemId: product.ebayItemId,
       });
       return NextResponse.json({ success: true });
-    } else {
-      await prisma.product.update({
-        where: { id: productId },
-        data: {
-          errorMessage: result.errorMessage || "Revise failed",
-        },
-      });
-
-      logger.error("revise/route", "eBay ReviseItem failed", undefined, {
-        productId,
-        ebayError: result.errorMessage,
-      });
-      return NextResponse.json(
-        { success: false, error: result.errorMessage },
-        { status: 422 }
-      );
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
+
+    await prisma.product.update({
+      where: { id: productId },
+      data: {
+        errorMessage: result.errorMessage || "Revise failed",
+      },
+    });
+
+    log.error("revise/route", "eBay ReviseItem failed", undefined, {
+      productId,
+      ebayError: result.errorMessage,
+    });
+    return NextResponse.json(
+      { success: false, error: result.errorMessage },
+      { status: 422 },
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
 
     await prisma.product.update({
       where: { id: productId },
@@ -100,7 +105,9 @@ export async function POST(request: Request) {
       },
     });
 
-    logger.error("revise/route", "Unhandled error in revise route", err, { productId });
+    log.error("revise/route", "Unhandled error in revise route", error, {
+      productId,
+    });
     const isValidationError =
       message.includes("Policy") ||
       message.includes("Category") ||
@@ -109,7 +116,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json(
       { success: false, error: message },
-      { status: isValidationError ? 422 : 500 }
+      { status: isValidationError ? 422 : 500 },
     );
   }
 }

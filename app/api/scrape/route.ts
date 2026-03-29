@@ -2,67 +2,73 @@ import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import { scrapeAmazonProduct } from "@/lib/amazon-scraper";
 import { getEbaySuggestedCategories } from "@/lib/ebay";
-import { logger } from "@/lib/logger";
+import { createRequestLogger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 
 export async function POST(request: Request) {
   const session = await auth();
+  const log = createRequestLogger(request, session?.user ? { userId: session.user.id } : {});
 
   if (!session?.user) {
+    log.warn("scrape/route", "Unauthorized scrape attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   let body;
   try {
     body = await request.json();
-  } catch {
+  } catch (error) {
+    log.error("scrape/route", "Invalid JSON body", error);
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
   const { url } = body;
 
   if (!url || typeof url !== "string" || url.trim() === "") {
+    log.warn("scrape/route", "Scrape request missing URL");
     return NextResponse.json({ error: "URL is required" }, { status: 400 });
   }
 
   if (!url.startsWith("https://www.amazon.com.au")) {
+    log.warn("scrape/route", "Rejected non-Amazon-AU scrape URL", { url });
     return NextResponse.json(
       { error: "Only Amazon AU URLs are supported" },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
-  logger.info("scrape/route", "Scrape started", { url, userId: session.user.id });
+  log.info("scrape/route", "Scrape started", { url });
 
   try {
     const product = await scrapeAmazonProduct(url);
 
-    logger.info("scrape/route", "Scrape succeeded", {
+    log.info("scrape/route", "Scrape succeeded", {
       url,
       asin: product.asin,
       title: product.title,
       imageCount: product.images.length,
     });
 
-    // Auto-detect eBay category from the product title
     let categoryId = "";
     let categoryName = "";
+
     try {
       const suggestions = await getEbaySuggestedCategories(product.title, 1);
       if (suggestions.length > 0) {
         categoryId = suggestions[0].categoryId;
         categoryName = suggestions[0].categoryName;
-        logger.info("scrape/route", "Auto-detected eBay category", {
+        log.info("scrape/route", "Auto-detected eBay category", {
           categoryId,
           categoryName,
           totalSuggestions: suggestions.length,
         });
       }
     } catch {
-      logger.error("scrape/route", "Category detection failed (non-blocking)", undefined, { title: product.title });
+      log.error("scrape/route", "Category detection failed (non-blocking)", undefined, {
+        title: product.title,
+      });
     }
 
-    // Fetch supplier settings defaults
     const supplierSettings = await prisma.supplierSettings.findFirst({
       where: { supplierName: "Amazon AU" },
     });
@@ -85,11 +91,11 @@ export async function POST(request: Request) {
       categoryName,
       supplierDefaults,
     });
-  } catch (err) {
-    logger.error("scrape/route", "Scrape failed", err, { url });
+  } catch (error) {
+    log.error("scrape/route", "Scrape failed", error, { url });
 
     const message =
-      err instanceof Error ? err.message : "Scraping failed unexpectedly";
+      error instanceof Error ? error.message : "Scraping failed unexpectedly";
     return NextResponse.json({ error: message }, { status: 422 });
   }
 }

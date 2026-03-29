@@ -523,6 +523,27 @@ body {
   line-height: 1.6;
 }
 
+/* ── Prevent empty tables from looking like text inputs ── */
+.ql-editor table {
+  margin-top: 1rem;
+  margin-bottom: 1rem;
+}
+
+.ql-editor td,
+.ql-editor th {
+  border: 1px solid #d1d5db; /* gray-300 */
+  padding: 0.5rem;
+}
+
+/* Give empty cells a placeholder background so they look like structural elements */
+.ql-editor td:has(> br:only-child),
+.ql-editor td:empty {
+  background-color: #f8fafc; /* slate-50 */
+  background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+  background-size: 8px 8px;
+  min-height: 2.5rem;
+}
+
 @media (max-width: 768px) {
   [data-toolbar-variant="grouped"] .ql-toolbar.ql-snow {
     padding: 0.75rem;

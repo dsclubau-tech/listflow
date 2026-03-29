@@ -1,40 +1,43 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
-import { logger } from "@/lib/logger";
+import { createRequestLogger } from "@/lib/logger";
 import { applyKeywordFilter } from "@/lib/keyword-filter";
 
 export async function PATCH(
   request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const session = await auth();
   const { id } = await params;
+  const log = createRequestLogger(request, session?.user ? { userId: session.user.id } : {});
 
   if (!session?.user) {
-    logger.error("api/products/PATCH", "Unauthorized attempt", undefined, { id });
+    log.warn("api/products/PATCH", "Unauthorized attempt", { id });
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  logger.info("api/products/PATCH", "Update request received", { id, userId: session.user.id });
+  log.info("api/products/PATCH", "Update request received", { id });
 
   const product = await prisma.product.findUnique({ where: { id } });
 
   if (!product) {
-    logger.error("api/products/PATCH", "Product not found", undefined, { id });
+    log.warn("api/products/PATCH", "Product not found", { id });
     return NextResponse.json({ error: "Product not found" }, { status: 404 });
   }
 
   let body;
   try {
     body = await request.json();
-    logger.info("api/products/PATCH", "Parsing request body", { id, fields: Object.keys(body) });
-  } catch (err) {
-    logger.error("api/products/PATCH", "Invalid JSON body", err, { id });
+    log.info("api/products/PATCH", "Parsing request body", {
+      id,
+      fields: Object.keys(body),
+    });
+  } catch (error) {
+    log.error("api/products/PATCH", "Invalid JSON body", error, { id });
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  // Only allow updating specific fields
   const allowedFields = [
     "title",
     "description",
@@ -59,10 +62,10 @@ export async function PATCH(
   }
 
   if (Object.keys(data).length === 0) {
-    logger.error("api/products/PATCH", "No valid fields to update", undefined, { id });
+    log.warn("api/products/PATCH", "No valid fields to update", { id });
     return NextResponse.json(
       { error: "No valid fields to update" },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
@@ -99,7 +102,7 @@ export async function PATCH(
     if (typeof data.category !== "string" || !/^\d+$/.test(data.category.trim())) {
       return NextResponse.json(
         { error: "Category must be a numeric eBay Category ID" },
-        { status: 400 }
+        { status: 400 },
       );
     }
     data.category = data.category.trim();
@@ -113,7 +116,7 @@ export async function PATCH(
     ) {
       return NextResponse.json(
         { error: "At least one valid image URL is required" },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -121,7 +124,6 @@ export async function PATCH(
   }
 
   try {
-    // Apply keyword blacklist filter before saving
     const titleStr = typeof data.title === "string" ? data.title : undefined;
     const descStr = typeof data.description === "string" ? data.description : undefined;
     let removedKeywords: string[] = [];
@@ -129,7 +131,7 @@ export async function PATCH(
     if (titleStr || descStr) {
       const filtered = await applyKeywordFilter(
         titleStr || product.title,
-        descStr || product.description
+        descStr || product.description,
       );
       if (titleStr) data.title = filtered.title;
       if (descStr) data.description = filtered.description;
@@ -142,41 +144,43 @@ export async function PATCH(
       include: { store: true, createdBy: true },
     });
 
-    logger.info("api/products/PATCH", "Update successful", { id });
+    log.info("api/products/PATCH", "Update successful", { id });
     return NextResponse.json({ ...updated, removedKeywords });
-  } catch (err) {
-    logger.error("api/products/PATCH", "Database update failed", err, { id });
+  } catch (error) {
+    log.error("api/products/PATCH", "Database update failed", error, { id });
     return NextResponse.json({ error: "Database update failed" }, { status: 500 });
   }
 }
 
 export async function DELETE(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const session = await auth();
   const { id } = await params;
+  const log = createRequestLogger(request, session?.user ? { userId: session.user.id } : {});
 
   if (!session?.user) {
+    log.warn("api/products/DELETE", "Unauthorized delete attempt", { id });
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const product = await prisma.product.findUnique({ where: { id } });
 
   if (!product) {
+    log.warn("api/products/DELETE", "Product not found", { id });
     return NextResponse.json({ error: "Product not found" }, { status: 404 });
   }
 
   try {
-    // Delete related UploadLogs first to avoid FK constraint errors
     await prisma.uploadLog.deleteMany({ where: { productId: id } });
     await prisma.variant.deleteMany({ where: { productId: id } });
     await prisma.product.delete({ where: { id } });
 
-    logger.info("api/products/DELETE", "Product deleted", { id, userId: session.user.id });
+    log.info("api/products/DELETE", "Product deleted", { id });
     return NextResponse.json({ success: true });
-  } catch (err) {
-    logger.error("api/products/DELETE", "Delete failed", err, { id });
+  } catch (error) {
+    log.error("api/products/DELETE", "Delete failed", error, { id });
     return NextResponse.json({ error: "Failed to delete product" }, { status: 500 });
   }
 }

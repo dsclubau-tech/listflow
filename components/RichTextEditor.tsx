@@ -73,8 +73,8 @@ interface CompactToolbarButtonProps {
 let quillConfigured = false;
 
 type QuillRegistrar = {
-  import: (...args: any[]) => any;
-  register: (...args: any[]) => void;
+  import: (path: string) => unknown;
+  register: (...args: unknown[]) => void;
 };
 
 type BlotBaseCtor = new (...args: never[]) => Record<string, unknown>;
@@ -170,7 +170,7 @@ export default function RichTextEditor({
     let cancelled = false;
 
     void import("react-quill-new").then((mod) => {
-      registerCustomFormats(mod.Quill);
+      registerCustomFormats(mod.Quill as unknown as QuillRegistrar);
       if (!cancelled) {
         setEditorComponent(() => mod.default as ReactQuillComponent);
       }
@@ -180,6 +180,25 @@ export default function RichTextEditor({
       cancelled = true;
     };
   }, []);
+
+  // Cleanup completely empty 1x1 tables (often left over from scrapers) on initial load.
+  // We only run this once so users can still insert new empty tables intentionally.
+  const hasCleanedUpRef = useRef(false);
+  useEffect(() => {
+    if (value && !hasCleanedUpRef.current) {
+      hasCleanedUpRef.current = true;
+      
+      // Matches a 1x1 table at the very end of the content containing only a <br> or whitespace
+      const emptyTableRegex = /<table[^>]*>\s*<tbody[^>]*>\s*<tr[^>]*>\s*<td[^>]*>(?:<br\s*\/?>|\s*)<\/td>\s*<\/tr>\s*<\/tbody>\s*<\/table>\s*$/i;
+      
+      if (emptyTableRegex.test(value)) {
+        const cleaned = value.replace(emptyTableRegex, "");
+        if (cleaned !== value) {
+          onChange(cleaned);
+        }
+      }
+    }
+  }, [value, onChange]);
 
   const modules = useMemo(
     () => ({

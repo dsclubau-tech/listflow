@@ -6,6 +6,7 @@ import Link from "next/link";
 import SlideOver from "@/components/SlideOver";
 import RichTextEditor from "@/components/RichTextEditor";
 import type { ScrapedProduct } from "@/components/AddProductModal";
+import { reportClientError } from "@/lib/client-logger";
 
 interface Store {
   id: string;
@@ -158,9 +159,26 @@ export default function DraftEditForm({
         if (res.ok) {
           const data = await res.json();
           setStores(data);
+        } else {
+          void reportClientError(
+            "draft-edit/stores",
+            "Failed to fetch stores",
+            undefined,
+            { status: res.status },
+            {
+              requestId: res.headers.get("x-request-id") ?? undefined,
+              tags: ["bootstrap"],
+            },
+          );
         }
-      } catch {
-        console.error("Failed to fetch stores");
+      } catch (error) {
+        void reportClientError(
+          "draft-edit/stores",
+          "Failed to fetch stores",
+          error,
+          undefined,
+          { tags: ["bootstrap"] },
+        );
       } finally {
         setStoresLoading(false);
       }
@@ -190,10 +208,26 @@ export default function DraftEditForm({
           if (data.returns.length === 1) setReturnPolicyId(data.returns[0].profileId);
           if (data.payment.length === 1) setPaymentPolicyId(data.payment[0].profileId);
         } else {
+          void reportClientError(
+            "draft-edit/policies",
+            "Failed to fetch policies",
+            undefined,
+            { status: res.status, storeId },
+            {
+              requestId: res.headers.get("x-request-id") ?? undefined,
+              tags: ["policies"],
+            },
+          );
           setPolicies(null);
         }
-      } catch {
-        console.error("Failed to fetch policies");
+      } catch (error) {
+        void reportClientError(
+          "draft-edit/policies",
+          "Failed to fetch policies",
+          error,
+          { storeId },
+          { tags: ["policies"] },
+        );
         setPolicies(null);
       } finally {
         setPoliciesLoading(false);

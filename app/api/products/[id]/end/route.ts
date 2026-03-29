@@ -3,48 +3,52 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { buildEndItemXML } from "@/lib/ebay-xml";
 import { callEbayEndItem, getStoreNumber } from "@/lib/ebay";
-import { logger } from "@/lib/logger";
+import { createRequestLogger } from "@/lib/logger";
 
 export async function POST(
-  _request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
 ) {
   const session = await auth();
+  const log = createRequestLogger(request, session?.user ? { userId: session.user.id } : {});
 
   if (!session?.user) {
+    log.warn("end-listing/route", "Unauthorized end-listing attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id: productId } = await params;
 
-  // Fetch product with store relation
   const product = await prisma.product.findUnique({
     where: { id: productId },
     include: { store: true },
   });
 
   if (!product) {
+    log.warn("end-listing/route", "Product not found for end-listing", { productId });
     return NextResponse.json({ error: "Product not found" }, { status: 404 });
   }
 
   if (product.status !== "IMPORTED" || !product.ebayItemId) {
+    log.warn("end-listing/route", "Rejected end-listing for product not on eBay", {
+      productId,
+    });
     return NextResponse.json(
       { error: "Product is not currently listed on eBay" },
-      { status: 400 }
+      { status: 400 },
     );
   }
 
-  logger.info("end-listing/route", "End listing request received", {
+  log.info("end-listing/route", "End listing request received", {
     productId,
     ebayItemId: product.ebayItemId,
-    userId: session.user.id,
   });
 
   try {
     const storeNumber = await getStoreNumber(product.storeId);
     const xml = buildEndItemXML(product.ebayItemId);
 
-    logger.info("end-listing/route", "Sending EndItem request to eBay", {
+    log.info("end-listing/route", "Sending EndItem request to eBay", {
       productId,
       ebayItemId: product.ebayItemId,
       storeNumber,
@@ -53,13 +57,12 @@ export async function POST(
     const result = await callEbayEndItem(xml, storeNumber);
 
     if (result.success) {
-      logger.info("end-listing/route", "eBay EndItem succeeded", {
+      log.info("end-listing/route", "eBay EndItem succeeded", {
         productId,
         ebayItemId: product.ebayItemId,
         storeNumber,
       });
 
-      // Reset product status to DRAFT and clear the eBay item ID
       await prisma.product.update({
         where: { id: productId },
         data: {
@@ -70,28 +73,28 @@ export async function POST(
       });
 
       return NextResponse.json({ success: true });
-    } else {
-      logger.error("end-listing/route", "eBay EndItem failed", undefined, {
-        productId,
-        ebayItemId: product.ebayItemId,
-        storeNumber,
-        ebayError: result.errorMessage,
-      });
-
-      return NextResponse.json(
-        { success: false, error: result.errorMessage },
-        { status: 422 }
-      );
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Unknown error";
-    logger.error("end-listing/route", "Unhandled error in end listing route", err, {
+
+    log.error("end-listing/route", "eBay EndItem failed", undefined, {
+      productId,
+      ebayItemId: product.ebayItemId,
+      storeNumber,
+      ebayError: result.errorMessage,
+    });
+
+    return NextResponse.json(
+      { success: false, error: result.errorMessage },
+      { status: 422 },
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    log.error("end-listing/route", "Unhandled error in end listing route", error, {
       productId,
     });
 
     return NextResponse.json(
       { success: false, error: message },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }
