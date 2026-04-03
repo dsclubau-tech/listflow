@@ -70,6 +70,8 @@ export async function PATCH(request: Request) {
     "minProductQuantity",
     "maxShippingDays",
     "primeOnly",
+    "priceTrackingEnabled",
+    "priceCheckHour",
     "storeNumber",
     "defaultItemSpecifics",
   ];

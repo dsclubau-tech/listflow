@@ -34,3 +34,24 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+## Price Tracking Cron
+
+ListFlow includes an automated Amazon AU to eBay price tracker.
+
+1. Set `CRON_SECRET` in your environment.
+2. Enable price tracking in `Settings > Supplier Settings > General > Price Tracking`.
+3. Match your Railway cron schedule to the configured UTC hour.
+
+Example Railway cron:
+
+```bash
+0 6 * * *
+```
+
+Example request:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  https://your-app.railway.app/api/cron/price-check
+```

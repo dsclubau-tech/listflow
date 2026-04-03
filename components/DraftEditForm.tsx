@@ -1,3 +1,4 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
@@ -22,6 +23,16 @@ interface Policies {
   shipping: PolicyEntry[];
   returns: PolicyEntry[];
   payment: PolicyEntry[];
+}
+
+interface PolicyTemplate {
+  id: string;
+  name: string;
+  storeId: string;
+  shippingPolicyId: string | null;
+  returnPolicyId: string | null;
+  paymentPolicyId: string | null;
+  isDefault: boolean;
 }
 
 interface DraftEditFormProps {
@@ -61,6 +72,8 @@ export default function DraftEditForm({
   const [shippingPolicyId, setShippingPolicyId] = useState("");
   const [returnPolicyId, setReturnPolicyId] = useState("");
   const [paymentPolicyId, setPaymentPolicyId] = useState("");
+  const [policyTemplates, setPolicyTemplates] = useState<PolicyTemplate[]>([]);
+  const [selectedPolicyTemplateId, setSelectedPolicyTemplateId] = useState("");
 
   // Product fields
   const [title, setTitle] = useState("");
@@ -140,16 +153,66 @@ export default function DraftEditForm({
       );
       setActiveTab(0);
       setErrors({});
+      setStoreId("");
+      setPolicies(null);
+      setSelectedPolicyTemplateId("");
 
       // Pre-fill policies from supplier defaults
-      if (defaults?.shippingPolicyId) setShippingPolicyId(defaults.shippingPolicyId);
-      if (defaults?.paymentPolicyId) setPaymentPolicyId(defaults.paymentPolicyId);
-      if (defaults?.returnPolicyId) setReturnPolicyId(defaults.returnPolicyId);
+      setShippingPolicyId(defaults?.shippingPolicyId ?? "");
+      setPaymentPolicyId(defaults?.paymentPolicyId ?? "");
+      setReturnPolicyId(defaults?.returnPolicyId ?? "");
 
       // Pre-select template from supplier defaults
-      if (defaults?.templateId) setSelectedTemplateId(defaults.templateId);
+      setSelectedTemplateId(defaults?.templateId ?? "");
     }
   }, [scrapedData]);
+
+  useEffect(() => {
+    if (!scrapedData?.supplierDefaults?.storeNumber || storeId || stores.length === 0) {
+      return;
+    }
+
+    const defaultStoreName = `Store ${scrapedData.supplierDefaults.storeNumber}`;
+    const defaultStore = stores.find((store) => store.name === defaultStoreName);
+    if (defaultStore) {
+      setStoreId(defaultStore.id);
+    }
+  }, [scrapedData, storeId, stores]);
+
+  useEffect(() => {
+    async function fetchPolicyTemplates() {
+      try {
+        const res = await fetch("/api/policy-templates");
+        if (res.ok) {
+          const data = await res.json();
+          setPolicyTemplates(data);
+        } else {
+          void reportClientError(
+            "draft-edit/policy-templates",
+            "Failed to fetch policy templates",
+            undefined,
+            { status: res.status },
+            {
+              requestId: res.headers.get("x-request-id") ?? undefined,
+              tags: ["policy-templates"],
+            },
+          );
+          setPolicyTemplates([]);
+        }
+      } catch (error) {
+        void reportClientError(
+          "draft-edit/policy-templates",
+          "Failed to fetch policy templates",
+          error,
+          undefined,
+          { tags: ["policy-templates"] },
+        );
+        setPolicyTemplates([]);
+      }
+    }
+
+    void fetchPolicyTemplates();
+  }, []);
 
   // Fetch stores on mount
   useEffect(() => {
@@ -190,9 +253,6 @@ export default function DraftEditForm({
   useEffect(() => {
     if (!storeId) {
       setPolicies(null);
-      setShippingPolicyId("");
-      setReturnPolicyId("");
-      setPaymentPolicyId("");
       return;
     }
 
@@ -203,10 +263,15 @@ export default function DraftEditForm({
         if (res.ok) {
           const data = await res.json();
           setPolicies(data);
-          // Auto-select first option if only one exists
-          if (data.shipping.length === 1) setShippingPolicyId(data.shipping[0].profileId);
-          if (data.returns.length === 1) setReturnPolicyId(data.returns[0].profileId);
-          if (data.payment.length === 1) setPaymentPolicyId(data.payment[0].profileId);
+          if (data.shipping.length === 1) {
+            setShippingPolicyId((current) => current || data.shipping[0].profileId);
+          }
+          if (data.returns.length === 1) {
+            setReturnPolicyId((current) => current || data.returns[0].profileId);
+          }
+          if (data.payment.length === 1) {
+            setPaymentPolicyId((current) => current || data.payment[0].profileId);
+          }
         } else {
           void reportClientError(
             "draft-edit/policies",
@@ -233,8 +298,39 @@ export default function DraftEditForm({
         setPoliciesLoading(false);
       }
     }
-    fetchPolicies();
+
+    void fetchPolicies();
   }, [storeId]);
+
+  useEffect(() => {
+    if (!selectedPolicyTemplateId) {
+      return;
+    }
+
+    const selectedTemplate = policyTemplates.find(
+      (template) => template.id === selectedPolicyTemplateId,
+    );
+
+    if (!selectedTemplate) {
+      setSelectedPolicyTemplateId("");
+      return;
+    }
+
+    const stillMatches =
+      (selectedTemplate.shippingPolicyId ?? "") === shippingPolicyId &&
+      (selectedTemplate.returnPolicyId ?? "") === returnPolicyId &&
+      (selectedTemplate.paymentPolicyId ?? "") === paymentPolicyId;
+
+    if (!stillMatches) {
+      setSelectedPolicyTemplateId("");
+    }
+  }, [
+    paymentPolicyId,
+    policyTemplates,
+    returnPolicyId,
+    selectedPolicyTemplateId,
+    shippingPolicyId,
+  ]);
 
   // Derived
   const isSaveDisabled =
@@ -293,6 +389,7 @@ export default function DraftEditForm({
       shippingPolicyId: shippingPolicyId || undefined,
       returnPolicyId: returnPolicyId || undefined,
       paymentPolicyId: paymentPolicyId || undefined,
+      policyTemplateId: selectedPolicyTemplateId || undefined,
       templateId: selectedTemplateId || undefined,
     };
 
@@ -401,9 +498,43 @@ export default function DraftEditForm({
               </div>
 
               {/* Policies */}
-              {storeId && (
-                <div className="space-y-3">
-                  {policiesLoading ? (
+              <div className="space-y-3">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Policy Template
+                  </label>
+                  <select
+                    value={selectedPolicyTemplateId}
+                    onChange={(e) => {
+                      const nextTemplateId = e.target.value;
+                      setSelectedPolicyTemplateId(nextTemplateId);
+
+                      if (!nextTemplateId) {
+                        return;
+                      }
+
+                      const selectedPolicyTemplate = policyTemplates.find((template) => template.id === nextTemplateId);
+                      if (!selectedPolicyTemplate) {
+                        return;
+                      }
+
+                      setShippingPolicyId(selectedPolicyTemplate.shippingPolicyId ?? "");
+                      setReturnPolicyId(selectedPolicyTemplate.returnPolicyId ?? "");
+                      setPaymentPolicyId(selectedPolicyTemplate.paymentPolicyId ?? "");
+                    }}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  >
+                    <option value="">Select policy template</option>
+                    {policyTemplates.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                {storeId ? (
+                  policiesLoading ? (
                     <p className="text-sm text-gray-500 animate-pulse">Loading policies…</p>
                   ) : policies ? (
                     <>
@@ -464,9 +595,13 @@ export default function DraftEditForm({
                         </select>
                       </div>
                     </>
-                  ) : null}
-                </div>
-              )}
+                  ) : null
+                ) : (
+                  <p className="text-sm text-gray-500">
+                    Select a store if you want to edit the individual policy IDs manually.
+                  </p>
+                )}
+              </div>
 
               {/* Title */}
               <div>

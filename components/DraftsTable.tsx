@@ -1,17 +1,13 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
 import { Fragment, useState } from "react";
 import { useRouter } from "next/navigation";
-import type { Product, Store, User } from "@/app/generated/prisma/client";
 import InlineEditForm from "@/components/InlineEditForm";
-
-type ProductWithRelations = Product & {
-  store: Store;
-  createdBy: User;
-};
+import type { SerializedProductRow } from "@/types/product-row";
 
 interface DraftsTableProps {
-  products: ProductWithRelations[];
+  products: SerializedProductRow[];
   onToast: (message: string, variant: "success" | "error") => void;
   view?: "drafts" | "products";
 }
@@ -27,6 +23,91 @@ const statusBadgeLabels: Record<string, string> = {
   IMPORTED: "Imported",
   FAILED: "Failed",
 };
+
+function formatMoney(value: string | number | null | undefined) {
+  if (value === null || value === undefined) {
+    return "A$0.00";
+  }
+
+  const parsed = typeof value === "number" ? value : Number(value);
+  const amount = Number.isFinite(parsed) ? parsed : 0;
+
+  return `A$${amount.toFixed(2)}`;
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function getPriceTrackingState(product: SerializedProductRow) {
+  const variantCount = product._count?.variants ?? 0;
+  const lastHistory = product.priceHistory?.[0] ?? null;
+  const lastCheckTime = product.lastPriceCheck
+    ? new Date(product.lastPriceCheck).getTime()
+    : null;
+  const lastHistoryTime = lastHistory
+    ? new Date(lastHistory.createdAt).getTime()
+    : null;
+  const hasFreshChange =
+    lastCheckTime !== null &&
+    lastHistoryTime !== null &&
+    lastCheckTime === lastHistoryTime;
+
+  if (!product.asin || variantCount === 0) {
+    return {
+      label: "Not tracked",
+      badgeClass: "bg-gray-100 text-gray-600",
+      detail: !product.asin
+        ? "Add an Amazon ASIN to track this listing."
+        : "Add at least one variant to enable auto-updates.",
+    };
+  }
+
+  if (product.priceCheckError) {
+    return {
+      label: "Check failed",
+      badgeClass: "bg-red-100 text-red-700",
+      detail: product.priceCheckError,
+    };
+  }
+
+  if (hasFreshChange && lastHistory) {
+    return {
+      label: "Price changed",
+      badgeClass: "bg-amber-100 text-amber-800",
+      detail: `${formatMoney(lastHistory.previousPrice)} -> ${formatMoney(lastHistory.newPrice)} on Amazon`,
+    };
+  }
+
+  if (product.lastPriceCheck) {
+    return {
+      label: "No change",
+      badgeClass: "bg-emerald-100 text-emerald-700",
+      detail: `Checked ${formatDateTime(product.lastPriceCheck) ?? "recently"}`,
+    };
+  }
+
+  return {
+    label: "Awaiting check",
+    badgeClass: "bg-gray-100 text-gray-600",
+    detail: "Tracked product has not been checked yet.",
+  };
+}
 
 export default function DraftsTable({
   products,
@@ -279,7 +360,7 @@ export default function DraftsTable({
     );
   }
 
-  const columnCount = isDraftsView ? 8 : 7;
+  const columnCount = 8;
 
   return (
     <>
@@ -307,6 +388,9 @@ export default function DraftsTable({
               <th className="px-4 py-3 text-left">Store</th>
               <th className="px-4 py-3 text-left">Created by</th>
               <th className="px-4 py-3 text-left">Status</th>
+              {isProductsView && (
+                <th className="px-4 py-3 text-left">Price Tracking</th>
+              )}
               <th className="px-4 py-3 text-left">Actions</th>
             </tr>
           </thead>
@@ -316,6 +400,9 @@ export default function DraftsTable({
               const isSelected = selectedIds.includes(product.id);
               const isFailedDraft =
                 isDraftsView && product.status === "FAILED";
+              const trackingState = isProductsView
+                ? getPriceTrackingState(product)
+                : null;
 
               return (
                 <Fragment key={product.id}>
@@ -412,6 +499,24 @@ export default function DraftsTable({
                       </span>
                     </td>
 
+                    {isProductsView && trackingState && (
+                      <td className="px-4 py-3">
+                        <div className="max-w-xs">
+                          <span
+                            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${trackingState.badgeClass}`}
+                          >
+                            {trackingState.label}
+                          </span>
+                          <span
+                            className="mt-1 block truncate text-xs text-gray-500"
+                            title={trackingState.detail}
+                          >
+                            {trackingState.detail}
+                          </span>
+                        </div>
+                      </td>
+                    )}
+
                     <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-2">
                         {loadingId === product.id ? (
@@ -498,7 +603,7 @@ export default function DraftsTable({
                     <tr>
                       <td colSpan={columnCount} className="p-0">
                         <InlineEditForm
-                          product={product}
+                          product={product as never}
                           onCollapse={() => setExpandedProductId(null)}
                         />
                       </td>

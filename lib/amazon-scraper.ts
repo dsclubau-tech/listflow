@@ -1,4 +1,4 @@
-import { chromium } from "playwright";
+import { chromium, type Browser } from "playwright";
 
 export interface ScrapedProduct {
   title: string;
@@ -18,12 +18,105 @@ export interface ScrapedProduct {
     country: string;
     zipcode: string;
     shippingMethod: string;
+    storeNumber: number;
     templateId: string | null;
     shippingPolicyId: string | null;
     paymentPolicyId: string | null;
     returnPolicyId: string | null;
     capitalizeTitle: boolean;
   };
+}
+
+function parseAmazonPriceValue(value: string | null | undefined): number | null {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.replace(/[^\d.,]/g, "").trim();
+
+  if (!normalized) {
+    return null;
+  }
+
+  const compact = normalized.replace(/,/g, "");
+  const parsed = Number.parseFloat(compact);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+
+  return Math.round(parsed * 100) / 100;
+}
+
+export async function scrapeAmazonPrice(
+  asin: string,
+  browser?: Browser
+): Promise<number | null> {
+  const normalizedAsin = asin.trim().toUpperCase();
+
+  if (!/^[A-Z0-9]{10}$/.test(normalizedAsin)) {
+    throw new Error("A valid ASIN is required.");
+  }
+
+  const ownedBrowser = browser ?? (await chromium.launch({ headless: true }));
+  const page = await ownedBrowser.newPage();
+
+  try {
+    await page.setExtraHTTPHeaders({
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    });
+
+    await page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+
+    const selectors = [
+      "#priceblock_ourprice",
+      ".a-price .a-offscreen",
+      "#price_inside_buybox",
+      'span.a-price[data-a-color="price"] .a-offscreen',
+    ];
+
+    for (const selector of selectors) {
+      const priceText = await page
+        .locator(selector)
+        .first()
+        .textContent({ timeout: 5000 })
+        .catch(() => null);
+      const price = parseAmazonPriceValue(priceText);
+
+      if (price !== null) {
+        return price;
+      }
+    }
+
+    const fallbackText = await page.evaluate(() => {
+      const candidates = [
+        document.querySelector("#corePrice_feature_div"),
+        document.querySelector("#apex_desktop"),
+        document.querySelector("#buybox"),
+      ];
+
+      for (const candidate of candidates) {
+        const text = candidate?.textContent?.trim();
+        if (text) {
+          return text;
+        }
+      }
+
+      return null;
+    });
+
+    return parseAmazonPriceValue(fallbackText);
+  } finally {
+    await page.close();
+
+    if (!browser) {
+      await ownedBrowser.close();
+    }
+  }
 }
 
 function decodeHtmlAttribute(value: string): string {

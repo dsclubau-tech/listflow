@@ -1,6 +1,7 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Product, Store, User } from "@/app/generated/prisma/client";
@@ -21,6 +22,16 @@ interface Policies {
   shipping: PolicyEntry[];
   returns: PolicyEntry[];
   payment: PolicyEntry[];
+}
+
+interface PolicyTemplate {
+  id: string;
+  name: string;
+  storeId: string;
+  shippingPolicyId: string | null;
+  returnPolicyId: string | null;
+  paymentPolicyId: string | null;
+  isDefault: boolean;
 }
 
 interface InlineEditFormProps {
@@ -80,6 +91,9 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
   const [paymentPolicyId, setPaymentPolicyId] = useState(product.paymentPolicyId || "");
   const [shippingPolicyId, setShippingPolicyId] = useState(product.shippingPolicyId || "");
   const [returnPolicyId, setReturnPolicyId] = useState(product.returnPolicyId || "");
+  const [policyTemplates, setPolicyTemplates] = useState<PolicyTemplate[]>([]);
+  const [selectedPolicyTemplateId, setSelectedPolicyTemplateId] = useState(product.policyTemplateId || "");
+  const hasInferredPolicyTemplateRef = useRef(Boolean(product.policyTemplateId));
   const [countryLocation, setCountryLocation] = useState("Australia");
   const [defaultZipcode, setDefaultZipcode] = useState("3170");
   const [brand, setBrand] = useState("");
@@ -176,6 +190,99 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
     fetchPolicies();
   }, [fetchPolicies]);
 
+  useEffect(() => {
+    async function fetchPolicyTemplates() {
+      try {
+        const res = await fetch("/api/policy-templates");
+        if (res.ok) {
+          const data = await res.json();
+          setPolicyTemplates(data);
+        } else {
+          void reportClientError(
+            "inline-edit/policy-templates",
+            "Failed to fetch policy templates",
+            undefined,
+            { status: res.status, productId: product.id },
+            {
+              requestId: res.headers.get("x-request-id") ?? undefined,
+              tags: ["policy-templates"],
+            },
+          );
+          setPolicyTemplates([]);
+        }
+      } catch (error) {
+        void reportClientError(
+          "inline-edit/policy-templates",
+          "Failed to fetch policy templates",
+          error,
+          { productId: product.id },
+          { tags: ["policy-templates"] },
+        );
+        setPolicyTemplates([]);
+      }
+    }
+
+    void fetchPolicyTemplates();
+  }, [product.id]);
+
+  useEffect(() => {
+    if (!selectedPolicyTemplateId) {
+      return;
+    }
+
+    const selectedTemplate = policyTemplates.find(
+      (template) => template.id === selectedPolicyTemplateId,
+    );
+
+    if (!selectedTemplate) {
+      setSelectedPolicyTemplateId("");
+      return;
+    }
+
+    const stillMatches =
+      (selectedTemplate.shippingPolicyId ?? "") === shippingPolicyId &&
+      (selectedTemplate.returnPolicyId ?? "") === returnPolicyId &&
+      (selectedTemplate.paymentPolicyId ?? "") === paymentPolicyId;
+
+    if (!stillMatches) {
+      setSelectedPolicyTemplateId("");
+    }
+  }, [
+    paymentPolicyId,
+    policyTemplates,
+    returnPolicyId,
+    selectedPolicyTemplateId,
+    shippingPolicyId,
+  ]);
+
+  useEffect(() => {
+    if (
+      hasInferredPolicyTemplateRef.current ||
+      selectedPolicyTemplateId ||
+      policyTemplates.length === 0
+    ) {
+      return;
+    }
+
+    const matchingTemplate = policyTemplates.find((template) =>
+      (template.shippingPolicyId ?? "") === shippingPolicyId &&
+      (template.returnPolicyId ?? "") === returnPolicyId &&
+      (template.paymentPolicyId ?? "") === paymentPolicyId,
+    );
+
+    hasInferredPolicyTemplateRef.current = true;
+
+    if (matchingTemplate) {
+      setSelectedPolicyTemplateId(matchingTemplate.id);
+    }
+  }, [
+    paymentPolicyId,
+    policyTemplates,
+    returnPolicyId,
+    selectedPolicyTemplateId,
+    shippingPolicyId,
+  ]);
+
   // Auto-clear save message
   useEffect(() => {
     if (saveMessage) {
@@ -249,6 +356,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       shippingPolicyId: shippingPolicyId || null,
       returnPolicyId: returnPolicyId || null,
       paymentPolicyId: paymentPolicyId || null,
+      policyTemplateId: selectedPolicyTemplateId || null,
       templateId: selectedTemplateId || null,
     };
 
@@ -718,6 +826,38 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
                 onChange={(e) => setBrand(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
               />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Policy Template</label>
+              <select
+                value={selectedPolicyTemplateId}
+                onChange={(e) => {
+                  const nextTemplateId = e.target.value;
+                  setSelectedPolicyTemplateId(nextTemplateId);
+
+                  if (!nextTemplateId) {
+                    return;
+                  }
+
+                  const selectedPolicyTemplate = policyTemplates.find((template) => template.id === nextTemplateId);
+                  if (!selectedPolicyTemplate) {
+                    return;
+                  }
+
+                  setShippingPolicyId(selectedPolicyTemplate.shippingPolicyId ?? "");
+                  setReturnPolicyId(selectedPolicyTemplate.returnPolicyId ?? "");
+                  setPaymentPolicyId(selectedPolicyTemplate.paymentPolicyId ?? "");
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+              >
+                <option value="">Select policy template</option>
+                {policyTemplates.map((template) => (
+                  <option key={template.id} value={template.id}>
+                    {template.name}
+                  </option>
+                ))}
+              </select>
             </div>
 
             {/* Payment Policy */}

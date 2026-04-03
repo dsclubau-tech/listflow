@@ -26,6 +26,7 @@ export interface ScrapedProduct {
     country: string;
     zipcode: string;
     shippingMethod: string;
+    storeNumber: number;
     templateId: string | null;
     shippingPolicyId: string | null;
     paymentPolicyId: string | null;

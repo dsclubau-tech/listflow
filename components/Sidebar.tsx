@@ -28,6 +28,20 @@ export default function Sidebar({ userName, userEmail }: SidebarProps) {
       ),
     },
     {
+      href: "/price-tracker",
+      label: "Price Tracker",
+      icon: (
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25Zm0 0h4.5M14.06 6.19l3.75 3.75M7.5 21h13.5"
+          />
+        </svg>
+      ),
+    },
+    {
       href: "/drafts",
       label: "Drafts",
       icon: (

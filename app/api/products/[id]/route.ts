@@ -51,6 +51,7 @@ export async function PATCH(
     "shippingPolicyId",
     "returnPolicyId",
     "paymentPolicyId",
+    "policyTemplateId",
     "templateId",
   ];
 
@@ -121,6 +122,39 @@ export async function PATCH(
     }
 
     data.images = data.images.map((image) => image.trim());
+  }
+
+  if (data.policyTemplateId !== undefined) {
+    if (
+      data.policyTemplateId !== null &&
+      typeof data.policyTemplateId !== "string"
+    ) {
+      return NextResponse.json(
+        { error: "policyTemplateId must be a string or null" },
+        { status: 400 },
+      );
+    }
+
+    const normalizedPolicyTemplateId =
+      typeof data.policyTemplateId === "string"
+        ? data.policyTemplateId.trim() || null
+        : null;
+
+    if (normalizedPolicyTemplateId) {
+      const policyTemplate = await prisma.policyTemplate.findUnique({
+        where: { id: normalizedPolicyTemplateId },
+        select: { id: true },
+      });
+
+      if (!policyTemplate) {
+        return NextResponse.json(
+          { error: "Policy template not found" },
+          { status: 400 },
+        );
+      }
+    }
+
+    data.policyTemplateId = normalizedPolicyTemplateId;
   }
 
   try {

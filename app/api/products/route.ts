@@ -32,6 +32,7 @@ export async function POST(request: Request) {
     shippingPolicyId,
     returnPolicyId,
     paymentPolicyId,
+    policyTemplateId,
     templateId,
   } = body;
 
@@ -85,6 +86,33 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Store not found" }, { status: 400 });
   }
 
+  let normalizedPolicyTemplateId: string | null = null;
+  if (policyTemplateId !== undefined) {
+    if (policyTemplateId !== null && typeof policyTemplateId !== "string") {
+      return NextResponse.json(
+        { error: "policyTemplateId must be a string or null" },
+        { status: 400 },
+      );
+    }
+
+    normalizedPolicyTemplateId =
+      typeof policyTemplateId === "string" ? policyTemplateId.trim() || null : null;
+
+    if (normalizedPolicyTemplateId) {
+      const policyTemplate = await prisma.policyTemplate.findUnique({
+        where: { id: normalizedPolicyTemplateId },
+        select: { id: true },
+      });
+
+      if (!policyTemplate) {
+        return NextResponse.json(
+          { error: "Policy template not found" },
+          { status: 400 },
+        );
+      }
+    }
+  }
+
   // Apply keyword blacklist filter
   const filtered = await applyKeywordFilter(title.trim(), description.trim());
 
@@ -107,6 +135,7 @@ export async function POST(request: Request) {
       shippingPolicyId: shippingPolicyId || null,
       returnPolicyId: returnPolicyId || null,
       paymentPolicyId: paymentPolicyId || null,
+      policyTemplateId: normalizedPolicyTemplateId,
       templateId: templateId || null,
     },
     include: {

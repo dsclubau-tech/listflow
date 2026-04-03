@@ -8,15 +8,10 @@ import type { ScrapedProduct } from "@/components/AddProductModal";
 import DraftEditForm from "@/components/DraftEditForm";
 import Toast from "@/components/Toast";
 import { useToast } from "@/hooks/useToast";
-import type { Product, Store, User } from "@/app/generated/prisma/client";
-
-type ProductWithRelations = Product & {
-  store: Store;
-  createdBy: User;
-};
+import type { SerializedProductRow } from "@/types/product-row";
 
 interface DashboardClientProps {
-  products: ProductWithRelations[];
+  products: SerializedProductRow[];
 }
 
 export default function DashboardClient({ products }: DashboardClientProps) {

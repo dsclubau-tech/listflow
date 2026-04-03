@@ -1,6 +1,7 @@
+/* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import EditVariantModal from "@/components/EditVariantModal";
 import { calculateTotalProfit } from "@/lib/variant-pricing";
 import type { VariantRecord } from "@/types/variant";
@@ -31,7 +32,7 @@ export default function ProductVariantsEditor({
   const [editingVariant, setEditingVariant] = useState<VariantRecord | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
-  async function loadVariants() {
+  const loadVariants = useCallback(async () => {
     setLoading(true);
     setError(null);
 
@@ -52,11 +53,11 @@ export default function ProductVariantsEditor({
     } finally {
       setLoading(false);
     }
-  }
+  }, [product.id]);
 
   useEffect(() => {
     void loadVariants();
-  }, [product.id]);
+  }, [loadVariants]);
 
   function handleSaved(variant: VariantRecord, mode: "create" | "edit") {
     setVariants((prev) => {

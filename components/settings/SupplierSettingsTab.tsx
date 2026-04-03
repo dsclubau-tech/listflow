@@ -27,6 +27,8 @@ interface SupplierSettingsData {
   minProductQuantity: number;
   maxShippingDays: number;
   primeOnly: boolean;
+  priceTrackingEnabled: boolean;
+  priceCheckHour: number;
   storeNumber: number;
   defaultItemSpecifics: Record<string, string>;
 }
@@ -187,6 +189,8 @@ export default function SupplierSettingsTab() {
           minProductQuantity: settings.minProductQuantity,
           maxShippingDays: settings.maxShippingDays,
           primeOnly: settings.primeOnly,
+          priceTrackingEnabled: settings.priceTrackingEnabled,
+          priceCheckHour: settings.priceCheckHour,
           storeNumber: parseInt(selectedStore),
           defaultItemSpecifics: settings.defaultItemSpecifics,
         }),
@@ -691,6 +695,53 @@ export default function SupplierSettingsTab() {
                     checked={settings.primeOnly}
                     onChange={(v) => updateField("primeOnly", v)}
                   />
+                </div>
+              </div>
+            </section>
+
+            <section>
+              <h3 className="text-sm font-semibold text-gray-800 mb-4">Price Tracking</h3>
+              <div className="rounded-xl border border-gray-200 bg-white p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-medium text-gray-800">
+                      Enable automatic Amazon to eBay price checks
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-gray-500">
+                      When enabled, imported products with an ASIN and at least one
+                      variant can be checked on a daily cron run. The configured
+                      hour is in UTC and should match your Railway cron schedule.
+                    </p>
+                  </div>
+                  <ToggleSwitch
+                    checked={settings.priceTrackingEnabled}
+                    onChange={(value) => updateField("priceTrackingEnabled", value)}
+                  />
+                </div>
+
+                <div className="mt-4 max-w-xs">
+                  <label className="mb-1 block text-xs text-gray-500">
+                    Check Hour (UTC)
+                  </label>
+                  <select
+                    value={settings.priceCheckHour}
+                    onChange={(e) =>
+                      updateField(
+                        "priceCheckHour",
+                        Number.parseInt(e.target.value, 10) || 0
+                      )
+                    }
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  >
+                    {Array.from({ length: 24 }, (_, hour) => (
+                      <option key={hour} value={hour}>
+                        {hour.toString().padStart(2, "0")}:00 UTC
+                      </option>
+                    ))}
+                  </select>
+                  <p className="mt-1 text-xs text-gray-400">
+                    Example: `06:00 UTC` matches a cron schedule of `0 6 * * *`.
+                  </p>
                 </div>
               </div>
             </section>

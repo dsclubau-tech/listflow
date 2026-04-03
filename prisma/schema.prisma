@@ -37,6 +37,7 @@ model Store {
 
   products    Product[]
   uploadLogs  UploadLog[]
+  policyTemplates PolicyTemplate[]
 }
 
 enum ProductStatus {
@@ -65,9 +66,13 @@ model Product {
   ebayItemId    String?
   errorMessage  String?       @db.Text
   asin          String?
+  amazonPrice   Decimal?      @db.Decimal(10, 2)
+  lastPriceCheck DateTime?
+  priceCheckError String?     @db.Text
   shippingPolicyId String?
   returnPolicyId   String?
   paymentPolicyId  String?
+  policyTemplateId String?
   templateId       String?
   storeId       String
   createdById   String
@@ -78,6 +83,7 @@ model Product {
   createdBy     User          @relation(fields: [createdById], references: [id])
   uploadLogs    UploadLog[]
   variants      Variant[]
+  priceHistory  PriceHistory[]
 }
 
 model Variant {
@@ -102,9 +108,31 @@ model Variant {
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
-  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  product      Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
+  priceHistory PriceHistory[]
 
   @@index([productId])
+}
+
+model PriceHistory {
+  id                String   @id @default(cuid())
+  productId         String
+  variantId         String?
+  previousPrice     Decimal  @db.Decimal(10, 2)
+  newPrice          Decimal  @db.Decimal(10, 2)
+  previousSellPrice Decimal  @db.Decimal(10, 2)
+  newSellPrice      Decimal  @db.Decimal(10, 2)
+  changePercent     Float
+  ebayRevised       Boolean  @default(false)
+  errorMessage      String?  @db.Text
+  createdAt         DateTime @default(now())
+
+  product Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant Variant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
+  @@index([productId])
+  @@index([variantId])
+  @@index([createdAt])
 }
 
 enum UploadStatus {
@@ -136,6 +164,22 @@ model DescriptionTemplate {
   isDefault Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+model PolicyTemplate {
+  id               String   @id @default(cuid())
+  name             String
+  storeId          String
+  shippingPolicyId String?
+  returnPolicyId   String?
+  paymentPolicyId  String?
+  isDefault        Boolean  @default(false)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  store            Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
 }
 
 model KeywordBlacklist {
@@ -176,6 +220,8 @@ model SupplierSettings {
   minProductQuantity    Int      @default(2)
   maxShippingDays       Int      @default(25)
   primeOnly             Boolean  @default(true)
+  priceTrackingEnabled  Boolean  @default(false)
+  priceCheckHour        Int      @default(6)
 
   storeNumber           Int      @default(1)
 

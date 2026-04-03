@@ -18,6 +18,8 @@ export default async function DraftsPage() {
   const serializedProducts = products.map((product) => ({
     ...product,
     price: product.price.toString(),
+    amazonPrice: product.amazonPrice?.toString() ?? null,
+    lastPriceCheck: product.lastPriceCheck?.toISOString() ?? null,
     createdAt: product.createdAt.toISOString(),
     updatedAt: product.updatedAt.toISOString(),
     store: {
