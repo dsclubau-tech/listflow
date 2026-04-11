@@ -72,6 +72,7 @@ export async function PATCH(request: Request) {
     "primeOnly",
     "priceTrackingEnabled",
     "priceCheckHour",
+    "scrapePostcode",
     "storeNumber",
     "defaultItemSpecifics",
   ];

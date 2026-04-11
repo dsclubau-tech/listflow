@@ -1,7 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   applyRoundCents,
   calculateProfitFixedFromSellPrice,
@@ -25,6 +25,13 @@ interface EditVariantModalProps {
 }
 
 type ModalTab = "pricing" | "general";
+
+interface SupplierPricingDefaults {
+  feesPercent: number;
+  feesFixed: number;
+  profitPercent: number;
+  profitFixed: number;
+}
 
 interface VariantFormState {
   sku: string;
@@ -54,6 +61,10 @@ function toMoneyString(value: number) {
   return value.toFixed(2);
 }
 
+function toFiniteNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
 function parseImages(imagesText: string) {
   return imagesText
     .split(/\r?\n/)
@@ -71,14 +82,38 @@ function normalizeItemSpecifics(
   );
 }
 
+function recalculateSellPriceForState(next: VariantFormState) {
+  const sellPrice = calculateSellPrice({
+    buyPrice: toNumber(next.buyPrice),
+    feesPercent: toNumber(next.feesPercent),
+    feesFixed: toNumber(next.feesFixed),
+    profitPercent: toNumber(next.profitPercent),
+    profitFixed: toNumber(next.profitFixed),
+    roundCents: next.roundCentsEnabled ? 0.99 : null,
+  });
+
+  return {
+    ...next,
+    sellPrice: toMoneyString(sellPrice),
+  };
+}
+
 function buildFormState(props: {
   variant: VariantRecord | null;
   defaultBuyPrice: number;
   defaultQuantity: number;
   defaultImages: string[];
   defaultSku: string | null;
+  pricingDefaults?: SupplierPricingDefaults | null;
 }): VariantFormState {
-  const { variant, defaultBuyPrice, defaultQuantity, defaultImages, defaultSku } = props;
+  const {
+    variant,
+    defaultBuyPrice,
+    defaultQuantity,
+    defaultImages,
+    defaultSku,
+    pricingDefaults,
+  } = props;
 
   if (variant) {
     return {
@@ -104,15 +139,15 @@ function buildFormState(props: {
     };
   }
 
-  return {
+  return recalculateSellPriceForState({
     sku: defaultSku || "",
     title: "Default",
     imagesText: defaultImages.join("\n"),
     buyPrice: toMoneyString(defaultBuyPrice),
-    feesPercent: "0",
-    feesFixed: "0",
-    profitPercent: "0",
-    profitFixed: "0",
+    feesPercent: String(pricingDefaults?.feesPercent ?? 0),
+    feesFixed: String(pricingDefaults?.feesFixed ?? 0),
+    profitPercent: String(pricingDefaults?.profitPercent ?? 0),
+    profitFixed: String(pricingDefaults?.profitFixed ?? 0),
     sellPrice: toMoneyString(defaultBuyPrice),
     quantity: String(defaultQuantity),
     status: defaultQuantity > 0 ? "IN_STOCK" : "OUT_OF_STOCK",
@@ -121,7 +156,7 @@ function buildFormState(props: {
     allowMarketplace: true,
     roundCentsEnabled: false,
     itemSpecifics: [],
-  };
+  });
 }
 
 export default function EditVariantModal({
@@ -148,6 +183,13 @@ export default function EditVariantModal({
   );
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pricingDefaults, setPricingDefaults] =
+    useState<SupplierPricingDefaults | null>(null);
+  const pricingDefaultsRef = useRef<SupplierPricingDefaults | null>(null);
+
+  useEffect(() => {
+    pricingDefaultsRef.current = pricingDefaults;
+  }, [pricingDefaults]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -163,9 +205,78 @@ export default function EditVariantModal({
         defaultQuantity,
         defaultImages,
         defaultSku,
+        pricingDefaults: pricingDefaultsRef.current,
       })
     );
   }, [defaultBuyPrice, defaultImages, defaultQuantity, defaultSku, isOpen, variant]);
+
+  useEffect(() => {
+    if (!isOpen || variant) {
+      return;
+    }
+
+    let cancelled = false;
+
+    void (async () => {
+      try {
+        const response = await fetch("/api/supplier-settings", {
+          cache: "no-store",
+        });
+
+        if (!response.ok) {
+          return;
+        }
+
+        const data = (await response.json()) as {
+          ebayFeePercent?: number;
+          fixedFeeAmount?: number;
+          additionalProfitPercent?: number;
+          additionalProfitFixed?: number;
+        };
+
+        if (cancelled) {
+          return;
+        }
+
+        const nextDefaults: SupplierPricingDefaults = {
+          feesPercent: toFiniteNumber(data.ebayFeePercent),
+          feesFixed: toFiniteNumber(data.fixedFeeAmount),
+          profitPercent: toFiniteNumber(data.additionalProfitPercent),
+          profitFixed: toFiniteNumber(data.additionalProfitFixed),
+        };
+
+        pricingDefaultsRef.current = nextDefaults;
+        setPricingDefaults(nextDefaults);
+
+        setForm((prev) => {
+          const hasUntouchedPricing =
+            prev.feesPercent === "0" &&
+            prev.feesFixed === "0" &&
+            prev.profitPercent === "0" &&
+            prev.profitFixed === "0" &&
+            prev.sellPrice === toMoneyString(defaultBuyPrice);
+
+          if (!hasUntouchedPricing) {
+            return prev;
+          }
+
+          return recalculateSellPriceForState({
+            ...prev,
+            feesPercent: String(nextDefaults.feesPercent),
+            feesFixed: String(nextDefaults.feesFixed),
+            profitPercent: String(nextDefaults.profitPercent),
+            profitFixed: String(nextDefaults.profitFixed),
+          });
+        });
+      } catch {
+        // Leave zeroed pricing defaults in place if settings are unavailable.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [defaultBuyPrice, isOpen, variant]);
 
   const imageUrls = useMemo(() => parseImages(form.imagesText), [form.imagesText]);
   const heroImage = imageUrls[0] || defaultImages[0] || "";
@@ -184,19 +295,7 @@ export default function EditVariantModal({
   });
 
   function recalculateSellPrice(next: VariantFormState) {
-    const sellPrice = calculateSellPrice({
-      buyPrice: toNumber(next.buyPrice),
-      feesPercent: toNumber(next.feesPercent),
-      feesFixed: toNumber(next.feesFixed),
-      profitPercent: toNumber(next.profitPercent),
-      profitFixed: toNumber(next.profitFixed),
-      roundCents: next.roundCentsEnabled ? 0.99 : null,
-    });
-
-    return {
-      ...next,
-      sellPrice: toMoneyString(sellPrice),
-    };
+    return recalculateSellPriceForState(next);
   }
 
   function updatePricingField(

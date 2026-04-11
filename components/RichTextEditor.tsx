@@ -156,6 +156,7 @@ export default function RichTextEditor({
         redo?: () => void;
       } | null;
       getSelection: (focus?: boolean) => { index: number; length: number } | null;
+      getFormat: (index?: number, length?: number) => Record<string, unknown>;
       deleteText: (index: number, length: number, source?: string) => void;
       format: (name: string, value: unknown, source?: string) => void;
       insertEmbed: (index: number, type: string, value: unknown, source?: string) => void;
@@ -297,6 +298,16 @@ export default function RichTextEditor({
     editor?.focus();
   }, [getEditor]);
 
+  const handleToggleList = useCallback(
+    (listType: "ordered" | "bullet") => {
+      withEditorSelection((editor, index, length) => {
+        const currentList = editor.getFormat(index, length).list;
+        editor.format("list", currentList === listType ? false : listType, "user");
+      });
+    },
+    [withEditorSelection],
+  );
+
   const rootStyle = {
     "--listflow-quill-min-height": minHeight,
   } as CSSProperties;
@@ -319,8 +330,24 @@ export default function RichTextEditor({
         </ToolbarSection>
 
         <ToolbarSection label="Lists & Indentation">
-          <button type="button" className="ql-list" value="ordered" aria-label="Ordered list" disabled={quillToolbarDisabled}>1.</button>
-          <button type="button" className="ql-list" value="bullet" aria-label="Bullet list" disabled={quillToolbarDisabled}>{"\u2022"}</button>
+          <button
+            type="button"
+            className="listflow-quill-action"
+            aria-label="Toggle numbered list"
+            onClick={() => handleToggleList("ordered")}
+            disabled={quillToolbarDisabled}
+          >
+            <span className="listflow-quill-list-glyph">1.</span>
+          </button>
+          <button
+            type="button"
+            className="listflow-quill-action"
+            aria-label="Toggle bulleted list"
+            onClick={() => handleToggleList("bullet")}
+            disabled={quillToolbarDisabled}
+          >
+            <span className="listflow-quill-list-glyph">{"\u2022"}</span>
+          </button>
           <button type="button" className="ql-blockquote" aria-label="Blockquote" disabled={quillToolbarDisabled}>&quot;</button>
           <button type="button" className="ql-align" value="" aria-label="Align left" disabled={quillToolbarDisabled}>Left</button>
           <button type="button" className="ql-align" value="center" aria-label="Align center" disabled={quillToolbarDisabled}>Center</button>
@@ -387,8 +414,20 @@ export default function RichTextEditor({
         </span>
 
         <span className="ql-formats">
-          <button type="button" className="ql-list" value="ordered" aria-label="Ordered list" disabled={quillToolbarDisabled} />
-          <button type="button" className="ql-list" value="bullet" aria-label="Bullet list" disabled={quillToolbarDisabled} />
+          <CompactToolbarButton
+            ariaLabel="Toggle numbered list"
+            onClick={() => handleToggleList("ordered")}
+            disabled={quillToolbarDisabled}
+          >
+            <span className="listflow-quill-list-glyph">1.</span>
+          </CompactToolbarButton>
+          <CompactToolbarButton
+            ariaLabel="Toggle bulleted list"
+            onClick={() => handleToggleList("bullet")}
+            disabled={quillToolbarDisabled}
+          >
+            <span className="listflow-quill-list-glyph">{"\u2022"}</span>
+          </CompactToolbarButton>
           <button type="button" className="ql-blockquote" aria-label="Blockquote" disabled={quillToolbarDisabled} />
           <button type="button" className="ql-align" value="" aria-label="Align left" disabled={quillToolbarDisabled} />
           <button type="button" className="ql-align" value="center" aria-label="Align center" disabled={quillToolbarDisabled} />

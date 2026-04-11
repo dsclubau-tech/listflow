@@ -40,7 +40,14 @@ export async function POST(request: Request) {
   log.info("scrape/route", "Scrape started", { url });
 
   try {
-    const product = await scrapeAmazonProduct(url);
+    const supplierSettings = await prisma.supplierSettings.findFirst({
+      where: { supplierName: "Amazon AU" },
+    });
+
+    const product = await scrapeAmazonProduct(
+      url,
+      supplierSettings?.scrapePostcode || undefined
+    );
 
     log.info("scrape/route", "Scrape succeeded", {
       url,
@@ -68,10 +75,6 @@ export async function POST(request: Request) {
         title: product.title,
       });
     }
-
-    const supplierSettings = await prisma.supplierSettings.findFirst({
-      where: { supplierName: "Amazon AU" },
-    });
 
     const supplierDefaults = {
       quantity: supplierSettings?.defaultQuantity ?? 1,

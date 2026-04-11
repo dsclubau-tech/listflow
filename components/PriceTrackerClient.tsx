@@ -293,11 +293,41 @@ export default function PriceTrackerClient({
                       <div className="font-medium text-gray-900">
                         {item.product.title}
                       </div>
-                      {item.variant && (
-                        <div className="mt-1 text-xs text-gray-500">
-                          Variant: {item.variant.title}
-                        </div>
-                      )}
+                      <div className="mt-1 flex items-center gap-2">
+                        {item.product.asin && (
+                          <a
+                            href={`https://www.amazon.com.au/dp/${item.product.asin}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-orange-600 hover:text-orange-800 transition-colors"
+                            title="View on Amazon"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                            </svg>
+                            Amazon
+                          </a>
+                        )}
+                        {item.product.ebayItemId && (
+                          <a
+                            href={`https://www.ebay.com.au/itm/${item.product.ebayItemId}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 transition-colors"
+                            title="View on eBay"
+                          >
+                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                            </svg>
+                            eBay
+                          </a>
+                        )}
+                        {item.variant && (
+                          <span className="text-xs text-gray-400">
+                            Variant: {item.variant.title}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-700">
                       {formatMoney(item.previousPrice)} {"->"} {formatMoney(item.newPrice)}

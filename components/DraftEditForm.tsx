@@ -138,7 +138,9 @@ export default function DraftEditForm({
       setCategory(scrapedData.categoryId || "");
       setCategoryName(scrapedData.categoryName || scrapedData.category || "");
       setCondition(scrapedData.condition);
-      setPrice("");
+      setPrice(
+        scrapedData.price !== null ? scrapedData.price.toFixed(2) : ""
+      );
       setQuantity(String(defaults?.quantity ?? 1));
       setBrand(scrapedData.brand);
       setVariant(scrapedData.variantName || "");

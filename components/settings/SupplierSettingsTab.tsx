@@ -29,6 +29,7 @@ interface SupplierSettingsData {
   primeOnly: boolean;
   priceTrackingEnabled: boolean;
   priceCheckHour: number;
+  scrapePostcode: string;
   storeNumber: number;
   defaultItemSpecifics: Record<string, string>;
 }
@@ -191,6 +192,7 @@ export default function SupplierSettingsTab() {
           primeOnly: settings.primeOnly,
           priceTrackingEnabled: settings.priceTrackingEnabled,
           priceCheckHour: settings.priceCheckHour,
+          scrapePostcode: settings.scrapePostcode,
           storeNumber: parseInt(selectedStore),
           defaultItemSpecifics: settings.defaultItemSpecifics,
         }),
@@ -741,6 +743,26 @@ export default function SupplierSettingsTab() {
                   </select>
                   <p className="mt-1 text-xs text-gray-400">
                     Example: `06:00 UTC` matches a cron schedule of `0 6 * * *`.
+                  </p>
+                </div>
+
+                <div className="mt-4 max-w-xs">
+                  <label className="mb-1 block text-xs text-gray-500">
+                    Amazon Delivery Postcode
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={6}
+                    value={settings.scrapePostcode}
+                    onChange={(e) =>
+                      updateField("scrapePostcode", e.target.value.replace(/\D/g, ""))
+                    }
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    placeholder="e.g. 2217"
+                  />
+                  <p className="mt-1 text-xs text-gray-400">
+                    The scraper will set this postcode on Amazon to get local pricing
+                    and availability. Default: 2217 (Kogarah, NSW).
                   </p>
                 </div>
               </div>

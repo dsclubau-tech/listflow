@@ -12,6 +12,12 @@ const PRICE_TOLERANCE = 0.01;
 const PRODUCT_DELAY_MS = 3000;
 const SUPPLIER_NAME = "Amazon AU";
 
+/** Guard 1: reject price changes larger than this percentage in either direction. */
+const MAX_CHANGE_PERCENT = 80;
+
+/** Guard 2: never send a sell price below eBay's minimum for fixed-price listings. */
+const EBAY_MIN_PRICE = 1.0;
+
 export interface PriceCheckResult {
   checked: number;
   changed: number;
@@ -148,7 +154,11 @@ export async function runPriceCheck(
       const checkedAt = new Date();
 
       try {
-        const currentAmazonPrice = await scrapeAmazonPrice(product.asin, browser);
+        const currentAmazonPrice = await scrapeAmazonPrice(
+          product.asin,
+          browser,
+          supplierSettings.scrapePostcode || undefined
+        );
 
         if (currentAmazonPrice === null) {
           result.failed += 1;
@@ -172,6 +182,33 @@ export async function runPriceCheck(
         const previousAmazonPrice =
           decimalToNumber(product.amazonPrice) ??
           decimalToNumber(product.variants[0]?.buyPrice);
+
+        // First-time check: no stored amazonPrice yet. Record the current
+        // Amazon price as the baseline and skip — do NOT trigger an eBay
+        // revision on the very first scrape because the variant buyPrice
+        // may have been entered manually and differ from the live price.
+        const isFirstCheck = product.amazonPrice === null;
+
+        if (isFirstCheck) {
+          result.skipped += 1;
+
+          await prisma.product.update({
+            where: { id: product.id },
+            data: {
+              amazonPrice: toMoneyDecimal(currentAmazonPrice),
+              lastPriceCheck: checkedAt,
+              priceCheckError: null,
+            },
+          });
+
+          logger.info("price-checker/run", "First check — baseline established", {
+            productId: product.id,
+            asin: product.asin,
+            baselinePrice: currentAmazonPrice,
+          });
+
+          continue;
+        }
 
         if (!previousAmazonPrice || previousAmazonPrice <= 0) {
           result.failed += 1;
@@ -210,6 +247,37 @@ export async function runPriceCheck(
         const changeRatio = currentAmazonPrice / previousAmazonPrice;
         const changePercent =
           ((currentAmazonPrice - previousAmazonPrice) / previousAmazonPrice) * 100;
+
+        // --- Guard 1: Reject implausible price swings ---
+        // If the Amazon price supposedly changed by more than MAX_CHANGE_PERCENT
+        // in either direction, stop and flag it. A $999 product doesn't drop
+        // to $5 overnight through normal market movement.
+        if (Math.abs(changePercent) > MAX_CHANGE_PERCENT) {
+          result.failed += 1;
+
+          await prisma.product.update({
+            where: { id: product.id },
+            data: {
+              lastPriceCheck: checkedAt,
+              priceCheckError:
+                `Price change of ${changePercent.toFixed(1)}% exceeds the ` +
+                `${MAX_CHANGE_PERCENT}% safety limit. Amazon price went from ` +
+                `A$${previousAmazonPrice.toFixed(2)} to A$${currentAmazonPrice.toFixed(2)}. ` +
+                `Manual review required.`,
+            },
+          });
+
+          logger.warn("price-checker/run", "Guard 1: price change exceeds threshold", {
+            productId: product.id,
+            asin: product.asin,
+            previousAmazonPrice,
+            currentAmazonPrice,
+            changePercent: roundMoney(changePercent),
+            threshold: MAX_CHANGE_PERCENT,
+          });
+
+          continue;
+        }
         const nextVariants = product.variants.map((variant) => {
           const previousBuyPrice = decimalToNumber(variant.buyPrice) ?? 0;
           const previousSellPrice = decimalToNumber(variant.sellPrice) ?? 0;
@@ -236,6 +304,33 @@ export async function runPriceCheck(
 
         if (nextPrimarySellPrice === undefined) {
           result.skipped += 1;
+          continue;
+        }
+
+        // --- Guard 2: Reject sell prices below eBay's minimum ---
+        // eBay rejects fixed-price listings below A$1.00 (Error 73).
+        // Catch this before making the API call.
+        if (nextPrimarySellPrice < EBAY_MIN_PRICE) {
+          result.failed += 1;
+
+          await prisma.product.update({
+            where: { id: product.id },
+            data: {
+              lastPriceCheck: checkedAt,
+              priceCheckError:
+                `Calculated sell price A$${nextPrimarySellPrice.toFixed(2)} is below ` +
+                `eBay's minimum of A$${EBAY_MIN_PRICE.toFixed(2)}. ` +
+                `eBay would reject this update. Manual review required.`,
+            },
+          });
+
+          logger.warn("price-checker/run", "Guard 2: sell price below eBay minimum", {
+            productId: product.id,
+            asin: product.asin,
+            nextPrimarySellPrice,
+            ebayMinPrice: EBAY_MIN_PRICE,
+          });
+
           continue;
         }
 

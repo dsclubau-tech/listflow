@@ -12,7 +12,7 @@ export interface ScrapedProduct {
   title: string;
   description: string;
   images: string[];
-  price: null;
+  price: number | null;
   condition: "New";
   category: string;
   categoryId: string;

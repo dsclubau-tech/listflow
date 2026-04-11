@@ -4,7 +4,7 @@ export interface ScrapedProduct {
   title: string;
   description: string;
   images: string[];
-  price: null; // always null — user sets price manually
+  price: number | null;
   condition: "New"; // Amazon products are always new
   category: string;
   categoryId: string;
@@ -48,9 +48,198 @@ function parseAmazonPriceValue(value: string | null | undefined): number | null 
   return Math.round(parsed * 100) / 100;
 }
 
+/**
+ * Track which Browser instance already has its delivery postcode set.
+ * This prevents setting it on every single product page — once per
+ * browser session is enough because Amazon stores it in a cookie.
+ */
+const postcodeSetForBrowser = new WeakSet<Browser>();
+
+/**
+ * Set the delivery postcode on Amazon AU by interacting with the
+ * location popup. This ensures the scraper sees AU pricing and
+ * availability regardless of where the server is located.
+ *
+ * Handles two scenarios:
+ * 1. Amazon auto-shows the popup (common for non-AU IPs)
+ * 2. We need to click the "Deliver to" link to open it
+ *
+ * Non-blocking: returns true on success, false if the interaction
+ * failed. The scraper will still work without it.
+ */
+async function setAmazonDeliveryPostcode(
+  page: import("playwright").Page,
+  postcode: string
+): Promise<boolean> {
+  try {
+    // Step 1: Check if the popup is already auto-shown by Amazon
+    // (happens when Amazon detects a non-AU IP)
+    let popupOpen = await page
+      .locator("#GLUXZipUpdateInput")
+      .isVisible({ timeout: 2000 })
+      .catch(() => false);
+
+    // Step 2: If popup is NOT already open, click the location link
+    if (!popupOpen) {
+      const locationLink = page.locator("#nav-global-location-popover-link");
+      if (!(await locationLink.isVisible({ timeout: 3000 }).catch(() => false))) {
+        return false;
+      }
+      await locationLink.click();
+      popupOpen = await page
+        .locator("#GLUXZipUpdateInput")
+        .isVisible({ timeout: 5000 })
+        .catch(() => false);
+    }
+
+    if (!popupOpen) {
+      return false;
+    }
+
+    // Step 3: Type the postcode
+    const zipInput = page.locator("#GLUXZipUpdateInput");
+    await zipInput.fill(postcode);
+
+    // Step 4: Click Apply
+    const applyBtn = page.locator(
+      '#GLUXZipUpdate input[type="submit"], #GLUXZipUpdate .a-button-input, #GLUXZipUpdate .a-button'
+    );
+    await applyBtn.first().click();
+
+    // Step 5: Wait for Amazon to process — it may show a city dropdown
+    await page.waitForTimeout(2000);
+
+    // Step 6: If a city selection appears, pick the first option
+    const cityList = page.locator("#GLUXCityList select, #GLUXCityPopover select");
+    if (await cityList.isVisible({ timeout: 2000 }).catch(() => false)) {
+      await cityList.first().selectOption({ index: 1 });
+      await page.waitForTimeout(1000);
+    }
+
+    // Step 7: Click Done/Continue — this typically triggers a full page reload
+    const doneBtn = page.locator(
+      '[name="glowDoneButton"], #GLUXConfirmClose, .a-popover-footer .a-button-primary'
+    );
+    if (await doneBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
+      await Promise.all([
+        page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {}),
+        doneBtn.first().click(),
+      ]);
+    }
+
+    // Step 8: Ensure page is stable after any reload
+    await page.waitForLoadState("domcontentloaded").catch(() => {});
+    await page.waitForTimeout(1000);
+
+    return true;
+  } catch {
+    // Non-blocking — if anything fails, we proceed with default location
+    return false;
+  }
+}
+
+async function extractAmazonPriceFromPage(
+  page: import("playwright").Page
+): Promise<number | null> {
+  const selectors = [
+    "#priceblock_ourprice",
+    ".a-price .a-offscreen",
+    "#price_inside_buybox",
+    'span.a-price[data-a-color="price"] .a-offscreen',
+  ];
+
+  for (const selector of selectors) {
+    const priceText = await page
+      .locator(selector)
+      .first()
+      .textContent({ timeout: 5000 })
+      .catch(() => null);
+    const price = parseAmazonPriceValue(priceText);
+
+    if (price !== null) {
+      return price;
+    }
+  }
+
+  // Fallback: scan DOM containers for price-like patterns instead of
+  // stripping all non-numeric characters (which caused the thirteen cent
+  // incident by concatenating shipping fees with product prices).
+  const fallbackCandidates = await page.evaluate(() => {
+    const containers = [
+      document.querySelector("#corePrice_feature_div"),
+      document.querySelector("#apex_desktop"),
+      document.querySelector("#buybox"),
+    ];
+
+    const allText: string[] = [];
+
+    for (const container of containers) {
+      const text = container?.textContent?.trim();
+      if (text) {
+        allText.push(text);
+      }
+    }
+
+    if (allText.length === 0) {
+      return [];
+    }
+
+    // Extract price-like patterns: "$999.00", "A$999.00", "AU$1,299.00"
+    const pricePattern = /(?:A(?:U)?\$|US\$|\$)\s*([\d,]+\.\d{2})\b/g;
+    const found: string[] = [];
+
+    for (const text of allText) {
+      let match: RegExpExecArray | null;
+      while ((match = pricePattern.exec(text)) !== null) {
+        found.push(match[1]);
+      }
+    }
+
+    return found;
+  });
+
+  if (fallbackCandidates.length === 0) {
+    return null;
+  }
+
+  // Parse all candidates, reject anything below $1.00
+  const SCRAPER_MIN_PRICE = 1.0;
+  const validPrices: number[] = [];
+
+  for (const raw of fallbackCandidates) {
+    const price = parseAmazonPriceValue(raw);
+    if (price !== null && price >= SCRAPER_MIN_PRICE) {
+      validPrices.push(price);
+    }
+  }
+
+  if (validPrices.length === 0) {
+    return null;
+  }
+
+  // Pick the most frequently occurring price (real prices appear multiple
+  // times on the page; noise values like shipping fees appear once).
+  const frequency = new Map<number, number>();
+  for (const price of validPrices) {
+    frequency.set(price, (frequency.get(price) ?? 0) + 1);
+  }
+
+  let bestPrice = validPrices[0];
+  let bestCount = 0;
+  for (const [price, count] of frequency) {
+    if (count > bestCount) {
+      bestCount = count;
+      bestPrice = price;
+    }
+  }
+
+  return bestPrice;
+}
+
 export async function scrapeAmazonPrice(
   asin: string,
-  browser?: Browser
+  browser?: Browser,
+  postcode?: string
 ): Promise<number | null> {
   const normalizedAsin = asin.trim().toUpperCase();
 
@@ -72,44 +261,20 @@ export async function scrapeAmazonPrice(
       timeout: 30000,
     });
 
-    const selectors = [
-      "#priceblock_ourprice",
-      ".a-price .a-offscreen",
-      "#price_inside_buybox",
-      'span.a-price[data-a-color="price"] .a-offscreen',
-    ];
-
-    for (const selector of selectors) {
-      const priceText = await page
-        .locator(selector)
-        .first()
-        .textContent({ timeout: 5000 })
-        .catch(() => null);
-      const price = parseAmazonPriceValue(priceText);
-
-      if (price !== null) {
-        return price;
+    // Set delivery postcode once per browser session so Amazon shows
+    // AU-local prices and availability (e.g. Kogarah 2217)
+    if (postcode && !postcodeSetForBrowser.has(ownedBrowser)) {
+      const success = await setAmazonDeliveryPostcode(page, postcode);
+      if (success) {
+        postcodeSetForBrowser.add(ownedBrowser);
+        // Reload the page to get updated prices for this postcode
+        await page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
+          waitUntil: "domcontentloaded",
+          timeout: 30000,
+        });
       }
     }
-
-    const fallbackText = await page.evaluate(() => {
-      const candidates = [
-        document.querySelector("#corePrice_feature_div"),
-        document.querySelector("#apex_desktop"),
-        document.querySelector("#buybox"),
-      ];
-
-      for (const candidate of candidates) {
-        const text = candidate?.textContent?.trim();
-        if (text) {
-          return text;
-        }
-      }
-
-      return null;
-    });
-
-    return parseAmazonPriceValue(fallbackText);
+    return extractAmazonPriceFromPage(page);
   } finally {
     await page.close();
 
@@ -231,7 +396,10 @@ function cleanDescriptionHtml(html: string): string {
   }
 }
 
-export async function scrapeAmazonProduct(url: string): Promise<ScrapedProduct> {
+export async function scrapeAmazonProduct(
+  url: string,
+  postcode?: string
+): Promise<ScrapedProduct> {
   // Validate URL
   if (!url.includes("amazon.com.au")) {
     throw new Error("Only Amazon AU (amazon.com.au) URLs are supported.");
@@ -248,6 +416,15 @@ export async function scrapeAmazonProduct(url: string): Promise<ScrapedProduct> 
     });
 
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+
+    if (postcode && !postcodeSetForBrowser.has(browser)) {
+      const success = await setAmazonDeliveryPostcode(page, postcode);
+      if (success) {
+        postcodeSetForBrowser.add(browser);
+        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+      }
+    }
+
     await page.waitForSelector("#productTitle", { timeout: 15000 });
 
     // Title
@@ -290,8 +467,7 @@ export async function scrapeAmazonProduct(url: string): Promise<ScrapedProduct> 
         );
     });
 
-    // Price — always null
-    const price = null;
+    const price = await extractAmazonPriceFromPage(page);
 
     // Active variant
     const variantName = await page

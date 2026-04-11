@@ -222,6 +222,7 @@ model SupplierSettings {
   primeOnly             Boolean  @default(true)
   priceTrackingEnabled  Boolean  @default(false)
   priceCheckHour        Int      @default(6)
+  scrapePostcode        String   @default("2217")
 
   storeNumber           Int      @default(1)
 
