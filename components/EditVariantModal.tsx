@@ -4,10 +4,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   applyRoundCents,
+  calculateNetProfit,
   calculateProfitFixedFromSellPrice,
   calculateSellPrice,
   calculateTotalFees,
-  calculateTotalProfit,
 } from "@/lib/variant-pricing";
 import type { VariantPayload, VariantRecord } from "@/types/variant";
 
@@ -211,7 +211,7 @@ export default function EditVariantModal({
   }, [defaultBuyPrice, defaultImages, defaultQuantity, defaultSku, isOpen, variant]);
 
   useEffect(() => {
-    if (!isOpen || variant) {
+    if (!isOpen) {
       return;
     }
 
@@ -249,14 +249,16 @@ export default function EditVariantModal({
         setPricingDefaults(nextDefaults);
 
         setForm((prev) => {
-          const hasUntouchedPricing =
-            prev.feesPercent === "0" &&
-            prev.feesFixed === "0" &&
-            prev.profitPercent === "0" &&
-            prev.profitFixed === "0" &&
-            prev.sellPrice === toMoneyString(defaultBuyPrice);
+          // Apply supplier defaults when all fee/profit fields are still zero.
+          // This covers both new variants and existing variants that were
+          // created before the pricing fix was deployed.
+          const allFeesZero =
+            toNumber(prev.feesPercent) === 0 &&
+            toNumber(prev.feesFixed) === 0 &&
+            toNumber(prev.profitPercent) === 0 &&
+            toNumber(prev.profitFixed) === 0;
 
-          if (!hasUntouchedPricing) {
+          if (!allFeesZero) {
             return prev;
           }
 
@@ -276,19 +278,21 @@ export default function EditVariantModal({
     return () => {
       cancelled = true;
     };
-  }, [defaultBuyPrice, isOpen, variant]);
+  }, [isOpen, variant]);
 
   const imageUrls = useMemo(() => parseImages(form.imagesText), [form.imagesText]);
   const heroImage = imageUrls[0] || defaultImages[0] || "";
   const roundCents = form.roundCentsEnabled ? 0.99 : null;
 
   const sellPriceNumber = toNumber(form.sellPrice);
-  const totalProfit = calculateTotalProfit({
-    sellPrice: sellPriceNumber,
-    profitPercent: toNumber(form.profitPercent),
-    profitFixed: toNumber(form.profitFixed),
-  });
+  const buyPriceNumber = toNumber(form.buyPrice);
   const totalFees = calculateTotalFees({
+    sellPrice: sellPriceNumber,
+    feesPercent: toNumber(form.feesPercent),
+    feesFixed: toNumber(form.feesFixed),
+  });
+  const totalProfit = calculateNetProfit({
+    buyPrice: buyPriceNumber,
     sellPrice: sellPriceNumber,
     feesPercent: toNumber(form.feesPercent),
     feesFixed: toNumber(form.feesFixed),

@@ -695,10 +695,10 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       </div>
 
       {/* ===== Tab Content ===== */}
-      <div className="p-6 max-h-[600px] overflow-y-auto">
+      <div className="p-6">
         {/* ===== Tab 1 — Product ===== */}
         {activeTab === 0 && (
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-2 gap-4 max-h-[600px] overflow-y-auto">
             {/* Title — full width */}
             <div className="col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-1">Title</label>

@@ -3,7 +3,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import EditVariantModal from "@/components/EditVariantModal";
-import { calculateTotalProfit } from "@/lib/variant-pricing";
+import { calculateNetProfit } from "@/lib/variant-pricing";
 import type { VariantRecord } from "@/types/variant";
 
 interface ProductVariantsEditorProps {
@@ -158,10 +158,11 @@ export default function ProductVariantsEditor({
             </thead>
             <tbody>
               {variants.map((variant) => {
-                const totalProfit = calculateTotalProfit({
+                const totalProfit = calculateNetProfit({
+                  buyPrice: toNumber(variant.buyPrice),
                   sellPrice: toNumber(variant.sellPrice),
-                  profitPercent: variant.profitPercent,
-                  profitFixed: variant.profitFixed,
+                  feesPercent: variant.feesPercent,
+                  feesFixed: variant.feesFixed,
                 });
 
                 return (

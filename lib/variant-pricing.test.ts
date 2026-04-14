@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   applyRoundCents,
+  calculateNetProfit,
   calculateProfitFixedFromSellPrice,
   calculateSellPrice,
   calculateTotalFees,
@@ -70,5 +71,27 @@ test("calculateTotalFees and calculateTotalProfit derive display totals", () => 
       profitFixed: 2,
     }),
     7
+  );
+});
+
+test("calculateNetProfit derives actual margin after buy price and fees", () => {
+  assert.equal(
+    calculateNetProfit({
+      buyPrice: 149.9,
+      sellPrice: 172.68,
+      feesPercent: 13,
+      feesFixed: 0.33,
+    }),
+    0
+  );
+
+  assert.equal(
+    calculateNetProfit({
+      buyPrice: 100,
+      sellPrice: 140,
+      feesPercent: 10,
+      feesFixed: 2,
+    }),
+    24
   );
 });

@@ -369,12 +369,9 @@ body {
   background: #f5f5f5;
   padding: 0.4rem 0.6rem;
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
   gap: 2px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: thin;
 }
 
 [data-toolbar-variant="compact"] .ql-toolbar.ql-snow .ql-formats {

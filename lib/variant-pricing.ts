@@ -68,6 +68,23 @@ export function calculateTotalFees(input: {
   return roundMoney((sellPrice * feesPercent) / 100 + feesFixed);
 }
 
+export function calculateNetProfit(input: {
+  buyPrice: number;
+  sellPrice: number;
+  feesPercent: number;
+  feesFixed: number;
+}) {
+  const buyPrice = Math.max(0, normalizeNumber(input.buyPrice));
+  const sellPrice = Math.max(0, normalizeNumber(input.sellPrice));
+  const totalFees = calculateTotalFees({
+    sellPrice,
+    feesPercent: input.feesPercent,
+    feesFixed: input.feesFixed,
+  });
+
+  return roundMoney(sellPrice - buyPrice - totalFees);
+}
+
 export function calculateTotalProfit(input: {
   sellPrice: number;
   profitPercent: number;

@@ -44,8 +44,21 @@ const COLOR_OPTIONS = [
   "#3d1466",
 ];
 
+const CUSTOM_SIZES = [
+  { label: "Default", value: "" },
+  { label: "14", value: "14px" },
+  { label: "16", value: "16px" },
+  { label: "18", value: "18px" },
+  { label: "20", value: "20px" },
+  { label: "22", value: "22px" },
+  { label: "24", value: "24px" },
+  { label: "28", value: "28px" },
+  { label: "32", value: "32px" },
+];
+
 type ReactQuillComponent = ComponentType<Record<string, unknown>>;
 type ToolbarVariant = "grouped" | "compact";
+type PickerKey = "font" | "size";
 
 interface RichTextEditorProps {
   value: string;
@@ -122,6 +135,12 @@ function registerCustomFormats(Quill: QuillRegistrar) {
   }
 
   Quill.register(DividerBlot, true);
+
+  // Register custom pixel-based sizes with Quill
+  const Size = Quill.import("attributors/style/size") as { whitelist: string[] };
+  Size.whitelist = CUSTOM_SIZES.filter((s) => s.value).map((s) => s.value);
+  Quill.register(Size, true);
+
   quillConfigured = true;
 }
 
@@ -166,6 +185,21 @@ export default function RichTextEditor({
   } | null>(null);
   const [EditorComponent, setEditorComponent] = useState<ReactQuillComponent | null>(null);
   const [isSourceMode, setIsSourceMode] = useState(false);
+  const [openPicker, setOpenPicker] = useState<PickerKey | null>(null);
+  const pickerRef = useRef<HTMLSpanElement | null>(null);
+
+  useEffect(() => {
+    if (!openPicker) return;
+
+    function handleClick(event: MouseEvent) {
+      if (pickerRef.current && !pickerRef.current.contains(event.target as Node)) {
+        setOpenPicker(null);
+      }
+    }
+
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [openPicker]);
 
   useEffect(() => {
     let cancelled = false;
@@ -188,10 +222,10 @@ export default function RichTextEditor({
   useEffect(() => {
     if (value && !hasCleanedUpRef.current) {
       hasCleanedUpRef.current = true;
-      
+
       // Matches a 1x1 table at the very end of the content containing only a <br> or whitespace
       const emptyTableRegex = /<table[^>]*>\s*<tbody[^>]*>\s*<tr[^>]*>\s*<td[^>]*>(?:<br\s*\/?>|\s*)<\/td>\s*<\/tr>\s*<\/tbody>\s*<\/table>\s*$/i;
-      
+
       if (emptyTableRegex.test(value)) {
         const cleaned = value.replace(emptyTableRegex, "");
         if (cleaned !== value) {
@@ -216,16 +250,52 @@ export default function RichTextEditor({
   );
   const quillToolbarDisabled = isSourceMode || !EditorComponent;
 
+  useEffect(() => {
+    if (quillToolbarDisabled) {
+      setOpenPicker(null);
+    }
+  }, [quillToolbarDisabled]);
+
   const getEditor = useCallback(() => editorRef.current?.getEditor() ?? null, []);
 
   const withEditorSelection = useCallback(
-    (callback: (editor: NonNullable<ReturnType<typeof getEditor>>, index: number, length: number) => void) => {
+    (
+      callback: (
+        editor: NonNullable<ReturnType<typeof getEditor>>,
+        index: number,
+        length: number,
+      ) => void,
+    ) => {
       const editor = getEditor();
       if (!editor) return;
 
       editor.focus();
       const range = editor.getSelection(true) ?? { index: editor.getLength(), length: 0 };
       callback(editor, range.index, range.length);
+    },
+    [getEditor],
+  );
+
+  const handleFormatFont = useCallback(
+    (fontValue: string) => {
+      const editor = getEditor();
+      if (!editor) return;
+
+      editor.focus();
+      editor.format("font", fontValue || false, "user");
+      setOpenPicker(null);
+    },
+    [getEditor],
+  );
+
+  const handleFormatSize = useCallback(
+    (sizeValue: string) => {
+      const editor = getEditor();
+      if (!editor) return;
+
+      editor.focus();
+      editor.format("size", sizeValue || false, "user");
+      setOpenPicker(null);
     },
     [getEditor],
   );
@@ -374,10 +444,11 @@ export default function RichTextEditor({
             <option value="monospace">Monospace</option>
           </select>
           <select className="ql-size" defaultValue="" aria-label="Font size" disabled={quillToolbarDisabled}>
-            <option value="">Size</option>
-            <option value="small">Small</option>
-            <option value="large">Large</option>
-            <option value="huge">Huge</option>
+            {CUSTOM_SIZES.map((s) => (
+              <option key={s.value || "default"} value={s.value}>
+                {s.label}
+              </option>
+            ))}
           </select>
           <select className="ql-color" defaultValue="" aria-label="Text color" disabled={quillToolbarDisabled}>
             {COLOR_OPTIONS.map((color) => (
@@ -466,18 +537,130 @@ export default function RichTextEditor({
           </CompactToolbarButton>
         </span>
 
-        <span className="ql-formats">
-          <select className="ql-font" defaultValue="" aria-label="Font family" disabled={quillToolbarDisabled}>
-            <option value="">Font</option>
-            <option value="serif">Serif</option>
-            <option value="monospace">Monospace</option>
-          </select>
-          <select className="ql-size" defaultValue="" aria-label="Font size" disabled={quillToolbarDisabled}>
-            <option value="">Size</option>
-            <option value="small">Small</option>
-            <option value="large">Large</option>
-            <option value="huge">Huge</option>
-          </select>
+        <span className="ql-formats" ref={pickerRef}>
+          <div style={{ position: "relative", display: "inline-block" }}>
+            <button
+              type="button"
+              className="listflow-quill-action listflow-quill-action-compact listflow-quill-action-compact-label"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => setOpenPicker(openPicker === "font" ? null : "font")}
+              disabled={quillToolbarDisabled}
+              aria-label="Font family"
+              aria-expanded={openPicker === "font"}
+              aria-haspopup="menu"
+            >
+              Font ▾
+            </button>
+            {openPicker === "font" && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  left: 0,
+                  zIndex: 1000,
+                  background: "#fff",
+                  border: "1px solid #d1d5db",
+                  borderRadius: 6,
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+                  padding: 4,
+                  minWidth: 100,
+                }}
+              >
+                {[
+                  { label: "Default", value: "" },
+                  { label: "Serif", value: "serif" },
+                  { label: "Monospace", value: "monospace" },
+                ].map((option) => (
+                  <button
+                    key={option.value || "default"}
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => handleFormatFont(option.value)}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      textAlign: "left",
+                      padding: "4px 8px",
+                      border: "none",
+                      background: "transparent",
+                      cursor: "pointer",
+                      fontSize: 12,
+                      borderRadius: 3,
+                      fontFamily: option.value || "inherit",
+                    }}
+                    onMouseEnter={(event) => {
+                      (event.target as HTMLElement).style.background = "#f3f4f6";
+                    }}
+                    onMouseLeave={(event) => {
+                      (event.target as HTMLElement).style.background = "transparent";
+                    }}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={{ position: "relative", display: "inline-block" }}>
+            <button
+              type="button"
+              className="listflow-quill-action listflow-quill-action-compact listflow-quill-action-compact-label"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => setOpenPicker(openPicker === "size" ? null : "size")}
+              disabled={quillToolbarDisabled}
+              aria-label="Font size"
+              aria-expanded={openPicker === "size"}
+              aria-haspopup="menu"
+            >
+              Size ▾
+            </button>
+            {openPicker === "size" && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  left: 0,
+                  zIndex: 1000,
+                  background: "#fff",
+                  border: "1px solid #d1d5db",
+                  borderRadius: 6,
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+                  padding: 4,
+                  minWidth: 80,
+                }}
+              >
+                {CUSTOM_SIZES.map((option) => (
+                  <button
+                    key={option.value || "default"}
+                    type="button"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={() => handleFormatSize(option.value)}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      textAlign: "left",
+                      padding: "4px 8px",
+                      border: "none",
+                      background: "transparent",
+                      cursor: "pointer",
+                      fontSize: option.value ? parseInt(option.value, 10) : 14,
+                      borderRadius: 3,
+                    }}
+                    onMouseEnter={(event) => {
+                      (event.target as HTMLElement).style.background = "#f3f4f6";
+                    }}
+                    onMouseLeave={(event) => {
+                      (event.target as HTMLElement).style.background = "transparent";
+                    }}
+                  >
+                    {option.label}{option.value ? "px" : ""}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           <select className="ql-color" defaultValue="" aria-label="Text color" disabled={quillToolbarDisabled}>
             {COLOR_OPTIONS.map((color) => (
               <option key={`color-${color || "default"}`} value={color} />
