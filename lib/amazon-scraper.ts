@@ -48,6 +48,121 @@ function parseAmazonPriceValue(value: string | null | undefined): number | null 
   return Math.round(parsed * 100) / 100;
 }
 
+// ── Amazon → eBay item specifics mapping ──────────────────────────────
+
+/**
+ * Amazon fields that are internal / irrelevant to eBay listings.
+ * These are stripped from the final item specifics.
+ */
+const AMAZON_FIELDS_TO_REMOVE = new Set([
+  "asin",
+  "date first available",
+  "best sellers rank",
+  "customer reviews",
+  "manufacturer",          // Brand is already extracted separately
+  "item model number",
+  "is discontinued by manufacturer",
+  "batteries",
+  "batteries required",
+  "batteries included",
+  "country of origin",
+]);
+
+/**
+ * Direct 1:1 field name mappings from Amazon → eBay.
+ * Keys are lowercase Amazon field names; values are the eBay-expected names.
+ */
+const AMAZON_TO_EBAY_FIELD_MAP: Record<string, string> = {
+  "color":                  "Colour",
+  "colour":                 "Colour",
+  "material type":          "Material",
+  "material":               "Material",
+  "item weight":            "Item Weight",
+  "product dimensions":     "__dimensions__",   // handled specially
+  "package dimensions":     "__dimensions__",   // handled specially
+  "item dimensions":        "__dimensions__",   // handled specially
+  "item dimensions d x w x h": "__dimensions__", // handled specially
+  "item dimensions lxwxh":  "__dimensions__",   // handled specially
+  "item dimensions  lxwxh": "__dimensions__",   // double-space variant
+  "style":                  "Style",
+  "pattern":                "Pattern",
+  "finish type":            "Finish",
+  "shape":                  "Shape",
+  "power source":           "Power Source",
+  "voltage":                "Voltage",
+  "wattage":                "Wattage",
+  "connectivity technology":"Connectivity",
+  "number of items":        "Number of Items",
+  "special feature":        "Features",
+  "special features":       "Features",
+};
+
+/**
+ * Parses a dimension string like "120 x 50 x 86.8 cm" or "47.2 x 19.7 x 34.2 inches"
+ * into { length, width, height } with units.
+ */
+function parseDimensions(raw: string): { length: string; width: string; height: string } | null {
+  // Match patterns like "120 x 50 x 86.8 cm", "120 * 50 * 86.8 cm", or "120L x 50W x 86.8H cm"
+  const normalized = raw.replace(/\*/g, "x");
+  const match = normalized.match(
+    /(\d+(?:\.\d+)?)\s*[A-Za-z]?\s*[x×]\s*(\d+(?:\.\d+)?)\s*[A-Za-z]?\s*[x×]\s*(\d+(?:\.\d+)?)\s*[A-Za-z]?\s*(cm|centimetres|centimeters|mm|m|inches|in)?/i
+  );
+
+  if (!match) return null;
+
+  const [, d1, d2, d3, unitRaw] = match;
+  const unit = unitRaw ? ` ${unitRaw.toLowerCase().replace("centimetres", "cm").replace("centimeters", "cm").replace("inches", "cm").replace("in", "cm")}` : " cm";
+
+  return {
+    length: `${d1}${unit}`,
+    width:  `${d2}${unit}`,
+    height: `${d3}${unit}`,
+  };
+}
+
+/**
+ * Normalizes raw Amazon item specifics into eBay-compatible field names.
+ * - Parses combined dimension fields into separate Length/Width/Height
+ * - Renames fields using the mapping table
+ * - Strips Amazon-internal fields
+ */
+function normalizeItemSpecificsForEbay(
+  specs: Record<string, string>,
+): Record<string, string> {
+  const result: Record<string, string> = {};
+
+  for (const [rawKey, value] of Object.entries(specs)) {
+    const lowerKey = rawKey.toLowerCase().trim();
+
+    // Skip Amazon-internal fields
+    if (AMAZON_FIELDS_TO_REMOVE.has(lowerKey)) continue;
+
+    const mappedKey = AMAZON_TO_EBAY_FIELD_MAP[lowerKey];
+
+    if (mappedKey === "__dimensions__") {
+      // Parse combined dimensions into separate fields
+      const dims = parseDimensions(value);
+      if (dims) {
+        if (!result["Item Length"]) result["Item Length"] = dims.length;
+        if (!result["Item Width"])  result["Item Width"]  = dims.width;
+        if (!result["Item Height"]) result["Item Height"] = dims.height;
+      }
+      continue;
+    }
+
+    if (mappedKey) {
+      // Use the eBay-standard name, don't overwrite if already set
+      if (!result[mappedKey]) result[mappedKey] = value;
+    } else {
+      // Pass through as-is (capitalize first letter for consistency)
+      const cleanKey = rawKey.trim();
+      if (!result[cleanKey]) result[cleanKey] = value;
+    }
+  }
+
+  return result;
+}
+
 /**
  * Track which Browser instance already has its delivery postcode set.
  * This prevents setting it on every single product page — once per
@@ -809,24 +924,72 @@ export async function scrapeAmazonProduct(
         .join("");
     });
 
-    // Item Specifics — extract from product information table
+    // Item specifics — merge both Amazon AU layouts:
+    // table rows and the detail bullets list.
     const itemSpecifics = await page.evaluate(() => {
       const specs: Record<string, string> = {};
+
+      function cleanText(value: string | null | undefined): string {
+        return (value ?? "")
+          .replace(/[\u200e\u200f]/g, "")
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+
+      function normalizeKey(value: string): string {
+        return cleanText(value).replace(/\s*[:\-]\s*$/, "").trim();
+      }
+
+      function normalizeValue(value: string): string {
+        return cleanText(value).replace(/^[:\-]\s*/, "").trim();
+      }
+
+      function addSpec(rawKey: string | null | undefined, rawValue: string | null | undefined): void {
+        const key = normalizeKey(rawKey ?? "");
+        const value = normalizeValue(rawValue ?? "");
+
+        if (!key || !value) return;
+        if (/customer/i.test(key) || /best seller/i.test(key)) return;
+        if (!specs[key]) {
+          specs[key] = value;
+        }
+      }
+
       const rows = document.querySelectorAll(
         "#productDetails_techSpec_section_1 tr, #productDetails_detailBullets_sections1 tr, .a-keyvalue tr"
       );
       rows.forEach((row) => {
-        const key = row.querySelector("th")?.textContent?.trim();
-        const value = row.querySelector("td")?.textContent?.trim();
-        if (
-          key &&
-          value &&
-          !key.includes("Customer") &&
-          !key.includes("Best Seller")
-        ) {
-          specs[key] = value.replace(/\u200e/g, "").trim();
+        addSpec(
+          row.querySelector("th")?.textContent,
+          row.querySelector("td")?.textContent
+        );
+      });
+
+      const bulletItems = document.querySelectorAll(
+        "#detailBullets_feature_div li, #detailBulletsWrapper_feature_div li"
+      );
+      bulletItems.forEach((item) => {
+        const label = item.querySelector(".a-text-bold");
+        if (label) {
+          const labelText = cleanText(label.textContent);
+          const fullText = cleanText(item.textContent);
+          const valueText = fullText.startsWith(labelText)
+            ? fullText.slice(labelText.length)
+            : fullText.replace(labelText, "");
+
+          addSpec(labelText, valueText);
+          return;
+        }
+
+        const spans = Array.from(item.querySelectorAll("span"))
+          .map((span) => cleanText(span.textContent))
+          .filter(Boolean);
+
+        if (spans.length >= 2) {
+          addSpec(spans[0], spans.slice(1).join(" "));
         }
       });
+
       return specs;
     });
 
@@ -834,6 +997,9 @@ export async function scrapeAmazonProduct(
     const truncatedTitle = title.length > 80
       ? title.slice(0, 80).replace(/\s+\S*$/, "")
       : title;
+
+    // Map Amazon field names to eBay-required field names
+    const normalizedSpecs = normalizeItemSpecificsForEbay(itemSpecifics);
 
     return {
       title: truncatedTitle,
@@ -844,7 +1010,7 @@ export async function scrapeAmazonProduct(
       category,
       categoryId: "",
       categoryName: "",
-      itemSpecifics,
+      itemSpecifics: normalizedSpecs,
       variantName,
       asin,
       brand,

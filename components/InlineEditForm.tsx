@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import type { Product, Store, User } from "@/app/generated/prisma/client";
+import type { ScrapedProduct } from "@/components/AddProductModal";
 import ProductVariantsEditor from "@/components/ProductVariantsEditor";
 import RichTextEditor from "@/components/RichTextEditor";
 import { reportClientError } from "@/lib/client-logger";
@@ -39,6 +40,12 @@ interface InlineEditFormProps {
   onCollapse: () => void;
 }
 
+interface SaveMessage {
+  text: string;
+  title?: string;
+  variant: "success" | "error";
+}
+
 // ----- VERO keywords -----
 
 const VERO_KEYWORDS = [
@@ -61,6 +68,15 @@ function storeNameToNumber(name: string): 1 | 2 | 3 {
   if (name === "Store 1") return 1;
   if (name === "Store 2") return 2;
   return 3;
+}
+
+function splitErrorMessage(message: string): string[] {
+  const parts = message
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  return parts.length > 0 ? parts : [message.trim()];
 }
 
 // ----- Tabs -----
@@ -132,7 +148,8 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
   // Save state
   const [isSaving, setIsSaving] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [saveMessage, setSaveMessage] = useState<{ text: string; variant: "success" | "error" } | null>(null);
+  const [isRegrabbing, setIsRegrabbing] = useState(false);
+  const [saveMessage, setSaveMessage] = useState<SaveMessage | null>(null);
 
   // Parse brand / location from itemSpecifics on load
   useEffect(() => {
@@ -285,13 +302,28 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
 
   // Auto-clear save message
   useEffect(() => {
-    if (saveMessage) {
+    if (saveMessage?.variant === "success" && !saveMessage.title) {
       const timer = setTimeout(() => setSaveMessage(null), 3000);
       return () => clearTimeout(timer);
     }
   }, [saveMessage]);
 
   const isImported = product.status === "IMPORTED" && Boolean(product.ebayItemId);
+  const inlineSuccessMessage =
+    saveMessage?.variant === "success" && !saveMessage.title ? saveMessage : null;
+  const bannerMessage =
+    saveMessage && (saveMessage.variant === "error" || Boolean(saveMessage.title))
+      ? saveMessage
+      : null;
+  const bannerItems = useMemo(
+    () =>
+      bannerMessage
+        ? bannerMessage.variant === "error"
+          ? splitErrorMessage(bannerMessage.text)
+          : [bannerMessage.text]
+        : [],
+    [bannerMessage]
+  );
 
   // ----- Save -----
 
@@ -303,7 +335,11 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
 
     // Validate category is numeric before saving
     if (!category.trim() || !/^\d+$/.test(category.trim())) {
-      setSaveMessage({ variant: "error", text: "eBay requires a numeric Category ID (e.g. 171114). Please update the Category ID field." });
+      setSaveMessage({
+        variant: "error",
+        title: "Save failed",
+        text: "eBay requires a numeric Category ID (e.g. 171114). Please update the Category ID field.",
+      });
       setIsSaving(false);
       return false;
     }
@@ -372,6 +408,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
         // Show keyword removal toast if applicable
         if (data.removedKeywords && data.removedKeywords.length > 0) {
           setSaveMessage({
+            title: "Review required",
             text: `The following keywords were automatically removed: ${data.removedKeywords.join(", ")}. Check your title and description.`,
             variant: "error",
           });
@@ -399,7 +436,11 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
             tags: ["save"],
           },
         );
-        setSaveMessage({ text: data.error || "Save failed", variant: "error" });
+        setSaveMessage({
+          title: "Save failed",
+          text: data.error || "Save failed",
+          variant: "error",
+        });
         return false;
       }
     } catch (err) {
@@ -411,7 +452,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
         { productId: product.id },
         { tags: ["save"] },
       );
-      setSaveMessage({ text: msg, variant: "error" });
+      setSaveMessage({ title: "Save failed", text: msg, variant: "error" });
       return false;
     } finally {
       setIsSaving(false);
@@ -430,6 +471,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
     if (isImported) {
       setSaveMessage({
         variant: "error",
+        title: "Import failed",
         text: "This product is already imported. Use Save & Update eBay instead.",
       });
       return;
@@ -439,6 +481,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
     if (descriptionContainsAmazon) {
       setSaveMessage({
         variant: "error",
+        title: "Import blocked",
         text: "Import blocked - description contains the word 'Amazon'. Edit your description and remove all mentions before importing.",
       });
       return;
@@ -479,7 +522,11 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
             tags: ["import"],
           },
         );
-        setSaveMessage({ text: data.error || "Import failed", variant: "error" });
+        setSaveMessage({
+          title: "Import failed",
+          text: data.error || "Import failed",
+          variant: "error",
+        });
       }
     } catch (err) {
       void reportClientError(
@@ -489,7 +536,11 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
         { productId: product.id },
         { tags: ["import"] },
       );
-      setSaveMessage({ text: "Network error during import", variant: "error" });
+      setSaveMessage({
+        title: "Import failed",
+        text: "Network error during import",
+        variant: "error",
+      });
     } finally {
       setIsImporting(false);
     }
@@ -502,6 +553,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
     if (!isImported) {
       setSaveMessage({
         variant: "error",
+        title: "Update failed",
         text: "This product must be imported before it can be updated on eBay.",
       });
       return;
@@ -510,6 +562,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
     if (descriptionContainsAmazon) {
       setSaveMessage({
         variant: "error",
+        title: "Update blocked",
         text: "Update blocked - description contains the word 'Amazon'. Edit your description and remove all mentions before updating eBay.",
       });
       return;
@@ -550,7 +603,11 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
             tags: ["revise"],
           },
         );
-        setSaveMessage({ text: data.error || "Update failed", variant: "error" });
+        setSaveMessage({
+          title: "Update failed",
+          text: data.error || "Update failed",
+          variant: "error",
+        });
       }
     } catch (err) {
       void reportClientError(
@@ -560,9 +617,109 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
         { productId: product.id },
         { tags: ["revise"] },
       );
-      setSaveMessage({ text: "Network error during update", variant: "error" });
+      setSaveMessage({
+        title: "Update failed",
+        text: "Network error during update",
+        variant: "error",
+      });
     } finally {
       setIsRevising(false);
+    }
+  }
+
+  async function handleRegrab() {
+    if (!product.asin) {
+      return;
+    }
+
+    setIsRegrabbing(true);
+    setSaveMessage(null);
+
+    try {
+      const url = `https://www.amazon.com.au/dp/${product.asin}`;
+      const res = await fetch("/api/scrape", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url }),
+        signal: AbortSignal.timeout(90000),
+      });
+
+      const data = (await res.json()) as ScrapedProduct | { error?: string };
+
+      if (!res.ok) {
+        void reportClientError(
+          "inline-edit/regrab",
+          "Regrab failed",
+          undefined,
+          {
+            productId: product.id,
+            asin: product.asin,
+            status: res.status,
+            error: "error" in data ? data.error : undefined,
+          },
+          {
+            requestId: res.headers.get("x-request-id") ?? undefined,
+            tags: ["regrab"],
+          },
+        );
+        setSaveMessage({
+          title: "Regrab failed",
+          text: ("error" in data && data.error) || "Failed to fetch product details",
+          variant: "error",
+        });
+        return;
+      }
+
+      const scraped = data as ScrapedProduct;
+      let refreshedTitle = scraped.title;
+
+      if (scraped.supplierDefaults?.capitalizeTitle) {
+        refreshedTitle = refreshedTitle
+          .split(" ")
+          .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+          .join(" ");
+      }
+
+      setTitle(refreshedTitle);
+      setDescription(scraped.description);
+      setImages([...scraped.images]);
+      setHoveredImage(null);
+      setBrand(scraped.brand);
+      setItemSpecifics(
+        Object.entries(scraped.itemSpecifics).map(([key, value]) => ({
+          key,
+          value: String(value),
+        }))
+      );
+
+      if (scraped.categoryId) {
+        setCategory(scraped.categoryId);
+      }
+
+      if (scraped.categoryName || scraped.category) {
+        setCategoryName(scraped.categoryName || scraped.category);
+      }
+
+      setSaveMessage({
+        title: "Regrab complete",
+        text: "Product details refreshed from Amazon. Review and Save when you're ready.",
+        variant: "success",
+      });
+    } catch (err) {
+      void reportClientError(
+        "inline-edit/regrab",
+        "Regrab request failed",
+        err,
+        { productId: product.id, asin: product.asin },
+        { tags: ["regrab"] },
+      );
+      setSaveMessage({
+        title: "Regrab failed",
+        text: "Network error. Please try again.",
+        variant: "error",
+      });
+    } finally {
+      setIsRegrabbing(false);
     }
   }
 
@@ -589,23 +746,23 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
   // ----- Derived -----
 
   const storeBadge = product.store.name;
-  const thumbnail = product.images[0] || "";
+  const thumbnail = images[0] || "";
 
   return (
     <div className="bg-gray-50 border-t border-gray-200">
       {/* ===== Header bar ===== */}
-      <div className="flex items-center justify-between px-6 py-3 bg-white border-b border-gray-200">
+      <div className="flex flex-col gap-3 px-6 py-3 bg-white border-b border-gray-200 lg:flex-row lg:items-center lg:justify-between">
         {/* Left side */}
         <div className="flex items-center gap-3 min-w-0">
           {thumbnail && (
             <img
               src={thumbnail}
-              alt={product.title}
+              alt={title}
               className="w-10 h-10 rounded object-cover flex-shrink-0"
             />
           )}
-          <span className="text-sm font-medium text-gray-900 truncate max-w-xs" title={product.title}>
-            {product.title}
+          <span className="text-sm font-medium text-gray-900 truncate max-w-xs" title={title}>
+            {title}
           </span>
           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 flex-shrink-0">
             {storeBadge}
@@ -618,20 +775,27 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
         </div>
 
         {/* Right side — buttons */}
-        <div className="flex items-center gap-2 flex-shrink-0">
-          {saveMessage && (
-            <span
-              className={`text-sm font-medium ${
-                saveMessage.variant === "success" ? "text-green-600" : "text-red-600"
-              }`}
+        <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
+          {product.asin && (
+            <button
+              type="button"
+              onClick={handleRegrab}
+              disabled={isRegrabbing || isSaving || isImporting || isRevising}
+              className="px-3 py-1.5 border border-blue-300 text-blue-700 text-sm font-medium rounded-md hover:bg-blue-50 disabled:opacity-40 transition-colors"
+              title="Re-fetch product details from Amazon. This can take 10-30 seconds."
             >
-              {saveMessage.text}
+              {isRegrabbing ? "Regrabbing..." : "↻ Regrab"}
+            </button>
+          )}
+          {inlineSuccessMessage && (
+            <span className="text-sm font-medium text-green-600">
+              {inlineSuccessMessage.text}
             </span>
           )}
           <button
             type="button"
             onClick={() => void handleSave()}
-            disabled={isSaving || isImporting || isRevising}
+            disabled={isSaving || isImporting || isRevising || isRegrabbing}
             className="px-4 py-1.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 disabled:opacity-40 transition-colors"
           >
             {isSaving ? "Saving..." : isImported ? "Save Locally" : "Save"}
@@ -640,7 +804,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
             <button
               type="button"
               onClick={handleSaveAndImport}
-              disabled={isSaving || isImporting || isRevising}
+              disabled={isSaving || isImporting || isRevising || isRegrabbing}
               className="px-4 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-md disabled:opacity-40 transition-colors"
             >
               {isImporting ? "Importing..." : "Save & Import"}
@@ -650,7 +814,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
             <button
               type="button"
               onClick={handleSaveAndUpdateEbay}
-              disabled={isSaving || isImporting || isRevising}
+              disabled={isSaving || isImporting || isRevising || isRegrabbing}
               className="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-md disabled:opacity-40 transition-colors"
             >
               {isRevising ? "Updating..." : "Save & Update eBay"}
@@ -658,6 +822,64 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
           )}
         </div>
       </div>
+
+      {bannerMessage && (
+        <div
+          className={`border-b px-6 py-3 ${
+            bannerMessage.variant === "error"
+              ? "border-red-200 bg-red-50"
+              : "border-green-200 bg-green-50"
+          }`}
+        >
+          <div className="flex items-start gap-3">
+            <svg
+              className={`mt-0.5 h-5 w-5 flex-shrink-0 ${
+                bannerMessage.variant === "error" ? "text-red-500" : "text-green-500"
+              }`}
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2}
+            >
+              {bannerMessage.variant === "error" ? (
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              ) : (
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              )}
+            </svg>
+            <div className="min-w-0">
+              <p
+                className={`text-sm font-semibold ${
+                  bannerMessage.variant === "error" ? "text-red-800" : "text-green-800"
+                }`}
+              >
+                {bannerMessage.title || "Action required"}
+              </p>
+              {bannerItems.length > 1 ? (
+                <ul
+                  className={`mt-2 list-disc space-y-1 pl-5 text-sm ${
+                    bannerMessage.variant === "error" ? "text-red-700" : "text-green-700"
+                  }`}
+                >
+                  {bannerItems.map((item, index) => (
+                    <li key={`${index}-${item}`} className="break-words">
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p
+                  className={`mt-1 break-words text-sm ${
+                    bannerMessage.variant === "error" ? "text-red-700" : "text-green-700"
+                  }`}
+                >
+                  {bannerItems[0]}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ===== VERO Warning ===== */}
       {veroMatch && (

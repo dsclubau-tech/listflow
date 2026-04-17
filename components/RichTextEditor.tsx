@@ -58,7 +58,7 @@ const CUSTOM_SIZES = [
 
 type ReactQuillComponent = ComponentType<Record<string, unknown>>;
 type ToolbarVariant = "grouped" | "compact";
-type PickerKey = "font" | "size";
+type PickerKey = "font" | "size" | "color";
 
 interface RichTextEditorProps {
   value: string;
@@ -295,6 +295,18 @@ export default function RichTextEditor({
 
       editor.focus();
       editor.format("size", sizeValue || false, "user");
+      setOpenPicker(null);
+    },
+    [getEditor],
+  );
+
+  const handleFormatColor = useCallback(
+    (colorValue: string) => {
+      const editor = getEditor();
+      if (!editor) return;
+
+      editor.focus();
+      editor.format("color", colorValue || false, "user");
       setOpenPicker(null);
     },
     [getEditor],
@@ -661,16 +673,67 @@ export default function RichTextEditor({
             )}
           </div>
 
-          <select className="ql-color" defaultValue="" aria-label="Text color" disabled={quillToolbarDisabled}>
-            {COLOR_OPTIONS.map((color) => (
-              <option key={`color-${color || "default"}`} value={color} />
-            ))}
-          </select>
-          <select className="ql-background" defaultValue="" aria-label="Highlight color" disabled={quillToolbarDisabled}>
-            {COLOR_OPTIONS.map((color) => (
-              <option key={`background-${color || "default"}`} value={color} />
-            ))}
-          </select>
+          <div style={{ position: "relative", display: "inline-block" }}>
+            <button
+              type="button"
+              className="listflow-quill-action listflow-quill-action-compact listflow-quill-action-compact-label"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={() => setOpenPicker(openPicker === "color" ? null : "color")}
+              disabled={quillToolbarDisabled}
+              aria-label="Text color"
+              aria-expanded={openPicker === "color"}
+              aria-haspopup="menu"
+            >
+              A ▾
+            </button>
+            {openPicker === "color" && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  left: 0,
+                  zIndex: 1000,
+                  background: "#fff",
+                  border: "1px solid #d1d5db",
+                  borderRadius: 6,
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.1)",
+                  padding: 6,
+                  width: 152,
+                }}
+              >
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 2 }}>
+                  {COLOR_OPTIONS.map((color) => (
+                    <button
+                      key={`pick-${color || "auto"}`}
+                      type="button"
+                      title={color || "Automatic"}
+                      onMouseDown={(event) => event.preventDefault()}
+                      onClick={() => handleFormatColor(color)}
+                      style={{
+                        width: 18,
+                        height: 18,
+                        borderRadius: 3,
+                        border: color ? "1px solid #d1d5db" : "1px dashed #9ca3af",
+                        background: color || "#fff",
+                        cursor: "pointer",
+                        padding: 0,
+                        position: "relative",
+                      }}
+                      onMouseEnter={(event) => {
+                        (event.target as HTMLElement).style.outline = "2px solid #f97316";
+                        (event.target as HTMLElement).style.outlineOffset = "1px";
+                      }}
+                      onMouseLeave={(event) => {
+                        (event.target as HTMLElement).style.outline = "none";
+                      }}
+                    >
+                      {!color && <span style={{ fontSize: 10, color: "#6b7280" }}>✕</span>}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
           <CompactToolbarButton
             ariaLabel="Toggle source mode"
             onClick={() => setIsSourceMode((current) => !current)}
