@@ -1,0 +1,146 @@
+import { NextResponse } from "next/server";
+import { auth } from "@/auth";
+import { prisma } from "@/lib/prisma";
+import { runPriceCheck } from "@/lib/price-checker";
+import { createRequestLogger } from "@/lib/logger";
+
+function roundMoney(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+export async function POST(request: Request) {
+  const session = await auth();
+  const log = createRequestLogger(
+    request,
+    session?.user ? { userId: session.user.id } : {}
+  );
+
+  if (!session?.user) {
+    log.warn("price-check/simulate/route", "Unauthorized simulation attempt");
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let body: {
+    productId?: string;
+    simulatedPrice?: number;
+    applyToEbay?: boolean;
+  };
+
+  try {
+    body = (await request.json()) as {
+      productId?: string;
+      simulatedPrice?: number;
+      applyToEbay?: boolean;
+    };
+  } catch (error) {
+    log.error("price-check/simulate/route", "Invalid JSON body", error);
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const productId = body.productId?.trim();
+  const rawPrice =
+    typeof body.simulatedPrice === "number"
+      ? body.simulatedPrice
+      : Number(body.simulatedPrice);
+  const simulatedPrice = roundMoney(rawPrice);
+  const applyToEbay = body.applyToEbay === true;
+
+  if (!productId) {
+    return NextResponse.json({ error: "productId is required" }, { status: 400 });
+  }
+
+  if (!Number.isFinite(simulatedPrice) || simulatedPrice <= 0) {
+    return NextResponse.json(
+      { error: "simulatedPrice must be a positive number" },
+      { status: 400 }
+    );
+  }
+
+  const product = await prisma.product.findUnique({
+    where: { id: productId },
+    select: {
+      id: true,
+      status: true,
+      asin: true,
+      amazonPrice: true,
+      variants: {
+        select: { id: true },
+        take: 1,
+      },
+    },
+  });
+
+  if (!product) {
+    return NextResponse.json({ error: "Product not found" }, { status: 404 });
+  }
+
+  if (product.status !== "IMPORTED" || !product.asin) {
+    return NextResponse.json(
+      { error: "Product must be imported and have an ASIN" },
+      { status: 400 }
+    );
+  }
+
+  if (product.variants.length === 0) {
+    return NextResponse.json(
+      { error: "Product must have at least one variant" },
+      { status: 400 }
+    );
+  }
+
+  if (product.amazonPrice === null) {
+    await prisma.product.update({
+      where: { id: productId },
+      data: {
+        amazonPrice: simulatedPrice,
+        lastPriceCheck: new Date(),
+        priceCheckError: null,
+      },
+    });
+
+    log.info("price-check/simulate/route", "Baseline established via simulation", {
+      productId,
+      baselinePrice: simulatedPrice,
+    });
+
+    return NextResponse.json({
+      checked: 1,
+      changed: 0,
+      failed: 0,
+      skipped: 1,
+      reason:
+        `Baseline established at A$${simulatedPrice.toFixed(2)}. ` +
+        "Change the simulated price and run again to test the price change flow.",
+    });
+  }
+
+  try {
+    const result = await runPriceCheck({
+      productIds: [productId],
+      ignoreSchedule: true,
+      simulatedPrices: {
+        [productId]: simulatedPrice,
+      },
+      dryRun: !applyToEbay,
+    });
+
+    log.info("price-check/simulate/route", "Simulated price check completed", {
+      productId,
+      simulatedPrice,
+      applyToEbay,
+      result,
+    });
+
+    return NextResponse.json(result);
+  } catch (error) {
+    log.error("price-check/simulate/route", "Simulated price check failed", error, {
+      productId,
+      simulatedPrice,
+      applyToEbay,
+    });
+    return NextResponse.json(
+      { error: "Simulated price check failed" },
+      { status: 500 }
+    );
+  }
+}

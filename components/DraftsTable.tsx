@@ -120,6 +120,7 @@ export default function DraftsTable({
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkImporting, setBulkImporting] = useState(false);
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [bulkProgress, setBulkProgress] = useState(0);
   const [bulkTotal, setBulkTotal] = useState(0);
   const router = useRouter();
@@ -332,6 +333,53 @@ export default function DraftsTable({
         `${skippedAmazon} product(s) skipped - description contains 'Amazon'. Edit and retry.`,
         "error"
       );
+    }
+  }
+
+  async function handleBulkDelete() {
+    const idsToDelete = selectedIds;
+
+    if (idsToDelete.length === 0) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Are you sure you want to delete ${idsToDelete.length} selected draft(s)? This cannot be undone.`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsBulkDeleting(true);
+
+    try {
+      const res = await fetch("/api/products/bulk-delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds: idsToDelete }),
+      });
+      const data = await res.json().catch(() => ({}));
+
+      if (res.ok) {
+        const deletedCount =
+          typeof data.deletedCount === "number"
+            ? data.deletedCount
+            : idsToDelete.length;
+
+        setSelectedIds([]);
+        onToast(
+          `${deletedCount} selected draft(s) deleted`,
+          "success"
+        );
+        router.refresh();
+      } else {
+        onToast(data.error || "Failed to delete selected drafts.", "error");
+      }
+    } catch {
+      onToast("Network error while deleting selected drafts.", "error");
+    } finally {
+      setIsBulkDeleting(false);
     }
   }
 
@@ -644,7 +692,7 @@ export default function DraftsTable({
             </button>
             <button
               onClick={handleBulkImport}
-              disabled={bulkImporting}
+              disabled={bulkImporting || isBulkDeleting}
               className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
             >
               {bulkImporting ? (
@@ -657,6 +705,23 @@ export default function DraftsTable({
                 </>
               ) : (
                 "Import Selected"
+              )}
+            </button>
+            <button
+              onClick={handleBulkDelete}
+              disabled={isBulkDeleting || bulkImporting}
+              className="px-4 py-2 border border-red-200 text-red-600 text-sm font-medium rounded-md hover:bg-red-50 transition-colors disabled:opacity-60 flex items-center gap-2"
+            >
+              {isBulkDeleting ? (
+                <>
+                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                  </svg>
+                  Deleting...
+                </>
+              ) : (
+                "Delete Selected"
               )}
             </button>
           </div>

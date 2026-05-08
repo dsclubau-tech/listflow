@@ -36,18 +36,64 @@ interface PriceTrackerHistoryItem {
   } | null;
 }
 
+interface TrackedProductOption {
+  id: string;
+  title: string;
+  asin: string | null;
+  amazonPrice: string | null;
+  ebayItemId: string | null;
+  buyPrice: string;
+  sellPrice: string;
+}
+
 interface PriceTrackerClientProps {
   initialSummary: PriceTrackerSummary;
   initialHistory: PriceTrackerHistoryItem[];
+  initialTrackedProducts: TrackedProductOption[];
+}
+
+interface PriceCheckResponse {
+  checked?: number;
+  changed?: number;
+  failed?: number;
+  skipped?: number;
+  reason?: string;
+  error?: string;
+}
+
+interface BulkResolution {
+  matched: { asin: string; productId: string; title: string }[];
+  unmatched: string[];
+}
+
+interface BulkCheckResult {
+  summary: string;
+  resolution: BulkResolution | null;
+  tone: "success" | "warning" | "error";
+}
+
+interface SimulationResultState {
+  summary: string;
+  detail: string;
+  tone: "success" | "warning" | "error";
 }
 
 type DirectionFilter = "all" | "up" | "down";
 type SortValue = "newest" | "largest" | "smallest";
 
-function formatMoney(value: string) {
+function formatMoney(value: string | number) {
   const parsed = Number(value);
   const amount = Number.isFinite(parsed) ? parsed : 0;
   return `A$${amount.toFixed(2)}`;
+}
+
+function formatMoneyInput(value: string | number | null) {
+  if (value === null) {
+    return "";
+  }
+
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed.toFixed(2) : "";
 }
 
 function formatDateTime(value: string | null) {
@@ -69,9 +115,30 @@ function formatDateTime(value: string | null) {
   });
 }
 
+function formatPriceCheckSummary(data: PriceCheckResponse) {
+  if (data.reason) {
+    return data.reason;
+  }
+
+  return `${data.checked ?? 0} checked, ${data.changed ?? 0} changed, ${data.failed ?? 0} failed, ${data.skipped ?? 0} skipped.`;
+}
+
+function getSimulationTone(data: PriceCheckResponse): SimulationResultState["tone"] {
+  if ((data.failed ?? 0) > 0) {
+    return "error";
+  }
+
+  if ((data.changed ?? 0) > 0) {
+    return "success";
+  }
+
+  return "warning";
+}
+
 export default function PriceTrackerClient({
   initialSummary,
   initialHistory,
+  initialTrackedProducts,
 }: PriceTrackerClientProps) {
   const router = useRouter();
   const { toast, showToast, hideToast } = useToast();
@@ -79,6 +146,18 @@ export default function PriceTrackerClient({
   const [directionFilter, setDirectionFilter] =
     useState<DirectionFilter>("all");
   const [sortBy, setSortBy] = useState<SortValue>("newest");
+  const [isSimulatorOpen, setIsSimulatorOpen] = useState(true);
+  const [selectedProductId, setSelectedProductId] = useState("");
+  const [simulatedPrice, setSimulatedPrice] = useState("");
+  const [applyToEbay, setApplyToEbay] = useState(false);
+  const [isSimulating, setIsSimulating] = useState(false);
+  const [simulationResult, setSimulationResult] =
+    useState<SimulationResultState | null>(null);
+  const [isBulkOpen, setIsBulkOpen] = useState(false);
+  const [asinInput, setAsinInput] = useState("");
+  const [isBulkChecking, setIsBulkChecking] = useState(false);
+  const [bulkResult, setBulkResult] = useState<BulkCheckResult | null>(null);
+  const [bulkApplyToEbay, setBulkApplyToEbay] = useState(false);
 
   useEffect(() => {
     if (!isChecking) {
@@ -91,6 +170,35 @@ export default function PriceTrackerClient({
 
     return () => window.clearInterval(interval);
   }, [isChecking, router]);
+
+  useEffect(() => {
+    if (initialTrackedProducts.length === 0) {
+      if (selectedProductId) {
+        setSelectedProductId("");
+      }
+      return;
+    }
+
+    const stillExists = initialTrackedProducts.some(
+      (product) => product.id === selectedProductId
+    );
+
+    if (!selectedProductId || !stillExists) {
+      setSelectedProductId(initialTrackedProducts[0].id);
+    }
+  }, [initialTrackedProducts, selectedProductId]);
+
+  useEffect(() => {
+    const selectedProduct = initialTrackedProducts.find(
+      (product) => product.id === selectedProductId
+    );
+
+    setSimulatedPrice(formatMoneyInput(selectedProduct?.amazonPrice ?? null));
+  }, [initialTrackedProducts, selectedProductId]);
+
+  useEffect(() => {
+    setSimulationResult(null);
+  }, [selectedProductId]);
 
   const filteredHistory = useMemo(() => {
     const directionFiltered = initialHistory.filter((item) => {
@@ -121,6 +229,27 @@ export default function PriceTrackerClient({
     return items;
   }, [directionFilter, initialHistory, sortBy]);
 
+  const selectedProduct = useMemo(
+    () =>
+      initialTrackedProducts.find((product) => product.id === selectedProductId) ??
+      null,
+    [initialTrackedProducts, selectedProductId]
+  );
+
+  const currentAmazonPrice = selectedProduct?.amazonPrice
+    ? Number(selectedProduct.amazonPrice)
+    : null;
+  const hasStoredAmazonPrice =
+    currentAmazonPrice !== null &&
+    Number.isFinite(currentAmazonPrice) &&
+    currentAmazonPrice > 0;
+  const parsedSimulatedPrice = Number(simulatedPrice);
+  const canRunSimulation =
+    Boolean(selectedProduct) &&
+    Number.isFinite(parsedSimulatedPrice) &&
+    parsedSimulatedPrice > 0 &&
+    !isSimulating;
+
   const handleCheckNow = async () => {
     setIsChecking(true);
 
@@ -133,14 +262,7 @@ export default function PriceTrackerClient({
         body: JSON.stringify({ all: true }),
       });
 
-      const data = (await response.json()) as {
-        checked?: number;
-        changed?: number;
-        failed?: number;
-        skipped?: number;
-        reason?: string;
-        error?: string;
-      };
+      const data = (await response.json()) as PriceCheckResponse;
 
       if (!response.ok) {
         throw new Error(data.error || "Failed to check prices");
@@ -161,6 +283,96 @@ export default function PriceTrackerClient({
       setIsChecking(false);
     }
   };
+
+  const applyQuickAdjustment = (multiplier: number) => {
+    if (!hasStoredAmazonPrice || currentAmazonPrice === null) {
+      return;
+    }
+
+    setSimulatedPrice(formatMoneyInput(currentAmazonPrice * multiplier));
+  };
+
+  const handleSimulatedCheck = async () => {
+    if (!selectedProduct) {
+      showToast("Select a tracked product first.", "error");
+      return;
+    }
+
+    if (!Number.isFinite(parsedSimulatedPrice) || parsedSimulatedPrice <= 0) {
+      showToast("Enter a valid simulated price.", "error");
+      return;
+    }
+
+    setIsSimulating(true);
+    setSimulationResult(null);
+
+    try {
+      const response = await fetch("/api/price-check/simulate", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productId: selectedProduct.id,
+          simulatedPrice: parsedSimulatedPrice,
+          applyToEbay,
+        }),
+      });
+
+      const data = (await response.json()) as PriceCheckResponse;
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to run simulated check");
+      }
+
+      const summary = formatPriceCheckSummary(data);
+      const tone = getSimulationTone(data);
+      let detail =
+        "The simulation completed without a recorded price change.";
+
+      if (tone === "error") {
+        detail =
+          "The simulated run did not complete cleanly. Check the latest history entry or product error state for details.";
+      } else if ((data.changed ?? 0) > 0) {
+        detail = applyToEbay
+          ? "Variant prices, stored Amazon price, price history, and the live eBay revise flow were processed for this run."
+          : "Dry-run mode was used. Variant prices, stored Amazon price, and price history were updated without calling the live eBay revise API.";
+      } else if (data.reason?.startsWith("Baseline established")) {
+        detail =
+          "The simulated price was stored as the Amazon baseline. Run again with a different price to exercise the change flow.";
+      } else if ((data.skipped ?? 0) > 0) {
+        detail =
+          "No update was applied because the simulated price did not produce a change that passed the tracker rules.";
+      }
+
+      setSimulationResult({
+        summary,
+        detail,
+        tone,
+      });
+      showToast(summary, tone === "error" ? "error" : "success");
+      router.refresh();
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to run simulated check";
+
+      setSimulationResult({
+        summary: message,
+        detail: "The simulator request was rejected before a price update was recorded.",
+        tone: "error",
+      });
+      showToast(message, "error");
+    } finally {
+      setIsSimulating(false);
+    }
+  };
+
+  const simulationResultClasses =
+    simulationResult?.tone === "error"
+      ? "border-red-200 bg-red-50 text-red-900"
+      : simulationResult?.tone === "warning"
+        ? "border-amber-200 bg-amber-100/70 text-amber-950"
+        : "border-emerald-200 bg-emerald-50 text-emerald-900";
 
   return (
     <>
@@ -232,6 +444,499 @@ export default function PriceTrackerClient({
         </div>
       </div>
 
+      <div className="mb-8 overflow-hidden rounded-2xl border border-dashed border-amber-300 bg-amber-50/70">
+        <button
+          type="button"
+          onClick={() => setIsSimulatorOpen((current) => !current)}
+          aria-expanded={isSimulatorOpen}
+          className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
+        >
+          <div>
+            <div className="flex items-center gap-3">
+              <span className="inline-flex rounded-full border border-amber-300 bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-amber-700">
+                Test
+              </span>
+              <h2 className="text-lg font-semibold text-amber-950">
+                Test Simulator
+              </h2>
+            </div>
+            <p className="mt-1 text-sm text-amber-900/80">
+              Simulate an Amazon price change for one tracked product and verify
+              the downstream pricing flow immediately.
+            </p>
+          </div>
+
+          <span className="inline-flex items-center gap-2 text-sm font-medium text-amber-900">
+            {isSimulatorOpen ? "Hide" : "Show"}
+            <svg
+              className={`h-4 w-4 transition-transform ${
+                isSimulatorOpen ? "rotate-180" : ""
+              }`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="m6 9 6 6 6-6"
+              />
+            </svg>
+          </span>
+        </button>
+
+        {isSimulatorOpen && (
+          <div className="border-t border-amber-200 px-5 py-5">
+            {initialTrackedProducts.length === 0 ? (
+              <p className="rounded-xl border border-amber-200 bg-white px-4 py-3 text-sm text-amber-950">
+                No tracked products are ready for simulation yet.
+              </p>
+            ) : (
+              <>
+                <div className="grid gap-4 xl:grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)]">
+                  <div className="rounded-xl border border-amber-200 bg-white p-4">
+                    <label className="block text-sm font-medium text-gray-900">
+                      Product Picker
+                    </label>
+                    <select
+                      value={selectedProductId}
+                      onChange={(event) => setSelectedProductId(event.target.value)}
+                      className="mt-2 w-full rounded-md border border-amber-200 bg-white px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    >
+                      {initialTrackedProducts.map((product) => (
+                        <option key={product.id} value={product.id}>
+                          {product.title} ({product.asin ?? "No ASIN"})
+                        </option>
+                      ))}
+                    </select>
+
+                    <div className="mt-4 grid gap-3 sm:grid-cols-3">
+                      <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-3">
+                        <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                          Current Amazon Price
+                        </p>
+                        <p className="mt-2 text-lg font-semibold text-gray-900">
+                          {selectedProduct?.amazonPrice
+                            ? formatMoney(selectedProduct.amazonPrice)
+                            : "Not stored"}
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-3">
+                        <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                          First Variant Buy
+                        </p>
+                        <p className="mt-2 text-lg font-semibold text-gray-900">
+                          {selectedProduct
+                            ? formatMoney(selectedProduct.buyPrice)
+                            : "A$0.00"}
+                        </p>
+                      </div>
+                      <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-3">
+                        <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                          First Variant Sell
+                        </p>
+                        <p className="mt-2 text-lg font-semibold text-gray-900">
+                          {selectedProduct
+                            ? formatMoney(selectedProduct.sellPrice)
+                            : "A$0.00"}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 text-xs text-gray-500">
+                      <span className="font-medium text-gray-700">ASIN:</span>{" "}
+                      {selectedProduct?.asin ?? "Not available"}
+                      <span className="mx-2 text-gray-300">|</span>
+                      <span className="font-medium text-gray-700">eBay:</span>{" "}
+                      {selectedProduct?.ebayItemId ?? "Not linked"}
+                    </div>
+                  </div>
+
+                  <div className="rounded-xl border border-amber-200 bg-white p-4">
+                    <label className="block text-sm font-medium text-gray-900">
+                      Simulated Price
+                    </label>
+                    <div className="mt-2 flex items-center rounded-md border border-amber-200 bg-white focus-within:ring-2 focus-within:ring-amber-500">
+                      <span className="px-3 text-sm text-gray-500">A$</span>
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        value={simulatedPrice}
+                        onChange={(event) => setSimulatedPrice(event.target.value)}
+                        className="w-full rounded-r-md px-3 py-2 text-sm text-gray-900 focus:outline-none"
+                        placeholder="45.99"
+                      />
+                    </div>
+
+                    <div className="mt-3 grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => applyQuickAdjustment(1.1)}
+                        disabled={!hasStoredAmazonPrice}
+                        className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        +10%
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyQuickAdjustment(0.9)}
+                        disabled={!hasStoredAmazonPrice}
+                        className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        -10%
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyQuickAdjustment(1.25)}
+                        disabled={!hasStoredAmazonPrice}
+                        className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        +25%
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => applyQuickAdjustment(0.75)}
+                        disabled={!hasStoredAmazonPrice}
+                        className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900 transition-colors hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        -25%
+                      </button>
+                    </div>
+
+                    {!hasStoredAmazonPrice && (
+                      <p className="mt-3 text-xs text-amber-900">
+                        No baseline stored yet. The first simulated run will establish
+                        the baseline. Run again with a different price to test changes.
+                      </p>
+                    )}
+
+                    <label className="mt-4 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950">
+                      <input
+                        type="checkbox"
+                        checked={applyToEbay}
+                        onChange={(event) => setApplyToEbay(event.target.checked)}
+                        className="mt-0.5 h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                      />
+                      <span className="flex-1">
+                        <span className="font-medium">Apply to eBay</span>
+                        <span
+                          className="ml-2 inline-flex h-5 w-5 items-center justify-center rounded-full border border-amber-300 bg-white text-xs font-semibold text-amber-700"
+                          title="Dry-run is the default. Enable this only when you want the simulator to call eBay and change the live listing."
+                        >
+                          i
+                        </span>
+                        <span className="mt-1 block text-xs text-amber-900/80">
+                          Leave this off to skip the live eBay revise call while
+                          still updating local price history and recalculated
+                          variant pricing.
+                        </span>
+                      </span>
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={handleSimulatedCheck}
+                      disabled={!canRunSimulation}
+                      className="mt-4 inline-flex w-full items-center justify-center rounded-md bg-amber-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {isSimulating ? "Running..." : "Run Simulated Check"}
+                    </button>
+                  </div>
+                </div>
+
+                {simulationResult && (
+                  <div
+                    className={`mt-4 rounded-xl border px-4 py-3 ${simulationResultClasses}`}
+                  >
+                    <p className="text-sm font-semibold">Simulation Result</p>
+                    <p className="mt-1 text-sm">{simulationResult.summary}</p>
+                    <p className="mt-1 text-xs opacity-90">
+                      {simulationResult.detail}
+                    </p>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      <div className="mb-8 overflow-hidden rounded-2xl border border-dashed border-sky-300 bg-sky-50/70">
+        <button
+          type="button"
+          onClick={() => setIsBulkOpen((current) => !current)}
+          aria-expanded={isBulkOpen}
+          className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
+        >
+          <div>
+            <div className="flex items-center gap-3">
+              <span className="inline-flex rounded-full border border-sky-300 bg-white px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-sky-700">
+                Bulk
+              </span>
+              <h2 className="text-lg font-semibold text-sky-950">
+                Bulk ASIN Check
+              </h2>
+            </div>
+            <p className="mt-1 text-sm text-sky-900/80">
+              Paste a list of ASINs to run targeted price checks on specific
+              products.
+            </p>
+          </div>
+
+          <span className="inline-flex items-center gap-2 text-sm font-medium text-sky-900">
+            {isBulkOpen ? "Hide" : "Show"}
+            <svg
+              className={`h-4 w-4 transition-transform ${
+                isBulkOpen ? "rotate-180" : ""
+              }`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="m6 9 6 6 6-6"
+              />
+            </svg>
+          </span>
+        </button>
+
+        {isBulkOpen && (
+          <div className="border-t border-sky-200 px-5 py-5">
+            <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+              <div className="rounded-xl border border-sky-200 bg-white p-4">
+                <label className="block text-sm font-medium text-gray-900">
+                  ASIN List
+                </label>
+                <textarea
+                  value={asinInput}
+                  onChange={(event) => {
+                    setAsinInput(event.target.value);
+                    setBulkResult(null);
+                  }}
+                  rows={6}
+                  placeholder={"Paste ASINs here — one per line, or comma/space separated\nB0D36TKRB1\nB0DNZCQQJJ\nB0CX23V2ZK"}
+                  className="mt-2 w-full rounded-md border border-sky-200 bg-white px-3 py-2 font-mono text-sm text-gray-900 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                />
+                <p className="mt-2 text-xs text-gray-500">
+                  {(() => {
+                    const parsed = asinInput
+                      .split(/[\n,\s]+/)
+                      .map((s) => s.trim().toUpperCase())
+                      .filter(Boolean);
+                    const unique = [...new Set(parsed)];
+                    return unique.length === 0
+                      ? "No ASINs entered yet."
+                      : `${unique.length} unique ASIN${unique.length === 1 ? "" : "s"} detected.`;
+                  })()}
+                </p>
+              </div>
+
+              <div className="rounded-xl border border-sky-200 bg-white p-4">
+                <p className="text-sm font-medium text-gray-900">How it works</p>
+                <ul className="mt-2 space-y-2 text-sm text-gray-600">
+                  <li className="flex items-start gap-2">
+                    <span className="mt-0.5 text-sky-600">1.</span>
+                    Paste your ASINs in the box — any format works.
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="mt-0.5 text-sky-600">2.</span>
+                    We match each ASIN against your imported products.
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="mt-0.5 text-sky-600">3.</span>
+                    A live Amazon price check runs only on matched products.
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="mt-0.5 text-sky-600">4.</span>
+                    Changed prices are revised on eBay automatically.
+                  </li>
+                </ul>
+
+                <label className="mt-4 flex items-start gap-3 rounded-lg border border-sky-200 bg-sky-50 px-3 py-3 text-sm text-sky-950">
+                  <input
+                    type="checkbox"
+                    checked={bulkApplyToEbay}
+                    onChange={(event) => setBulkApplyToEbay(event.target.checked)}
+                    className="mt-0.5 h-4 w-4 rounded border-sky-300 text-sky-600 focus:ring-sky-500"
+                  />
+                  <span className="flex-1">
+                    <span className="font-medium">Apply to eBay</span>
+                    <span
+                      className="ml-2 inline-flex h-5 w-5 items-center justify-center rounded-full border border-sky-300 bg-white text-xs font-semibold text-sky-700"
+                      title="When off, prices are checked and history is recorded but eBay listings are NOT revised. Enable this to push changes live."
+                    >
+                      i
+                    </span>
+                    <span className="mt-1 block text-xs text-sky-900/80">
+                      Leave this off to check prices without revising eBay
+                      listings. Enable to push price changes live.
+                    </span>
+                  </span>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const parsed = asinInput
+                      .split(/[\n,\s]+/)
+                      .map((s) => s.trim().toUpperCase())
+                      .filter(Boolean);
+                    const unique = [...new Set(parsed)];
+
+                    if (unique.length === 0) {
+                      showToast("Enter at least one ASIN.", "error");
+                      return;
+                    }
+
+                    setIsBulkChecking(true);
+                    setBulkResult(null);
+
+                    try {
+                      const response = await fetch("/api/price-check", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ asins: unique, dryRun: !bulkApplyToEbay }),
+                      });
+
+                      const data = (await response.json()) as PriceCheckResponse & {
+                        resolution?: BulkResolution;
+                      };
+
+                      if (!response.ok) {
+                        throw new Error(data.error || "Bulk check failed");
+                      }
+
+                      const matchedCount = data.resolution?.matched.length ?? 0;
+                      const unmatchedCount = data.resolution?.unmatched.length ?? 0;
+
+                      const tone: BulkCheckResult["tone"] =
+                        (data.failed ?? 0) > 0
+                          ? "error"
+                          : unmatchedCount > 0
+                            ? "warning"
+                            : "success";
+
+                      setBulkResult({
+                        summary: formatPriceCheckSummary(data),
+                        resolution: data.resolution ?? null,
+                        tone,
+                      });
+
+                      showToast(
+                        `Checked ${matchedCount} product${matchedCount === 1 ? "" : "s"}. ${unmatchedCount} ASIN${unmatchedCount === 1 ? "" : "s"} unmatched.`,
+                        tone === "error" ? "error" : "success"
+                      );
+
+                      router.refresh();
+                    } catch (error) {
+                      const message =
+                        error instanceof Error
+                          ? error.message
+                          : "Bulk price check failed";
+                      showToast(message, "error");
+                      setBulkResult({
+                        summary: message,
+                        resolution: null,
+                        tone: "error",
+                      });
+                    } finally {
+                      setIsBulkChecking(false);
+                    }
+                  }}
+                  disabled={
+                    isBulkChecking ||
+                    asinInput
+                      .split(/[\n,\s]+/)
+                      .filter((s) => s.trim()).length === 0
+                  }
+                  className="mt-4 inline-flex w-full items-center justify-center rounded-md bg-sky-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isBulkChecking ? "Checking..." : "Check These ASINs"}
+                </button>
+              </div>
+            </div>
+
+            {bulkResult && (
+              <div
+                className={`mt-4 rounded-xl border px-4 py-3 ${
+                  bulkResult.tone === "error"
+                    ? "border-red-200 bg-red-50 text-red-900"
+                    : bulkResult.tone === "warning"
+                      ? "border-amber-200 bg-amber-100/70 text-amber-950"
+                      : "border-emerald-200 bg-emerald-50 text-emerald-900"
+                }`}
+              >
+                <p className="text-sm font-semibold">Bulk Check Result</p>
+                <p className="mt-1 text-sm">{bulkResult.summary}</p>
+
+                {bulkResult.resolution && (
+                  <div className="mt-3 space-y-2">
+                    {bulkResult.resolution.matched.length > 0 && (
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-wide opacity-80">
+                          Matched ({bulkResult.resolution.matched.length})
+                        </p>
+                        <ul className="mt-1 space-y-1">
+                          {bulkResult.resolution.matched.map((m) => (
+                            <li
+                              key={m.asin}
+                              className="flex items-center gap-2 text-sm"
+                            >
+                              <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-200 text-xs text-emerald-800">
+                                ✓
+                              </span>
+                              <span className="font-mono text-xs">
+                                {m.asin}
+                              </span>
+                              <span className="truncate text-xs opacity-80">
+                                — {m.title}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {bulkResult.resolution.unmatched.length > 0 && (
+                      <div>
+                        <p className="text-xs font-medium uppercase tracking-wide opacity-80">
+                          Unmatched ({bulkResult.resolution.unmatched.length})
+                        </p>
+                        <ul className="mt-1 space-y-1">
+                          {bulkResult.resolution.unmatched.map((asin) => (
+                            <li
+                              key={asin}
+                              className="flex items-center gap-2 text-sm"
+                            >
+                              <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-red-200 text-xs text-red-800">
+                                ✗
+                              </span>
+                              <span className="font-mono text-xs">
+                                {asin}
+                              </span>
+                              <span className="text-xs opacity-70">
+                                — not imported or no variants
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <select
           value={directionFilter}
@@ -299,11 +1004,21 @@ export default function PriceTrackerClient({
                             href={`https://www.amazon.com.au/dp/${item.product.asin}`}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-xs text-orange-600 hover:text-orange-800 transition-colors"
+                            className="inline-flex items-center gap-1 text-xs text-orange-600 transition-colors hover:text-orange-800"
                             title="View on Amazon"
                           >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                            <svg
+                              className="h-3.5 w-3.5"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                              strokeWidth={1.5}
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
+                              />
                             </svg>
                             Amazon
                           </a>
@@ -313,11 +1028,21 @@ export default function PriceTrackerClient({
                             href={`https://www.ebay.com.au/itm/${item.product.ebayItemId}`}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1 text-xs text-blue-600 hover:text-blue-800 transition-colors"
+                            className="inline-flex items-center gap-1 text-xs text-blue-600 transition-colors hover:text-blue-800"
                             title="View on eBay"
                           >
-                            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                            <svg
+                              className="h-3.5 w-3.5"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                              strokeWidth={1.5}
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
+                              />
                             </svg>
                             eBay
                           </a>
@@ -330,7 +1055,8 @@ export default function PriceTrackerClient({
                       </div>
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-700">
-                      {formatMoney(item.previousPrice)} {"->"} {formatMoney(item.newPrice)}
+                      {formatMoney(item.previousPrice)} {"->"}{" "}
+                      {formatMoney(item.newPrice)}
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-700">
                       {formatMoney(item.previousSellPrice)} {"->"}{" "}

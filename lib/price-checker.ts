@@ -1,4 +1,4 @@
-import { chromium } from "playwright";
+import { chromium, type Browser } from "playwright";
 import { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { scrapeAmazonPrice } from "@/lib/amazon-scraper";
@@ -29,6 +29,8 @@ export interface PriceCheckResult {
 interface RunPriceCheckOptions {
   productIds?: string[];
   ignoreSchedule?: boolean;
+  simulatedPrices?: Record<string, number>;
+  dryRun?: boolean;
 }
 
 type ProductRecord = NonNullable<Awaited<ReturnType<typeof prisma.product.findFirst>>>;
@@ -83,6 +85,22 @@ async function reviseProductPrice(product: RevisableProduct) {
   return callEbayReviseItem(xml, storeNumber);
 }
 
+function getSimulatedPrice(
+  simulatedPrices: Record<string, number> | undefined,
+  productId: string
+) {
+  if (!simulatedPrices) {
+    return null;
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(simulatedPrices, productId)) {
+    return null;
+  }
+
+  const value = simulatedPrices[productId];
+  return Number.isFinite(value) ? roundMoney(value) : null;
+}
+
 export async function runPriceCheck(
   options: RunPriceCheckOptions = {}
 ): Promise<PriceCheckResult> {
@@ -134,7 +152,7 @@ export async function runPriceCheck(
     return { checked: 0, changed: 0, failed: 0, skipped: 0 };
   }
 
-  const browser = await chromium.launch({ headless: true });
+  let browser: Browser | null = null;
   const result: PriceCheckResult = {
     checked: 0,
     changed: 0,
@@ -142,8 +160,16 @@ export async function runPriceCheck(
     skipped: 0,
   };
 
+  const getBrowser = async () => {
+    if (!browser) {
+      browser = await chromium.launch({ headless: true });
+    }
+
+    return browser;
+  };
+
   try {
-    for (const product of products) {
+    for (const [index, product] of products.entries()) {
       result.checked += 1;
 
       if (!product.asin || product.variants.length === 0) {
@@ -152,13 +178,19 @@ export async function runPriceCheck(
       }
 
       const checkedAt = new Date();
+      const simulatedAmazonPrice = getSimulatedPrice(
+        options.simulatedPrices,
+        product.id
+      );
 
       try {
-        const currentAmazonPrice = await scrapeAmazonPrice(
-          product.asin,
-          browser,
-          supplierSettings.scrapePostcode || undefined
-        );
+        const currentAmazonPrice =
+          simulatedAmazonPrice ??
+          (await scrapeAmazonPrice(
+            product.asin,
+            await getBrowser(),
+            supplierSettings.scrapePostcode || undefined
+          ));
 
         if (currentAmazonPrice === null) {
           result.failed += 1;
@@ -334,10 +366,12 @@ export async function runPriceCheck(
           continue;
         }
 
-        const reviseResult = await reviseProductPrice({
-          ...product,
-          price: toMoneyDecimal(nextPrimarySellPrice),
-        });
+        const reviseResult = options.dryRun
+          ? { success: true as const }
+          : await reviseProductPrice({
+              ...product,
+              price: toMoneyDecimal(nextPrimarySellPrice),
+            });
 
         if (!reviseResult.success) {
           result.failed += 1;
@@ -430,6 +464,8 @@ export async function runPriceCheck(
           previousAmazonPrice,
           currentAmazonPrice,
           changePercent: roundMoney(changePercent),
+          dryRun: Boolean(options.dryRun),
+          usedSimulatedPrice: simulatedAmazonPrice !== null,
         });
       } catch (error) {
         result.failed += 1;
@@ -451,11 +487,17 @@ export async function runPriceCheck(
         });
       }
 
-      await sleep(PRODUCT_DELAY_MS);
+      if (simulatedAmazonPrice === null && index < products.length - 1) {
+        await sleep(PRODUCT_DELAY_MS);
+      }
     }
 
     return result;
   } finally {
-    await browser.close();
+    const browserToClose = browser as Browser | null;
+
+    if (browserToClose) {
+      await browserToClose.close();
+    }
   }
 }

@@ -1,4 +1,4 @@
-import type { Product, Variant } from "@/app/generated/prisma/client";
+import { Prisma, type Product, type Variant } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import type { VariantPayload, VariantRecord } from "@/types/variant";
 import { variantStatuses } from "@/types/variant";
@@ -162,31 +162,60 @@ function buildDefaultVariantData(product: DefaultVariantSource) {
   };
 }
 
+function isSerializationFailure(error: unknown) {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === "P2034"
+  );
+}
+
 export async function ensureDefaultVariantForProduct(productId: string) {
-  const existingCount = await prisma.variant.count({
-    where: { productId },
-  });
+  const maxAttempts = 2;
 
-  if (existingCount > 0) {
-    return;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await prisma.$transaction(
+        async (tx) => {
+          await tx.$queryRaw`
+            SELECT "id" FROM "Product" WHERE "id" = ${productId} FOR UPDATE
+          `;
+
+          const existingCount = await tx.variant.count({
+            where: { productId },
+          });
+
+          if (existingCount > 0) {
+            return;
+          }
+
+          const product = await tx.product.findUnique({
+            where: { id: productId },
+            select: {
+              id: true,
+              price: true,
+              quantity: true,
+              images: true,
+              asin: true,
+            },
+          });
+
+          if (!product) {
+            return;
+          }
+
+          await tx.variant.create({
+            data: buildDefaultVariantData(product),
+          });
+        },
+        {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+        },
+      );
+      return;
+    } catch (error) {
+      if (attempt === maxAttempts || !isSerializationFailure(error)) {
+        throw error;
+      }
+    }
   }
-
-  const product = await prisma.product.findUnique({
-    where: { id: productId },
-    select: {
-      id: true,
-      price: true,
-      quantity: true,
-      images: true,
-      asin: true,
-    },
-  });
-
-  if (!product) {
-    return;
-  }
-
-  await prisma.variant.create({
-    data: buildDefaultVariantData(product),
-  });
 }
