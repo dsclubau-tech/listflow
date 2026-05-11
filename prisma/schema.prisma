@@ -51,6 +51,11 @@ enum VariantStatus {
   OUT_OF_STOCK
 }
 
+enum PriceCheckSource {
+  LIVE
+  SIMULATED
+}
+
 model Product {
   id            String        @id @default(cuid())
   title         String
@@ -125,6 +130,7 @@ model PriceHistory {
   changePercent     Float
   ebayRevised       Boolean  @default(false)
   errorMessage      String?  @db.Text
+  source            PriceCheckSource @default(LIVE)
   createdAt         DateTime @default(now())
 
   product Product  @relation(fields: [productId], references: [id], onDelete: Cascade)

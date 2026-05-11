@@ -101,6 +101,20 @@ function getSimulatedPrice(
   return Number.isFinite(value) ? roundMoney(value) : null;
 }
 
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : "Unexpected price check error";
+}
+
+function isBrowserClosedError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  return /has been closed|target closed|browser.*closed|page.*closed/i.test(
+    error.message
+  );
+}
+
 export async function runPriceCheck(
   options: RunPriceCheckOptions = {}
 ): Promise<PriceCheckResult> {
@@ -168,6 +182,68 @@ export async function runPriceCheck(
     return browser;
   };
 
+  const closeBrowser = async () => {
+    const browserToClose = browser;
+    browser = null;
+
+    if (browserToClose) {
+      await browserToClose.close().catch(() => {});
+    }
+  };
+
+  const scrapeAmazonPriceWithRetry = async (productId: string, asin: string) => {
+    const scrapeWithCurrentBrowser = async () => {
+      const activeBrowser = await getBrowser();
+      const price = await scrapeAmazonPrice(
+        asin,
+        activeBrowser,
+        supplierSettings.scrapePostcode || undefined
+      );
+
+      if (price === null && !activeBrowser.isConnected()) {
+        throw new Error("Browser has been closed during Amazon scrape.");
+      }
+
+      return price;
+    };
+
+    try {
+      return await scrapeWithCurrentBrowser();
+    } catch (error) {
+      if (!isBrowserClosedError(error)) {
+        throw error;
+      }
+
+      logger.warn(
+        "price-checker/run",
+        "Amazon scrape browser closed; retrying with a fresh browser",
+        {
+          productId,
+          asin,
+          errorMessage: getErrorMessage(error),
+        }
+      );
+
+      await closeBrowser();
+
+      try {
+        return await scrapeWithCurrentBrowser();
+      } catch (retryError) {
+        if (isBrowserClosedError(retryError)) {
+          await closeBrowser();
+        }
+
+        logger.warn("price-checker/run", "Amazon scrape retry failed", {
+          productId,
+          asin,
+          errorMessage: getErrorMessage(retryError),
+        });
+
+        throw retryError;
+      }
+    }
+  };
+
   try {
     for (const [index, product] of products.entries()) {
       result.checked += 1;
@@ -182,15 +258,13 @@ export async function runPriceCheck(
         options.simulatedPrices,
         product.id
       );
+      const priceHistorySource =
+        simulatedAmazonPrice !== null ? "SIMULATED" : "LIVE";
 
       try {
         const currentAmazonPrice =
           simulatedAmazonPrice ??
-          (await scrapeAmazonPrice(
-            product.asin,
-            await getBrowser(),
-            supplierSettings.scrapePostcode || undefined
-          ));
+          (await scrapeAmazonPriceWithRetry(product.id, product.asin));
 
         if (currentAmazonPrice === null) {
           result.failed += 1;
@@ -398,6 +472,7 @@ export async function runPriceCheck(
                 ebayRevised: false,
                 errorMessage:
                   reviseResult.errorMessage || "Failed to revise eBay listing.",
+                source: priceHistorySource,
                 createdAt: checkedAt,
               })),
             });
@@ -451,6 +526,7 @@ export async function runPriceCheck(
               changePercent,
               ebayRevised: true,
               errorMessage: null,
+              source: priceHistorySource,
               createdAt: checkedAt,
             })),
           });
@@ -470,8 +546,7 @@ export async function runPriceCheck(
       } catch (error) {
         result.failed += 1;
 
-        const message =
-          error instanceof Error ? error.message : "Unexpected price check error";
+        const message = getErrorMessage(error);
 
         await prisma.product.update({
           where: { id: product.id },
@@ -497,7 +572,7 @@ export async function runPriceCheck(
     const browserToClose = browser as Browser | null;
 
     if (browserToClose) {
-      await browserToClose.close();
+      await browserToClose.close().catch(() => {});
     }
   }
 }

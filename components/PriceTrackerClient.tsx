@@ -23,6 +23,7 @@ interface PriceTrackerHistoryItem {
   changePercent: number;
   ebayRevised: boolean;
   errorMessage: string | null;
+  source: "LIVE" | "SIMULATED";
   createdAt: string;
   product: {
     id: string;
@@ -78,6 +79,7 @@ interface SimulationResultState {
   tone: "success" | "warning" | "error";
 }
 
+type SourceFilter = "all" | "live" | "simulated";
 type DirectionFilter = "all" | "up" | "down";
 type SortValue = "newest" | "largest" | "smallest";
 
@@ -143,6 +145,7 @@ export default function PriceTrackerClient({
   const router = useRouter();
   const { toast, showToast, hideToast } = useToast();
   const [isChecking, setIsChecking] = useState(false);
+  const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [directionFilter, setDirectionFilter] =
     useState<DirectionFilter>("all");
   const [sortBy, setSortBy] = useState<SortValue>("newest");
@@ -201,7 +204,17 @@ export default function PriceTrackerClient({
   }, [selectedProductId]);
 
   const filteredHistory = useMemo(() => {
-    const directionFiltered = initialHistory.filter((item) => {
+    const sourceFiltered = initialHistory.filter((item) => {
+      if (sourceFilter === "all") {
+        return true;
+      }
+
+      return sourceFilter === "live"
+        ? item.source === "LIVE"
+        : item.source === "SIMULATED";
+    });
+
+    const directionFiltered = sourceFiltered.filter((item) => {
       if (directionFilter === "all") {
         return true;
       }
@@ -227,7 +240,7 @@ export default function PriceTrackerClient({
     });
 
     return items;
-  }, [directionFilter, initialHistory, sortBy]);
+  }, [directionFilter, initialHistory, sortBy, sourceFilter]);
 
   const selectedProduct = useMemo(
     () =>
@@ -939,6 +952,18 @@ export default function PriceTrackerClient({
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <select
+          value={sourceFilter}
+          onChange={(event) =>
+            setSourceFilter(event.target.value as SourceFilter)
+          }
+          className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-500"
+        >
+          <option value="all">All sources</option>
+          <option value="live">Live only</option>
+          <option value="simulated">Simulated only</option>
+        </select>
+
+        <select
           value={directionFilter}
           onChange={(event) =>
             setDirectionFilter(event.target.value as DirectionFilter)
@@ -986,6 +1011,11 @@ export default function PriceTrackerClient({
             ) : (
               filteredHistory.map((item) => {
                 const priceWentUp = item.changePercent > 0;
+                const sourceLabel = item.source === "SIMULATED" ? "SIM" : "LIVE";
+                const sourceClasses =
+                  item.source === "SIMULATED"
+                    ? "border-amber-200 bg-amber-100 text-amber-800"
+                    : "border-emerald-200 bg-emerald-100 text-emerald-700";
 
                 return (
                   <tr
@@ -1052,6 +1082,11 @@ export default function PriceTrackerClient({
                             Variant: {item.variant.title}
                           </span>
                         )}
+                        <span
+                          className={`inline-flex rounded-full border px-1.5 py-0.5 text-[10px] font-semibold leading-none ${sourceClasses}`}
+                        >
+                          {sourceLabel}
+                        </span>
                       </div>
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-700">

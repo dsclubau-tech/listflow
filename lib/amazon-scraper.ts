@@ -186,15 +186,65 @@ async function setAmazonDeliveryPostcode(
   page: import("playwright").Page,
   postcode: string
 ): Promise<boolean> {
+  // Strategy 1: Call Amazon's AJAX address-change endpoint directly.
+  // This is what the location popup does under the hood — far more reliable
+  // than trying to click through the popup UI which changes frequently.
   try {
-    // Step 1: Check if the popup is already auto-shown by Amazon
-    // (happens when Amazon detects a non-AU IP)
+    const ajaxResult = await page.evaluate(async (pc: string) => {
+      const formData = new URLSearchParams({
+        locationType: "LOCATION_INPUT",
+        zipCode: pc,
+        storeContext: "pc",
+        deviceType: "web",
+        pageType: "Detail",
+        actionSource: "glow",
+      });
+
+      const response = await fetch(
+        "/gp/delivery/ajax/address-change.html",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: formData.toString(),
+        }
+      );
+
+      if (!response.ok) {
+        return { success: false, reason: `HTTP ${response.status}` };
+      }
+
+      const text = await response.text();
+      // Amazon returns JSON — a successful response contains "isValidAddress":1
+      const isValid =
+        text.includes('"isValidAddress":1') ||
+        text.includes('"isValidAddress": 1');
+      return { success: isValid, reason: isValid ? "ok" : "invalid address response" };
+    }, postcode);
+
+    if (ajaxResult.success) {
+      return true;
+    }
+
+    console.warn(
+      `[setAmazonDeliveryPostcode] AJAX method failed: ${ajaxResult.reason}. Trying popup fallback.`
+    );
+  } catch {
+    console.warn(
+      "[setAmazonDeliveryPostcode] AJAX method threw. Trying popup fallback."
+    );
+  }
+
+  // Strategy 2: Fall back to the traditional popup interaction.
+  try {
+    // Check if the popup is already auto-shown by Amazon
     let popupOpen = await page
       .locator("#GLUXZipUpdateInput")
       .isVisible({ timeout: 2000 })
       .catch(() => false);
 
-    // Step 2: If popup is NOT already open, click the location link
+    // If popup is NOT already open, click the location link
     if (!popupOpen) {
       const locationLink = page.locator("#nav-global-location-popover-link");
       if (!(await locationLink.isVisible({ timeout: 3000 }).catch(() => false))) {
@@ -211,44 +261,43 @@ async function setAmazonDeliveryPostcode(
       return false;
     }
 
-    // Step 3: Type the postcode
+    // Type the postcode
     const zipInput = page.locator("#GLUXZipUpdateInput");
     await zipInput.fill(postcode);
 
-    // Step 4: Click Apply
+    // Click Apply
     const applyBtn = page.locator(
       '#GLUXZipUpdate input[type="submit"], #GLUXZipUpdate .a-button-input, #GLUXZipUpdate .a-button'
     );
     await applyBtn.first().click();
 
-    // Step 5: Wait for Amazon to process — it may show a city dropdown
+    // Wait for Amazon to process
     await page.waitForTimeout(2000);
 
-    // Step 6: If a city selection appears, pick the first option
+    // If a city selection appears, pick the first option
     const cityList = page.locator("#GLUXCityList select, #GLUXCityPopover select");
     if (await cityList.isVisible({ timeout: 2000 }).catch(() => false)) {
       await cityList.first().selectOption({ index: 1 });
       await page.waitForTimeout(1000);
     }
 
-    // Step 7: Click Done/Continue — this typically triggers a full page reload
+    // Click Done/Continue
     const doneBtn = page.locator(
       '[name="glowDoneButton"], #GLUXConfirmClose, .a-popover-footer .a-button-primary'
     );
     if (await doneBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
       await Promise.all([
-        page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {}),
+        page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => {}),
         doneBtn.first().click(),
       ]);
     }
 
-    // Step 8: Ensure page is stable after any reload
+    // Ensure page is stable after any reload
     await page.waitForLoadState("domcontentloaded").catch(() => {});
     await page.waitForTimeout(1000);
 
     return true;
   } catch {
-    // Non-blocking — if anything fails, we proceed with default location
     return false;
   }
 }
@@ -311,7 +360,7 @@ async function extractAmazonPriceFromPage(
     }
 
     return found;
-  });
+  }).catch(() => [] as string[]);
 
   if (fallbackCandidates.length === 0) {
     return null;
@@ -366,35 +415,145 @@ export async function scrapeAmazonPrice(
   const page = await ownedBrowser.newPage();
 
   try {
+    // Hide the "webdriver" flag so Amazon doesn't detect headless automation
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "webdriver", {
+        get: () => false,
+      });
+    });
+
     await page.setExtraHTTPHeaders({
       "User-Agent":
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     });
 
     await page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
-      waitUntil: "domcontentloaded",
+      waitUntil: "load",
       timeout: 30000,
     });
 
-    // Set delivery postcode once per browser session so Amazon shows
-    // AU-local prices and availability (e.g. Kogarah 2217)
+    // Set delivery postcode so Amazon shows AU-local prices and availability.
+    // If the first attempt fails, retry — a failed postcode causes Amazon to
+    // geo-locate the server (often Singapore) and show "out of stock" for AU
+    // products that ARE actually available for Australian delivery.
     if (postcode && !postcodeSetForBrowser.has(ownedBrowser)) {
-      const success = await setAmazonDeliveryPostcode(page, postcode);
-      if (success) {
-        postcodeSetForBrowser.add(ownedBrowser);
-        // Reload the page to get updated prices for this postcode
+      const MAX_POSTCODE_ATTEMPTS = 3;
+      let postcodeApplied = false;
+
+      for (let attempt = 1; attempt <= MAX_POSTCODE_ATTEMPTS; attempt++) {
+        const success = await setAmazonDeliveryPostcode(page, postcode);
+        if (success) {
+          postcodeSetForBrowser.add(ownedBrowser);
+          postcodeApplied = true;
+          break;
+        }
+
+        console.warn(
+          `[scrapeAmazonPrice] Postcode attempt ${attempt}/${MAX_POSTCODE_ATTEMPTS} failed for ${normalizedAsin}. ${
+            attempt < MAX_POSTCODE_ATTEMPTS ? "Retrying..." : "Giving up."
+          }`
+        );
+
+        if (attempt < MAX_POSTCODE_ATTEMPTS) {
+          // Reload the page before retrying — Amazon sometimes needs a
+          // fresh page load to show the location popup again.
+          await page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
+            waitUntil: "load",
+            timeout: 30000,
+          });
+        }
+      }
+
+      // Reload after postcode is set to get updated prices
+      if (postcodeApplied) {
         await page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
-          waitUntil: "domcontentloaded",
+          waitUntil: "load",
           timeout: 30000,
         });
       }
     }
-    return extractAmazonPriceFromPage(page);
+
+    // Wait for Amazon's JS to render price elements into the DOM.
+    await page
+      .waitForSelector(
+        "#corePrice_feature_div, .a-price, #priceblock_ourprice, #apex_desktop",
+        { timeout: 10000 }
+      )
+      .catch(() => {
+        // Price containers didn't appear — fall through and let
+        // extractAmazonPriceFromPage try its own selectors.
+      });
+
+    // Detect out-of-stock before attempting price extraction
+    const stockStatus = await page
+      .evaluate(() => {
+        const buybox = document.querySelector("#buybox, #availability");
+        const text = buybox?.textContent?.toLowerCase() ?? "";
+        if (
+          text.includes("temporarily out of stock") ||
+          text.includes("currently unavailable")
+        ) {
+          return "out_of_stock";
+        }
+        return "available";
+      })
+      .catch(() => "unknown");
+
+    if (stockStatus === "out_of_stock") {
+      // Check if the delivery location is still non-AU — that means
+      // the postcode setter failed and "out of stock" is a geo-location
+      // issue, not a real stock issue.
+      const deliveryLocation = await page
+        .evaluate(() => {
+          const el = document.querySelector("#glow-ingress-line2, #nav-global-location-data-modal-action");
+          return el?.textContent?.trim() ?? "";
+        })
+        .catch(() => "");
+
+      const isAuDelivery =
+        deliveryLocation.toLowerCase().includes("australia") ||
+        /\b\d{4}\b/.test(deliveryLocation); // AU postcodes are 4 digits
+
+      if (!isAuDelivery) {
+        throw new Error(
+          `Could not set delivery postcode to Australia for ${normalizedAsin}. ` +
+            `Amazon is delivering to "${deliveryLocation || "unknown location"}" — ` +
+            `the product may appear out of stock due to geo-location.`
+        );
+      }
+
+      throw new Error(
+        `Product ${normalizedAsin} is temporarily out of stock on Amazon — no price available.`
+      );
+    }
+
+    const price = await extractAmazonPriceFromPage(page);
+
+    // Diagnostic: log page context when price extraction fails
+    if (price === null) {
+      const pageTitle = await page.title().catch(() => "(unknown)");
+      const pageUrl = page.url();
+      const bodySnippet = await page
+        .evaluate(() => {
+          const body = document.body?.innerText ?? "";
+          return body.slice(0, 500);
+        })
+        .catch(() => "(could not read body)");
+
+      console.warn(
+        `[scrapeAmazonPrice] Price not found for ASIN ${normalizedAsin}.\n` +
+          `  Page title: ${pageTitle}\n` +
+          `  Page URL:   ${pageUrl}\n` +
+          `  Body start: ${bodySnippet.slice(0, 200)}`
+      );
+    }
+
+    return price;
   } finally {
-    await page.close();
+    await page.close().catch(() => {});
 
     if (!browser) {
-      await ownedBrowser.close();
+      await ownedBrowser.close().catch(() => {});
     }
   }
 }
