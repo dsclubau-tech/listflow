@@ -27,6 +27,18 @@ export interface ScrapedProduct {
   };
 }
 
+const USER_AGENTS = [
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+  "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15",
+];
+
+function getRandomUserAgent() {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
+
 function parseAmazonPriceValue(value: string | null | undefined): number | null {
   if (!value) {
     return null;
@@ -162,13 +174,6 @@ function normalizeItemSpecificsForEbay(
 
   return result;
 }
-
-/**
- * Track which Browser instance already has its delivery postcode set.
- * This prevents setting it on every single product page — once per
- * browser session is enough because Amazon stores it in a cookie.
- */
-const postcodeSetForBrowser = new WeakSet<Browser>();
 
 /**
  * Set the delivery postcode on Amazon AU by interacting with the
@@ -412,7 +417,11 @@ export async function scrapeAmazonPrice(
   }
 
   const ownedBrowser = browser ?? (await chromium.launch({ headless: true }));
-  const page = await ownedBrowser.newPage();
+  const context = await ownedBrowser.newContext({
+    userAgent: getRandomUserAgent(),
+    viewport: { width: 1920, height: 1080 },
+  });
+  const page = await context.newPage();
 
   try {
     // Hide the "webdriver" flag so Amazon doesn't detect headless automation
@@ -420,11 +429,6 @@ export async function scrapeAmazonPrice(
       Object.defineProperty(navigator, "webdriver", {
         get: () => false,
       });
-    });
-
-    await page.setExtraHTTPHeaders({
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     });
 
     await page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
@@ -436,14 +440,13 @@ export async function scrapeAmazonPrice(
     // If the first attempt fails, retry — a failed postcode causes Amazon to
     // geo-locate the server (often Singapore) and show "out of stock" for AU
     // products that ARE actually available for Australian delivery.
-    if (postcode && !postcodeSetForBrowser.has(ownedBrowser)) {
+    if (postcode) {
       const MAX_POSTCODE_ATTEMPTS = 3;
       let postcodeApplied = false;
 
       for (let attempt = 1; attempt <= MAX_POSTCODE_ATTEMPTS; attempt++) {
         const success = await setAmazonDeliveryPostcode(page, postcode);
         if (success) {
-          postcodeSetForBrowser.add(ownedBrowser);
           postcodeApplied = true;
           break;
         }
@@ -550,7 +553,7 @@ export async function scrapeAmazonPrice(
 
     return price;
   } finally {
-    await page.close().catch(() => {});
+    await context.close().catch(() => {});
 
     if (!browser) {
       await ownedBrowser.close().catch(() => {});
@@ -682,19 +685,17 @@ export async function scrapeAmazonProduct(
   const browser = await chromium.launch({ headless: true });
 
   try {
-    const page = await browser.newPage();
-
-    await page.setExtraHTTPHeaders({
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    const context = await browser.newContext({
+      userAgent: getRandomUserAgent(),
+      viewport: { width: 1920, height: 1080 },
     });
+    const page = await context.newPage();
 
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
 
-    if (postcode && !postcodeSetForBrowser.has(browser)) {
+    if (postcode) {
       const success = await setAmazonDeliveryPostcode(page, postcode);
       if (success) {
-        postcodeSetForBrowser.add(browser);
         await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
       }
     }

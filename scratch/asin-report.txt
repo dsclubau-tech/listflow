@@ -1,0 +1,66 @@
+Found 10 imported products without ASIN
+
+---
+Title: Natural Grain Free Dry Dog Food, Adult & Puppy Salmon, 10.88kg Bag Anchovy & Sar
+SKU: B007M0IEKE
+Specifics: (none)
+SKU is ASIN?: true
+ASINs in desc: (none)
+---
+Title: Grain Free Adult Ocean Formula Whitefish, Herring Meal & Salmon Meal Dry Dog 10k
+SKU: B01DAG9JRA
+Specifics: (none)
+SKU is ASIN?: true
+ASINs in desc: (none)
+---
+Title: 2 in 1 Magnetic Dual Splittable Bluetooth Speaker, IPX6 Waterproof Split Portabl
+SKU: B0F1CCLZGT
+Specifics: (none)
+SKU is ASIN?: true
+ASINs in desc: (none)
+---
+Title: 2 in 1 Magnetic Split Bluetooth Speaker, Color Blocking Waterproof Dual Splittab
+SKU: B0FJQVCD5W
+Specifics: (none)
+SKU is ASIN?: true
+ASINs in desc: (none)
+---
+Title: Bluetooth Speaker, 40W Portable Wireless Speakers with Immersive Stereo Sound &
+SKU: B0BRCDTN9Q
+Specifics: (none)
+SKU is ASIN?: true
+ASINs in desc: (none)
+---
+Title: Linsoul KZ ZS10 Pro, 4BA+1DD 5 Driver in Ear Monitor, HiFi Wired Earbuds, Gaming
+SKU: B07QKYTGH9
+Specifics: (none)
+SKU is ASIN?: true
+ASINs in desc: (none)
+---
+Title: NEEWER Overhead Camera Mount Rig with Dual Ballhead Super Clamp/Phone Holder/C C
+SKU: B0C781VKS1
+Specifics: (none)
+SKU is ASIN?: true
+ASINs in desc: (none)
+---
+Title: Kebtek Electric Pruning Shears Professional Cordless Pruning Shears for Gardenin
+SKU: B0B2R53GRY
+Specifics: (none)
+SKU is ASIN?: true
+ASINs in desc: (none)
+---
+Title: Back Seat Extender for Dogs,Large Space Dog Car Seat Cover Hard Bottom Holds, Me
+SKU: B0D56YBQY6
+Specifics: (none)
+SKU is ASIN?: true
+ASINs in desc: (none)
+---
+Title: Shark Klik n' Flip Manual Steam Mop, 30 Second Heat Up Time, 350mL Water Capacit
+SKU: B079S8CQ58
+Specifics: (none)
+SKU is ASIN?: true
+ASINs in desc: (none)
+
+=== SUMMARY ===
+Total imported (no ASIN): 200
+With SKU: 200

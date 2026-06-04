@@ -54,12 +54,39 @@ export async function POST(request: Request) {
     const storeNumber = await getStoreNumber(product.storeId);
     const finalDescription = await resolveDescriptionTemplate(product);
     const productWithResolvedDesc = { ...product, description: finalDescription };
-    const xml = buildReviseItemXML(productWithResolvedDesc);
+
+    // Fetch variants so we can use the primary variant's sellPrice as the
+    // eBay listing price instead of the potentially stale product.price.
+    const variants = await prisma.variant.findMany({
+      where: { productId: product.id },
+      orderBy: { createdAt: "asc" },
+    });
+
+    const primarySellPrice = variants.length > 0
+      ? Number(variants[0].sellPrice)
+      : null;
+
+    // If we have a valid variant sell price, use it as the eBay StartPrice
+    // and sync product.price to keep them consistent.
+    const overrideStartPrice =
+      primarySellPrice !== null && Number.isFinite(primarySellPrice) && primarySellPrice > 0
+        ? primarySellPrice
+        : undefined;
+
+    if (overrideStartPrice !== undefined) {
+      await prisma.product.update({
+        where: { id: productId },
+        data: { price: overrideStartPrice },
+      });
+    }
+
+    const xml = buildReviseItemXML(productWithResolvedDesc, overrideStartPrice);
 
     log.info("revise/route", "Sending ReviseItem request to eBay", {
       productId,
       ebayItemId: product.ebayItemId,
       storeNumber,
+      startPrice: overrideStartPrice ?? Number(product.price),
     });
 
     const result = await callEbayReviseItem(xml, storeNumber);

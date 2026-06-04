@@ -16,13 +16,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let body: { productId?: string; all?: boolean; asins?: string[]; dryRun?: boolean };
+  let body: {
+    productId?: string;
+    productIds?: unknown[];
+    all?: boolean;
+    asins?: string[];
+  };
   try {
     body = (await request.json()) as {
       productId?: string;
+      productIds?: unknown[];
       all?: boolean;
       asins?: string[];
-      dryRun?: boolean;
     };
   } catch (error) {
     log.error("price-check/route", "Invalid JSON body", error);
@@ -30,6 +35,18 @@ export async function POST(request: Request) {
   }
 
   const productId = body.productId?.trim();
+  const productIds = [
+    ...new Set(
+      [
+        ...(productId ? [productId] : []),
+        ...(Array.isArray(body.productIds)
+          ? body.productIds.map((id) =>
+              typeof id === "string" ? id.trim() : ""
+            )
+          : []),
+      ].filter(Boolean)
+    ),
+  ];
   const rawAsins = Array.isArray(body.asins) ? body.asins : [];
 
   // Normalise ASINs: trim, uppercase, deduplicate, drop blanks
@@ -41,9 +58,9 @@ export async function POST(request: Request) {
     ),
   ];
 
-  if (!body.all && !productId && asins.length === 0) {
+  if (!body.all && productIds.length === 0 && asins.length === 0) {
     return NextResponse.json(
-      { error: "Either productId, all=true, or asins[] is required" },
+      { error: "Either productId/productIds, all=true, or asins[] is required" },
       { status: 400 }
     );
   }
@@ -72,6 +89,7 @@ export async function POST(request: Request) {
       return NextResponse.json({
         checked: 0,
         changed: 0,
+        pendingReview: 0,
         failed: 0,
         skipped: 0,
         reason: "No eligible products found for the supplied ASINs.",
@@ -86,7 +104,6 @@ export async function POST(request: Request) {
       const result = await runPriceCheck({
         productIds: eligible.map((p) => p.id),
         ignoreSchedule: true,
-        dryRun: body.dryRun !== false,
       });
 
       log.info("price-check/route", "Bulk ASIN price check completed", {
@@ -118,26 +135,88 @@ export async function POST(request: Request) {
     }
   }
 
-  // ── Single product flow ───────────────────────────────────────────────
-  if (productId) {
-    const product = await prisma.product.findUnique({
-      where: { id: productId },
-      select: { id: true },
+  // Targeted product flow.
+  if (productIds.length > 0) {
+    const products = await prisma.product.findMany({
+      where: { id: { in: productIds } },
+      select: {
+        id: true,
+        title: true,
+        asin: true,
+        status: true,
+        _count: { select: { variants: true } },
+      },
     });
 
-    if (!product) {
-      return NextResponse.json({ error: "Product not found" }, { status: 404 });
+    const foundIds = new Set(products.map((product) => product.id));
+    const missingIds = productIds.filter((id) => !foundIds.has(id));
+    const eligible = products.filter(
+      (product) =>
+        product.status === "IMPORTED" &&
+        Boolean(product.asin) &&
+        product._count.variants > 0
+    );
+    const eligibleIds = new Set(eligible.map((product) => product.id));
+    const ineligibleIds = products
+      .filter((product) => !eligibleIds.has(product.id))
+      .map((product) => product.id);
+
+    if (eligible.length === 0) {
+      return NextResponse.json({
+        checked: 0,
+        changed: 0,
+        pendingReview: 0,
+        failed: 0,
+        skipped: 0,
+        reason: "No eligible tracked products found for the selected products.",
+        resolution: {
+          matched: [],
+          unmatched: [...missingIds, ...ineligibleIds],
+        },
+      });
+    }
+
+    try {
+      const result = await runPriceCheck({
+        productIds: eligible.map((product) => product.id),
+        ignoreSchedule: true,
+      });
+
+      log.info("price-check/route", "Targeted product price check completed", {
+        requestedCount: productIds.length,
+        matchedCount: eligible.length,
+        unmatchedCount: missingIds.length + ineligibleIds.length,
+        result,
+      });
+
+      return NextResponse.json({
+        ...result,
+        resolution: {
+          matched: eligible.map((product) => ({
+            asin: product.asin,
+            productId: product.id,
+            title: product.title,
+          })),
+          unmatched: [...missingIds, ...ineligibleIds],
+        },
+      });
+    } catch (error) {
+      log.error("price-check/route", "Targeted product price check failed", error, {
+        productIds,
+      });
+      return NextResponse.json(
+        { error: "Targeted price check failed" },
+        { status: 500 }
+      );
     }
   }
 
   try {
     const result = await runPriceCheck({
-      productIds: productId ? [productId] : undefined,
       ignoreSchedule: true,
     });
 
     log.info("price-check/route", "Manual price check completed", {
-      productId: productId ?? null,
       all: Boolean(body.all),
       result,
     });
@@ -145,7 +224,6 @@ export async function POST(request: Request) {
     return NextResponse.json(result);
   } catch (error) {
     log.error("price-check/route", "Manual price check failed", error, {
-      productId: productId ?? null,
       all: Boolean(body.all),
     });
     return NextResponse.json(

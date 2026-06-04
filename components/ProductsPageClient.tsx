@@ -17,6 +17,7 @@ export default function ProductsPageClient({
   const router = useRouter();
   const [isExporting, setIsExporting] = useState(false);
   const [isCheckingPrices, setIsCheckingPrices] = useState(false);
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const { toast, showToast, hideToast } = useToast();
 
   const handleExportCsv = async () => {
@@ -93,17 +94,23 @@ export default function ProductsPageClient({
     setIsCheckingPrices(true);
 
     try {
+      const body =
+        selectedProductIds.length > 0
+          ? { productIds: selectedProductIds }
+          : { all: true };
+
       const response = await fetch("/api/price-check", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ all: true }),
+        body: JSON.stringify(body),
       });
 
       const data = (await response.json()) as {
         checked?: number;
         changed?: number;
+        pendingReview?: number;
         failed?: number;
         skipped?: number;
         reason?: string;
@@ -117,7 +124,7 @@ export default function ProductsPageClient({
       showToast(
         data.reason
           ? data.reason
-          : `Checked ${data.checked ?? 0} products. ${data.changed ?? 0} changed, ${data.failed ?? 0} failed, ${data.skipped ?? 0} unchanged.`,
+          : `Checked ${data.checked ?? 0} product${data.checked === 1 ? "" : "s"}. ${data.pendingReview ?? 0} pending review, ${data.failed ?? 0} failed, ${data.skipped ?? 0} unchanged.`,
         data.failed && data.failed > 0 ? "error" : "success"
       );
       router.refresh();
@@ -158,7 +165,11 @@ export default function ProductsPageClient({
               d="M4 4v5h.582m14.356-2A8 8 0 006.582 9m0 0H9m11 11v-5h-.581m0 0A8.003 8.003 0 017.64 15m11.778 0H15"
             />
           </svg>
-          {isCheckingPrices ? "Checking Prices..." : "Check Prices Now"}
+          {isCheckingPrices
+            ? "Checking Prices..."
+            : selectedProductIds.length > 0
+              ? `Check ${selectedProductIds.length} Selected`
+              : "Check Prices Now"}
         </button>
         <button
           onClick={handleExportCsv}
@@ -183,7 +194,12 @@ export default function ProductsPageClient({
         </button>
       </div>
 
-      <DraftsTable products={products} onToast={showToast} view="products" />
+      <DraftsTable
+        products={products}
+        onToast={showToast}
+        view="products"
+        onSelectionChange={setSelectedProductIds}
+      />
 
       {toast.visible && (
         <Toast

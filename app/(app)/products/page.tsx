@@ -9,6 +9,7 @@ export default async function ProductsPage() {
       store: true,
       createdBy: true,
       priceHistory: {
+        where: { appliedAt: null },
         orderBy: { createdAt: "desc" },
         take: 1,
       },
@@ -33,6 +34,7 @@ export default async function ProductsPage() {
       newPrice: entry.newPrice.toString(),
       previousSellPrice: entry.previousSellPrice.toString(),
       newSellPrice: entry.newSellPrice.toString(),
+      appliedAt: entry.appliedAt?.toISOString() ?? null,
       createdAt: entry.createdAt.toISOString(),
     })),
     store: {

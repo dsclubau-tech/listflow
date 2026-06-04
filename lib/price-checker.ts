@@ -1,4 +1,3 @@
-import { chromium, type Browser } from "playwright";
 import { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { scrapeAmazonPrice } from "@/lib/amazon-scraper";
@@ -9,18 +8,17 @@ import { resolveDescriptionTemplate } from "@/lib/template-resolver";
 import { logger } from "@/lib/logger";
 
 const PRICE_TOLERANCE = 0.01;
-const PRODUCT_DELAY_MS = 3000;
+const PRODUCT_DELAY_MIN_MS = 3000;
+const PRODUCT_DELAY_MAX_MS = 7000;
 const SUPPLIER_NAME = "Amazon AU";
 
 /** Guard 1: reject price changes larger than this percentage in either direction. */
 const MAX_CHANGE_PERCENT = 80;
 
-/** Guard 2: never send a sell price below eBay's minimum for fixed-price listings. */
-const EBAY_MIN_PRICE = 1.0;
-
 export interface PriceCheckResult {
   checked: number;
   changed: number;
+  pendingReview: number;
   failed: number;
   skipped: number;
   reason?: string;
@@ -30,7 +28,6 @@ interface RunPriceCheckOptions {
   productIds?: string[];
   ignoreSchedule?: boolean;
   simulatedPrices?: Record<string, number>;
-  dryRun?: boolean;
 }
 
 type ProductRecord = NonNullable<Awaited<ReturnType<typeof prisma.product.findFirst>>>;
@@ -62,6 +59,13 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function getProductDelayMs() {
+  return (
+    PRODUCT_DELAY_MIN_MS +
+    Math.random() * (PRODUCT_DELAY_MAX_MS - PRODUCT_DELAY_MIN_MS)
+  );
+}
+
 async function getSupplierSettings() {
   return prisma.supplierSettings.upsert({
     where: { supplierName: SUPPLIER_NAME },
@@ -70,17 +74,23 @@ async function getSupplierSettings() {
   });
 }
 
-async function reviseProductPrice(product: RevisableProduct) {
+export async function reviseProductPrice(
+  product: RevisableProduct,
+  overrideStartPrice?: number,
+) {
   if (!product.ebayItemId) {
     throw new Error("Product is missing an eBay item ID.");
   }
 
   const storeNumber = await getStoreNumber(product.storeId);
   const finalDescription = await resolveDescriptionTemplate(product);
-  const xml = buildReviseItemXML({
-    ...product,
-    description: finalDescription,
-  });
+  const xml = buildReviseItemXML(
+    {
+      ...product,
+      description: finalDescription,
+    },
+    overrideStartPrice,
+  );
 
   return callEbayReviseItem(xml, storeNumber);
 }
@@ -105,16 +115,6 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unexpected price check error";
 }
 
-function isBrowserClosedError(error: unknown) {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-
-  return /has been closed|target closed|browser.*closed|page.*closed/i.test(
-    error.message
-  );
-}
-
 export async function runPriceCheck(
   options: RunPriceCheckOptions = {}
 ): Promise<PriceCheckResult> {
@@ -124,6 +124,7 @@ export async function runPriceCheck(
     return {
       checked: 0,
       changed: 0,
+      pendingReview: 0,
       failed: 0,
       skipped: 0,
       reason: "Price tracking is disabled.",
@@ -137,6 +138,7 @@ export async function runPriceCheck(
       return {
         checked: 0,
         changed: 0,
+        pendingReview: 0,
         failed: 0,
         skipped: 0,
         reason: `Current UTC hour ${currentUtcHour} does not match configured hour ${supplierSettings.priceCheckHour}.`,
@@ -163,60 +165,31 @@ export async function runPriceCheck(
   });
 
   if (products.length === 0) {
-    return { checked: 0, changed: 0, failed: 0, skipped: 0 };
+    return { checked: 0, changed: 0, pendingReview: 0, failed: 0, skipped: 0 };
   }
 
-  let browser: Browser | null = null;
   const result: PriceCheckResult = {
     checked: 0,
     changed: 0,
+    pendingReview: 0,
     failed: 0,
     skipped: 0,
   };
 
-  const getBrowser = async () => {
-    if (!browser) {
-      browser = await chromium.launch({ headless: true });
-    }
-
-    return browser;
-  };
-
-  const closeBrowser = async () => {
-    const browserToClose = browser;
-    browser = null;
-
-    if (browserToClose) {
-      await browserToClose.close().catch(() => {});
-    }
-  };
-
   const scrapeAmazonPriceWithRetry = async (productId: string, asin: string) => {
-    const scrapeWithCurrentBrowser = async () => {
-      const activeBrowser = await getBrowser();
-      const price = await scrapeAmazonPrice(
+    const scrapeWithOwnedBrowser = () =>
+      scrapeAmazonPrice(
         asin,
-        activeBrowser,
+        undefined,
         supplierSettings.scrapePostcode || undefined
       );
 
-      if (price === null && !activeBrowser.isConnected()) {
-        throw new Error("Browser has been closed during Amazon scrape.");
-      }
-
-      return price;
-    };
-
     try {
-      return await scrapeWithCurrentBrowser();
+      return await scrapeWithOwnedBrowser();
     } catch (error) {
-      if (!isBrowserClosedError(error)) {
-        throw error;
-      }
-
       logger.warn(
         "price-checker/run",
-        "Amazon scrape browser closed; retrying with a fresh browser",
+        "Amazon scrape failed; retrying with a fresh browser",
         {
           productId,
           asin,
@@ -224,15 +197,9 @@ export async function runPriceCheck(
         }
       );
 
-      await closeBrowser();
-
       try {
-        return await scrapeWithCurrentBrowser();
+        return await scrapeWithOwnedBrowser();
       } catch (retryError) {
-        if (isBrowserClosedError(retryError)) {
-          await closeBrowser();
-        }
-
         logger.warn("price-checker/run", "Amazon scrape retry failed", {
           productId,
           asin,
@@ -244,9 +211,8 @@ export async function runPriceCheck(
     }
   };
 
-  try {
-    for (const [index, product] of products.entries()) {
-      result.checked += 1;
+  for (const [index, product] of products.entries()) {
+    result.checked += 1;
 
       if (!product.asin || product.variants.length === 0) {
         result.skipped += 1;
@@ -336,15 +302,121 @@ export async function runPriceCheck(
         }
 
         if (!hasMoneyChanged(previousAmazonPrice, currentAmazonPrice)) {
-          result.skipped += 1;
+          // Amazon price hasn't changed, but check if the primary variant's
+          // buyPrice is out of sync with the Amazon price. This happens when
+          // the variant was imported with buyPrice = sellPrice (markup baked
+          // in) or when the user updates fee/profit settings without fixing
+          // the buyPrice.
+          const primaryVariant = product.variants[0];
+          const primaryBuyPrice = primaryVariant
+            ? (decimalToNumber(primaryVariant.buyPrice) ?? 0)
+            : 0;
 
-          await prisma.product.update({
-            where: { id: product.id },
-            data: {
-              amazonPrice: toMoneyDecimal(currentAmazonPrice),
-              lastPriceCheck: checkedAt,
-              priceCheckError: null,
-            },
+          const buyPriceMismatch =
+            primaryVariant &&
+            hasMoneyChanged(primaryBuyPrice, currentAmazonPrice);
+
+          if (!buyPriceMismatch) {
+            result.skipped += 1;
+
+            await prisma.product.update({
+              where: { id: product.id },
+              data: {
+                amazonPrice: toMoneyDecimal(currentAmazonPrice),
+                lastPriceCheck: checkedAt,
+                priceCheckError: null,
+              },
+            });
+
+            continue;
+          }
+
+          // buyPrice ≠ amazonPrice — create a pending review to correct it.
+          logger.info("price-checker/run", "Variant buyPrice mismatch detected", {
+            productId: product.id,
+            asin: product.asin,
+            primaryBuyPrice,
+            amazonPrice: currentAmazonPrice,
+          });
+
+          const mismatchVariants = product.variants.map((variant, idx) => {
+            const prevBuy = decimalToNumber(variant.buyPrice) ?? 0;
+            const prevSell = decimalToNumber(variant.sellPrice) ?? 0;
+            const nextBuy = idx === 0
+              ? roundMoney(currentAmazonPrice)
+              : prevBuy;
+
+            const hasFeeOrProfit =
+              variant.feesPercent > 0 ||
+              variant.feesFixed > 0 ||
+              variant.profitPercent > 0 ||
+              variant.profitFixed > 0;
+
+            let nextSell: number;
+            if (hasFeeOrProfit) {
+              nextSell = calculateSellPrice({
+                buyPrice: nextBuy,
+                feesPercent: variant.feesPercent,
+                feesFixed: variant.feesFixed,
+                profitPercent: variant.profitPercent,
+                profitFixed: variant.profitFixed,
+                roundCents: variant.roundCents,
+              });
+            } else {
+              // Preserve dollar margin when no fees configured
+              const margin = prevSell - (previousAmazonPrice ?? prevBuy);
+              nextSell = roundMoney(Math.max(nextBuy, nextBuy + margin));
+            }
+
+            return {
+              id: variant.id,
+              previousBuyPrice: prevBuy,
+              nextBuyPrice: nextBuy,
+              previousSellPrice: prevSell,
+              nextSellPrice: nextSell,
+            };
+          });
+
+          const mismatchChangePercent =
+            ((currentAmazonPrice - primaryBuyPrice) / primaryBuyPrice) * 100;
+
+          await prisma.$transaction(async (tx) => {
+            await tx.product.update({
+              where: { id: product.id },
+              data: {
+                amazonPrice: toMoneyDecimal(currentAmazonPrice),
+                lastPriceCheck: checkedAt,
+                priceCheckError: null,
+              },
+            });
+
+            await tx.priceHistory.createMany({
+              data: mismatchVariants.map((variant) => ({
+                productId: product.id,
+                variantId: variant.id,
+                previousPrice: toMoneyDecimal(variant.previousBuyPrice),
+                newPrice: toMoneyDecimal(variant.nextBuyPrice),
+                previousSellPrice: toMoneyDecimal(variant.previousSellPrice),
+                newSellPrice: toMoneyDecimal(variant.nextSellPrice),
+                changePercent: roundMoney(mismatchChangePercent),
+                ebayRevised: false,
+                errorMessage: null,
+                source: priceHistorySource,
+                appliedAt: null,
+                createdAt: checkedAt,
+              })),
+            });
+          });
+
+          result.changed += 1;
+          result.pendingReview += 1;
+
+          logger.info("price-checker/run", "BuyPrice correction recorded for review", {
+            productId: product.id,
+            asin: product.asin,
+            oldBuyPrice: primaryBuyPrice,
+            newBuyPrice: currentAmazonPrice,
+            newSellPrice: mismatchVariants[0]?.nextSellPrice,
           });
 
           continue;
@@ -384,18 +456,45 @@ export async function runPriceCheck(
 
           continue;
         }
-        const nextVariants = product.variants.map((variant) => {
+        const nextVariants = product.variants.map((variant, variantIndex) => {
           const previousBuyPrice = decimalToNumber(variant.buyPrice) ?? 0;
           const previousSellPrice = decimalToNumber(variant.sellPrice) ?? 0;
-          const nextBuyPrice = roundMoney(previousBuyPrice * changeRatio);
-          const nextSellPrice = calculateSellPrice({
-            buyPrice: nextBuyPrice,
-            feesPercent: variant.feesPercent,
-            feesFixed: variant.feesFixed,
-            profitPercent: variant.profitPercent,
-            profitFixed: variant.profitFixed,
-            roundCents: variant.roundCents,
-          });
+
+          // For the primary variant (index 0), set buyPrice directly to the
+          // current Amazon price. For additional variants, scale proportionally
+          // using the change ratio so they maintain their relative pricing.
+          const nextBuyPrice =
+            variantIndex === 0
+              ? roundMoney(currentAmazonPrice)
+              : roundMoney(previousBuyPrice * changeRatio);
+
+          const hasFeeOrProfit =
+            variant.feesPercent > 0 ||
+            variant.feesFixed > 0 ||
+            variant.profitPercent > 0 ||
+            variant.profitFixed > 0;
+
+          let nextSellPrice: number;
+
+          if (hasFeeOrProfit) {
+            // Normal path: recalculate sell price from the new buy price using
+            // the variant's fee/profit settings.
+            nextSellPrice = calculateSellPrice({
+              buyPrice: nextBuyPrice,
+              feesPercent: variant.feesPercent,
+              feesFixed: variant.feesFixed,
+              profitPercent: variant.profitPercent,
+              profitFixed: variant.profitFixed,
+              roundCents: variant.roundCents,
+            });
+          } else {
+            // Fallback for variants where the markup was baked into buyPrice
+            // (fees and profit are all zero). Preserve the dollar margin
+            // between the old Amazon price and the old sell price so the user
+            // doesn't lose their entire markup.
+            const dollarMargin = previousSellPrice - (previousAmazonPrice ?? previousBuyPrice);
+            nextSellPrice = roundMoney(Math.max(nextBuyPrice, nextBuyPrice + dollarMargin));
+          }
 
           return {
             id: variant.id,
@@ -413,102 +512,10 @@ export async function runPriceCheck(
           continue;
         }
 
-        // --- Guard 2: Reject sell prices below eBay's minimum ---
-        // eBay rejects fixed-price listings below A$1.00 (Error 73).
-        // Catch this before making the API call.
-        if (nextPrimarySellPrice < EBAY_MIN_PRICE) {
-          result.failed += 1;
-
-          await prisma.product.update({
-            where: { id: product.id },
-            data: {
-              lastPriceCheck: checkedAt,
-              priceCheckError:
-                `Calculated sell price A$${nextPrimarySellPrice.toFixed(2)} is below ` +
-                `eBay's minimum of A$${EBAY_MIN_PRICE.toFixed(2)}. ` +
-                `eBay would reject this update. Manual review required.`,
-            },
-          });
-
-          logger.warn("price-checker/run", "Guard 2: sell price below eBay minimum", {
-            productId: product.id,
-            asin: product.asin,
-            nextPrimarySellPrice,
-            ebayMinPrice: EBAY_MIN_PRICE,
-          });
-
-          continue;
-        }
-
-        const reviseResult = options.dryRun
-          ? { success: true as const }
-          : await reviseProductPrice({
-              ...product,
-              price: toMoneyDecimal(nextPrimarySellPrice),
-            });
-
-        if (!reviseResult.success) {
-          result.failed += 1;
-
-          await prisma.$transaction(async (tx) => {
-            await tx.product.update({
-              where: { id: product.id },
-              data: {
-                lastPriceCheck: checkedAt,
-                priceCheckError:
-                  reviseResult.errorMessage || "Failed to revise eBay listing.",
-              },
-            });
-
-            await tx.priceHistory.createMany({
-              data: nextVariants.map((variant) => ({
-                productId: product.id,
-                variantId: variant.id,
-                previousPrice: toMoneyDecimal(variant.previousBuyPrice),
-                newPrice: toMoneyDecimal(variant.nextBuyPrice),
-                previousSellPrice: toMoneyDecimal(variant.previousSellPrice),
-                newSellPrice: toMoneyDecimal(variant.nextSellPrice),
-                changePercent,
-                ebayRevised: false,
-                errorMessage:
-                  reviseResult.errorMessage || "Failed to revise eBay listing.",
-                source: priceHistorySource,
-                createdAt: checkedAt,
-              })),
-            });
-          });
-
-          logger.error(
-            "price-checker/run",
-            "eBay revise failed for tracked product",
-            undefined,
-            {
-              productId: product.id,
-              ebayItemId: product.ebayItemId,
-              errorMessage: reviseResult.errorMessage,
-            }
-          );
-
-          continue;
-        }
-
         await prisma.$transaction(async (tx) => {
-          await Promise.all(
-            nextVariants.map((variant) =>
-              tx.variant.update({
-                where: { id: variant.id },
-                data: {
-                  buyPrice: toMoneyDecimal(variant.nextBuyPrice),
-                  sellPrice: toMoneyDecimal(variant.nextSellPrice),
-                },
-              })
-            )
-          );
-
           await tx.product.update({
             where: { id: product.id },
             data: {
-              price: toMoneyDecimal(nextPrimarySellPrice),
               amazonPrice: toMoneyDecimal(currentAmazonPrice),
               lastPriceCheck: checkedAt,
               priceCheckError: null,
@@ -524,23 +531,24 @@ export async function runPriceCheck(
               previousSellPrice: toMoneyDecimal(variant.previousSellPrice),
               newSellPrice: toMoneyDecimal(variant.nextSellPrice),
               changePercent,
-              ebayRevised: true,
+              ebayRevised: false,
               errorMessage: null,
               source: priceHistorySource,
+              appliedAt: null,
               createdAt: checkedAt,
             })),
           });
         });
 
         result.changed += 1;
+        result.pendingReview += 1;
 
-        logger.info("price-checker/run", "Tracked product price updated", {
+        logger.info("price-checker/run", "Tracked product price change recorded for review", {
           productId: product.id,
           asin: product.asin,
           previousAmazonPrice,
           currentAmazonPrice,
           changePercent: roundMoney(changePercent),
-          dryRun: Boolean(options.dryRun),
           usedSimulatedPrice: simulatedAmazonPrice !== null,
         });
       } catch (error) {
@@ -563,16 +571,9 @@ export async function runPriceCheck(
       }
 
       if (simulatedAmazonPrice === null && index < products.length - 1) {
-        await sleep(PRODUCT_DELAY_MS);
+        await sleep(getProductDelayMs());
       }
-    }
-
-    return result;
-  } finally {
-    const browserToClose = browser as Browser | null;
-
-    if (browserToClose) {
-      await browserToClose.close().catch(() => {});
-    }
   }
+
+  return result;
 }

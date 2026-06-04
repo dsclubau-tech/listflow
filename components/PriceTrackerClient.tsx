@@ -24,6 +24,7 @@ interface PriceTrackerHistoryItem {
   ebayRevised: boolean;
   errorMessage: string | null;
   source: "LIVE" | "SIMULATED";
+  appliedAt: string | null;
   createdAt: string;
   product: {
     id: string;
@@ -56,6 +57,7 @@ interface PriceTrackerClientProps {
 interface PriceCheckResponse {
   checked?: number;
   changed?: number;
+  pendingReview?: number;
   failed?: number;
   skipped?: number;
   reason?: string;
@@ -122,7 +124,7 @@ function formatPriceCheckSummary(data: PriceCheckResponse) {
     return data.reason;
   }
 
-  return `${data.checked ?? 0} checked, ${data.changed ?? 0} changed, ${data.failed ?? 0} failed, ${data.skipped ?? 0} skipped.`;
+  return `${data.checked ?? 0} checked, ${data.pendingReview ?? 0} pending review, ${data.failed ?? 0} failed, ${data.skipped ?? 0} skipped.`;
 }
 
 function getSimulationTone(data: PriceCheckResponse): SimulationResultState["tone"] {
@@ -135,6 +137,34 @@ function getSimulationTone(data: PriceCheckResponse): SimulationResultState["ton
   }
 
   return "warning";
+}
+
+function getHistoryStatus(item: PriceTrackerHistoryItem) {
+  if (!item.appliedAt) {
+    return {
+      label: "Pending review",
+      classes: "bg-amber-100 text-amber-800",
+    };
+  }
+
+  if (item.ebayRevised) {
+    return {
+      label: "Revised",
+      classes: "bg-emerald-100 text-emerald-700",
+    };
+  }
+
+  if (item.errorMessage) {
+    return {
+      label: "Apply failed",
+      classes: "bg-red-100 text-red-700",
+    };
+  }
+
+  return {
+    label: "Dismissed",
+    classes: "bg-gray-100 text-gray-700",
+  };
 }
 
 export default function PriceTrackerClient({
@@ -152,7 +182,6 @@ export default function PriceTrackerClient({
   const [isSimulatorOpen, setIsSimulatorOpen] = useState(true);
   const [selectedProductId, setSelectedProductId] = useState("");
   const [simulatedPrice, setSimulatedPrice] = useState("");
-  const [applyToEbay, setApplyToEbay] = useState(false);
   const [isSimulating, setIsSimulating] = useState(false);
   const [simulationResult, setSimulationResult] =
     useState<SimulationResultState | null>(null);
@@ -160,7 +189,9 @@ export default function PriceTrackerClient({
   const [asinInput, setAsinInput] = useState("");
   const [isBulkChecking, setIsBulkChecking] = useState(false);
   const [bulkResult, setBulkResult] = useState<BulkCheckResult | null>(null);
-  const [bulkApplyToEbay, setBulkApplyToEbay] = useState(false);
+  const [reviewingHistoryId, setReviewingHistoryId] = useState<string | null>(
+    null
+  );
 
   useEffect(() => {
     if (!isChecking) {
@@ -284,7 +315,7 @@ export default function PriceTrackerClient({
       showToast(
         data.reason
           ? data.reason
-          : `Checked ${data.checked ?? 0} products. ${data.changed ?? 0} changed, ${data.failed ?? 0} failed, ${data.skipped ?? 0} unchanged.`,
+          : `Checked ${data.checked ?? 0} products. ${data.pendingReview ?? 0} pending review, ${data.failed ?? 0} failed, ${data.skipped ?? 0} unchanged.`,
         data.failed && data.failed > 0 ? "error" : "success"
       );
       router.refresh();
@@ -328,7 +359,6 @@ export default function PriceTrackerClient({
         body: JSON.stringify({
           productId: selectedProduct.id,
           simulatedPrice: parsedSimulatedPrice,
-          applyToEbay,
         }),
       });
 
@@ -347,9 +377,8 @@ export default function PriceTrackerClient({
         detail =
           "The simulated run did not complete cleanly. Check the latest history entry or product error state for details.";
       } else if ((data.changed ?? 0) > 0) {
-        detail = applyToEbay
-          ? "Variant prices, stored Amazon price, price history, and the live eBay revise flow were processed for this run."
-          : "Dry-run mode was used. Variant prices, stored Amazon price, and price history were updated without calling the live eBay revise API.";
+        detail =
+          "The simulated change was recorded for manual review. Variant prices and the eBay listing were not changed.";
       } else if (data.reason?.startsWith("Baseline established")) {
         detail =
           "The simulated price was stored as the Amazon baseline. Run again with a different price to exercise the change flow.";
@@ -380,6 +409,54 @@ export default function PriceTrackerClient({
     }
   };
 
+  const handleHistoryReview = async (
+    priceHistoryId: string,
+    action: "apply" | "dismiss"
+  ) => {
+    if (action === "apply") {
+      const confirmed = window.confirm(
+        "Apply this price change to local variants and revise the eBay listing?"
+      );
+
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    setReviewingHistoryId(priceHistoryId);
+
+    try {
+      const response = await fetch(`/api/price-check/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ priceHistoryId }),
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        applied?: number;
+        dismissed?: number;
+      };
+
+      if (!response.ok) {
+        showToast(data.error || "Failed to review price change.", "error");
+        router.refresh();
+        return;
+      }
+
+      showToast(
+        action === "apply"
+          ? `Applied ${data.applied ?? 0} price change(s).`
+          : `Dismissed ${data.dismissed ?? 0} price change(s).`,
+        "success"
+      );
+      router.refresh();
+    } catch {
+      showToast("Network error while reviewing price change.", "error");
+    } finally {
+      setReviewingHistoryId(null);
+    }
+  };
+
   const simulationResultClasses =
     simulationResult?.tone === "error"
       ? "border-red-200 bg-red-50 text-red-900"
@@ -393,8 +470,8 @@ export default function PriceTrackerClient({
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">Price Tracker</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Monitor Amazon buy-price changes and the resulting eBay listing
-            revisions.
+            Monitor Amazon buy-price changes and review them before revising
+            eBay listings.
           </p>
         </div>
 
@@ -475,7 +552,7 @@ export default function PriceTrackerClient({
             </div>
             <p className="mt-1 text-sm text-amber-900/80">
               Simulate an Amazon price change for one tracked product and verify
-              the downstream pricing flow immediately.
+              the manual review flow immediately.
             </p>
           </div>
 
@@ -626,29 +703,6 @@ export default function PriceTrackerClient({
                       </p>
                     )}
 
-                    <label className="mt-4 flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-950">
-                      <input
-                        type="checkbox"
-                        checked={applyToEbay}
-                        onChange={(event) => setApplyToEbay(event.target.checked)}
-                        className="mt-0.5 h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
-                      />
-                      <span className="flex-1">
-                        <span className="font-medium">Apply to eBay</span>
-                        <span
-                          className="ml-2 inline-flex h-5 w-5 items-center justify-center rounded-full border border-amber-300 bg-white text-xs font-semibold text-amber-700"
-                          title="Dry-run is the default. Enable this only when you want the simulator to call eBay and change the live listing."
-                        >
-                          i
-                        </span>
-                        <span className="mt-1 block text-xs text-amber-900/80">
-                          Leave this off to skip the live eBay revise call while
-                          still updating local price history and recalculated
-                          variant pricing.
-                        </span>
-                      </span>
-                    </label>
-
                     <button
                       type="button"
                       onClick={handleSimulatedCheck}
@@ -768,31 +822,9 @@ export default function PriceTrackerClient({
                   </li>
                   <li className="flex items-start gap-2">
                     <span className="mt-0.5 text-sky-600">4.</span>
-                    Changed prices are revised on eBay automatically.
+                    Detected changes will be shown for your review.
                   </li>
                 </ul>
-
-                <label className="mt-4 flex items-start gap-3 rounded-lg border border-sky-200 bg-sky-50 px-3 py-3 text-sm text-sky-950">
-                  <input
-                    type="checkbox"
-                    checked={bulkApplyToEbay}
-                    onChange={(event) => setBulkApplyToEbay(event.target.checked)}
-                    className="mt-0.5 h-4 w-4 rounded border-sky-300 text-sky-600 focus:ring-sky-500"
-                  />
-                  <span className="flex-1">
-                    <span className="font-medium">Apply to eBay</span>
-                    <span
-                      className="ml-2 inline-flex h-5 w-5 items-center justify-center rounded-full border border-sky-300 bg-white text-xs font-semibold text-sky-700"
-                      title="When off, prices are checked and history is recorded but eBay listings are NOT revised. Enable this to push changes live."
-                    >
-                      i
-                    </span>
-                    <span className="mt-1 block text-xs text-sky-900/80">
-                      Leave this off to check prices without revising eBay
-                      listings. Enable to push price changes live.
-                    </span>
-                  </span>
-                </label>
 
                 <button
                   type="button"
@@ -815,7 +847,7 @@ export default function PriceTrackerClient({
                       const response = await fetch("/api/price-check", {
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ asins: unique, dryRun: !bulkApplyToEbay }),
+                        body: JSON.stringify({ asins: unique }),
                       });
 
                       const data = (await response.json()) as PriceCheckResponse & {
@@ -1016,6 +1048,8 @@ export default function PriceTrackerClient({
                   item.source === "SIMULATED"
                     ? "border-amber-200 bg-amber-100 text-amber-800"
                     : "border-emerald-200 bg-emerald-100 text-emerald-700";
+                const historyStatus = getHistoryStatus(item);
+                const isPendingReview = !item.appliedAt;
 
                 return (
                   <tr
@@ -1107,13 +1141,9 @@ export default function PriceTrackerClient({
                     </td>
                     <td className="px-4 py-3">
                       <span
-                        className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                          item.ebayRevised
-                            ? "bg-emerald-100 text-emerald-700"
-                            : "bg-red-100 text-red-700"
-                        }`}
+                        className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${historyStatus.classes}`}
                       >
-                        {item.ebayRevised ? "Revised" : "Failed"}
+                        {historyStatus.label}
                       </span>
                       {item.errorMessage && (
                         <div
@@ -1121,6 +1151,26 @@ export default function PriceTrackerClient({
                           title={item.errorMessage}
                         >
                           {item.errorMessage}
+                        </div>
+                      )}
+                      {isPendingReview && (
+                        <div className="mt-2 flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => handleHistoryReview(item.id, "apply")}
+                            disabled={reviewingHistoryId === item.id}
+                            className="rounded bg-emerald-600 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-50"
+                          >
+                            Apply
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleHistoryReview(item.id, "dismiss")}
+                            disabled={reviewingHistoryId === item.id}
+                            className="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
+                          >
+                            Dismiss
+                          </button>
                         </div>
                       )}
                     </td>

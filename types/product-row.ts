@@ -9,6 +9,7 @@ export interface SerializedPriceHistorySummary {
   changePercent: number;
   ebayRevised: boolean;
   errorMessage: string | null;
+  appliedAt: string | null;
   createdAt: string;
 }
 

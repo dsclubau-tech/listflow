@@ -108,6 +108,7 @@ export default async function PriceTrackerPage() {
     previousSellPrice: item.previousSellPrice.toString(),
     newSellPrice: item.newSellPrice.toString(),
     source: item.source,
+    appliedAt: item.appliedAt?.toISOString() ?? null,
     createdAt: item.createdAt.toISOString(),
   }));
 

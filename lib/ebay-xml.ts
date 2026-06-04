@@ -217,18 +217,89 @@ export function buildEndItemXML(ebayItemId: string, reason = "NotAvailable"): st
 }
 
 /**
- * Builds a valid eBay ReviseItem XML request body to update editable live-listing fields.
+ * Builds a GetSellerList request for active listings.
+ *
+ * GTC listings keep their original StartTime, but their EndTime stays in the
+ * near future as eBay renews them. Querying the next 120 days catches active
+ * listings without walking historic start-date windows.
  */
-export function buildReviseItemXML(product: ProductWithStore): string {
+export function buildGetSellerListXML(page: number): string {
+  const now = new Date();
+  const endTimeTo = new Date(now);
+  endTimeTo.setDate(endTimeTo.getDate() + 120);
+
+  const outputSelectors = [
+    "ItemID",
+    "Title",
+    "Description",
+    "PrimaryCategory",
+    "StartPrice",
+    "Quantity",
+    "QuantityAvailable",
+    "ConditionID",
+    "ConditionDisplayName",
+    "PictureDetails",
+    "ItemSpecifics",
+    "SKU",
+    "SellingStatus",
+    "Variations",
+    "ListingType",
+    "SellerProfiles",
+    "EndTime",
+  ]
+    .map((selector) => `  <OutputSelector>${selector}</OutputSelector>`)
+    .join("\n");
+
+  return `<?xml version="1.0" encoding="utf-8"?>
+<GetSellerListRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <ErrorLanguage>en_US</ErrorLanguage>
+  <WarningLevel>High</WarningLevel>
+  <GranularityLevel>Fine</GranularityLevel>
+  <EndTimeFrom>${now.toISOString()}</EndTimeFrom>
+  <EndTimeTo>${endTimeTo.toISOString()}</EndTimeTo>
+  <IncludeVariations>true</IncludeVariations>
+  <Pagination>
+    <EntriesPerPage>200</EntriesPerPage>
+    <PageNumber>${Math.max(1, Math.floor(page))}</PageNumber>
+  </Pagination>
+  <DetailLevel>ReturnAll</DetailLevel>
+${outputSelectors}
+</GetSellerListRequest>`;
+}
+
+/**
+ * Builds a valid eBay ReviseItem XML request body to update editable live-listing fields.
+ *
+ * When `overrideStartPrice` is provided it takes precedence over `product.price`.
+ * This is used by the price-check apply flow and the revise route to ensure
+ * the eBay listing always reflects the primary variant's calculated sell price
+ * rather than the potentially stale `product.price` field.
+ */
+export function buildReviseItemXML(
+  product: ProductWithStore,
+  overrideStartPrice?: string | number,
+): string {
   if (!product.ebayItemId) {
     throw new Error("Product has not been uploaded to eBay yet.");
   }
 
   const specifics = getProductSpecifics(product);
   const { location, postalCode } = getLocationMetadata(specifics);
-  const startPrice = getValidatedPrice(product);
   const quantity = getValidatedQuantity(product);
   const sellerProfilesXml = buildSellerProfilesXml(product);
+
+  // Use the override price (from the primary variant's sellPrice) when available,
+  // otherwise fall back to product.price for backwards compatibility.
+  let startPrice: string;
+  if (overrideStartPrice !== undefined) {
+    const numeric = Number(overrideStartPrice);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      throw new Error("Override start price must be greater than 0.");
+    }
+    startPrice = numeric.toFixed(2);
+  } else {
+    startPrice = getValidatedPrice(product);
+  }
 
   return `<?xml version="1.0" encoding="utf-8"?>
 <ReviseItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">

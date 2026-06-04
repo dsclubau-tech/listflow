@@ -58,7 +58,7 @@ async function diagnose() {
     return {
       robotCheck: html.includes("Robot Check") || html.includes("robot") || html.includes("captcha"),
       sorry: html.includes("Sorry") && html.includes("robot"),
-      webdriver: (navigator as any).webdriver,
+      webdriver: navigator.webdriver,
     };
   });
   console.log(JSON.stringify(hasRobotCheck, null, 2));

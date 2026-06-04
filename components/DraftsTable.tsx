@@ -1,7 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import InlineEditForm from "@/components/InlineEditForm";
 import type { SerializedProductRow } from "@/types/product-row";
@@ -10,6 +10,7 @@ interface DraftsTableProps {
   products: SerializedProductRow[];
   onToast: (message: string, variant: "success" | "error") => void;
   view?: "drafts" | "products";
+  onSelectionChange?: (selectedIds: string[]) => void;
 }
 
 const storeBadgeColors: Record<string, string> = {
@@ -35,6 +36,19 @@ function formatMoney(value: string | number | null | undefined) {
   return `A$${amount.toFixed(2)}`;
 }
 
+function parseMoney(value: string | number | null | undefined) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatChangePercent(value: number) {
+  return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
 function formatDateTime(value: string | null | undefined) {
   if (!value) {
     return null;
@@ -54,27 +68,50 @@ function formatDateTime(value: string | null | undefined) {
   });
 }
 
+function getAmazonChangeDetail(product: SerializedProductRow) {
+  const lastHistory = product.priceHistory?.[0] ?? null;
+
+  if (!lastHistory) {
+    return "Amazon price change is waiting for review.";
+  }
+
+  const currentAmazonPrice = parseMoney(product.amazonPrice);
+  const changeRatio = 1 + lastHistory.changePercent / 100;
+  const previousAmazonPrice =
+    currentAmazonPrice !== null &&
+    Number.isFinite(changeRatio) &&
+    Math.abs(changeRatio) > 0.000001
+      ? currentAmazonPrice / changeRatio
+      : null;
+
+  if (previousAmazonPrice === null || currentAmazonPrice === null) {
+    return `Amazon change ${formatChangePercent(lastHistory.changePercent)} is waiting for review.`;
+  }
+
+  return `Amazon: ${formatMoney(previousAmazonPrice)} -> ${formatMoney(currentAmazonPrice)} (${formatChangePercent(lastHistory.changePercent)})`;
+}
+
 function getPriceTrackingState(product: SerializedProductRow) {
   const variantCount = product._count?.variants ?? 0;
   const lastHistory = product.priceHistory?.[0] ?? null;
-  const lastCheckTime = product.lastPriceCheck
-    ? new Date(product.lastPriceCheck).getTime()
-    : null;
-  const lastHistoryTime = lastHistory
-    ? new Date(lastHistory.createdAt).getTime()
-    : null;
-  const hasFreshChange =
-    lastCheckTime !== null &&
-    lastHistoryTime !== null &&
-    lastCheckTime === lastHistoryTime;
 
   if (!product.asin || variantCount === 0) {
     return {
       label: "Not tracked",
       badgeClass: "bg-gray-100 text-gray-600",
+      priceHistoryId: null,
       detail: !product.asin
         ? "Add an Amazon ASIN to track this listing."
-        : "Add at least one variant to enable auto-updates.",
+        : "Add at least one variant to enable price tracking.",
+    };
+  }
+
+  if (lastHistory && !lastHistory.appliedAt) {
+    return {
+      label: "Pending review",
+      badgeClass: "bg-amber-100 text-amber-800",
+      priceHistoryId: lastHistory.id,
+      detail: getAmazonChangeDetail(product),
     };
   }
 
@@ -82,15 +119,8 @@ function getPriceTrackingState(product: SerializedProductRow) {
     return {
       label: "Check failed",
       badgeClass: "bg-red-100 text-red-700",
+      priceHistoryId: null,
       detail: product.priceCheckError,
-    };
-  }
-
-  if (hasFreshChange && lastHistory) {
-    return {
-      label: "Price changed",
-      badgeClass: "bg-amber-100 text-amber-800",
-      detail: `${formatMoney(lastHistory.previousPrice)} -> ${formatMoney(lastHistory.newPrice)} on Amazon`,
     };
   }
 
@@ -98,6 +128,7 @@ function getPriceTrackingState(product: SerializedProductRow) {
     return {
       label: "No change",
       badgeClass: "bg-emerald-100 text-emerald-700",
+      priceHistoryId: null,
       detail: `Checked ${formatDateTime(product.lastPriceCheck) ?? "recently"}`,
     };
   }
@@ -105,6 +136,7 @@ function getPriceTrackingState(product: SerializedProductRow) {
   return {
     label: "Awaiting check",
     badgeClass: "bg-gray-100 text-gray-600",
+    priceHistoryId: null,
     detail: "Tracked product has not been checked yet.",
   };
 }
@@ -113,6 +145,7 @@ export default function DraftsTable({
   products,
   onToast,
   view = "drafts",
+  onSelectionChange,
 }: DraftsTableProps) {
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -121,12 +154,20 @@ export default function DraftsTable({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkImporting, setBulkImporting] = useState(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
+  const [isBulkPriceChecking, setIsBulkPriceChecking] = useState(false);
+  const [reviewingPriceHistoryId, setReviewingPriceHistoryId] =
+    useState<string | null>(null);
   const [bulkProgress, setBulkProgress] = useState(0);
   const [bulkTotal, setBulkTotal] = useState(0);
   const router = useRouter();
 
   const isDraftsView = view === "drafts";
   const isProductsView = view === "products";
+  const hasSelectionColumn = isDraftsView || isProductsView;
+
+  useEffect(() => {
+    onSelectionChange?.(selectedIds);
+  }, [onSelectionChange, selectedIds]);
 
   function getStatusBadgeClasses(status: string) {
     if (status === "FAILED" && isDraftsView) {
@@ -229,15 +270,28 @@ export default function DraftsTable({
     }
   }
 
+  function canCheckProductPrice(product: SerializedProductRow) {
+    return (
+      product.status === "IMPORTED" &&
+      Boolean(product.asin) &&
+      (product._count?.variants ?? 0) > 0
+    );
+  }
+
   const selectableProducts = isDraftsView
     ? products.filter((product) => product.status !== "IMPORTED")
-    : [];
+    : products.filter(canCheckProductPrice);
   const allSelectableIds = selectableProducts.map((product) => product.id);
+  const selectableIdSet = new Set(allSelectableIds);
   const allSelected =
     allSelectableIds.length > 0 &&
     allSelectableIds.every((id) => selectedIds.includes(id));
 
   function toggleSelect(productId: string) {
+    if (!selectableIdSet.has(productId)) {
+      return;
+    }
+
     setSelectedIds((prev) =>
       prev.includes(productId)
         ? prev.filter((id) => id !== productId)
@@ -252,6 +306,101 @@ export default function DraftsTable({
     }
 
     setSelectedIds(allSelectableIds);
+  }
+
+  async function handleBulkPriceCheck() {
+    const idsToCheck = selectedIds.filter((id) => selectableIdSet.has(id));
+
+    if (idsToCheck.length === 0) {
+      onToast("Select at least one tracked product first.", "error");
+      return;
+    }
+
+    setIsBulkPriceChecking(true);
+
+    try {
+      const res = await fetch("/api/price-check", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds: idsToCheck }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        checked?: number;
+        changed?: number;
+        pendingReview?: number;
+        failed?: number;
+        skipped?: number;
+        reason?: string;
+        error?: string;
+      };
+
+      if (!res.ok) {
+        onToast(data.error || "Failed to check selected prices.", "error");
+        return;
+      }
+
+      setSelectedIds([]);
+      router.refresh();
+
+      onToast(
+        data.reason
+          ? data.reason
+          : `Checked ${data.checked ?? 0} selected product(s). ${data.pendingReview ?? 0} pending review, ${data.failed ?? 0} failed, ${data.skipped ?? 0} unchanged.`,
+        data.failed && data.failed > 0 ? "error" : "success"
+      );
+    } catch {
+      onToast("Network error while checking selected prices.", "error");
+    } finally {
+      setIsBulkPriceChecking(false);
+    }
+  }
+
+  async function handlePriceReview(
+    priceHistoryId: string,
+    action: "apply" | "dismiss"
+  ) {
+    if (action === "apply") {
+      const confirmed = window.confirm(
+        "Apply this price change to local variants and revise the eBay listing?"
+      );
+
+      if (!confirmed) {
+        return;
+      }
+    }
+
+    setReviewingPriceHistoryId(priceHistoryId);
+
+    try {
+      const res = await fetch(`/api/price-check/${action}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ priceHistoryId }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        applied?: number;
+        dismissed?: number;
+      };
+
+      if (!res.ok) {
+        onToast(data.error || "Failed to review price change.", "error");
+        router.refresh();
+        return;
+      }
+
+      onToast(
+        action === "apply"
+          ? `Applied ${data.applied ?? 0} price change(s).`
+          : `Dismissed ${data.dismissed ?? 0} price change(s).`,
+        "success"
+      );
+      router.refresh();
+    } catch {
+      onToast("Network error while reviewing price change.", "error");
+    } finally {
+      setReviewingPriceHistoryId(null);
+    }
   }
 
   async function handleBulkImport() {
@@ -408,24 +557,27 @@ export default function DraftsTable({
     );
   }
 
-  const columnCount = 8;
+  const columnCount = isProductsView ? 9 : 8;
 
   return (
     <>
-      {isDraftsView && selectedIds.length > 0 && (
-        <p className="text-sm text-gray-500 mb-2">{selectedIds.length} selected</p>
+      {selectedIds.length > 0 && (
+        <p className="text-sm text-gray-500 mb-2">
+          {selectedIds.length} selected
+        </p>
       )}
 
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
         <table className="w-full">
           <thead>
             <tr className="bg-gray-50 border-b text-xs font-medium text-gray-500 uppercase tracking-wide">
-              {isDraftsView && (
+              {hasSelectionColumn && (
                 <th className="px-4 py-3 text-left w-10">
                   <input
                     type="checkbox"
                     checked={allSelected}
                     onChange={toggleSelectAll}
+                    disabled={allSelectableIds.length === 0}
                     className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
                   />
                 </th>
@@ -446,6 +598,7 @@ export default function DraftsTable({
             {products.map((product) => {
               const isExpanded = expandedProductId === product.id;
               const isSelected = selectedIds.includes(product.id);
+              const isSelectable = selectableIdSet.has(product.id);
               const isFailedDraft =
                 isDraftsView && product.status === "FAILED";
               const trackingState = isProductsView
@@ -464,12 +617,18 @@ export default function DraftsTable({
                     }`}
                     onClick={() => toggleExpand(product.id)}
                   >
-                    {isDraftsView && (
+                    {hasSelectionColumn && (
                       <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                         <input
                           type="checkbox"
                           checked={isSelected}
+                          disabled={!isSelectable}
                           onChange={() => toggleSelect(product.id)}
+                          title={
+                            isProductsView && !isSelectable
+                              ? "Add an ASIN and at least one variant to price check this product."
+                              : undefined
+                          }
                           className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
                         />
                       </td>
@@ -561,6 +720,44 @@ export default function DraftsTable({
                           >
                             {trackingState.detail}
                           </span>
+                          {trackingState.priceHistoryId && (
+                            <div className="mt-2 flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handlePriceReview(
+                                    trackingState.priceHistoryId,
+                                    "apply"
+                                  );
+                                }}
+                                disabled={
+                                  reviewingPriceHistoryId ===
+                                  trackingState.priceHistoryId
+                                }
+                                className="rounded bg-emerald-600 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-50"
+                              >
+                                Apply
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handlePriceReview(
+                                    trackingState.priceHistoryId,
+                                    "dismiss"
+                                  );
+                                }}
+                                disabled={
+                                  reviewingPriceHistoryId ===
+                                  trackingState.priceHistoryId
+                                }
+                                className="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
+                              >
+                                Dismiss
+                              </button>
+                            </div>
+                          )}
                         </div>
                       </td>
                     )}
@@ -678,7 +875,7 @@ export default function DraftsTable({
         </table>
       </div>
 
-      {isDraftsView && selectedIds.length > 0 && (
+      {selectedIds.length > 0 && (
         <div className="fixed bottom-0 left-64 right-0 bg-white border-t border-gray-200 shadow-lg p-4 z-30 flex items-center justify-between">
           <span className="text-sm text-gray-500">
             {selectedIds.length} product(s) selected
@@ -690,40 +887,63 @@ export default function DraftsTable({
             >
               Deselect All
             </button>
-            <button
-              onClick={handleBulkImport}
-              disabled={bulkImporting || isBulkDeleting}
-              className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
-            >
-              {bulkImporting ? (
-                <>
-                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  Importing {bulkProgress}/{bulkTotal}...
-                </>
-              ) : (
-                "Import Selected"
-              )}
-            </button>
-            <button
-              onClick={handleBulkDelete}
-              disabled={isBulkDeleting || bulkImporting}
-              className="px-4 py-2 border border-red-200 text-red-600 text-sm font-medium rounded-md hover:bg-red-50 transition-colors disabled:opacity-60 flex items-center gap-2"
-            >
-              {isBulkDeleting ? (
-                <>
-                  <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
-                  Deleting...
-                </>
-              ) : (
-                "Delete Selected"
-              )}
-            </button>
+            {isDraftsView && (
+              <>
+                <button
+                  onClick={handleBulkImport}
+                  disabled={bulkImporting || isBulkDeleting}
+                  className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
+                >
+                  {bulkImporting ? (
+                    <>
+                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      Importing {bulkProgress}/{bulkTotal}...
+                    </>
+                  ) : (
+                    "Import Selected"
+                  )}
+                </button>
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={isBulkDeleting || bulkImporting}
+                  className="px-4 py-2 border border-red-200 text-red-600 text-sm font-medium rounded-md hover:bg-red-50 transition-colors disabled:opacity-60 flex items-center gap-2"
+                >
+                  {isBulkDeleting ? (
+                    <>
+                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      Deleting...
+                    </>
+                  ) : (
+                    "Delete Selected"
+                  )}
+                </button>
+              </>
+            )}
+            {isProductsView && (
+              <button
+                onClick={handleBulkPriceCheck}
+                disabled={isBulkPriceChecking}
+                className="px-4 py-2 bg-gray-900 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
+              >
+                {isBulkPriceChecking ? (
+                  <>
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                    </svg>
+                    Checking...
+                  </>
+                ) : (
+                  "Check Selected Prices"
+                )}
+              </button>
+            )}
           </div>
         </div>
       )}

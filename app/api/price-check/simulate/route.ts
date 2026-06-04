@@ -23,14 +23,12 @@ export async function POST(request: Request) {
   let body: {
     productId?: string;
     simulatedPrice?: number;
-    applyToEbay?: boolean;
   };
 
   try {
     body = (await request.json()) as {
       productId?: string;
       simulatedPrice?: number;
-      applyToEbay?: boolean;
     };
   } catch (error) {
     log.error("price-check/simulate/route", "Invalid JSON body", error);
@@ -43,7 +41,6 @@ export async function POST(request: Request) {
       ? body.simulatedPrice
       : Number(body.simulatedPrice);
   const simulatedPrice = roundMoney(rawPrice);
-  const applyToEbay = body.applyToEbay === true;
 
   if (!productId) {
     return NextResponse.json({ error: "productId is required" }, { status: 400 });
@@ -106,6 +103,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       checked: 1,
       changed: 0,
+      pendingReview: 0,
       failed: 0,
       skipped: 1,
       reason:
@@ -121,13 +119,11 @@ export async function POST(request: Request) {
       simulatedPrices: {
         [productId]: simulatedPrice,
       },
-      dryRun: !applyToEbay,
     });
 
     log.info("price-check/simulate/route", "Simulated price check completed", {
       productId,
       simulatedPrice,
-      applyToEbay,
       result,
     });
 
@@ -136,7 +132,6 @@ export async function POST(request: Request) {
     log.error("price-check/simulate/route", "Simulated price check failed", error, {
       productId,
       simulatedPrice,
-      applyToEbay,
     });
     return NextResponse.json(
       { error: "Simulated price check failed" },

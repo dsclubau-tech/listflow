@@ -53,6 +53,7 @@ export async function GET(request: Request) {
       newPrice: item.newPrice.toString(),
       previousSellPrice: item.previousSellPrice.toString(),
       newSellPrice: item.newSellPrice.toString(),
+      appliedAt: item.appliedAt?.toISOString() ?? null,
       createdAt: item.createdAt.toISOString(),
     })),
     page,

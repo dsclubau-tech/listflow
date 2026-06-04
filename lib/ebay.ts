@@ -378,6 +378,54 @@ export async function callEbayReviseItem(
 }
 
 /**
+ * Sends a GetSellerList XML request to the eBay Trading API.
+ * Returns raw XML because import-specific parsing lives in lib/ebay-import.ts.
+ */
+export async function callEbayGetSellerList(
+  xmlBody: string,
+  storeNumber: 1 | 2 | 3
+): Promise<string> {
+  const creds = getStoreCredentials(storeNumber);
+  const accessToken = await getOAuthAccessToken(storeNumber);
+
+  try {
+    const response = await fetch(EBAY_API_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "X-EBAY-API-SITEID": "15",
+        "X-EBAY-API-COMPATIBILITY-LEVEL": "967",
+        "X-EBAY-API-CALL-NAME": "GetSellerList",
+        "X-EBAY-API-APP-NAME": creds.appId,
+        "X-EBAY-API-DEV-NAME": creds.devId,
+        "X-EBAY-API-CERT-NAME": creds.certId,
+        "Content-Type": "text/xml",
+        "X-EBAY-API-IAF-TOKEN": accessToken,
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: xmlBody,
+    });
+
+    const xmlText = await response.text();
+
+    logger.ebayResponse("ebay/callEbayGetSellerList", "Raw eBay GetSellerList response received", xmlText, {
+      storeNumber,
+      httpStatus: response.status,
+    });
+
+    if (!response.ok) {
+      throw new Error(`eBay GetSellerList failed with HTTP ${response.status}: ${xmlText}`);
+    }
+
+    return xmlText;
+  } catch (err) {
+    logger.error("ebay/callEbayGetSellerList", "GetSellerList request failed", err, {
+      storeNumber,
+    });
+    throw err;
+  }
+}
+
+/**
  * Fetches the seller's Business Policies (shipping, returns, payment) from eBay.
  */
 export async function getEbayBusinessPolicies(storeNumber: 1 | 2 | 3): Promise<{
