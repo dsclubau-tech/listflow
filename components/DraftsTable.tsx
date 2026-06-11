@@ -1,7 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { Fragment, useEffect, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import InlineEditForm from "@/components/InlineEditForm";
 import type { SerializedProductRow } from "@/types/product-row";
@@ -66,6 +66,91 @@ function formatDateTime(value: string | null | undefined) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function PlatformIcon({ platform }: { platform: "amazon" | "ebay" }) {
+  if (platform === "amazon") {
+    return (
+      <span
+        aria-hidden="true"
+        className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded bg-gray-900 text-[10px] font-bold leading-none text-white"
+      >
+        a
+      </span>
+    );
+  }
+
+  return (
+    <span
+      aria-hidden="true"
+      className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded bg-blue-600 text-[9px] font-bold leading-none text-white"
+    >
+      e
+    </span>
+  );
+}
+
+function ItemIdCell({ product }: { product: SerializedProductRow }) {
+  const asin = product.asin?.trim();
+  const ebayItemId = product.ebayItemId?.trim();
+
+  return (
+    <div className="space-y-1.5 text-xs">
+      <div className="flex min-w-0 items-center gap-2">
+        <PlatformIcon platform="amazon" />
+        {asin ? (
+          <a
+            href={`https://www.amazon.com.au/dp/${asin}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(event) => event.stopPropagation()}
+            className="block truncate font-mono text-gray-700 hover:text-orange-600 hover:underline"
+            title={`Open Amazon ASIN ${asin}`}
+          >
+            {asin}
+          </a>
+        ) : (
+          <span className="text-gray-400">-</span>
+        )}
+      </div>
+      <div className="flex min-w-0 items-center gap-2">
+        <PlatformIcon platform="ebay" />
+        {ebayItemId ? (
+          <a
+            href={`https://www.ebay.com.au/itm/${ebayItemId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(event) => event.stopPropagation()}
+            className="block truncate font-mono text-gray-700 hover:text-blue-600 hover:underline"
+            title={`Open eBay item ${ebayItemId}`}
+          >
+            {ebayItemId}
+          </a>
+        ) : (
+          <span className="text-gray-400">-</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function PriceCell({ product }: { product: SerializedProductRow }) {
+  const primaryVariant = product.variants?.[0];
+  const buyPrice = primaryVariant?.buyPrice ?? product.amazonPrice ?? product.price;
+  const sellPrice = primaryVariant?.sellPrice ?? product.price;
+
+  return (
+    <div className="space-y-1 text-xs font-medium leading-5">
+      <div className="whitespace-nowrap">
+        <span className="text-gray-500">BUY</span>{" "}
+        <span className="font-semibold text-gray-900">{formatMoney(buyPrice)}</span>
+      </div>
+      <div className="whitespace-nowrap">
+        <span className="text-gray-500">SELL</span>{" "}
+        <span className="font-semibold text-gray-900">{formatMoney(sellPrice)}</span>
+      </div>
+    </div>
+  );
 }
 
 function getAmazonChangeDetail(product: SerializedProductRow) {
@@ -141,6 +226,14 @@ function getPriceTrackingState(product: SerializedProductRow) {
   };
 }
 
+function canCheckProductPrice(product: SerializedProductRow) {
+  return (
+    product.status === "IMPORTED" &&
+    Boolean(product.asin) &&
+    (product._count?.variants ?? 0) > 0
+  );
+}
+
 export default function DraftsTable({
   products,
   onToast,
@@ -159,6 +252,8 @@ export default function DraftsTable({
     useState<string | null>(null);
   const [bulkProgress, setBulkProgress] = useState(0);
   const [bulkTotal, setBulkTotal] = useState(0);
+  const [isBulkApplying, setIsBulkApplying] = useState(false);
+  const [isBulkDismissing, setIsBulkDismissing] = useState(false);
   const router = useRouter();
 
   const isDraftsView = view === "drafts";
@@ -270,22 +365,31 @@ export default function DraftsTable({
     }
   }
 
-  function canCheckProductPrice(product: SerializedProductRow) {
-    return (
-      product.status === "IMPORTED" &&
-      Boolean(product.asin) &&
-      (product._count?.variants ?? 0) > 0
-    );
-  }
-
-  const selectableProducts = isDraftsView
-    ? products.filter((product) => product.status !== "IMPORTED")
-    : products.filter(canCheckProductPrice);
-  const allSelectableIds = selectableProducts.map((product) => product.id);
-  const selectableIdSet = new Set(allSelectableIds);
+  const selectableProducts = useMemo(
+    () =>
+      isDraftsView
+        ? products.filter((product) => product.status !== "IMPORTED")
+        : products.filter(canCheckProductPrice),
+    [isDraftsView, products],
+  );
+  const allSelectableIds = useMemo(
+    () => selectableProducts.map((product) => product.id),
+    [selectableProducts],
+  );
+  const selectableIdSet = useMemo(
+    () => new Set(allSelectableIds),
+    [allSelectableIds],
+  );
   const allSelected =
     allSelectableIds.length > 0 &&
     allSelectableIds.every((id) => selectedIds.includes(id));
+
+  useEffect(() => {
+    setSelectedIds((currentIds) => {
+      const nextIds = currentIds.filter((id) => selectableIdSet.has(id));
+      return nextIds.length === currentIds.length ? currentIds : nextIds;
+    });
+  }, [selectableIdSet]);
 
   function toggleSelect(productId: string) {
     if (!selectableIdSet.has(productId)) {
@@ -306,6 +410,137 @@ export default function DraftsTable({
     }
 
     setSelectedIds(allSelectableIds);
+  }
+
+  const selectedPendingCount = useMemo(() => {
+    if (!isProductsView) {
+      return 0;
+    }
+
+    return products.filter(
+      (product) =>
+        selectedIds.includes(product.id) &&
+        (product.priceHistory?.length ?? 0) > 0 &&
+        product.priceHistory?.some((h) => !h.appliedAt)
+    ).length;
+  }, [isProductsView, products, selectedIds]);
+
+  async function handleBulkApplySelected() {
+    const idsWithPending = products
+      .filter(
+        (product) =>
+          selectedIds.includes(product.id) &&
+          (product.priceHistory?.length ?? 0) > 0 &&
+          product.priceHistory?.some((h) => !h.appliedAt)
+      )
+      .map((product) => product.id);
+
+    if (idsWithPending.length === 0) {
+      onToast("No selected products have pending price changes.", "error");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Apply pending price changes for ${idsWithPending.length} selected product(s) and revise their eBay listings? This cannot be undone.`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsBulkApplying(true);
+
+    try {
+      const res = await fetch("/api/price-check/bulk-apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds: idsWithPending }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        total?: number;
+        applied?: number;
+        failed?: number;
+        error?: string;
+      };
+
+      if (!res.ok) {
+        onToast(data.error || "Bulk apply failed.", "error");
+        router.refresh();
+        return;
+      }
+
+      const failureCount = data.failed ?? 0;
+      const appliedCount = data.applied ?? 0;
+      const totalCount = data.total ?? 0;
+
+      onToast(
+        failureCount > 0
+          ? `Applied ${appliedCount}/${totalCount} price change(s). ${failureCount} failed.`
+          : `Applied all ${appliedCount} price change(s) successfully.`,
+        failureCount > 0 ? "error" : "success"
+      );
+      setSelectedIds([]);
+      router.refresh();
+    } catch {
+      onToast("Network error while applying price changes.", "error");
+    } finally {
+      setIsBulkApplying(false);
+    }
+  }
+
+  async function handleBulkDismissSelected() {
+    const idsWithPending = products
+      .filter(
+        (product) =>
+          selectedIds.includes(product.id) &&
+          (product.priceHistory?.length ?? 0) > 0 &&
+          product.priceHistory?.some((h) => !h.appliedAt)
+      )
+      .map((product) => product.id);
+
+    if (idsWithPending.length === 0) {
+      onToast("No selected products have pending price changes.", "error");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Dismiss pending price changes for ${idsWithPending.length} selected product(s) without updating eBay?`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsBulkDismissing(true);
+
+    try {
+      const res = await fetch("/api/price-check/bulk-dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds: idsWithPending }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        dismissed?: number;
+        error?: string;
+      };
+
+      if (!res.ok) {
+        onToast(data.error || "Bulk dismiss failed.", "error");
+        router.refresh();
+        return;
+      }
+
+      onToast(
+        `Dismissed ${data.dismissed ?? 0} pending price change(s).`,
+        "success"
+      );
+      setSelectedIds([]);
+      router.refresh();
+    } catch {
+      onToast("Network error while dismissing price changes.", "error");
+    } finally {
+      setIsBulkDismissing(false);
+    }
   }
 
   async function handleBulkPriceCheck() {
@@ -557,7 +792,7 @@ export default function DraftsTable({
     );
   }
 
-  const columnCount = isProductsView ? 9 : 8;
+  const columnCount = isProductsView ? 11 : 8;
 
   return (
     <>
@@ -567,8 +802,9 @@ export default function DraftsTable({
         </p>
       )}
 
-      <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
-        <table className="w-full">
+      <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
+        <div className="overflow-x-auto">
+          <table className={isProductsView ? "w-full min-w-[1240px]" : "w-full"}>
           <thead>
             <tr className="bg-gray-50 border-b text-xs font-medium text-gray-500 uppercase tracking-wide">
               {hasSelectionColumn && (
@@ -585,6 +821,12 @@ export default function DraftsTable({
               <th className="px-4 py-3 text-left w-10" />
               <th className="px-4 py-3 text-left w-14">Image</th>
               <th className="px-4 py-3 text-left">Title</th>
+              {isProductsView && (
+                <>
+                  <th className="px-4 py-3 text-left">Item ID</th>
+                  <th className="px-4 py-3 text-left">Price</th>
+                </>
+              )}
               <th className="px-4 py-3 text-left">Store</th>
               <th className="px-4 py-3 text-left">Created by</th>
               <th className="px-4 py-3 text-left">Status</th>
@@ -681,6 +923,18 @@ export default function DraftsTable({
                         )}
                       </div>
                     </td>
+
+                    {isProductsView && (
+                      <>
+                        <td className="px-4 py-3">
+                          <ItemIdCell product={product} />
+                        </td>
+
+                        <td className="px-4 py-3">
+                          <PriceCell product={product} />
+                        </td>
+                      </>
+                    )}
 
                     <td className="px-4 py-3">
                       <span
@@ -827,7 +1081,7 @@ export default function DraftsTable({
                           </button>
                         )}
 
-                        {product.asin && (
+                        {product.asin && !isProductsView && (
                           <a
                             href={`https://www.amazon.com.au/dp/${product.asin}`}
                             target="_blank"
@@ -841,7 +1095,7 @@ export default function DraftsTable({
                           </a>
                         )}
 
-                        {product.ebayItemId && (
+                        {product.ebayItemId && !isProductsView && (
                           <a
                             href={`https://www.ebay.com.au/itm/${product.ebayItemId}`}
                             target="_blank"
@@ -872,7 +1126,8 @@ export default function DraftsTable({
               );
             })}
           </tbody>
-        </table>
+          </table>
+        </div>
       </div>
 
       {selectedIds.length > 0 && (
@@ -926,23 +1181,63 @@ export default function DraftsTable({
               </>
             )}
             {isProductsView && (
-              <button
-                onClick={handleBulkPriceCheck}
-                disabled={isBulkPriceChecking}
-                className="px-4 py-2 bg-gray-900 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
-              >
-                {isBulkPriceChecking ? (
+              <>
+                <button
+                  onClick={handleBulkPriceCheck}
+                  disabled={isBulkPriceChecking}
+                  className="px-4 py-2 bg-gray-900 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
+                >
+                  {isBulkPriceChecking ? (
+                    <>
+                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                      </svg>
+                      Checking...
+                    </>
+                  ) : (
+                    "Check Selected Prices"
+                  )}
+                </button>
+                {selectedPendingCount > 0 && (
                   <>
-                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                    </svg>
-                    Checking...
+                    <button
+                      onClick={handleBulkApplySelected}
+                      disabled={isBulkApplying || isBulkDismissing}
+                      className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
+                    >
+                      {isBulkApplying ? (
+                        <>
+                          <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                          Applying...
+                        </>
+                      ) : (
+                        `Apply ${selectedPendingCount} Pending`
+                      )}
+                    </button>
+                    <button
+                      onClick={handleBulkDismissSelected}
+                      disabled={isBulkApplying || isBulkDismissing}
+                      className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 transition-colors disabled:opacity-60 flex items-center gap-2"
+                    >
+                      {isBulkDismissing ? (
+                        <>
+                          <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          </svg>
+                          Dismissing...
+                        </>
+                      ) : (
+                        `Dismiss ${selectedPendingCount} Pending`
+                      )}
+                    </button>
                   </>
-                ) : (
-                  "Check Selected Prices"
                 )}
-              </button>
+              </>
             )}
           </div>
         </div>

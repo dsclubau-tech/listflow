@@ -1,13 +1,82 @@
 import { prisma } from "@/lib/prisma";
 import ProductsPageClient from "@/components/ProductsPageClient";
 
-export default async function ProductsPage() {
+const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
+const DEFAULT_PAGE_SIZE = 100;
+
+type SearchParamValue = string | string[] | undefined;
+
+function getSingleParam(value: SearchParamValue) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function parsePositiveInteger(value: SearchParamValue, fallback: number) {
+  const parsed = Number.parseInt(getSingleParam(value) ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parsePageSize(value: SearchParamValue) {
+  const parsed = parsePositiveInteger(value, DEFAULT_PAGE_SIZE);
+  return PAGE_SIZE_OPTIONS.includes(parsed as (typeof PAGE_SIZE_OPTIONS)[number])
+    ? parsed
+    : DEFAULT_PAGE_SIZE;
+}
+
+function getTodayRange() {
+  const start = new Date();
+  start.setHours(0, 0, 0, 0);
+
+  const end = new Date(start);
+  end.setDate(end.getDate() + 1);
+
+  return { start, end };
+}
+
+export default async function ProductsPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, SearchParamValue>>;
+}) {
+  const params = (await searchParams) ?? {};
+  const pageSize = parsePageSize(params.pageSize);
+  const requestedPage = parsePositiveInteger(params.page, 1);
+  const importedFilter =
+    getSingleParam(params.imported) === "today" ? "today" : null;
+  const todayRange = importedFilter === "today" ? getTodayRange() : null;
+  const where = {
+    status: "IMPORTED" as const,
+    ...(todayRange
+      ? {
+          createdAt: {
+            gte: todayRange.start,
+            lt: todayRange.end,
+          },
+        }
+      : {}),
+  };
+
+  const totalCount = await prisma.product.count({ where });
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const page = Math.min(requestedPage, totalPages);
+
   const products = await prisma.product.findMany({
-    where: { status: "IMPORTED" },
+    where,
     orderBy: { createdAt: "desc" },
+    skip: (page - 1) * pageSize,
+    take: pageSize,
     include: {
       store: true,
       createdBy: true,
+      variants: {
+        orderBy: { createdAt: "asc" },
+        take: 1,
+        select: {
+          id: true,
+          title: true,
+          buyPrice: true,
+          sellPrice: true,
+        },
+      },
       priceHistory: {
         where: { appliedAt: null },
         orderBy: { createdAt: "desc" },
@@ -28,6 +97,11 @@ export default async function ProductsPage() {
     lastPriceCheck: product.lastPriceCheck?.toISOString() ?? null,
     createdAt: product.createdAt.toISOString(),
     updatedAt: product.updatedAt.toISOString(),
+    variants: product.variants.map((variant) => ({
+      ...variant,
+      buyPrice: variant.buyPrice.toString(),
+      sellPrice: variant.sellPrice.toString(),
+    })),
     priceHistory: product.priceHistory.map((entry) => ({
       ...entry,
       previousPrice: entry.previousPrice.toString(),
@@ -51,7 +125,13 @@ export default async function ProductsPage() {
 
   return (
     <div className="p-8">
-      <ProductsPageClient products={serializedProducts as never} />
+      <ProductsPageClient
+        products={serializedProducts as never}
+        totalCount={totalCount}
+        page={page}
+        pageSize={pageSize}
+        importedFilter={importedFilter}
+      />
     </div>
   );
 }

@@ -255,22 +255,32 @@ export async function runPriceCheck(
           decimalToNumber(product.amazonPrice) ??
           decimalToNumber(product.variants[0]?.buyPrice);
 
-        // First-time check: no stored amazonPrice yet. Record the current
-        // Amazon price as the baseline and skip — do NOT trigger an eBay
-        // revision on the very first scrape because the variant buyPrice
-        // may have been entered manually and differ from the live price.
+        // First-time check: record the Amazon baseline and correct the
+        // primary BUY price without revising the eBay listing.
         const isFirstCheck = product.amazonPrice === null;
 
         if (isFirstCheck) {
           result.skipped += 1;
 
-          await prisma.product.update({
-            where: { id: product.id },
-            data: {
-              amazonPrice: toMoneyDecimal(currentAmazonPrice),
-              lastPriceCheck: checkedAt,
-              priceCheckError: null,
-            },
+          const primaryVariant = product.variants[0];
+          const currentAmazonPriceDecimal = toMoneyDecimal(currentAmazonPrice);
+
+          await prisma.$transaction(async (tx) => {
+            await tx.product.update({
+              where: { id: product.id },
+              data: {
+                amazonPrice: currentAmazonPriceDecimal,
+                lastPriceCheck: checkedAt,
+                priceCheckError: null,
+              },
+            });
+
+            await tx.variant.update({
+              where: { id: primaryVariant.id },
+              data: {
+                buyPrice: currentAmazonPriceDecimal,
+              },
+            });
           });
 
           logger.info("price-checker/run", "First check — baseline established", {

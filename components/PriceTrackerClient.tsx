@@ -52,6 +52,7 @@ interface PriceTrackerClientProps {
   initialSummary: PriceTrackerSummary;
   initialHistory: PriceTrackerHistoryItem[];
   initialTrackedProducts: TrackedProductOption[];
+  pendingCount: number;
 }
 
 interface PriceCheckResponse {
@@ -171,6 +172,7 @@ export default function PriceTrackerClient({
   initialSummary,
   initialHistory,
   initialTrackedProducts,
+  pendingCount,
 }: PriceTrackerClientProps) {
   const router = useRouter();
   const { toast, showToast, hideToast } = useToast();
@@ -192,6 +194,8 @@ export default function PriceTrackerClient({
   const [reviewingHistoryId, setReviewingHistoryId] = useState<string | null>(
     null
   );
+  const [isBulkApplying, setIsBulkApplying] = useState(false);
+  const [isBulkDismissing, setIsBulkDismissing] = useState(false);
 
   useEffect(() => {
     if (!isChecking) {
@@ -454,6 +458,94 @@ export default function PriceTrackerClient({
       showToast("Network error while reviewing price change.", "error");
     } finally {
       setReviewingHistoryId(null);
+    }
+  };
+
+  const handleBulkApplyAll = async () => {
+    const confirmed = window.confirm(
+      `Apply all ${pendingCount} pending price change(s) and revise their eBay listings? This cannot be undone.`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsBulkApplying(true);
+
+    try {
+      const response = await fetch("/api/price-check/bulk-apply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        total?: number;
+        applied?: number;
+        failed?: number;
+        skipped?: number;
+        failures?: { productId: string; title: string; error: string }[];
+        error?: string;
+      };
+
+      if (!response.ok) {
+        showToast(data.error || "Bulk apply failed.", "error");
+        router.refresh();
+        return;
+      }
+
+      const failureCount = data.failed ?? 0;
+      const appliedCount = data.applied ?? 0;
+      const totalCount = data.total ?? 0;
+
+      showToast(
+        failureCount > 0
+          ? `Applied ${appliedCount}/${totalCount} price change(s). ${failureCount} failed.`
+          : `Applied all ${appliedCount} price change(s) successfully.`,
+        failureCount > 0 ? "error" : "success"
+      );
+      router.refresh();
+    } catch {
+      showToast("Network error while applying all price changes.", "error");
+    } finally {
+      setIsBulkApplying(false);
+    }
+  };
+
+  const handleBulkDismissAll = async () => {
+    const confirmed = window.confirm(
+      `Dismiss all ${pendingCount} pending price change(s) without updating eBay?`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsBulkDismissing(true);
+
+    try {
+      const response = await fetch("/api/price-check/bulk-dismiss", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        dismissed?: number;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        showToast(data.error || "Bulk dismiss failed.", "error");
+        router.refresh();
+        return;
+      }
+
+      showToast(
+        `Dismissed ${data.dismissed ?? 0} pending price change(s).`,
+        "success"
+      );
+      router.refresh();
+    } catch {
+      showToast("Network error while dismissing price changes.", "error");
+    } finally {
+      setIsBulkDismissing(false);
     }
   };
 
@@ -981,6 +1073,128 @@ export default function PriceTrackerClient({
           </div>
         )}
       </div>
+
+      {pendingCount > 0 && (
+        <div className="mb-6 overflow-hidden rounded-2xl border border-emerald-200 bg-emerald-50/70">
+          <div className="px-5 py-4">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex h-8 w-8 items-center justify-center rounded-full bg-emerald-200 text-sm font-bold text-emerald-800">
+                  {pendingCount}
+                </span>
+                <div>
+                  <p className="text-sm font-semibold text-emerald-950">
+                    Pending price change{pendingCount === 1 ? "" : "s"} waiting
+                    for review
+                  </p>
+                  <p className="text-xs text-emerald-900/70">
+                    Apply all to update eBay listings, or dismiss to ignore.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleBulkApplyAll}
+                  disabled={isBulkApplying || isBulkDismissing}
+                  className="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isBulkApplying ? (
+                    <>
+                      <svg
+                        className="h-4 w-4 animate-spin"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                      >
+                        <circle
+                          className="opacity-25"
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          stroke="currentColor"
+                          strokeWidth="4"
+                        />
+                        <path
+                          className="opacity-75"
+                          fill="currentColor"
+                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                        />
+                      </svg>
+                      Applying...
+                    </>
+                  ) : (
+                    <>
+                      <svg
+                        className="h-4 w-4"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M5 13l4 4L19 7"
+                        />
+                      </svg>
+                      Apply All to eBay
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBulkDismissAll}
+                  disabled={isBulkApplying || isBulkDismissing}
+                  className="inline-flex items-center gap-2 rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {isBulkDismissing ? (
+                    <>
+                      <svg
+                        className="h-4 w-4 animate-spin"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                      >
+                        <circle
+                          className="opacity-25"
+                          cx="12"
+                          cy="12"
+                          r="10"
+                          stroke="currentColor"
+                          strokeWidth="4"
+                        />
+                        <path
+                          className="opacity-75"
+                          fill="currentColor"
+                          d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                        />
+                      </svg>
+                      Dismissing...
+                    </>
+                  ) : (
+                    <>
+                      <svg
+                        className="h-4 w-4"
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                        strokeWidth={2}
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M6 18L18 6M6 6l12 12"
+                        />
+                      </svg>
+                      Dismiss All
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <select

@@ -6,8 +6,11 @@ import {
   ProductStatus,
   VariantStatus,
 } from "@/app/generated/prisma/client";
-import { callEbayGetSellerList } from "@/lib/ebay";
-import { buildGetSellerListXML } from "@/lib/ebay-xml";
+import { callEbayGetItem, callEbayGetSellerList } from "@/lib/ebay";
+import {
+  buildGetItemXML,
+  buildGetSellerListIdsXML,
+} from "@/lib/ebay-xml";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 
@@ -15,29 +18,42 @@ export interface EbayImportOptions {
   storeId: string;
   storeNumber: 1 | 2 | 3;
   userId: string;
+  quantity: number;
   onProgress?: (progress: ImportProgress) => void;
 }
 
 export interface ImportProgress {
-  page: number;
-  totalPages: number;
-  created: number;
-  skipped: number;
-  failed: number;
-}
-
-export interface EbayImportResult {
+  processed: number;
   total: number;
   created: number;
   skipped: number;
   failed: number;
+  currentItemId?: string;
+}
+
+export interface EbayImportStats {
+  activeListings: number;
+  alreadyImported: number;
+  remaining: number;
+}
+
+export interface EbayImportResult {
+  requested: number;
+  activeListings: number;
+  alreadyImported: number;
+  remainingBeforeImport: number;
+  remainingAfterImport: number;
+  created: number;
+  skipped: number;
+  failed: number;
+  rateLimited: boolean;
   errors: Array<{ itemId: string; title: string; error: string }>;
 }
 
 type EbayNode = Record<string, unknown>;
 
-interface SellerListPage {
-  items: EbayNode[];
+interface SellerListIdPage {
+  itemIds: string[];
   totalPages: number;
 }
 
@@ -413,11 +429,11 @@ function formatEbayErrors(errors: unknown) {
   return messages.length > 0 ? messages.join("; ") : "Unknown eBay error";
 }
 
-async function fetchSellerListPage(
+async function fetchSellerListIdPage(
   storeNumber: 1 | 2 | 3,
   page: number,
-): Promise<SellerListPage> {
-  const xml = buildGetSellerListXML(page);
+): Promise<SellerListIdPage> {
+  const xml = buildGetSellerListIdsXML(page);
   const xmlText = await callEbayGetSellerList(xml, storeNumber);
   const parsed = parser.parse(xmlText) as EbayNode;
   const response = getPath(parsed, "GetSellerListResponse");
@@ -436,14 +452,108 @@ async function fetchSellerListPage(
     1,
     toInteger(getPath(response, "PaginationResult", "TotalNumberOfPages")) ?? 1,
   );
-  const items = asArray(getPath(response, "ItemArray", "Item")).filter(isNode);
+  const itemIds = asArray(getPath(response, "ItemArray", "Item"))
+    .filter(isNode)
+    .filter(isImportableListing)
+    .map((item) => getString(item, "ItemID"))
+    .filter(Boolean);
 
-  return { items, totalPages };
+  return { itemIds, totalPages };
 }
 
 function isImportableListing(item: EbayNode) {
   const listingType = getString(item, "ListingType");
   return listingType === "FixedPriceItem" || listingType === "StoresFixedPrice";
+}
+
+async function fetchAllEbayListingIds(storeNumber: 1 | 2 | 3) {
+  const itemIds: string[] = [];
+  let page = 1;
+  let totalPages = 1;
+
+  do {
+    const response = await fetchSellerListIdPage(storeNumber, page);
+    totalPages = response.totalPages;
+    itemIds.push(...response.itemIds);
+
+    if (page < totalPages) {
+      await delay(250);
+    }
+
+    page += 1;
+  } while (page <= totalPages);
+
+  return uniqueStrings(itemIds);
+}
+
+async function getExistingEbayItemIds(storeId: string, itemIds: string[]) {
+  if (itemIds.length === 0) {
+    return new Set<string>();
+  }
+
+  const products = await prisma.product.findMany({
+    where: {
+      storeId,
+      ebayItemId: {
+        in: itemIds,
+      },
+    },
+    select: {
+      ebayItemId: true,
+    },
+  });
+
+  return new Set(
+    products
+      .map((product) => product.ebayItemId)
+      .filter((itemId): itemId is string => Boolean(itemId)),
+  );
+}
+
+export async function getEbayImportStats(
+  options: Pick<EbayImportOptions, "storeId" | "storeNumber">,
+): Promise<EbayImportStats> {
+  const listingIds = await fetchAllEbayListingIds(options.storeNumber);
+  const existingIds = await getExistingEbayItemIds(options.storeId, listingIds);
+  const remaining = listingIds.filter((itemId) => !existingIds.has(itemId));
+
+  return {
+    activeListings: listingIds.length,
+    alreadyImported: existingIds.size,
+    remaining: remaining.length,
+  };
+}
+
+async function fetchEbayItemDetails(
+  storeNumber: 1 | 2 | 3,
+  itemId: string,
+): Promise<EbayNode> {
+  const xml = buildGetItemXML(itemId);
+  const xmlText = await callEbayGetItem(xml, storeNumber);
+  const parsed = parser.parse(xmlText) as EbayNode;
+  const response = getPath(parsed, "GetItemResponse");
+
+  if (!isNode(response)) {
+    throw new Error("Invalid GetItem response from eBay");
+  }
+
+  const ack = getString(response, "Ack");
+
+  if (ack !== "Success" && ack !== "Warning") {
+    throw new Error(formatEbayErrors(getPath(response, "Errors")));
+  }
+
+  const item = getPath(response, "Item");
+
+  if (!isNode(item)) {
+    throw new Error("GetItem response did not include an item");
+  }
+
+  return item;
+}
+
+function isRateLimitError(error: unknown) {
+  return /rate|limit|quota|throttl/i.test(getErrorMessage(error));
 }
 
 async function importSingleItem(
@@ -482,35 +592,52 @@ async function importSingleItem(
 export async function importEbayListings(
   options: EbayImportOptions,
 ): Promise<EbayImportResult> {
-  const result: EbayImportResult = {
-    total: 0,
-    created: 0,
-    skipped: 0,
-    failed: 0,
-    errors: [],
-  };
-  let page = 1;
-  let totalPages = 1;
-
   logger.info("ebay-import/importEbayListings", "Starting eBay listing import", {
     storeId: options.storeId,
     storeNumber: options.storeNumber,
     userId: options.userId,
+    quantity: options.quantity,
   });
 
-  do {
-    const response = await fetchSellerListPage(options.storeNumber, page);
-    totalPages = response.totalPages;
+  const listingIds = await fetchAllEbayListingIds(options.storeNumber);
+  const existingIds = await getExistingEbayItemIds(options.storeId, listingIds);
+  const remainingIds = listingIds.filter((itemId) => !existingIds.has(itemId));
+  const requested = Math.min(
+    Math.max(0, Math.floor(options.quantity)),
+    remainingIds.length,
+  );
+  const selectedIds = remainingIds.slice(0, requested);
+  const result: EbayImportResult = {
+    requested,
+    activeListings: listingIds.length,
+    alreadyImported: existingIds.size,
+    remainingBeforeImport: remainingIds.length,
+    remainingAfterImport: remainingIds.length,
+    created: 0,
+    skipped: 0,
+    failed: 0,
+    rateLimited: false,
+    errors: [],
+  };
 
-    for (const item of response.items) {
-      result.total += 1;
+  options.onProgress?.({
+    processed: 0,
+    total: selectedIds.length,
+    created: result.created,
+    skipped: result.skipped,
+    failed: result.failed,
+  });
+
+  for (const [index, itemId] of selectedIds.entries()) {
+    let title = "(loading)";
+
+    try {
+      const item = await fetchEbayItemDetails(options.storeNumber, itemId);
+      title = getString(item, "Title") || "(no title)";
 
       if (!isImportableListing(item)) {
         result.skipped += 1;
-        continue;
-      }
-
-      try {
+      } else {
         const wasCreated = await importSingleItem(
           item,
           options.storeId,
@@ -522,30 +649,38 @@ export async function importEbayListings(
         } else {
           result.skipped += 1;
         }
-      } catch (error) {
-        result.failed += 1;
-        result.errors.push({
-          itemId: getString(item, "ItemID") || "(missing)",
-          title: getString(item, "Title") || "(no title)",
-          error: getErrorMessage(error),
-        });
+      }
+    } catch (error) {
+      result.failed += 1;
+      result.errors.push({
+        itemId,
+        title,
+        error: getErrorMessage(error),
+      });
+
+      if (isRateLimitError(error)) {
+        result.rateLimited = true;
       }
     }
 
     options.onProgress?.({
-      page,
-      totalPages,
+      processed: index + 1,
+      total: selectedIds.length,
       created: result.created,
       skipped: result.skipped,
       failed: result.failed,
+      currentItemId: itemId,
     });
 
-    if (page < totalPages) {
-      await delay(500);
+    if (result.rateLimited) {
+      break;
     }
+  }
 
-    page += 1;
-  } while (page <= totalPages);
+  result.remainingAfterImport = Math.max(
+    0,
+    result.remainingBeforeImport - result.created - result.skipped,
+  );
 
   logger.info("ebay-import/importEbayListings", "Finished eBay listing import", {
     storeId: options.storeId,

@@ -267,6 +267,66 @@ ${outputSelectors}
 </GetSellerListRequest>`;
 }
 
+export function buildGetSellerListIdsXML(page: number): string {
+  const now = new Date();
+  const endTimeTo = new Date(now);
+  endTimeTo.setDate(endTimeTo.getDate() + 120);
+
+  const outputSelectors = ["ItemID", "ListingType"]
+    .map((selector) => `  <OutputSelector>${selector}</OutputSelector>`)
+    .join("\n");
+
+  return `<?xml version="1.0" encoding="utf-8"?>
+<GetSellerListRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <ErrorLanguage>en_US</ErrorLanguage>
+  <WarningLevel>High</WarningLevel>
+  <GranularityLevel>Fine</GranularityLevel>
+  <EndTimeFrom>${now.toISOString()}</EndTimeFrom>
+  <EndTimeTo>${endTimeTo.toISOString()}</EndTimeTo>
+  <Pagination>
+    <EntriesPerPage>200</EntriesPerPage>
+    <PageNumber>${Math.max(1, Math.floor(page))}</PageNumber>
+  </Pagination>
+  <DetailLevel>ReturnSummary</DetailLevel>
+${outputSelectors}
+</GetSellerListRequest>`;
+}
+
+export function buildGetItemXML(itemId: string): string {
+  const outputSelectors = [
+    "ItemID",
+    "Title",
+    "Description",
+    "PrimaryCategory",
+    "StartPrice",
+    "Quantity",
+    "QuantityAvailable",
+    "ConditionID",
+    "ConditionDisplayName",
+    "PictureDetails",
+    "ItemSpecifics",
+    "SKU",
+    "SellingStatus",
+    "Variations",
+    "ListingType",
+    "SellerProfiles",
+    "EndTime",
+  ]
+    .map((selector) => `  <OutputSelector>${selector}</OutputSelector>`)
+    .join("\n");
+
+  return `<?xml version="1.0" encoding="utf-8"?>
+<GetItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <ErrorLanguage>en_US</ErrorLanguage>
+  <WarningLevel>High</WarningLevel>
+  <ItemID>${escapeXml(itemId)}</ItemID>
+  <DetailLevel>ReturnAll</DetailLevel>
+  <IncludeItemSpecifics>true</IncludeItemSpecifics>
+  <IncludeVariations>true</IncludeVariations>
+${outputSelectors}
+</GetItemRequest>`;
+}
+
 /**
  * Builds a valid eBay ReviseItem XML request body to update editable live-listing fields.
  *

@@ -12,6 +12,7 @@ export default async function PriceTrackerPage() {
     lastRun,
     recentChanges,
     trackedProducts,
+    pendingCount,
   ] = await Promise.all([
     prisma.product.count({
       where: {
@@ -92,6 +93,9 @@ export default async function PriceTrackerPage() {
         },
       },
     }),
+    prisma.priceHistory.count({
+      where: { appliedAt: null },
+    }),
   ]);
 
   const summary = {
@@ -128,6 +132,7 @@ export default async function PriceTrackerPage() {
         initialSummary={summary}
         initialHistory={history}
         initialTrackedProducts={initialTrackedProducts}
+        pendingCount={pendingCount}
       />
     </div>
   );

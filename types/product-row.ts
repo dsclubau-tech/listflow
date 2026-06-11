@@ -23,6 +23,13 @@ export type SerializedUser = Omit<User, "createdAt" | "updatedAt"> & {
   updatedAt: string;
 };
 
+export interface SerializedProductVariantSummary {
+  id: string;
+  title: string;
+  buyPrice: string;
+  sellPrice: string;
+}
+
 export type SerializedProductRow = Omit<
   Product,
   "price" | "amazonPrice" | "lastPriceCheck" | "createdAt" | "updatedAt"
@@ -34,6 +41,7 @@ export type SerializedProductRow = Omit<
   updatedAt: string;
   store: SerializedStore;
   createdBy: SerializedUser;
+  variants?: SerializedProductVariantSummary[];
   priceHistory?: SerializedPriceHistorySummary[];
   _count?: {
     variants: number;
