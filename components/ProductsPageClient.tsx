@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import DraftsTable from "@/components/DraftsTable";
 import Toast from "@/components/Toast";
@@ -13,10 +13,76 @@ interface ProductsPageClientProps {
   page: number;
   pageSize: number;
   importedFilter: "today" | null;
+  productFilter: ProductFilter;
 }
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 const PAGE_SIZE_STORAGE_KEY = "listflow.products.pageSize";
+const PRICE_CHECK_JOB_STORAGE_KEY = "listflow.products.activePriceCheckJobId";
+
+type PriceCheckJobStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
+type PriceCheckJobScope = "SELECTED" | "ALL";
+type ProductFilter = "all" | "needs-changing-price" | "failed-on-hold";
+
+const PRODUCT_FILTER_OPTIONS: Array<{ value: ProductFilter; label: string }> = [
+  { value: "all", label: "All" },
+  { value: "needs-changing-price", label: "Needs changing price" },
+  { value: "failed-on-hold", label: "Failed / On hold" },
+];
+
+interface PriceCheckJob {
+  id: string;
+  status: PriceCheckJobStatus;
+  scope: PriceCheckJobScope;
+  total: number;
+  checked: number;
+  changed: number;
+  pendingReview: number;
+  failed: number;
+  skipped: number;
+  reason: string | null;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+function isActivePriceCheckJob(job: PriceCheckJob | null) {
+  return job?.status === "QUEUED" || job?.status === "RUNNING";
+}
+
+function isTerminalPriceCheckJob(job: PriceCheckJob | null) {
+  return job?.status === "COMPLETED" || job?.status === "FAILED";
+}
+
+function getPriceCheckJobSummary(job: PriceCheckJob) {
+  if (job.status === "FAILED") {
+    return job.errorMessage || "Price check failed.";
+  }
+
+  if (job.reason) {
+    return job.reason;
+  }
+
+  return `Checked ${job.checked} product${job.checked === 1 ? "" : "s"}. ${job.pendingReview} pending review, ${job.failed} failed, ${job.skipped} unchanged.`;
+}
+
+function getPriceCheckJobStatusText(job: PriceCheckJob) {
+  if (job.status === "QUEUED") {
+    return `Price check queued for ${job.total} product${job.total === 1 ? "" : "s"}.`;
+  }
+
+  if (job.status === "RUNNING") {
+    return `Checking prices ${job.checked}/${job.total}...`;
+  }
+
+  if (job.status === "COMPLETED") {
+    return getPriceCheckJobSummary(job);
+  }
+
+  return getPriceCheckJobSummary(job);
+}
 
 export default function ProductsPageClient({
   products,
@@ -24,17 +90,27 @@ export default function ProductsPageClient({
   page,
   pageSize,
   importedFilter,
+  productFilter,
 }: ProductsPageClientProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const [isExporting, setIsExporting] = useState(false);
-  const [isCheckingPrices, setIsCheckingPrices] = useState(false);
+  const [isStartingPriceCheckJob, setIsStartingPriceCheckJob] = useState(false);
+  const [priceCheckJob, setPriceCheckJob] = useState<PriceCheckJob | null>(null);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const notifiedTerminalJobIds = useRef<Set<string>>(new Set());
   const { toast, showToast, hideToast } = useToast();
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const isPriceCheckJobActive = isActivePriceCheckJob(priceCheckJob);
   const listingCountLabel =
-    importedFilter === "today" ? "listings added today" : "listings";
+    productFilter === "needs-changing-price"
+      ? "listings needing price changes"
+      : productFilter === "failed-on-hold"
+        ? "failed / on hold listings"
+        : importedFilter === "today"
+          ? "listings added today"
+          : "listings";
   const firstVisibleProduct =
     totalCount === 0 ? 0 : Math.min(totalCount, (page - 1) * pageSize + 1);
   const lastVisibleProduct =
@@ -58,6 +134,144 @@ export default function ProductsPageClient({
     router.replace(`${pathname}?${params.toString()}`);
   }, [pageSize, pathname, router, searchParams]);
 
+  const storePriceCheckJob = useCallback((job: PriceCheckJob | null) => {
+    setPriceCheckJob(job);
+
+    if (!job || isTerminalPriceCheckJob(job)) {
+      window.localStorage.removeItem(PRICE_CHECK_JOB_STORAGE_KEY);
+      return;
+    }
+
+    window.localStorage.setItem(PRICE_CHECK_JOB_STORAGE_KEY, job.id);
+  }, []);
+
+  const handleTerminalPriceCheckJob = useCallback(
+    (job: PriceCheckJob, notify: boolean) => {
+      window.localStorage.removeItem(PRICE_CHECK_JOB_STORAGE_KEY);
+      router.refresh();
+
+      if (!notify || notifiedTerminalJobIds.current.has(job.id)) {
+        return;
+      }
+
+      notifiedTerminalJobIds.current.add(job.id);
+      showToast(
+        getPriceCheckJobSummary(job),
+        job.status === "FAILED" || job.failed > 0 ? "error" : "success"
+      );
+    },
+    [router, showToast]
+  );
+
+  const applyPriceCheckJob = useCallback(
+    (job: PriceCheckJob | null, notifyTerminal = false) => {
+      storePriceCheckJob(job);
+
+      if (job && isTerminalPriceCheckJob(job)) {
+        handleTerminalPriceCheckJob(job, notifyTerminal);
+      }
+    },
+    [handleTerminalPriceCheckJob, storePriceCheckJob]
+  );
+
+  const fetchPriceCheckJob = useCallback(async (jobId: string) => {
+    const response = await fetch(`/api/price-check/jobs/${jobId}`, {
+      cache: "no-store",
+    });
+
+    if (response.status === 404) {
+      return null;
+    }
+
+    const data = (await response.json().catch(() => ({}))) as {
+      job?: PriceCheckJob | null;
+      error?: string;
+    };
+
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to load price check job.");
+    }
+
+    return data.job ?? null;
+  }, []);
+
+  const fetchCurrentPriceCheckJob = useCallback(async () => {
+    const response = await fetch("/api/price-check/jobs/current", {
+      cache: "no-store",
+    });
+    const data = (await response.json().catch(() => ({}))) as {
+      job?: PriceCheckJob | null;
+      error?: string;
+    };
+
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to load current price check job.");
+    }
+
+    return data.job ?? null;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function restorePriceCheckJob() {
+      try {
+        const savedJobId = window.localStorage.getItem(PRICE_CHECK_JOB_STORAGE_KEY);
+        let job: PriceCheckJob | null = savedJobId
+          ? await fetchPriceCheckJob(savedJobId)
+          : null;
+
+        if (!job) {
+          job = await fetchCurrentPriceCheckJob();
+        }
+
+        if (!cancelled && job) {
+          applyPriceCheckJob(job, true);
+        }
+      } catch {
+        if (!cancelled) {
+          window.localStorage.removeItem(PRICE_CHECK_JOB_STORAGE_KEY);
+        }
+      }
+    }
+
+    void restorePriceCheckJob();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [applyPriceCheckJob, fetchCurrentPriceCheckJob, fetchPriceCheckJob]);
+
+  useEffect(() => {
+    if (!priceCheckJob || !isActivePriceCheckJob(priceCheckJob)) {
+      return;
+    }
+
+    let cancelled = false;
+    const jobId = priceCheckJob.id;
+
+    async function pollPriceCheckJob() {
+      try {
+        const job = await fetchPriceCheckJob(jobId);
+
+        if (!cancelled) {
+          applyPriceCheckJob(job, true);
+        }
+      } catch {
+        // Keep the current banner visible; the next poll may succeed.
+      }
+    }
+
+    const interval = window.setInterval(() => {
+      void pollPriceCheckJob();
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [applyPriceCheckJob, fetchPriceCheckJob, priceCheckJob]);
+
   function navigateProductsPage(nextPage: number, nextPageSize = pageSize) {
     const boundedPage = Math.min(
       Math.max(1, nextPage),
@@ -78,6 +292,19 @@ export default function ProductsPageClient({
 
     window.localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(parsed));
     navigateProductsPage(1, parsed);
+  }
+
+  function handleProductFilterChange(nextFilter: ProductFilter) {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("page", "1");
+
+    if (nextFilter === "all") {
+      params.delete("filter");
+    } else {
+      params.set("filter", nextFilter);
+    }
+
+    router.push(`${pathname}?${params.toString()}`);
   }
 
   const handleExportCsv = async () => {
@@ -150,55 +377,105 @@ export default function ProductsPageClient({
     }
   };
 
-  const handleCheckPrices = async () => {
-    setIsCheckingPrices(true);
-
-    try {
-      const body =
-        selectedProductIds.length > 0
-          ? { productIds: selectedProductIds }
-          : { all: true };
-
-      const response = await fetch("/api/price-check", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(body),
-      });
-
-      const data = (await response.json()) as {
-        checked?: number;
-        changed?: number;
-        pendingReview?: number;
-        failed?: number;
-        skipped?: number;
-        reason?: string;
-        error?: string;
-      };
-
-      if (!response.ok) {
-        throw new Error(data.error || "Failed to check prices");
+  const startPriceCheckJob = useCallback(
+    async (productIds?: string[]) => {
+      if (isPriceCheckJobActive) {
+        showToast("A price check is already running.", "error");
+        return;
       }
 
-      showToast(
-        data.reason
-          ? data.reason
-          : `Checked ${data.checked ?? 0} product${data.checked === 1 ? "" : "s"}. ${data.pendingReview ?? 0} pending review, ${data.failed ?? 0} failed, ${data.skipped ?? 0} unchanged.`,
-        data.failed && data.failed > 0 ? "error" : "success"
-      );
-      router.refresh();
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to check prices";
-      showToast(message, "error");
-    } finally {
-      setIsCheckingPrices(false);
-    }
+      setIsStartingPriceCheckJob(true);
+
+      try {
+        const selectedIds = productIds?.filter(Boolean) ?? [];
+        const response = await fetch("/api/price-check/jobs", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(
+            selectedIds.length > 0 ? { productIds: selectedIds } : { all: true }
+          ),
+        });
+        const data = (await response.json().catch(() => ({}))) as {
+          job?: PriceCheckJob;
+          reused?: boolean;
+          error?: string;
+        };
+
+        if (!response.ok || !data.job) {
+          throw new Error(data.error || "Failed to start price check job.");
+        }
+
+        applyPriceCheckJob(data.job, true);
+
+        if (isActivePriceCheckJob(data.job)) {
+          showToast(
+            data.reused
+              ? "A price check is already running."
+              : `Price check started for ${data.job.total} product${data.job.total === 1 ? "" : "s"}.`,
+            "success"
+          );
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failed to start price check job";
+        showToast(message, "error");
+      } finally {
+        setIsStartingPriceCheckJob(false);
+      }
+    },
+    [applyPriceCheckJob, isPriceCheckJobActive, showToast]
+  );
+
+  const handleCheckPrices = () => {
+    void startPriceCheckJob(selectedProductIds);
   };
 
   return (
     <>
+      {priceCheckJob && (
+        <div
+          className={`mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border px-4 py-3 text-sm ${
+            priceCheckJob.status === "FAILED" || priceCheckJob.failed > 0
+              ? "border-red-200 bg-red-50 text-red-800"
+              : isActivePriceCheckJob(priceCheckJob)
+                ? "border-blue-200 bg-blue-50 text-blue-800"
+                : "border-green-200 bg-green-50 text-green-800"
+          }`}
+        >
+          <div className="flex items-center gap-3">
+            {isActivePriceCheckJob(priceCheckJob) && (
+              <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                />
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                />
+              </svg>
+            )}
+            <span className="font-medium">{getPriceCheckJobStatusText(priceCheckJob)}</span>
+          </div>
+          {isTerminalPriceCheckJob(priceCheckJob) && (
+            <button
+              type="button"
+              onClick={() => setPriceCheckJob(null)}
+              className="text-sm font-medium underline-offset-4 hover:underline"
+            >
+              Dismiss
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-semibold text-gray-900">Products</h1>
@@ -208,6 +485,27 @@ export default function ProductsPageClient({
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
+          <div className="inline-flex overflow-hidden rounded-md border border-gray-300 bg-white shadow-sm">
+            {PRODUCT_FILTER_OPTIONS.map((option) => {
+              const selected = option.value === productFilter;
+
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => handleProductFilterChange(option.value)}
+                  aria-pressed={selected}
+                  className={`border-r border-gray-300 px-3 py-2 text-sm font-medium transition-colors last:border-r-0 ${
+                    selected
+                      ? "bg-gray-900 text-white"
+                      : "text-gray-700 hover:bg-gray-50"
+                  }`}
+                >
+                  {option.label}
+                </button>
+              );
+            })}
+          </div>
           <label className="flex items-center gap-2 text-sm text-gray-600">
             Rows
             <select
@@ -225,7 +523,7 @@ export default function ProductsPageClient({
 
           <button
             onClick={handleCheckPrices}
-            disabled={isCheckingPrices}
+            disabled={isStartingPriceCheckJob || isPriceCheckJobActive}
             className="inline-flex items-center gap-2 rounded-md bg-gray-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <svg
@@ -242,8 +540,10 @@ export default function ProductsPageClient({
                 d="M4 4v5h.582m14.356-2A8 8 0 006.582 9m0 0H9m11 11v-5h-.581m0 0A8.003 8.003 0 017.64 15m11.778 0H15"
               />
             </svg>
-            {isCheckingPrices
-              ? "Checking Prices..."
+            {isStartingPriceCheckJob
+              ? "Starting..."
+              : isPriceCheckJobActive
+                ? `Checking ${priceCheckJob?.checked ?? 0}/${priceCheckJob?.total ?? 0}`
               : selectedProductIds.length > 0
                 ? `Check ${selectedProductIds.length} Selected`
                 : "Check Prices Now"}
@@ -277,6 +577,8 @@ export default function ProductsPageClient({
         onToast={showToast}
         view="products"
         onSelectionChange={setSelectedProductIds}
+        onPriceCheckSelected={startPriceCheckJob}
+        isPriceCheckJobActive={isStartingPriceCheckJob || isPriceCheckJobActive}
       />
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-gray-600">

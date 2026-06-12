@@ -11,6 +11,8 @@ interface DraftsTableProps {
   onToast: (message: string, variant: "success" | "error") => void;
   view?: "drafts" | "products";
   onSelectionChange?: (selectedIds: string[]) => void;
+  onPriceCheckSelected?: (productIds: string[]) => Promise<void>;
+  isPriceCheckJobActive?: boolean;
 }
 
 const storeBadgeColors: Record<string, string> = {
@@ -240,6 +242,8 @@ export default function DraftsTable({
   onToast,
   view = "drafts",
   onSelectionChange,
+  onPriceCheckSelected,
+  isPriceCheckJobActive = false,
 }: DraftsTableProps) {
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -346,7 +350,7 @@ export default function DraftsTable({
 
   async function handleEndListing(productId: string) {
     const confirmed = window.confirm(
-      "Are you sure you want to end this listing on eBay? The product will return to DRAFT status."
+      "Are you sure you want to end this listing on eBay and permanently remove it from ListFlow? This action cannot be undone."
     );
 
     if (!confirmed) {
@@ -360,7 +364,8 @@ export default function DraftsTable({
       const data = await res.json();
 
       if (res.ok) {
-        onToast("Listing ended on eBay", "success");
+        onToast("Listing ended on eBay and removed from ListFlow", "success");
+        setSelectedIds((prev) => prev.filter((id) => id !== productId));
         router.refresh();
       } else {
         onToast(data.error || "Failed to end listing.", "error");
@@ -589,6 +594,12 @@ export default function DraftsTable({
     setIsBulkPriceChecking(true);
 
     try {
+      if (onPriceCheckSelected) {
+        await onPriceCheckSelected(idsToCheck);
+        setSelectedIds([]);
+        return;
+      }
+
       const res = await fetch("/api/price-check", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1201,12 +1212,14 @@ export default function DraftsTable({
                           </span>
                         ) : null}
 
-                        {isProductsView && product.status === "IMPORTED" && (
+                        {isProductsView &&
+                          (product.status === "IMPORTED" ||
+                            product.status === "ON_HOLD") && (
                           <button
                             onClick={() => handleEndListing(product.id)}
                             disabled={endingId === product.id}
                             className="bg-red-500 hover:bg-red-600 text-white text-sm px-3 py-1 rounded transition-colors disabled:opacity-40 flex items-center gap-1.5"
-                            title="End listing on eBay"
+                            title="End listing on eBay and remove from ListFlow"
                           >
                             {endingId === product.id ? (
                               <>
@@ -1216,7 +1229,7 @@ export default function DraftsTable({
                                 </svg>
                                 Ending...
                               </>
-                            ) : "End"}
+                            ) : "End & Remove"}
                           </button>
                         )}
 
@@ -1374,10 +1387,10 @@ export default function DraftsTable({
                 )}
                 <button
                   onClick={handleBulkPriceCheck}
-                  disabled={isBulkPriceChecking}
+                  disabled={isBulkPriceChecking || isPriceCheckJobActive}
                   className="px-4 py-2 bg-gray-900 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
                 >
-                  {isBulkPriceChecking ? (
+                  {isBulkPriceChecking || isPriceCheckJobActive ? (
                     <>
                       <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />

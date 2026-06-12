@@ -1,9 +1,17 @@
 import { prisma } from "@/lib/prisma";
 import ProductsPageClient from "@/components/ProductsPageClient";
 import { ProductStatus } from "@/app/generated/prisma/enums";
+import type { Prisma } from "@/app/generated/prisma/client";
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 const DEFAULT_PAGE_SIZE = 100;
+const PRODUCT_FILTERS = [
+  "all",
+  "needs-changing-price",
+  "failed-on-hold",
+] as const;
+
+type ProductFilter = (typeof PRODUCT_FILTERS)[number];
 
 type SearchParamValue = string | string[] | undefined;
 
@@ -21,6 +29,14 @@ function parsePageSize(value: SearchParamValue) {
   return PAGE_SIZE_OPTIONS.includes(parsed as (typeof PAGE_SIZE_OPTIONS)[number])
     ? parsed
     : DEFAULT_PAGE_SIZE;
+}
+
+function parseProductFilter(value: SearchParamValue): ProductFilter {
+  const filter = getSingleParam(value);
+
+  return PRODUCT_FILTERS.includes(filter as ProductFilter)
+    ? (filter as ProductFilter)
+    : "all";
 }
 
 function getTodayRange() {
@@ -43,8 +59,9 @@ export default async function ProductsPage({
   const requestedPage = parsePositiveInteger(params.page, 1);
   const importedFilter =
     getSingleParam(params.imported) === "today" ? "today" : null;
+  const productFilter = parseProductFilter(params.filter);
   const todayRange = importedFilter === "today" ? getTodayRange() : null;
-  const where = {
+  const where: Prisma.ProductWhereInput = {
     status: { in: [ProductStatus.IMPORTED, ProductStatus.ON_HOLD] },
     ...(todayRange
       ? {
@@ -52,6 +69,23 @@ export default async function ProductsPage({
             gte: todayRange.start,
             lt: todayRange.end,
           },
+        }
+      : {}),
+    ...(productFilter === "needs-changing-price"
+      ? {
+          priceHistory: {
+            some: {
+              appliedAt: null,
+            },
+          },
+        }
+      : {}),
+    ...(productFilter === "failed-on-hold"
+      ? {
+          OR: [
+            { status: ProductStatus.ON_HOLD },
+            { priceCheckError: { not: null } },
+          ],
         }
       : {}),
   };
@@ -132,6 +166,7 @@ export default async function ProductsPage({
         page={page}
         pageSize={pageSize}
         importedFilter={importedFilter}
+        productFilter={productFilter}
       />
     </div>
   );

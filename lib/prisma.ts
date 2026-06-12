@@ -12,6 +12,12 @@ function createPrismaClient() {
   return new PrismaClient({ adapter });
 }
 
-export const prisma = globalForPrisma.prisma ?? createPrismaClient();
+function hasCurrentPrismaDelegates(client: PrismaClient | undefined) {
+  return Boolean(client && "priceCheckJob" in client);
+}
+
+export const prisma = hasCurrentPrismaDelegates(globalForPrisma.prisma)
+  ? globalForPrisma.prisma!
+  : createPrismaClient();
 
 if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;

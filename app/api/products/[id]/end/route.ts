@@ -4,6 +4,12 @@ import { NextResponse } from "next/server";
 import { buildEndItemXML } from "@/lib/ebay-xml";
 import { callEbayEndItem, getStoreNumber } from "@/lib/ebay";
 import { createRequestLogger } from "@/lib/logger";
+import { ProductStatus } from "@/app/generated/prisma/enums";
+
+const ENDABLE_STATUSES: ProductStatus[] = [
+  ProductStatus.IMPORTED,
+  ProductStatus.ON_HOLD,
+];
 
 export async function POST(
   request: Request,
@@ -29,7 +35,7 @@ export async function POST(
     return NextResponse.json({ error: "Product not found" }, { status: 404 });
   }
 
-  if (product.status !== "IMPORTED" || !product.ebayItemId) {
+  if (!ENDABLE_STATUSES.includes(product.status) || !product.ebayItemId) {
     log.warn("end-listing/route", "Rejected end-listing for product not on eBay", {
       productId,
     });
@@ -56,23 +62,27 @@ export async function POST(
 
     const result = await callEbayEndItem(xml, storeNumber);
 
-    if (result.success) {
-      log.info("end-listing/route", "eBay EndItem succeeded", {
+    const isAlreadyEnded =
+      result.errorMessage?.toLowerCase().includes("already ended") ||
+      result.errorMessage?.toLowerCase().includes("invalid item") ||
+      result.errorMessage?.toLowerCase().includes("does not exist") ||
+      result.errorMessage?.toLowerCase().includes("not found");
+
+    if (result.success || isAlreadyEnded) {
+      log.info("end-listing/route", "eBay EndItem succeeded (or listing was already ended), deleting product from database", {
         productId,
         ebayItemId: product.ebayItemId,
         storeNumber,
       });
 
-      await prisma.product.update({
-        where: { id: productId },
-        data: {
-          status: "DRAFT",
-          ebayItemId: null,
-          errorMessage: null,
-        },
-      });
+      await prisma.$transaction([
+        prisma.uploadLog.deleteMany({ where: { productId: product.id } }),
+        prisma.variant.deleteMany({ where: { productId: product.id } }),
+        prisma.priceHistory.deleteMany({ where: { productId: product.id } }),
+        prisma.product.delete({ where: { id: product.id } }),
+      ]);
 
-      return NextResponse.json({ success: true });
+      return NextResponse.json({ success: true, deleted: true });
     }
 
     log.error("end-listing/route", "eBay EndItem failed", undefined, {

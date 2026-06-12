@@ -6,6 +6,11 @@ import { callEbayEndItem, getStoreNumber } from "@/lib/ebay";
 import { createRequestLogger } from "@/lib/logger";
 import { ProductStatus } from "@/app/generated/prisma/enums";
 
+const ENDABLE_STATUSES: ProductStatus[] = [
+  ProductStatus.IMPORTED,
+  ProductStatus.ON_HOLD,
+];
+
 interface ProductFailure {
   productId: string;
   title: string;
@@ -72,11 +77,11 @@ export async function POST(request: Request) {
         continue;
       }
 
-      if (product.status !== ProductStatus.IMPORTED || !product.ebayItemId) {
+      if (!ENDABLE_STATUSES.includes(product.status) || !product.ebayItemId) {
         failures.push({
           productId: product.id,
           title: product.title,
-          error: "Product is not imported or lacks an eBay Item ID",
+          error: "Product is not listed on eBay or lacks an eBay Item ID",
         });
         failed += 1;
         continue;

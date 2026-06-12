@@ -24,10 +24,13 @@ export interface PriceCheckResult {
   reason?: string;
 }
 
+export type PriceCheckProgress = PriceCheckResult & { total: number };
+
 interface RunPriceCheckOptions {
   productIds?: string[];
   ignoreSchedule?: boolean;
   simulatedPrices?: Record<string, number>;
+  onProgress?: (progress: PriceCheckProgress) => void | Promise<void>;
 }
 
 type ProductRecord = NonNullable<Awaited<ReturnType<typeof prisma.product.findFirst>>>;
@@ -179,6 +182,21 @@ export async function runPriceCheck(
     failed: 0,
     skipped: 0,
   };
+  const reportProgress = async () => {
+    if (!options.onProgress) {
+      return;
+    }
+
+    try {
+      await options.onProgress({ ...result, total: products.length });
+    } catch (error) {
+      logger.warn("price-checker/run", "Price check progress callback failed", {
+        errorMessage: getErrorMessage(error),
+      });
+    }
+  };
+
+  await reportProgress();
 
   const scrapeAmazonPriceWithRetry = async (productId: string, asin: string) => {
     const scrapeWithOwnedBrowser = () =>
@@ -220,6 +238,7 @@ export async function runPriceCheck(
 
       if (!product.asin || product.variants.length === 0) {
         result.skipped += 1;
+        await reportProgress();
         continue;
       }
 
@@ -264,6 +283,7 @@ export async function runPriceCheck(
             asin: product.asin,
           });
 
+          await reportProgress();
           continue;
         }
 
@@ -306,6 +326,7 @@ export async function runPriceCheck(
             baselinePrice: currentAmazonPrice,
           });
 
+          await reportProgress();
           continue;
         }
 
@@ -325,6 +346,7 @@ export async function runPriceCheck(
             asin: product.asin,
           });
 
+          await reportProgress();
           continue;
         }
 
@@ -356,6 +378,7 @@ export async function runPriceCheck(
               },
             });
 
+            await reportProgress();
             continue;
           }
 
@@ -448,6 +471,7 @@ export async function runPriceCheck(
             newSellPrice: mismatchVariants[0]?.nextSellPrice,
           });
 
+          await reportProgress();
           continue;
         }
 
@@ -483,6 +507,7 @@ export async function runPriceCheck(
             threshold: MAX_CHANGE_PERCENT,
           });
 
+          await reportProgress();
           continue;
         }
         const nextVariants = product.variants.map((variant, variantIndex) => {
@@ -538,6 +563,7 @@ export async function runPriceCheck(
 
         if (nextPrimarySellPrice === undefined) {
           result.skipped += 1;
+          await reportProgress();
           continue;
         }
 
@@ -599,6 +625,8 @@ export async function runPriceCheck(
           asin: product.asin,
         });
       }
+
+      await reportProgress();
 
       if (simulatedAmazonPrice === null && index < products.length - 1) {
         await sleep(getProductDelayMs());

@@ -21,6 +21,7 @@ model User {
 
   products   Product[]
   uploadLogs UploadLog[]
+  priceCheckJobs PriceCheckJob[]
 }
 
 // --- Part 2 Models ---
@@ -55,6 +56,18 @@ enum VariantStatus {
 enum PriceCheckSource {
   LIVE
   SIMULATED
+}
+
+enum PriceCheckJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum PriceCheckJobScope {
+  SELECTED
+  ALL
 }
 
 model Product {
@@ -141,6 +154,31 @@ model PriceHistory {
 
   @@index([productId])
   @@index([variantId])
+  @@index([createdAt])
+}
+
+model PriceCheckJob {
+  id            String              @id @default(cuid())
+  userId        String
+  scope         PriceCheckJobScope
+  status        PriceCheckJobStatus @default(QUEUED)
+  productIds    String[]            @default([])
+  total         Int                 @default(0)
+  checked       Int                 @default(0)
+  changed       Int                 @default(0)
+  pendingReview Int                 @default(0)
+  failed        Int                 @default(0)
+  skipped       Int                 @default(0)
+  reason        String?             @db.Text
+  errorMessage  String?             @db.Text
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
+  startedAt     DateTime?
+  completedAt   DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
   @@index([createdAt])
 }
 

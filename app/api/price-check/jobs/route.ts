@@ -1,0 +1,47 @@
+import { NextResponse } from "next/server";
+import { auth } from "@/auth";
+import { createRequestLogger } from "@/lib/logger";
+import { createPriceCheckJob } from "@/lib/price-check-jobs";
+
+export async function POST(request: Request) {
+  const session = await auth();
+  const log = createRequestLogger(
+    request,
+    session?.user ? { userId: session.user.id } : {}
+  );
+
+  if (!session?.user?.id) {
+    log.warn("price-check/jobs/POST", "Unauthorized price check job attempt");
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let body: { productIds?: unknown[]; all?: boolean };
+  try {
+    body = (await request.json()) as { productIds?: unknown[]; all?: boolean };
+  } catch (error) {
+    log.error("price-check/jobs/POST", "Invalid JSON body", error);
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  try {
+    const result = await createPriceCheckJob({
+      userId: session.user.id,
+      productIds: body.productIds,
+      all: body.all === true,
+    });
+
+    log.info("price-check/jobs/POST", "Price check job request accepted", {
+      jobId: result.job.id,
+      status: result.job.status,
+      total: result.job.total,
+      reused: result.reused,
+    });
+
+    return NextResponse.json(result, { status: result.reused ? 200 : 202 });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to start price check job";
+    log.error("price-check/jobs/POST", "Failed to create price check job", error);
+    return NextResponse.json({ error: message }, { status: 400 });
+  }
+}
