@@ -27,6 +27,11 @@ export interface ScrapedProduct {
   };
 }
 
+export interface ScrapedAmazonPrice {
+  price: number | null;
+  stockLeft: number | null;
+}
+
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -409,7 +414,7 @@ export async function scrapeAmazonPrice(
   asin: string,
   browser?: Browser,
   postcode?: string
-): Promise<number | null> {
+): Promise<ScrapedAmazonPrice> {
   const normalizedAsin = asin.trim().toUpperCase();
 
   if (!/^[A-Z0-9]{10}$/.test(normalizedAsin)) {
@@ -530,6 +535,30 @@ export async function scrapeAmazonPrice(
       );
     }
 
+    const stockLeft = await page
+      .evaluate(() => {
+        const selectors = [
+          "#availability",
+          "#buybox",
+          "#desktop_buybox",
+          "#mir-layout-DELIVERY_BLOCK",
+        ];
+        const text = selectors
+          .map((selector) => document.querySelector(selector)?.textContent ?? "")
+          .join(" ")
+          .toLowerCase()
+          .replace(/\s+/g, " ");
+        const match = text.match(/only\s+(\d+)\s+left\s+in\s+stock/);
+
+        if (!match) {
+          return null;
+        }
+
+        const parsed = Number.parseInt(match[1], 10);
+        return Number.isFinite(parsed) ? parsed : null;
+      })
+      .catch(() => null);
+
     const price = await extractAmazonPriceFromPage(page);
 
     // Diagnostic: log page context when price extraction fails
@@ -551,7 +580,7 @@ export async function scrapeAmazonPrice(
       );
     }
 
-    return price;
+    return { price, stockLeft };
   } finally {
     await context.close().catch(() => {});
 

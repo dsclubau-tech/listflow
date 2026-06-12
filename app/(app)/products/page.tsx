@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import ProductsPageClient from "@/components/ProductsPageClient";
+import { ProductStatus } from "@/app/generated/prisma/enums";
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 const DEFAULT_PAGE_SIZE = 100;
@@ -44,7 +45,7 @@ export default async function ProductsPage({
     getSingleParam(params.imported) === "today" ? "today" : null;
   const todayRange = importedFilter === "today" ? getTodayRange() : null;
   const where = {
-    status: "IMPORTED" as const,
+    status: { in: [ProductStatus.IMPORTED, ProductStatus.ON_HOLD] },
     ...(todayRange
       ? {
           createdAt: {

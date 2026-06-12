@@ -5,6 +5,7 @@ import { buildAddItemXML } from "@/lib/ebay-xml";
 import { callEbayAddItem, getStoreNumber } from "@/lib/ebay";
 import { resolveDescriptionTemplate } from "@/lib/template-resolver";
 import { createRequestLogger } from "@/lib/logger";
+import { ProductStatus } from "@/app/generated/prisma/enums";
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -45,12 +46,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Product not found" }, { status: 404 });
   }
 
-  if (product.status === "IMPORTED") {
-    log.warn("upload/route", "Rejected upload for already imported product", {
+  if (
+    product.ebayItemId ||
+    product.status === ProductStatus.IMPORTED ||
+    product.status === ProductStatus.ON_HOLD
+  ) {
+    log.warn("upload/route", "Rejected upload for already listed product", {
       productId,
+      status: product.status,
+      ebayItemId: product.ebayItemId,
     });
     return NextResponse.json(
-      { error: "Product is already imported" },
+      { error: "Product is already listed on eBay" },
       { status: 400 },
     );
   }

@@ -115,6 +115,10 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unexpected price check error";
 }
 
+function getAmazonStockUpdate(stockLeft: number | null | undefined) {
+  return stockLeft === undefined ? {} : { amazonStockLeft: stockLeft };
+}
+
 export async function runPriceCheck(
   options: RunPriceCheckOptions = {}
 ): Promise<PriceCheckResult> {
@@ -228,9 +232,21 @@ export async function runPriceCheck(
         simulatedAmazonPrice !== null ? "SIMULATED" : "LIVE";
 
       try {
-        const currentAmazonPrice =
-          simulatedAmazonPrice ??
-          (await scrapeAmazonPriceWithRetry(product.id, product.asin));
+        let currentAmazonPrice: number | null;
+        let scrapedAmazonStockLeft: number | null | undefined;
+
+        if (simulatedAmazonPrice !== null) {
+          currentAmazonPrice = simulatedAmazonPrice;
+        } else {
+          const scrapeResult = await scrapeAmazonPriceWithRetry(
+            product.id,
+            product.asin
+          );
+          currentAmazonPrice = scrapeResult.price;
+          scrapedAmazonStockLeft = scrapeResult.stockLeft;
+        }
+
+        const amazonStockUpdate = getAmazonStockUpdate(scrapedAmazonStockLeft);
 
         if (currentAmazonPrice === null) {
           result.failed += 1;
@@ -270,6 +286,7 @@ export async function runPriceCheck(
               where: { id: product.id },
               data: {
                 amazonPrice: currentAmazonPriceDecimal,
+                ...amazonStockUpdate,
                 lastPriceCheck: checkedAt,
                 priceCheckError: null,
               },
@@ -333,6 +350,7 @@ export async function runPriceCheck(
               where: { id: product.id },
               data: {
                 amazonPrice: toMoneyDecimal(currentAmazonPrice),
+                ...amazonStockUpdate,
                 lastPriceCheck: checkedAt,
                 priceCheckError: null,
               },
@@ -395,6 +413,7 @@ export async function runPriceCheck(
               where: { id: product.id },
               data: {
                 amazonPrice: toMoneyDecimal(currentAmazonPrice),
+                ...amazonStockUpdate,
                 lastPriceCheck: checkedAt,
                 priceCheckError: null,
               },
@@ -527,6 +546,7 @@ export async function runPriceCheck(
             where: { id: product.id },
             data: {
               amazonPrice: toMoneyDecimal(currentAmazonPrice),
+              ...amazonStockUpdate,
               lastPriceCheck: checkedAt,
               priceCheckError: null,
             },

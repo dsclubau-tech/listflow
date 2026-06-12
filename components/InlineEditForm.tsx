@@ -309,6 +309,8 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
   }, [saveMessage]);
 
   const isImported = product.status === "IMPORTED" && Boolean(product.ebayItemId);
+  const isOnHold = product.status === "ON_HOLD" && Boolean(product.ebayItemId);
+  const isListed = isImported || isOnHold;
   const inlineSuccessMessage =
     saveMessage?.variant === "success" && !saveMessage.title ? saveMessage : null;
   const bannerMessage =
@@ -414,7 +416,11 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
           });
         } else if (showSuccessMessage) {
           setSaveMessage({
-            text: isImported ? "Saved locally. Update eBay to sync the live listing." : "Saved",
+            text: isOnHold
+              ? "Saved locally. Resume this listing before syncing updates to eBay."
+              : isImported
+                ? "Saved locally. Update eBay to sync the live listing."
+                : "Saved",
             variant: "success",
           });
         }
@@ -468,11 +474,13 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
   // ----- Save & Import -----
 
   async function handleSaveAndImport() {
-    if (isImported) {
+    if (isListed) {
       setSaveMessage({
         variant: "error",
         title: "Import failed",
-        text: "This product is already imported. Use Save & Update eBay instead.",
+        text: isOnHold
+          ? "This product is on hold. Resume it before updating the live eBay listing."
+          : "This product is already imported. Use Save & Update eBay instead.",
       });
       return;
     }
@@ -798,9 +806,9 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
             disabled={isSaving || isImporting || isRevising || isRegrabbing}
             className="px-4 py-1.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 disabled:opacity-40 transition-colors"
           >
-            {isSaving ? "Saving..." : isImported ? "Save Locally" : "Save"}
+            {isSaving ? "Saving..." : isListed ? "Save Locally" : "Save"}
           </button>
-          {!isImported && (
+          {!isListed && (
             <button
               type="button"
               onClick={handleSaveAndImport}

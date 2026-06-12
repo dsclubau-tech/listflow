@@ -377,3 +377,15 @@ ${sellerProfilesXml}
   </Item>
 </ReviseItemRequest>`;
 }
+
+export function buildReviseQuantityXML(ebayItemId: string, quantity: number): string {
+  return `<?xml version="1.0" encoding="utf-8"?>
+<ReviseItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <ErrorLanguage>en_US</ErrorLanguage>
+  <WarningLevel>High</WarningLevel>
+  <Item>
+    <ItemID>${escapeXml(ebayItemId)}</ItemID>
+    <Quantity>${quantity}</Quantity>
+  </Item>
+</ReviseItemRequest>`;
+}

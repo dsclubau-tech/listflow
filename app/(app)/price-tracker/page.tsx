@@ -8,11 +8,12 @@ export default async function PriceTrackerPage() {
   const [
     trackedCount,
     changedTodayProducts,
-    failedChecks,
+    failedProducts,
     lastRun,
     recentChanges,
     trackedProducts,
     pendingCount,
+    lowStockProducts,
   ] = await Promise.all([
     prisma.product.count({
       where: {
@@ -32,12 +33,20 @@ export default async function PriceTrackerPage() {
         productId: true,
       },
     }),
-    prisma.product.count({
+    prisma.product.findMany({
       where: {
         status: "IMPORTED",
         asin: { not: null },
         variants: { some: {} },
         priceCheckError: { not: null },
+      },
+      orderBy: { title: "asc" },
+      select: {
+        id: true,
+        title: true,
+        asin: true,
+        ebayItemId: true,
+        priceCheckError: true,
       },
     }),
     prisma.product.findFirst({
@@ -96,12 +105,27 @@ export default async function PriceTrackerPage() {
     prisma.priceHistory.count({
       where: { appliedAt: null },
     }),
+    prisma.product.findMany({
+      where: {
+        status: "IMPORTED",
+        asin: { not: null },
+        amazonStockLeft: { not: null, lte: 3 },
+      },
+      orderBy: [{ amazonStockLeft: "asc" }, { title: "asc" }],
+      select: {
+        id: true,
+        title: true,
+        asin: true,
+        ebayItemId: true,
+        amazonStockLeft: true,
+      },
+    }),
   ]);
 
   const summary = {
     trackedCount,
     changedToday: changedTodayProducts.length,
-    failedChecks,
+    failedChecks: failedProducts.length,
     lastRunAt: lastRun?.lastPriceCheck?.toISOString() ?? null,
   };
 
@@ -133,6 +157,8 @@ export default async function PriceTrackerPage() {
         initialHistory={history}
         initialTrackedProducts={initialTrackedProducts}
         pendingCount={pendingCount}
+        failedProducts={failedProducts}
+        lowStockProducts={lowStockProducts}
       />
     </div>
   );

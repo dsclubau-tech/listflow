@@ -23,6 +23,7 @@ const statusBadgeLabels: Record<string, string> = {
   DRAFT: "Draft",
   IMPORTED: "Imported",
   FAILED: "Failed",
+  ON_HOLD: "On Hold",
 };
 
 function formatMoney(value: string | number | null | undefined) {
@@ -254,6 +255,8 @@ export default function DraftsTable({
   const [bulkTotal, setBulkTotal] = useState(0);
   const [isBulkApplying, setIsBulkApplying] = useState(false);
   const [isBulkDismissing, setIsBulkDismissing] = useState(false);
+  const [isBulkResuming, setIsBulkResuming] = useState(false);
+  const [isBulkHolding, setIsBulkHolding] = useState(false);
   const router = useRouter();
 
   const isDraftsView = view === "drafts";
@@ -275,6 +278,10 @@ export default function DraftsTable({
 
     if (status === "FAILED") {
       return "bg-red-100 text-red-700";
+    }
+
+    if (status === "ON_HOLD") {
+      return "bg-amber-100 text-amber-700";
     }
 
     return "bg-gray-100 text-gray-600";
@@ -369,7 +376,10 @@ export default function DraftsTable({
     () =>
       isDraftsView
         ? products.filter((product) => product.status !== "IMPORTED")
-        : products.filter(canCheckProductPrice),
+        : products.filter(
+            (product) =>
+              product.status === "IMPORTED" || product.status === "ON_HOLD"
+          ),
     [isDraftsView, products],
   );
   const allSelectableIds = useMemo(
@@ -422,6 +432,28 @@ export default function DraftsTable({
         selectedIds.includes(product.id) &&
         (product.priceHistory?.length ?? 0) > 0 &&
         product.priceHistory?.some((h) => !h.appliedAt)
+    ).length;
+  }, [isProductsView, products, selectedIds]);
+
+  const selectedOnHoldCount = useMemo(() => {
+    if (!isProductsView) {
+      return 0;
+    }
+
+    return products.filter(
+      (product) =>
+        selectedIds.includes(product.id) && product.status === "ON_HOLD"
+    ).length;
+  }, [isProductsView, products, selectedIds]);
+
+  const selectedImportedCount = useMemo(() => {
+    if (!isProductsView) {
+      return 0;
+    }
+
+    return products.filter(
+      (product) =>
+        selectedIds.includes(product.id) && product.status === "IMPORTED"
     ).length;
   }, [isProductsView, products, selectedIds]);
 
@@ -544,7 +576,10 @@ export default function DraftsTable({
   }
 
   async function handleBulkPriceCheck() {
-    const idsToCheck = selectedIds.filter((id) => selectableIdSet.has(id));
+    const idsToCheck = selectedIds.filter((id) => {
+      const p = products.find((prod) => prod.id === id);
+      return p && canCheckProductPrice(p);
+    });
 
     if (idsToCheck.length === 0) {
       onToast("Select at least one tracked product first.", "error");
@@ -587,6 +622,123 @@ export default function DraftsTable({
       onToast("Network error while checking selected prices.", "error");
     } finally {
       setIsBulkPriceChecking(false);
+    }
+  }
+
+  async function handleBulkResumeSelected() {
+    const onHoldIds = products
+      .filter((product) => selectedIds.includes(product.id) && product.status === "ON_HOLD")
+      .map((product) => product.id);
+
+    if (onHoldIds.length === 0) {
+      onToast("No selected products are on hold.", "error");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Resume listing(s) on eBay for ${onHoldIds.length} selected product(s)? This will restore their original quantities.`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsBulkResuming(true);
+
+    try {
+      const res = await fetch("/api/products/bulk-resume", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds: onHoldIds }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        total?: number;
+        resumed?: number;
+        failed?: number;
+        error?: string;
+      };
+
+      if (!res.ok) {
+        onToast(data.error || "Bulk resume failed.", "error");
+        router.refresh();
+        return;
+      }
+
+      const failureCount = data.failed ?? 0;
+      const resumedCount = data.resumed ?? 0;
+
+      onToast(
+        failureCount > 0
+          ? `Resumed ${resumedCount} listing(s). ${failureCount} failed.`
+          : `Successfully resumed all ${resumedCount} listing(s).`,
+        failureCount > 0 ? "error" : "success"
+      );
+      setSelectedIds([]);
+      router.refresh();
+    } catch {
+      onToast("Network error while resuming listings.", "error");
+    } finally {
+      setIsBulkResuming(false);
+    }
+  }
+
+  async function handleBulkHoldSelected() {
+    const importedIds = products
+      .filter(
+        (product) =>
+          selectedIds.includes(product.id) && product.status === "IMPORTED"
+      )
+      .map((product) => product.id);
+
+    if (importedIds.length === 0) {
+      onToast("No selected products are imported.", "error");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Set eBay listing quantity to 0 for ${importedIds.length} selected product(s)? This will hide them from eBay search.`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsBulkHolding(true);
+
+    try {
+      const res = await fetch("/api/products/bulk-hold", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds: importedIds }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        total?: number;
+        held?: number;
+        failed?: number;
+        error?: string;
+      };
+
+      if (!res.ok) {
+        onToast(data.error || "Bulk hold failed.", "error");
+        router.refresh();
+        return;
+      }
+
+      const failureCount = data.failed ?? 0;
+      const heldCount = data.held ?? 0;
+
+      onToast(
+        failureCount > 0
+          ? `Put ${heldCount} product(s) on hold. ${failureCount} failed.`
+          : `Successfully put ${heldCount} product(s) on hold.`,
+        failureCount > 0 ? "error" : "success"
+      );
+      setSelectedIds([]);
+      router.refresh();
+    } catch {
+      onToast("Network error while putting products on hold.", "error");
+    } finally {
+      setIsBulkHolding(false);
     }
   }
 
@@ -1182,6 +1334,44 @@ export default function DraftsTable({
             )}
             {isProductsView && (
               <>
+                {selectedImportedCount > 0 && (
+                  <button
+                    onClick={handleBulkHoldSelected}
+                    disabled={isBulkHolding}
+                    className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
+                  >
+                    {isBulkHolding ? (
+                      <>
+                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        Holding...
+                      </>
+                    ) : (
+                      `Put ${selectedImportedCount} On Hold`
+                    )}
+                  </button>
+                )}
+                {selectedOnHoldCount > 0 && (
+                  <button
+                    onClick={handleBulkResumeSelected}
+                    disabled={isBulkResuming}
+                    className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
+                  >
+                    {isBulkResuming ? (
+                      <>
+                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        Resuming...
+                      </>
+                    ) : (
+                      `Resume ${selectedOnHoldCount} On Hold`
+                    )}
+                  </button>
+                )}
                 <button
                   onClick={handleBulkPriceCheck}
                   disabled={isBulkPriceChecking}

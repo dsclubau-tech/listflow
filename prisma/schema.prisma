@@ -44,6 +44,7 @@ enum ProductStatus {
   DRAFT
   IMPORTED
   FAILED
+  ON_HOLD
 }
 
 enum VariantStatus {
@@ -72,6 +73,7 @@ model Product {
   errorMessage  String?       @db.Text
   asin          String?
   amazonPrice   Decimal?      @db.Decimal(10, 2)
+  amazonStockLeft Int?
   lastPriceCheck DateTime?
   priceCheckError String?     @db.Text
   shippingPolicyId String?

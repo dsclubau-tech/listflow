@@ -50,7 +50,8 @@ async function runRegressionTest() {
       console.log(`📦 Testing ASIN: ${asin}`);
       
       const startTime = Date.now();
-      const price = await scrapeAmazonPrice(asin, browser, targetPostcode);
+      const scrapeResult = await scrapeAmazonPrice(asin, browser, targetPostcode);
+      const price = scrapeResult.price;
       const duration = ((Date.now() - startTime) / 1000).toFixed(2);
       
       // Look at the first browser page to see what happened
@@ -73,6 +74,10 @@ async function runRegressionTest() {
       }
 
       console.log(`💲 Scraped Price: A$${price.toFixed(2)}`);
+
+      if (scrapeResult.stockLeft !== null) {
+        console.log(`Stock Signal: Only ${scrapeResult.stockLeft} left in stock`);
+      }
 
       // 13-cent / plausibility guard check
       if (price < 1.0) {

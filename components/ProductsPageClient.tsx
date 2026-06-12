@@ -33,6 +33,8 @@ export default function ProductsPageClient({
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const { toast, showToast, hideToast } = useToast();
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+  const listingCountLabel =
+    importedFilter === "today" ? "listings added today" : "listings";
   const firstVisibleProduct =
     totalCount === 0 ? 0 : Math.min(totalCount, (page - 1) * pageSize + 1);
   const lastVisibleProduct =
@@ -201,8 +203,7 @@ export default function ProductsPageClient({
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-semibold text-gray-900">Products</h1>
           <span className="text-sm text-gray-500">
-            ({totalCount} {importedFilter === "today" ? "today" : "active"}{" "}
-            listings)
+            ({totalCount} {listingCountLabel})
           </span>
         </div>
 

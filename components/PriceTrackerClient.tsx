@@ -48,11 +48,27 @@ interface TrackedProductOption {
   sellPrice: string;
 }
 
+interface LowStockProduct {
+  id: string;
+  title: string;
+  asin: string | null;
+  ebayItemId: string | null;
+  amazonStockLeft: number | null;
+}
+
 interface PriceTrackerClientProps {
   initialSummary: PriceTrackerSummary;
   initialHistory: PriceTrackerHistoryItem[];
   initialTrackedProducts: TrackedProductOption[];
   pendingCount: number;
+  failedProducts?: Array<{
+    id: string;
+    title: string;
+    asin: string | null;
+    ebayItemId: string | null;
+    priceCheckError: string | null;
+  }>;
+  lowStockProducts?: LowStockProduct[];
 }
 
 interface PriceCheckResponse {
@@ -173,6 +189,8 @@ export default function PriceTrackerClient({
   initialHistory,
   initialTrackedProducts,
   pendingCount,
+  failedProducts = [],
+  lowStockProducts = [],
 }: PriceTrackerClientProps) {
   const router = useRouter();
   const { toast, showToast, hideToast } = useToast();
@@ -197,6 +215,157 @@ export default function PriceTrackerClient({
   const [isBulkApplying, setIsBulkApplying] = useState(false);
   const [isBulkDismissing, setIsBulkDismissing] = useState(false);
 
+  const [selectedFailedIds, setSelectedFailedIds] = useState<string[]>([]);
+  const [isBulkEnding, setIsBulkEnding] = useState(false);
+  const [isBulkHolding, setIsBulkHolding] = useState(false);
+  const [selectedLowStockIds, setSelectedLowStockIds] = useState<string[]>([]);
+  const [isBulkHoldingLowStock, setIsBulkHoldingLowStock] = useState(false);
+
+  const handleSelectLowStockAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedLowStockIds(lowStockProducts.map((product) => product.id));
+    } else {
+      setSelectedLowStockIds([]);
+    }
+  };
+
+  const handleSelectLowStockOne = (productId: string, checked: boolean) => {
+    if (checked) {
+      setSelectedLowStockIds((prev) => [...prev, productId]);
+    } else {
+      setSelectedLowStockIds((prev) => prev.filter((id) => id !== productId));
+    }
+  };
+
+  const handleBulkHoldLowStockSelected = async () => {
+    if (selectedLowStockIds.length === 0) return;
+
+    const confirmed = window.confirm(
+      `Set eBay listing quantity to 0 for ${selectedLowStockIds.length} low-stock product(s)? This will hide them from eBay search.`
+    );
+
+    if (!confirmed) return;
+
+    setIsBulkHoldingLowStock(true);
+    try {
+      const response = await fetch("/api/products/bulk-hold", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds: selectedLowStockIds }),
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        showToast(data.error || "Failed to put low-stock products on hold.", "error");
+      } else {
+        const held = data.held ?? 0;
+        const failed = data.failed ?? 0;
+        showToast(
+          failed > 0
+            ? `Put ${held} low-stock product(s) on hold. ${failed} failed.`
+            : `Successfully put ${held} low-stock product(s) on hold.`,
+          failed > 0 ? "error" : "success"
+        );
+        setSelectedLowStockIds([]);
+        router.refresh();
+      }
+    } catch {
+      showToast("Network error while trying to put low-stock products on hold.", "error");
+    } finally {
+      setIsBulkHoldingLowStock(false);
+    }
+  };
+
+  const handleSelectFailedAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedFailedIds((failedProducts ?? []).map((p) => p.id));
+    } else {
+      setSelectedFailedIds([]);
+    }
+  };
+
+  const handleSelectFailedOne = (productId: string, checked: boolean) => {
+    if (checked) {
+      setSelectedFailedIds((prev) => [...prev, productId]);
+    } else {
+      setSelectedFailedIds((prev) => prev.filter((id) => id !== productId));
+    }
+  };
+
+  const handleBulkEndSelected = async () => {
+    if (selectedFailedIds.length === 0) return;
+
+    const confirmed = window.confirm(
+      `Are you sure you want to end ${selectedFailedIds.length} listing(s) on eBay and PERMANENTLY delete them from ListFlow? This action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    setIsBulkEnding(true);
+    try {
+      const response = await fetch("/api/products/bulk-end", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds: selectedFailedIds }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        showToast(data.error || "Failed to end products.", "error");
+      } else {
+        const ended = data.ended ?? 0;
+        const failed = data.failed ?? 0;
+        if (failed > 0) {
+          showToast(`Ended ${ended} listing(s) on eBay and deleted them from ListFlow. ${failed} failed.`, "error");
+        } else {
+          showToast(`Successfully ended ${ended} listing(s) on eBay and deleted them from ListFlow.`, "success");
+        }
+        setSelectedFailedIds([]);
+        router.refresh();
+      }
+    } catch {
+      showToast("Network error while trying to end listings.", "error");
+    } finally {
+      setIsBulkEnding(false);
+    }
+  };
+
+  const handleBulkHoldSelected = async () => {
+    if (selectedFailedIds.length === 0) return;
+
+    const confirmed = window.confirm(
+      `Set eBay listing quantity to 0 and put ${selectedFailedIds.length} product(s) on hold? This will hide them from eBay search results.`
+    );
+
+    if (!confirmed) return;
+
+    setIsBulkHolding(true);
+    try {
+      const response = await fetch("/api/products/bulk-hold", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds: selectedFailedIds }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        showToast(data.error || "Failed to put products on hold.", "error");
+      } else {
+        const held = data.held ?? 0;
+        const failed = data.failed ?? 0;
+        if (failed > 0) {
+          showToast(`Set quantity to 0 for ${held} listing(s). ${failed} failed.`, "error");
+        } else {
+          showToast(`Successfully put ${held} product(s) on hold.`, "success");
+        }
+        setSelectedFailedIds([]);
+        router.refresh();
+      }
+    } catch {
+      showToast("Network error while trying to put products on hold.", "error");
+    } finally {
+      setIsBulkHolding(false);
+    }
+  };
+
   useEffect(() => {
     if (!isChecking) {
       return;
@@ -208,6 +377,22 @@ export default function PriceTrackerClient({
 
     return () => window.clearInterval(interval);
   }, [isChecking, router]);
+
+  useEffect(() => {
+    const lowStockIdSet = new Set(lowStockProducts.map((product) => product.id));
+    setSelectedLowStockIds((currentIds) => {
+      const nextIds = currentIds.filter((id) => lowStockIdSet.has(id));
+      return nextIds.length === currentIds.length ? currentIds : nextIds;
+    });
+  }, [lowStockProducts]);
+
+  useEffect(() => {
+    const failedProductIdSet = new Set(failedProducts.map((product) => product.id));
+    setSelectedFailedIds((currentIds) => {
+      const nextIds = currentIds.filter((id) => failedProductIdSet.has(id));
+      return nextIds.length === currentIds.length ? currentIds : nextIds;
+    });
+  }, [failedProducts]);
 
   useEffect(() => {
     if (initialTrackedProducts.length === 0) {
@@ -625,6 +810,223 @@ export default function PriceTrackerClient({
           </p>
         </div>
       </div>
+
+      {lowStockProducts.length > 0 && (
+        <div className="mb-8 overflow-hidden rounded-2xl border border-amber-200 bg-amber-50/50 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-amber-100 pb-4">
+            <div>
+              <h2 className="flex items-center gap-2 text-lg font-semibold text-amber-950">
+                <svg
+                  className="h-5 w-5 text-amber-600"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke="currentColor"
+                  aria-hidden="true"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 9v3.75m0 3.75h.008v.008H12V16.5zm8.25 2.25H3.75L12 4.5l8.25 14.25z"
+                  />
+                </svg>
+                {lowStockProducts.length} Product{lowStockProducts.length === 1 ? "" : "s"} Have Low Amazon Stock
+              </h2>
+              <p className="mt-1 text-sm text-amber-900/75">
+                Review imported listings where Amazon reports three or fewer units left.
+              </p>
+            </div>
+
+            {selectedLowStockIds.length > 0 && (
+              <button
+                type="button"
+                onClick={handleBulkHoldLowStockSelected}
+                disabled={isBulkHoldingLowStock}
+                className="inline-flex items-center gap-2 rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isBulkHoldingLowStock ? "Holding..." : `Put Selected On Hold (${selectedLowStockIds.length})`}
+              </button>
+            )}
+          </div>
+
+          <div className="mt-4 max-h-64 overflow-y-auto rounded-xl border border-amber-100 bg-white/75">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-amber-100 bg-amber-50 text-xs font-medium uppercase tracking-wide text-amber-950">
+                  <th className="w-12 px-4 py-3">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                      checked={
+                        lowStockProducts.length > 0 &&
+                        selectedLowStockIds.length === lowStockProducts.length
+                      }
+                      onChange={(event) =>
+                        handleSelectLowStockAll(event.target.checked)
+                      }
+                    />
+                  </th>
+                  <th className="px-4 py-3">Product Title</th>
+                  <th className="px-4 py-3">ASIN</th>
+                  <th className="px-4 py-3">eBay Item ID</th>
+                  <th className="px-4 py-3">Amazon Stock</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-amber-50">
+                {lowStockProducts.map((product) => (
+                  <tr key={product.id} className="hover:bg-amber-50/50">
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                        checked={selectedLowStockIds.includes(product.id)}
+                        onChange={(event) =>
+                          handleSelectLowStockOne(product.id, event.target.checked)
+                        }
+                      />
+                    </td>
+                    <td className="max-w-md truncate px-4 py-3 font-medium text-amber-950">
+                      {product.title}
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-amber-900">
+                      {product.asin ? (
+                        <a
+                          href={`https://www.amazon.com.au/dp/${product.asin}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hover:text-orange-700 hover:underline"
+                        >
+                          {product.asin}
+                        </a>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-amber-900">
+                      {product.ebayItemId ? (
+                        <a
+                          href={`https://www.ebay.com.au/itm/${product.ebayItemId}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hover:text-blue-700 hover:underline"
+                        >
+                          {product.ebayItemId}
+                        </a>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-sm font-medium text-amber-950">
+                      Only {product.amazonStockLeft ?? "?"} left in stock
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {failedProducts && failedProducts.length > 0 && (
+        <div className="mb-8 overflow-hidden rounded-2xl border border-red-200 bg-red-50/30 p-5">
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-red-100 pb-4">
+            <div>
+              <h2 className="text-lg font-semibold text-red-950 flex items-center gap-2">
+                <svg className="h-5 w-5 text-red-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                {failedProducts.length} Product{failedProducts.length === 1 ? "" : "s"} Failed Last Price Check
+              </h2>
+              <p className="mt-1 text-sm text-red-900/70">
+                These listings failed Amazon price verification because they are out of stock or the page was deleted. Choose an option to handle them.
+              </p>
+            </div>
+
+            {selectedFailedIds.length > 0 && (
+              <div className="flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={handleBulkEndSelected}
+                  disabled={isBulkEnding || isBulkHolding}
+                  className="inline-flex items-center gap-2 rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-50"
+                >
+                  {isBulkEnding
+                    ? "Ending..."
+                    : `End Selected on eBay & Delete (${selectedFailedIds.length})`}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleBulkHoldSelected}
+                  disabled={isBulkEnding || isBulkHolding}
+                  className="inline-flex items-center gap-2 rounded-md border border-red-200 bg-white px-4 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-50 disabled:opacity-50"
+                >
+                  {isBulkHolding
+                    ? "Holding..."
+                    : `Put Selected On Hold (${selectedFailedIds.length})`}
+                </button>
+              </div>
+            )}
+          </div>
+
+          <div className="mt-4 max-h-60 overflow-y-auto rounded-xl border border-red-100 bg-white/70">
+            <table className="w-full text-left">
+              <thead>
+                <tr className="border-b border-red-100 bg-red-50/50 text-xs font-medium uppercase tracking-wide text-red-950">
+                  <th className="w-12 px-4 py-3">
+                    <input
+                      type="checkbox"
+                      className="rounded border-red-300 text-red-600 focus:ring-red-500 h-4 w-4"
+                      checked={selectedFailedIds.length === failedProducts.length}
+                      onChange={(e) => handleSelectFailedAll(e.target.checked)}
+                    />
+                  </th>
+                  <th className="px-4 py-3">Product Title</th>
+                  <th className="px-4 py-3">ASIN</th>
+                  <th className="px-4 py-3">eBay Item ID</th>
+                  <th className="px-4 py-3">Error Reason</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-red-50">
+                {failedProducts.map((p) => (
+                  <tr key={p.id} className="hover:bg-red-50/20">
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        className="rounded border-red-300 text-red-600 focus:ring-red-500 h-4 w-4"
+                        checked={selectedFailedIds.includes(p.id)}
+                        onChange={(e) => handleSelectFailedOne(p.id, e.target.checked)}
+                      />
+                    </td>
+                    <td className="px-4 py-3 font-medium text-red-950 max-w-md truncate">
+                      {p.title}
+                    </td>
+                    <td className="px-4 py-3 font-mono text-xs text-red-900">
+                      {p.asin}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-red-900">
+                      {p.ebayItemId ? (
+                        <a
+                          href={`https://www.ebay.com.au/itm/${p.ebayItemId}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="hover:underline text-blue-600 font-medium"
+                        >
+                          {p.ebayItemId}
+                        </a>
+                      ) : (
+                        "-"
+                      )}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-red-700 italic font-medium">
+                      {p.priceCheckError}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
       <div className="mb-8 overflow-hidden rounded-2xl border border-dashed border-amber-300 bg-amber-50/70">
         <button
