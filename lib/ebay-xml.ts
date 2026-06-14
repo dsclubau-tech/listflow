@@ -229,6 +229,9 @@ export function buildGetSellerListXML(page: number): string {
   endTimeTo.setDate(endTimeTo.getDate() + 120);
 
   const outputSelectors = [
+    "PaginationResult",
+    "HasMoreItems",
+    "ReturnedItemCountActual",
     "ItemID",
     "Title",
     "Description",
@@ -272,7 +275,13 @@ export function buildGetSellerListIdsXML(page: number): string {
   const endTimeTo = new Date(now);
   endTimeTo.setDate(endTimeTo.getDate() + 120);
 
-  const outputSelectors = ["ItemID", "ListingType"]
+  const outputSelectors = [
+    "PaginationResult",
+    "HasMoreItems",
+    "ReturnedItemCountActual",
+    "ItemID",
+    "ListingType",
+  ]
     .map((selector) => `  <OutputSelector>${selector}</OutputSelector>`)
     .join("\n");
 

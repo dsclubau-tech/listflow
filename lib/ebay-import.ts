@@ -9,6 +9,7 @@ import {
 import { callEbayGetItem, callEbayGetSellerList } from "@/lib/ebay";
 import {
   buildGetItemXML,
+  buildGetSellerListXML,
   buildGetSellerListIdsXML,
 } from "@/lib/ebay-xml";
 import { logger } from "@/lib/logger";
@@ -19,7 +20,7 @@ export interface EbayImportOptions {
   storeNumber: 1 | 2 | 3;
   userId: string;
   quantity: number;
-  onProgress?: (progress: ImportProgress) => void;
+  onProgress?: (progress: ImportProgress) => void | Promise<void>;
 }
 
 export interface ImportProgress {
@@ -55,6 +56,13 @@ type EbayNode = Record<string, unknown>;
 interface SellerListIdPage {
   itemIds: string[];
   totalPages: number;
+  hasMoreItems: boolean;
+}
+
+interface SellerListDetailPage {
+  items: EbayNode[];
+  totalPages: number;
+  hasMoreItems: boolean;
 }
 
 interface NameValuePair {
@@ -70,7 +78,8 @@ const parser = new XMLParser({
   trimValues: true,
 });
 
-const ASIN_PATTERN = /^B0[A-Z0-9]{8,}$/i;
+const ASIN_PATTERN = /\bB0[A-Z0-9]{8}\b/i;
+const IMPORT_STATS_CACHE_TTL_MS = 3 * 60 * 60 * 1000;
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -140,22 +149,66 @@ function getString(source: unknown, ...path: string[]) {
   return toText(getPath(source, ...path)).trim();
 }
 
-function normalizeAsinSku(sku: string) {
-  const asin = sku.trim().toUpperCase();
-  return ASIN_PATTERN.test(asin) ? asin : null;
+function extractAsinFromText(value: string) {
+  const match = value.toUpperCase().match(ASIN_PATTERN);
+  return match ? match[0] : null;
 }
 
-function extractAsinFromSku(item: EbayNode): string | null {
-  const itemAsin = normalizeAsinSku(getString(item, "SKU"));
+function extractAsinFromSpecifics(specifics: Record<string, string>) {
+  const preferredKeys = new Set([
+    "asin",
+    "amazonasin",
+    "amazonitemid",
+    "amazonitemnumber",
+  ]);
+
+  for (const [key, value] of Object.entries(specifics)) {
+    const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+    if (preferredKeys.has(normalizedKey)) {
+      const asin = extractAsinFromText(value);
+
+      if (asin) {
+        return asin;
+      }
+    }
+  }
+
+  for (const value of Object.values(specifics)) {
+    const asin = extractAsinFromText(value);
+
+    if (asin) {
+      return asin;
+    }
+  }
+
+  return null;
+}
+
+function extractAsin(item: EbayNode, specifics: Record<string, string>): string | null {
+  const itemAsin = extractAsinFromText(getString(item, "SKU"));
 
   if (itemAsin) {
     return itemAsin;
   }
 
   const variations = asArray(getPath(item, "Variations", "Variation")).filter(isNode);
-  const firstVariationAsin = normalizeAsinSku(getString(variations[0], "SKU"));
 
-  return firstVariationAsin;
+  for (const variation of variations) {
+    const variationAsin = extractAsinFromText(getString(variation, "SKU"));
+
+    if (variationAsin) {
+      return variationAsin;
+    }
+  }
+
+  const specificsAsin = extractAsinFromSpecifics(specifics);
+
+  if (specificsAsin) {
+    return specificsAsin;
+  }
+
+  return extractAsinFromText(toText(getPath(item, "Description")));
 }
 
 function toNumber(value: unknown): number | null {
@@ -375,6 +428,7 @@ function mapEbayItemToProduct(
   const categoryId = getString(item, "PrimaryCategory", "CategoryID");
   const title = getString(item, "Title") || "(no title)";
   const quantity = getAvailableQuantity(item);
+  const itemSpecifics = getItemSpecifics(item);
 
   return {
     title,
@@ -385,11 +439,11 @@ function mapEbayItemToProduct(
     categoryName: getString(item, "PrimaryCategory", "CategoryName") || null,
     condition: getCondition(item),
     images: getPictureUrls(item),
-    itemSpecifics: getItemSpecifics(item),
+    itemSpecifics,
     status: ProductStatus.IMPORTED,
     ebayItemId: getString(item, "ItemID"),
     errorMessage: null,
-    asin: extractAsinFromSku(item),
+    asin: extractAsin(item, itemSpecifics),
     amazonPrice: null,
     shippingPolicyId: getPolicyId(
       item,
@@ -429,6 +483,21 @@ function formatEbayErrors(errors: unknown) {
   return messages.length > 0 ? messages.join("; ") : "Unknown eBay error";
 }
 
+function getSellerListPagination(response: EbayNode, page: number) {
+  const explicitTotalPages = toInteger(
+    getPath(response, "PaginationResult", "TotalNumberOfPages"),
+  );
+  const hasMoreItems = /^true$/i.test(getString(response, "HasMoreItems"));
+  const totalPages =
+    explicitTotalPages !== null
+      ? Math.max(1, explicitTotalPages)
+      : hasMoreItems
+        ? page + 1
+        : page;
+
+  return { totalPages, hasMoreItems };
+}
+
 async function fetchSellerListIdPage(
   storeNumber: 1 | 2 | 3,
   page: number,
@@ -448,17 +517,41 @@ async function fetchSellerListIdPage(
     throw new Error(formatEbayErrors(getPath(response, "Errors")));
   }
 
-  const totalPages = Math.max(
-    1,
-    toInteger(getPath(response, "PaginationResult", "TotalNumberOfPages")) ?? 1,
-  );
+  const pagination = getSellerListPagination(response, page);
   const itemIds = asArray(getPath(response, "ItemArray", "Item"))
     .filter(isNode)
     .filter(isImportableListing)
     .map((item) => getString(item, "ItemID"))
     .filter(Boolean);
 
-  return { itemIds, totalPages };
+  return { itemIds, ...pagination };
+}
+
+async function fetchSellerListDetailPage(
+  storeNumber: 1 | 2 | 3,
+  page: number,
+): Promise<SellerListDetailPage> {
+  const xml = buildGetSellerListXML(page);
+  const xmlText = await callEbayGetSellerList(xml, storeNumber);
+  const parsed = parser.parse(xmlText) as EbayNode;
+  const response = getPath(parsed, "GetSellerListResponse");
+
+  if (!isNode(response)) {
+    throw new Error("Invalid GetSellerList response from eBay");
+  }
+
+  const ack = getString(response, "Ack");
+
+  if (ack !== "Success" && ack !== "Warning") {
+    throw new Error(formatEbayErrors(getPath(response, "Errors")));
+  }
+
+  const pagination = getSellerListPagination(response, page);
+  const items = asArray(getPath(response, "ItemArray", "Item"))
+    .filter(isNode)
+    .filter(isImportableListing);
+
+  return { items, ...pagination };
 }
 
 function isImportableListing(item: EbayNode) {
@@ -484,6 +577,50 @@ async function fetchAllEbayListingIds(storeNumber: 1 | 2 | 3) {
   } while (page <= totalPages);
 
   return uniqueStrings(itemIds);
+}
+
+async function getCachedEbayListingIds(
+  storeId: string,
+  storeNumber: 1 | 2 | 3,
+) {
+  const cached = await prisma.ebayImportStatsCache.findUnique({
+    where: { storeId },
+    select: {
+      listingIds: true,
+      fetchedAt: true,
+    },
+  });
+  const now = Date.now();
+
+  if (
+    cached &&
+    now - cached.fetchedAt.getTime() < IMPORT_STATS_CACHE_TTL_MS
+  ) {
+    return cached.listingIds;
+  }
+
+  const listingIds = await fetchAllEbayListingIds(storeNumber);
+
+  await prisma.ebayImportStatsCache.upsert({
+    where: { storeId },
+    create: {
+      storeId,
+      activeListings: listingIds.length,
+      listingIds,
+      fetchedAt: new Date(now),
+    },
+    update: {
+      activeListings: listingIds.length,
+      listingIds,
+      fetchedAt: new Date(now),
+    },
+  });
+
+  return listingIds;
+}
+
+export async function invalidateEbayImportStatsCache(storeId: string) {
+  await prisma.ebayImportStatsCache.deleteMany({ where: { storeId } });
 }
 
 async function getExistingEbayItemIds(storeId: string, itemIds: string[]) {
@@ -513,7 +650,10 @@ async function getExistingEbayItemIds(storeId: string, itemIds: string[]) {
 export async function getEbayImportStats(
   options: Pick<EbayImportOptions, "storeId" | "storeNumber">,
 ): Promise<EbayImportStats> {
-  const listingIds = await fetchAllEbayListingIds(options.storeNumber);
+  const listingIds = await getCachedEbayListingIds(
+    options.storeId,
+    options.storeNumber,
+  );
   const existingIds = await getExistingEbayItemIds(options.storeId, listingIds);
   const remaining = listingIds.filter((itemId) => !existingIds.has(itemId));
 
@@ -550,6 +690,40 @@ async function fetchEbayItemDetails(
   }
 
   return item;
+}
+
+async function fetchSelectedEbayItemDetails(
+  storeNumber: 1 | 2 | 3,
+  itemIds: string[],
+) {
+  const pendingIds = new Set(itemIds);
+  const itemsById = new Map<string, EbayNode>();
+  let page = 1;
+  let totalPages = 1;
+
+  while (pendingIds.size > 0 && page <= totalPages) {
+    const response = await fetchSellerListDetailPage(storeNumber, page);
+    totalPages = response.totalPages;
+
+    for (const item of response.items) {
+      const itemId = getString(item, "ItemID");
+
+      if (!pendingIds.has(itemId)) {
+        continue;
+      }
+
+      itemsById.set(itemId, item);
+      pendingIds.delete(itemId);
+    }
+
+    if (pendingIds.size > 0 && page < totalPages) {
+      await delay(250);
+    }
+
+    page += 1;
+  }
+
+  return itemsById;
 }
 
 function isRateLimitError(error: unknown) {
@@ -599,7 +773,10 @@ export async function importEbayListings(
     quantity: options.quantity,
   });
 
-  const listingIds = await fetchAllEbayListingIds(options.storeNumber);
+  const listingIds = await getCachedEbayListingIds(
+    options.storeId,
+    options.storeNumber,
+  );
   const existingIds = await getExistingEbayItemIds(options.storeId, listingIds);
   const remainingIds = listingIds.filter((itemId) => !existingIds.has(itemId));
   const requested = Math.min(
@@ -620,7 +797,7 @@ export async function importEbayListings(
     errors: [],
   };
 
-  options.onProgress?.({
+  await options.onProgress?.({
     processed: 0,
     total: selectedIds.length,
     created: result.created,
@@ -628,11 +805,32 @@ export async function importEbayListings(
     failed: result.failed,
   });
 
+  let itemsById = new Map<string, EbayNode>();
+
+  try {
+    itemsById = await fetchSelectedEbayItemDetails(
+      options.storeNumber,
+      selectedIds,
+    );
+  } catch (error) {
+    logger.warn(
+      "ebay-import/importEbayListings",
+      "Batched GetSellerList detail fetch failed; falling back to per-item GetItem calls",
+      {
+        storeId: options.storeId,
+        storeNumber: options.storeNumber,
+        error: getErrorMessage(error),
+      },
+    );
+  }
+
   for (const [index, itemId] of selectedIds.entries()) {
     let title = "(loading)";
 
     try {
-      const item = await fetchEbayItemDetails(options.storeNumber, itemId);
+      const item =
+        itemsById.get(itemId) ??
+        (await fetchEbayItemDetails(options.storeNumber, itemId));
       title = getString(item, "Title") || "(no title)";
 
       if (!isImportableListing(item)) {
@@ -663,7 +861,7 @@ export async function importEbayListings(
       }
     }
 
-    options.onProgress?.({
+    await options.onProgress?.({
       processed: index + 1,
       total: selectedIds.length,
       created: result.created,

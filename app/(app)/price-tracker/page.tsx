@@ -1,7 +1,10 @@
 import { prisma } from "@/lib/prisma";
 import PriceTrackerClient from "@/components/PriceTrackerClient";
+import { dismissObsoletePendingPriceChanges } from "@/lib/price-history-cleanup";
 
 export default async function PriceTrackerPage() {
+  await dismissObsoletePendingPriceChanges();
+
   const todayUtc = new Date();
   todayUtc.setUTCHours(0, 0, 0, 0);
 

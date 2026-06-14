@@ -40,25 +40,85 @@ interface ImportResult {
 
 type ModalState = "confirm" | "importing" | "complete";
 
-type ImportStreamEvent =
-  | ({ type: "progress" } & ImportProgress)
-  | ({ type: "complete" } & ImportResult)
-  | { type: "error"; message: string };
+type ImportJobStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
+
+interface ImportJob {
+  id: string;
+  storeId: string;
+  status: ImportJobStatus;
+  quantity: number;
+  requested: number;
+  activeListings: number;
+  alreadyImported: number;
+  remainingBeforeImport: number;
+  remainingAfterImport: number;
+  processed: number;
+  total: number;
+  created: number;
+  skipped: number;
+  failed: number;
+  rateLimited: boolean;
+  errors: Array<{ itemId: string; title: string; error: string }>;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+}
+
+interface StoredImportJob {
+  id: string;
+  storeId: string;
+}
+
+const IMPORT_JOB_STORAGE_KEY = "listflow:ebay-import:active-job";
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unknown error";
 }
 
-function isImportStreamEvent(value: unknown): value is ImportStreamEvent {
-  if (!value || typeof value !== "object" || !("type" in value)) {
-    return false;
-  }
-
-  return typeof (value as { type?: unknown }).type === "string";
-}
-
 function formatNumber(value: number) {
   return new Intl.NumberFormat().format(value);
+}
+
+function isActiveImportJob(job: ImportJob | null) {
+  return job?.status === "QUEUED" || job?.status === "RUNNING";
+}
+
+function readStoredImportJob(): StoredImportJob | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  try {
+    const raw = window.localStorage.getItem(IMPORT_JOB_STORAGE_KEY);
+    const parsed = raw ? (JSON.parse(raw) as Partial<StoredImportJob>) : null;
+
+    return parsed?.id && parsed.storeId
+      ? { id: parsed.id, storeId: parsed.storeId }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredImportJob(job: ImportJob) {
+  window.localStorage.setItem(
+    IMPORT_JOB_STORAGE_KEY,
+    JSON.stringify({ id: job.id, storeId: job.storeId }),
+  );
+}
+
+function clearStoredImportJob(jobId?: string) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const stored = readStoredImportJob();
+
+  if (!jobId || stored?.id === jobId) {
+    window.localStorage.removeItem(IMPORT_JOB_STORAGE_KEY);
+  }
 }
 
 export default function EbayImportClient({ stores }: EbayImportClientProps) {
@@ -72,12 +132,16 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
   const [modalState, setModalState] = useState<ModalState | null>(null);
   const [pendingQuantity, setPendingQuantity] = useState(100);
   const [importing, setImporting] = useState(false);
+  const [activeJob, setActiveJob] = useState<ImportJob | null>(null);
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showErrors, setShowErrors] = useState(false);
 
   const selectedStoreRecord = stores.find((store) => store.id === selectedStore);
+  const activeJobId = activeJob?.id ?? null;
+  const activeJobStatus = activeJob?.status ?? null;
+  const activeImportRunning = activeJobStatus === "QUEUED" || activeJobStatus === "RUNNING";
   const parsedQuantity = Number.parseInt(quantity, 10);
   const quantityValue =
     Number.isFinite(parsedQuantity) && parsedQuantity >= 0 ? parsedQuantity : 0;
@@ -89,6 +153,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
     : 0;
   const importDisabled =
     importing ||
+    activeImportRunning ||
     statsLoading ||
     !stats ||
     stats.remaining === 0 ||
@@ -186,7 +251,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
   }
 
   function openConfirmation(amount = quantityValue) {
-    if (!stats || amount < 1 || amount > stats.remaining || importing) {
+    if (!stats || amount < 1 || amount > stats.remaining || importing || activeImportRunning) {
       return;
     }
 
@@ -199,7 +264,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
   }
 
   function handleImportAllRemaining() {
-    if (!stats || stats.remaining < 1 || importing) {
+    if (!stats || stats.remaining < 1 || importing || activeImportRunning) {
       return;
     }
 
@@ -208,109 +273,77 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
     openConfirmation(stats.remaining);
   }
 
-  function handleStreamEvent(event: ImportStreamEvent) {
-    if (event.type === "progress") {
-      setProgress({
-        processed: event.processed,
-        total: event.total,
-        created: event.created,
-        skipped: event.skipped,
-        failed: event.failed,
-        currentItemId: event.currentItemId,
-      });
-      return;
-    }
+  const applyImportJob = useCallback(
+    (job: ImportJob) => {
+      setActiveJob(job);
+      setPendingQuantity(job.quantity);
 
-    if (event.type === "complete") {
-      setResult({
-        requested: event.requested,
-        activeListings: event.activeListings,
-        alreadyImported: event.alreadyImported,
-        remainingBeforeImport: event.remainingBeforeImport,
-        remainingAfterImport: event.remainingAfterImport,
-        created: event.created,
-        skipped: event.skipped,
-        failed: event.failed,
-        rateLimited: event.rateLimited,
-        errors: event.errors,
-      });
+      if (isActiveImportJob(job)) {
+        writeStoredImportJob(job);
+        setImporting(true);
+        setModalState("importing");
+        setProgress({
+          processed: job.processed,
+          total: job.total || job.requested || job.quantity,
+          created: job.created,
+          skipped: job.skipped,
+          failed: job.failed,
+        });
+        setResult(null);
+        setError(null);
+        return;
+      }
+
+      clearStoredImportJob(job.id);
+      setActiveJob(null);
+      setImporting(false);
       setProgress(null);
       setModalState("complete");
+
+      if (job.status === "FAILED") {
+        setResult(null);
+        setError(job.errorMessage || "eBay import failed");
+      } else {
+        setError(null);
+        setResult({
+          requested: job.requested,
+          activeListings: job.activeListings,
+          alreadyImported: job.alreadyImported,
+          remainingBeforeImport: job.remainingBeforeImport,
+          remainingAfterImport: job.remainingAfterImport,
+          created: job.created,
+          skipped: job.skipped,
+          failed: job.failed,
+          rateLimited: job.rateLimited,
+          errors: job.errors,
+        });
+      }
+
       router.refresh();
       void loadStats();
-      return;
+    },
+    [loadStats, router],
+  );
+
+  const fetchImportJob = useCallback(async (jobId: string) => {
+    const response = await fetch(
+      `/api/ebay-import/jobs/${encodeURIComponent(jobId)}`,
+      { cache: "no-store" },
+    );
+    const data = (await response.json().catch(() => ({}))) as {
+      job?: ImportJob;
+      error?: string;
+    };
+
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to load import job");
     }
 
-    setError(event.message);
-    setProgress(null);
-    setModalState("complete");
-  }
-
-  function parseSseBlock(block: string) {
-    const dataLine = block.split("\n").find((line) => line.startsWith("data: "));
-
-    if (!dataLine) {
-      return null;
-    }
-
-    const parsed = JSON.parse(dataLine.slice(6)) as unknown;
-    return isImportStreamEvent(parsed) ? parsed : null;
-  }
-
-  async function readStream(response: Response) {
-    if (!response.body) {
-      throw new Error("Import response did not include a stream");
-    }
-
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let receivedTerminalEvent = false;
-
-    while (true) {
-      const { done, value } = await reader.read();
-
-      if (done) {
-        break;
-      }
-
-      buffer += decoder.decode(value, { stream: true });
-      const blocks = buffer.split("\n\n");
-      buffer = blocks.pop() ?? "";
-
-      for (const block of blocks) {
-        const event = parseSseBlock(block);
-
-        if (!event) {
-          continue;
-        }
-
-        handleStreamEvent(event);
-
-        if (event.type === "complete" || event.type === "error") {
-          receivedTerminalEvent = true;
-        }
-      }
-    }
-
-    buffer += decoder.decode();
-
-    if (buffer.trim()) {
-      const event = parseSseBlock(buffer);
-
-      if (event) {
-        handleStreamEvent(event);
-        receivedTerminalEvent = event.type === "complete" || event.type === "error";
-      }
-    }
-
-    if (!receivedTerminalEvent) {
-      throw new Error("Connection lost before the import completed. Re-run the import to continue safely.");
-    }
-  }
+    return data.job ?? null;
+  }, []);
 
   async function startImport() {
-    if (!selectedStore || importing || pendingQuantity < 1) {
+    if (!selectedStore || importing || activeImportRunning || pendingQuantity < 1) {
       return;
     }
 
@@ -328,26 +361,115 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
     setShowErrors(false);
 
     try {
-      const response = await fetch("/api/ebay-import", {
+      const response = await fetch("/api/ebay-import/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ storeId: selectedStore, quantity: pendingQuantity }),
       });
+      const data = (await response.json().catch(() => ({}))) as {
+        job?: ImportJob;
+        error?: string;
+      };
 
       if (!response.ok) {
-        const data = (await response.json().catch(() => ({}))) as { error?: string };
         throw new Error(data.error || "Failed to start eBay import");
       }
 
-      await readStream(response);
+      if (!data.job) {
+        throw new Error("Import job response did not include a job");
+      }
+
+      applyImportJob(data.job);
     } catch (caughtError) {
       setError(getErrorMessage(caughtError));
       setProgress(null);
       setModalState("complete");
-    } finally {
       setImporting(false);
     }
   }
+
+  useEffect(() => {
+    if (!selectedStore) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function recoverImportJob() {
+      const stored = readStoredImportJob();
+
+      if (stored?.storeId === selectedStore) {
+        try {
+          const job = await fetchImportJob(stored.id);
+
+          if (!cancelled && job) {
+            applyImportJob(job);
+            return;
+          }
+        } catch {
+          clearStoredImportJob(stored.id);
+        }
+      }
+
+      try {
+        const response = await fetch(
+          `/api/ebay-import/jobs/current?storeId=${encodeURIComponent(selectedStore)}`,
+          { cache: "no-store" },
+        );
+        const data = (await response.json().catch(() => ({}))) as {
+          job?: ImportJob | null;
+        };
+
+        if (!cancelled && response.ok && data.job) {
+          applyImportJob(data.job);
+        }
+      } catch {
+        if (!cancelled && stored?.storeId === selectedStore) {
+          clearStoredImportJob(stored.id);
+        }
+      }
+    }
+
+    void recoverImportJob();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [applyImportJob, fetchImportJob, selectedStore]);
+
+  useEffect(() => {
+    if (!activeJobId || !activeImportRunning) {
+      return;
+    }
+
+    const jobId = activeJobId;
+    let cancelled = false;
+
+    async function pollImportJob() {
+      try {
+        const job = await fetchImportJob(jobId);
+
+        if (!cancelled && job) {
+          applyImportJob(job);
+        }
+      } catch (caughtError) {
+        if (!cancelled) {
+          setError(getErrorMessage(caughtError));
+          setImporting(false);
+          setProgress(null);
+          setModalState("complete");
+        }
+      }
+    }
+
+    const intervalId = window.setInterval(pollImportJob, 2000);
+    void pollImportJob();
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [activeImportRunning, activeJobId, applyImportJob, fetchImportJob]);
 
   function closeModal() {
     if (importing) {
@@ -361,6 +483,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
   }
 
   function resetForNextBatch() {
+    setActiveJob(null);
     setModalState(null);
     setProgress(null);
     setResult(null);
@@ -385,7 +508,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
               id="store"
               value={selectedStore}
               onChange={(event) => setSelectedStore(event.target.value)}
-              disabled={importing || stores.length === 0}
+              disabled={importing || activeImportRunning || stores.length === 0}
               className="mt-2 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
             >
               {stores.length === 0 ? (
@@ -411,7 +534,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
               max={stats?.remaining ?? undefined}
               value={quantity}
               onChange={(event) => handleQuantityChange(event.target.value)}
-              disabled={importing || statsLoading || !stats}
+              disabled={importing || activeImportRunning || statsLoading || !stats}
               className="mt-2 w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
             />
           </div>
@@ -447,7 +570,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
           <button
             type="button"
             onClick={handleImportAllRemaining}
-            disabled={importing || statsLoading || !stats || stats.remaining < 1}
+            disabled={importing || activeImportRunning || statsLoading || !stats || stats.remaining < 1}
             className="inline-flex items-center justify-center rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Import All Remaining
@@ -497,10 +620,14 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
 
             {modalState === "importing" && (
               <div className="p-6" aria-live="polite">
-                <h2 className="text-lg font-semibold text-gray-900">Importing Listings</h2>
+                <h2 className="text-lg font-semibold text-gray-900">
+                  {activeJobStatus === "QUEUED" ? "Preparing Import" : "Importing Listings"}
+                </h2>
                 <div className="mt-5 flex items-center justify-between gap-4">
                   <p className="text-sm font-medium text-gray-900">
-                    Importing {progress?.processed ?? 0} of {progress?.total ?? pendingQuantity}...
+                    {activeJobStatus === "QUEUED" && (progress?.processed ?? 0) === 0
+                      ? "Waiting to start..."
+                      : `Importing ${progress?.processed ?? 0} of ${progress?.total ?? pendingQuantity}...`}
                   </p>
                   <span className="text-sm text-gray-500">{progressPercent}%</span>
                 </div>
@@ -527,7 +654,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
               <div className="p-6">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <h2 className="text-lg font-semibold text-gray-900">
-                    {result?.rateLimited ? "Import Paused" : "Import Complete"}
+                    {error ? "Import Failed" : result?.rateLimited ? "Import Paused" : "Import Complete"}
                   </h2>
                   <button
                     type="button"
@@ -645,7 +772,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
                     onClick={resetForNextBatch}
                     className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700"
                   >
-                    Import Next Batch
+                    {error ? "Try Again" : "Import Next Batch"}
                   </button>
                 </div>
               </div>

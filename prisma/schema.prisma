@@ -22,6 +22,7 @@ model User {
   products   Product[]
   uploadLogs UploadLog[]
   priceCheckJobs PriceCheckJob[]
+  ebayImportJobs EbayImportJob[]
 }
 
 // --- Part 2 Models ---
@@ -36,9 +37,11 @@ model Store {
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
 
-  products    Product[]
-  uploadLogs  UploadLog[]
-  policyTemplates PolicyTemplate[]
+  products             Product[]
+  uploadLogs           UploadLog[]
+  policyTemplates      PolicyTemplate[]
+  ebayImportStatsCache EbayImportStatsCache?
+  ebayImportJobs       EbayImportJob[]
 }
 
 enum ProductStatus {
@@ -70,6 +73,13 @@ enum PriceCheckJobScope {
   ALL
 }
 
+enum EbayImportJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
 model Product {
   id            String        @id @default(cuid())
   title         String
@@ -89,6 +99,7 @@ model Product {
   amazonStockLeft Int?
   lastPriceCheck DateTime?
   priceCheckError String?     @db.Text
+  internalNote    String?     @db.Text
   shippingPolicyId String?
   returnPolicyId   String?
   paymentPolicyId  String?
@@ -200,6 +211,53 @@ model UploadLog {
   product      Product      @relation(fields: [productId], references: [id])
   store        Store        @relation(fields: [storeId], references: [id])
   user         User         @relation(fields: [userId], references: [id])
+}
+
+model EbayImportStatsCache {
+  id             String   @id @default(cuid())
+  storeId        String   @unique
+  activeListings Int
+  listingIds     String[] @default([])
+  fetchedAt      DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([fetchedAt])
+}
+
+model EbayImportJob {
+  id                    String              @id @default(cuid())
+  userId                String
+  storeId               String
+  storeNumber           Int
+  status                EbayImportJobStatus @default(QUEUED)
+  quantity              Int
+  requested             Int                 @default(0)
+  activeListings        Int                 @default(0)
+  alreadyImported       Int                 @default(0)
+  remainingBeforeImport Int                 @default(0)
+  remainingAfterImport  Int                 @default(0)
+  processed             Int                 @default(0)
+  total                 Int                 @default(0)
+  created               Int                 @default(0)
+  skipped               Int                 @default(0)
+  failed                Int                 @default(0)
+  rateLimited           Boolean             @default(false)
+  errors                Json                @default("[]")
+  errorMessage          String?             @db.Text
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+  startedAt             DateTime?
+  completedAt           DateTime?
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([storeId, status])
+  @@index([createdAt])
 }
 
 // TODO: Part 3

@@ -30,11 +30,23 @@ async function findPendingHistoryTarget(body: ReviewRequestBody) {
   const productId = body.productId?.trim();
 
   if (priceHistoryId) {
-    return prisma.priceHistory.findFirst({
+    const selectedHistory = await prisma.priceHistory.findFirst({
       where: {
         id: priceHistoryId,
         appliedAt: null,
       },
+    });
+
+    if (!selectedHistory) {
+      return null;
+    }
+
+    return prisma.priceHistory.findFirst({
+      where: {
+        productId: selectedHistory.productId,
+        appliedAt: null,
+      },
+      orderBy: { createdAt: "desc" },
     });
   }
 
@@ -194,6 +206,19 @@ export async function POST(request: Request) {
     await tx.priceHistory.updateMany({
       where: {
         id: { in: historyIds },
+        appliedAt: null,
+      },
+      data: {
+        appliedAt: reviewedAt,
+        ebayRevised: false,
+        errorMessage: null,
+      },
+    });
+
+    await tx.priceHistory.updateMany({
+      where: {
+        productId: product.id,
+        id: { notIn: historyIds },
         appliedAt: null,
       },
       data: {

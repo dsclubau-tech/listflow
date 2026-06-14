@@ -27,6 +27,10 @@ export interface SerializedProductVariantSummary {
   id: string;
   title: string;
   buyPrice: string;
+  feesPercent?: number;
+  feesFixed?: number;
+  profitPercent?: number;
+  profitFixed?: number;
   sellPrice: string;
 }
 
@@ -37,6 +41,8 @@ export type SerializedProductRow = Omit<
   price: string;
   amazonPrice?: string | null;
   lastPriceCheck?: string | null;
+  internalNote?: string | null;
+  uploadedAt?: string | null;
   createdAt: string;
   updatedAt: string;
   store: SerializedStore;

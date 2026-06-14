@@ -53,6 +53,7 @@ export async function PATCH(
     "paymentPolicyId",
     "policyTemplateId",
     "templateId",
+    "internalNote",
   ];
 
   const data: Record<string, unknown> = {};
@@ -155,6 +156,20 @@ export async function PATCH(
     }
 
     data.policyTemplateId = normalizedPolicyTemplateId;
+  }
+
+  if (data.internalNote !== undefined) {
+    if (data.internalNote !== null && typeof data.internalNote !== "string") {
+      return NextResponse.json(
+        { error: "internalNote must be a string or null" },
+        { status: 400 },
+      );
+    }
+
+    data.internalNote =
+      typeof data.internalNote === "string"
+        ? data.internalNote.trim() || null
+        : null;
   }
 
   try {

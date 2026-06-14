@@ -4,6 +4,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import InlineEditForm from "@/components/InlineEditForm";
+import { calculateNetProfit } from "@/lib/variant-pricing";
 import type { SerializedProductRow } from "@/types/product-row";
 
 interface DraftsTableProps {
@@ -48,8 +49,42 @@ function parseMoney(value: string | number | null | undefined) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function formatMoneyRange(values: number[]) {
+  if (values.length === 0) {
+    return "-";
+  }
+
+  const sorted = [...values].sort((left, right) => left - right);
+  const min = sorted[0];
+  const max = sorted[sorted.length - 1];
+
+  if (min === max) {
+    return formatMoney(min);
+  }
+
+  return `${formatMoney(min)} - ${formatMoney(max)}`;
+}
+
 function formatChangePercent(value: number) {
   return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) {
+    return null;
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 function formatDateTime(value: string | null | undefined) {
@@ -138,21 +173,84 @@ function ItemIdCell({ product }: { product: SerializedProductRow }) {
 }
 
 function PriceCell({ product }: { product: SerializedProductRow }) {
-  const primaryVariant = product.variants?.[0];
-  const buyPrice = primaryVariant?.buyPrice ?? product.amazonPrice ?? product.price;
-  const sellPrice = primaryVariant?.sellPrice ?? product.price;
+  const variants = product.variants ?? [];
+  const buyPrices = variants
+    .map((variant) => parseMoney(variant.buyPrice))
+    .filter((value): value is number => value !== null);
+  const sellPrices = variants
+    .map((variant) => parseMoney(variant.sellPrice))
+    .filter((value): value is number => value !== null);
+  const fallbackBuyPrice = parseMoney(product.amazonPrice ?? product.price);
+  const fallbackSellPrice = parseMoney(product.price);
 
   return (
     <div className="space-y-1 text-xs font-medium leading-5">
       <div className="whitespace-nowrap">
         <span className="text-gray-500">BUY</span>{" "}
-        <span className="font-semibold text-gray-900">{formatMoney(buyPrice)}</span>
+        <span className="font-semibold text-gray-900">
+          {formatMoneyRange(
+            buyPrices.length > 0
+              ? buyPrices
+              : fallbackBuyPrice !== null
+                ? [fallbackBuyPrice]
+                : []
+          )}
+        </span>
       </div>
       <div className="whitespace-nowrap">
         <span className="text-gray-500">SELL</span>{" "}
-        <span className="font-semibold text-gray-900">{formatMoney(sellPrice)}</span>
+        <span className="font-semibold text-gray-900">
+          {formatMoneyRange(
+            sellPrices.length > 0
+              ? sellPrices
+              : fallbackSellPrice !== null
+                ? [fallbackSellPrice]
+                : []
+          )}
+        </span>
       </div>
     </div>
+  );
+}
+
+function ProfitCell({ product }: { product: SerializedProductRow }) {
+  const profits = (product.variants ?? [])
+    .map((variant) => {
+      const buyPrice = parseMoney(variant.buyPrice);
+      const sellPrice = parseMoney(variant.sellPrice);
+
+      if (buyPrice === null || sellPrice === null) {
+        return null;
+      }
+
+      return calculateNetProfit({
+        buyPrice,
+        sellPrice,
+        feesPercent: variant.feesPercent ?? 0,
+        feesFixed: variant.feesFixed ?? 0,
+      });
+    })
+    .filter((value): value is number => value !== null);
+
+  if (profits.length === 0) {
+    const buyPrice = parseMoney(product.amazonPrice);
+    const sellPrice = parseMoney(product.price);
+
+    if (buyPrice === null || sellPrice === null) {
+      return <span className="text-sm text-gray-400">-</span>;
+    }
+
+    return (
+      <span className="whitespace-nowrap text-sm font-medium text-gray-700">
+        {formatMoney(sellPrice - buyPrice)}
+      </span>
+    );
+  }
+
+  return (
+    <span className="whitespace-nowrap text-sm font-medium text-gray-700">
+      {formatMoneyRange(profits)}
+    </span>
   );
 }
 
@@ -261,6 +359,10 @@ export default function DraftsTable({
   const [isBulkDismissing, setIsBulkDismissing] = useState(false);
   const [isBulkResuming, setIsBulkResuming] = useState(false);
   const [isBulkHolding, setIsBulkHolding] = useState(false);
+  const [notingProduct, setNotingProduct] =
+    useState<SerializedProductRow | null>(null);
+  const [noteDraft, setNoteDraft] = useState("");
+  const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
   const router = useRouter();
 
   const isDraftsView = view === "drafts";
@@ -374,6 +476,45 @@ export default function DraftsTable({
       onToast("Network error while ending listing.", "error");
     } finally {
       setEndingId(null);
+    }
+  }
+
+  function openInternalNote(product: SerializedProductRow) {
+    setNotingProduct(product);
+    setNoteDraft(product.internalNote ?? "");
+  }
+
+  async function handleSaveInternalNote() {
+    if (!notingProduct) {
+      return;
+    }
+
+    setSavingNoteId(notingProduct.id);
+
+    try {
+      const res = await fetch(`/api/products/${notingProduct.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ internalNote: noteDraft }),
+      });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+
+      if (!res.ok) {
+        onToast(data.error || "Failed to save internal note.", "error");
+        return;
+      }
+
+      onToast(
+        noteDraft.trim() ? "Internal note saved" : "Internal note cleared",
+        "success"
+      );
+      setNotingProduct(null);
+      setNoteDraft("");
+      router.refresh();
+    } catch {
+      onToast("Network error while saving internal note.", "error");
+    } finally {
+      setSavingNoteId(null);
     }
   }
 
@@ -955,7 +1096,7 @@ export default function DraftsTable({
     );
   }
 
-  const columnCount = isProductsView ? 11 : 8;
+  const columnCount = isProductsView ? 13 : 8;
 
   return (
     <>
@@ -967,11 +1108,28 @@ export default function DraftsTable({
 
       <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
         <div className="overflow-x-auto">
-          <table className={isProductsView ? "w-full min-w-[1240px]" : "w-full"}>
+          <table className={isProductsView ? "w-full min-w-[1240px] table-fixed" : "w-full"}>
+          {isProductsView && (
+            <colgroup>
+              <col className="w-[34px]" />
+              <col className="w-7" />
+              <col className="w-[58px]" />
+              <col className="w-[250px]" />
+              <col className="w-24" />
+              <col className="w-[72px]" />
+              <col className="w-[108px]" />
+              <col className="w-[72px]" />
+              <col className="w-[84px]" />
+              <col className="w-[88px]" />
+              <col className="w-[214px]" />
+              <col className="w-11" />
+              <col className="w-[102px]" />
+            </colgroup>
+          )}
           <thead>
             <tr className="bg-gray-50 border-b text-xs font-medium text-gray-500 uppercase tracking-wide">
               {hasSelectionColumn && (
-                <th className="px-4 py-3 text-left w-10">
+                <th className="px-3 py-3 text-left w-10">
                   <input
                     type="checkbox"
                     checked={allSelected}
@@ -981,22 +1139,28 @@ export default function DraftsTable({
                   />
                 </th>
               )}
-              <th className="px-4 py-3 text-left w-10" />
-              <th className="px-4 py-3 text-left w-14">Image</th>
-              <th className="px-4 py-3 text-left">Title</th>
+              <th className="px-2 py-3 text-left w-10" />
+              <th className="px-3 py-3 text-left w-14">Image</th>
+              <th className="px-3 py-3 text-left">Title</th>
               {isProductsView && (
                 <>
-                  <th className="px-4 py-3 text-left">Item ID</th>
-                  <th className="px-4 py-3 text-left">Price</th>
+                  <th className="px-3 py-3 text-left">Price</th>
+                  <th className="px-3 py-3 text-left">Profit</th>
+                  <th className="px-3 py-3 text-left">Item ID</th>
                 </>
               )}
-              <th className="px-4 py-3 text-left">Store</th>
-              <th className="px-4 py-3 text-left">Created by</th>
-              <th className="px-4 py-3 text-left">Status</th>
+              <th className="px-3 py-3 text-left">Store</th>
+              <th className="px-3 py-3 text-left">
+                {isProductsView ? "Uploaded" : "Created by"}
+              </th>
+              <th className="px-3 py-3 text-left">Status</th>
               {isProductsView && (
-                <th className="px-4 py-3 text-left">Price Tracking</th>
+                <>
+                  <th className="px-3 py-3 text-left">Price Tracking</th>
+                  <th className="px-2 py-3 text-left">Note</th>
+                </>
               )}
-              <th className="px-4 py-3 text-left">Actions</th>
+              <th className="px-3 py-3 text-left">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -1023,7 +1187,7 @@ export default function DraftsTable({
                     onClick={() => toggleExpand(product.id)}
                   >
                     {hasSelectionColumn && (
-                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                      <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                         <input
                           type="checkbox"
                           checked={isSelected}
@@ -1039,7 +1203,7 @@ export default function DraftsTable({
                       </td>
                     )}
 
-                    <td className="px-4 py-3">
+                    <td className="px-2 py-3">
                       <svg
                         className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${
                           isExpanded ? "rotate-90" : ""
@@ -1052,7 +1216,7 @@ export default function DraftsTable({
                       </svg>
                     </td>
 
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3">
                       {product.images && product.images.length > 0 ? (
                         <img
                           src={product.images[0]}
@@ -1068,8 +1232,8 @@ export default function DraftsTable({
                       )}
                     </td>
 
-                    <td className="px-4 py-3">
-                      <div className="max-w-xs">
+                    <td className="px-3 py-3">
+                      <div className={isProductsView ? "max-w-[15rem]" : "max-w-xs"}>
                         <span
                           className="text-sm font-medium text-gray-900 truncate block"
                           title={product.title}
@@ -1089,19 +1253,23 @@ export default function DraftsTable({
 
                     {isProductsView && (
                       <>
-                        <td className="px-4 py-3">
-                          <ItemIdCell product={product} />
+                        <td className="px-3 py-3">
+                          <PriceCell product={product} />
                         </td>
 
-                        <td className="px-4 py-3">
-                          <PriceCell product={product} />
+                        <td className="px-3 py-3">
+                          <ProfitCell product={product} />
+                        </td>
+
+                        <td className="px-3 py-3">
+                          <ItemIdCell product={product} />
                         </td>
                       </>
                     )}
 
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3">
                       <span
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                        className={`inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-medium ${
                           storeBadgeColors[product.store.name] || "bg-gray-100 text-gray-800"
                         }`}
                       >
@@ -1109,13 +1277,15 @@ export default function DraftsTable({
                       </span>
                     </td>
 
-                    <td className="px-4 py-3">
-                      <span className="text-sm text-gray-500">
-                        {product.createdBy.name}
+                    <td className="px-3 py-3">
+                      <span className="whitespace-nowrap text-sm text-gray-500">
+                        {isProductsView
+                          ? formatDate(product.uploadedAt) ?? "-"
+                          : product.createdBy.name}
                       </span>
                     </td>
 
-                    <td className="px-4 py-3">
+                    <td className="px-3 py-3">
                       <span
                         className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusBadgeClasses(product.status)}`}
                       >
@@ -1124,8 +1294,8 @@ export default function DraftsTable({
                     </td>
 
                     {isProductsView && trackingState && (
-                      <td className="px-4 py-3">
-                        <div className="max-w-xs">
+                      <td className="px-3 py-3">
+                        <div className="max-w-[13rem]">
                           <span
                             className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${trackingState.badgeClass}`}
                           >
@@ -1179,7 +1349,46 @@ export default function DraftsTable({
                       </td>
                     )}
 
-                    <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                    {isProductsView && (
+                      <td className="px-2 py-3" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          onClick={() => openInternalNote(product)}
+                          title={
+                            product.internalNote
+                              ? `Edit internal note: ${product.internalNote}`
+                              : "Add an internal note"
+                          }
+                          aria-label={
+                            product.internalNote
+                              ? "Edit internal note"
+                              : "Add an internal note"
+                          }
+                          className={`inline-flex h-8 w-8 items-center justify-center rounded transition-colors ${
+                            product.internalNote
+                              ? "text-orange-600 hover:bg-orange-50"
+                              : "text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+                          }`}
+                        >
+                          <svg
+                            className="h-4 w-4"
+                            fill="none"
+                            stroke="currentColor"
+                            viewBox="0 0 24 24"
+                            strokeWidth={1.8}
+                            aria-hidden="true"
+                          >
+                            <path
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              d="M7.5 4.5h7.25a2.75 2.75 0 012.75 2.75v5.5a2.75 2.75 0 01-2.75 2.75H11L6.5 20v-3.75a1.75 1.75 0 01-1.5-1.73V7.25A2.75 2.75 0 017.5 4.5z"
+                            />
+                          </svg>
+                        </button>
+                      </td>
+                    )}
+
+                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-2">
                         {loadingId === product.id ? (
                           <button
@@ -1218,7 +1427,7 @@ export default function DraftsTable({
                           <button
                             onClick={() => handleEndListing(product.id)}
                             disabled={endingId === product.id}
-                            className="bg-red-500 hover:bg-red-600 text-white text-sm px-3 py-1 rounded transition-colors disabled:opacity-40 flex items-center gap-1.5"
+                            className="flex items-center gap-1 whitespace-nowrap rounded bg-red-500 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-40"
                             title="End listing on eBay and remove from ListFlow"
                           >
                             {endingId === product.id ? (
@@ -1294,6 +1503,56 @@ export default function DraftsTable({
           </table>
         </div>
       </div>
+
+      {notingProduct && (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 px-4"
+          onClick={() => {
+            if (!savingNoteId) {
+              setNotingProduct(null);
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-4">
+              <h2 className="text-base font-semibold text-gray-900">
+                Internal note
+              </h2>
+              <p className="mt-1 truncate text-sm text-gray-500">
+                {notingProduct.title}
+              </p>
+            </div>
+            <textarea
+              value={noteDraft}
+              onChange={(event) => setNoteDraft(event.target.value)}
+              rows={5}
+              className="w-full resize-none rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+              placeholder="Add an internal note"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setNotingProduct(null)}
+                disabled={Boolean(savingNoteId)}
+                className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveInternalNote}
+                disabled={Boolean(savingNoteId)}
+                className="rounded-md bg-gray-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700 disabled:opacity-50"
+              >
+                {savingNoteId ? "Saving..." : "Save note"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {selectedIds.length > 0 && (
         <div className="fixed bottom-0 left-64 right-0 bg-white border-t border-gray-200 shadow-lg p-4 z-30 flex items-center justify-between">

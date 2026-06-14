@@ -5,6 +5,11 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import DraftsTable from "@/components/DraftsTable";
 import Toast from "@/components/Toast";
 import { useToast } from "@/hooks/useToast";
+import {
+  getProductAdvancedFilter,
+  PRODUCT_ADVANCED_FILTERS,
+  type ProductAdvancedFilterId,
+} from "@/lib/product-filter-definitions";
 import type { SerializedProductRow } from "@/types/product-row";
 
 interface ProductsPageClientProps {
@@ -14,6 +19,8 @@ interface ProductsPageClientProps {
   pageSize: number;
   importedFilter: "today" | null;
   productFilter: ProductFilter;
+  hasAdvancedFilters: boolean;
+  supplierOptions: Array<{ id: string; name: string }>;
 }
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
@@ -29,6 +36,46 @@ const PRODUCT_FILTER_OPTIONS: Array<{ value: ProductFilter; label: string }> = [
   { value: "needs-changing-price", label: "Needs changing price" },
   { value: "failed-on-hold", label: "Failed / On hold" },
 ];
+const RANGE_FILTER_IDS = new Set<ProductAdvancedFilterId>([
+  "sellPrice",
+  "buyPrice",
+  "profit",
+  "quantity",
+  "fees",
+]);
+const STATIC_SELECT_OPTIONS: Partial<
+  Record<ProductAdvancedFilterId, Array<{ value: string; label: string }>>
+> = {
+  inventoryStatus: [
+    { value: "imported", label: "Imported" },
+    { value: "on-hold", label: "On Hold" },
+    { value: "check-failed", label: "Check failed" },
+  ],
+  stockMonitoring: [
+    { value: "low-stock", label: "Low stock" },
+    { value: "has-stock-data", label: "Has stock data" },
+    { value: "no-stock-data", label: "No stock data" },
+  ],
+  priceMonitoring: [
+    { value: "needs-changing-price", label: "Needs changing price" },
+    { value: "check-failed", label: "Check failed" },
+    { value: "not-checked", label: "Not checked" },
+    { value: "checked", label: "Checked" },
+    { value: "tracked", label: "Tracked" },
+  ],
+  autoOrder: [
+    { value: "configured", label: "Configured" },
+    { value: "not-configured", label: "Not configured" },
+  ],
+  veroViolation: [{ value: "potential", label: "Potential issue" }],
+};
+
+function getRangeParamKeys(filterId: ProductAdvancedFilterId) {
+  return {
+    min: `${filterId}Min`,
+    max: `${filterId}Max`,
+  };
+}
 
 interface PriceCheckJob {
   id: string;
@@ -91,6 +138,8 @@ export default function ProductsPageClient({
   pageSize,
   importedFilter,
   productFilter,
+  hasAdvancedFilters,
+  supplierOptions,
 }: ProductsPageClientProps) {
   const router = useRouter();
   const pathname = usePathname();
@@ -99,12 +148,15 @@ export default function ProductsPageClient({
   const [isStartingPriceCheckJob, setIsStartingPriceCheckJob] = useState(false);
   const [priceCheckJob, setPriceCheckJob] = useState<PriceCheckJob | null>(null);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
   const notifiedTerminalJobIds = useRef<Set<string>>(new Set());
   const { toast, showToast, hideToast } = useToast();
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const isPriceCheckJobActive = isActivePriceCheckJob(priceCheckJob);
   const listingCountLabel =
-    productFilter === "needs-changing-price"
+    hasAdvancedFilters
+      ? "filtered listings"
+      : productFilter === "needs-changing-price"
       ? "listings needing price changes"
       : productFilter === "failed-on-hold"
         ? "failed / on hold listings"
@@ -307,6 +359,181 @@ export default function ProductsPageClient({
     router.push(`${pathname}?${params.toString()}`);
   }
 
+  function getSelectOptions(filterId: ProductAdvancedFilterId) {
+    if (filterId === "supplier") {
+      return supplierOptions.map((store) => ({
+        value: store.id,
+        label: store.name,
+      }));
+    }
+
+    return STATIC_SELECT_OPTIONS[filterId] ?? [];
+  }
+
+  function isAdvancedFilterActive(filterId: ProductAdvancedFilterId) {
+    if (RANGE_FILTER_IDS.has(filterId)) {
+      const keys = getRangeParamKeys(filterId);
+      return searchParams.has(keys.min) || searchParams.has(keys.max);
+    }
+
+    return searchParams.has(filterId);
+  }
+
+  function updateFilterParams(
+    update: (params: URLSearchParams) => void,
+    mode: "push" | "replace" = "replace"
+  ) {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("page", "1");
+    update(params);
+    const nextUrl = `${pathname}?${params.toString()}`;
+
+    if (mode === "push") {
+      router.push(nextUrl);
+    } else {
+      router.replace(nextUrl);
+    }
+  }
+
+  function handleAddAdvancedFilter(filterId: ProductAdvancedFilterId) {
+    const filter = getProductAdvancedFilter(filterId);
+
+    if (!filter?.enabled) {
+      return;
+    }
+
+    updateFilterParams((params) => {
+      if (RANGE_FILTER_IDS.has(filterId)) {
+        const keys = getRangeParamKeys(filterId);
+        params.set(keys.min, "");
+        params.set(keys.max, "");
+        return;
+      }
+
+      if (filter.control === "select") {
+        const firstOption = getSelectOptions(filterId)[0]?.value ?? "";
+        params.set(filterId, firstOption);
+        return;
+      }
+
+      params.set(filterId, "");
+    }, "push");
+    setIsFilterMenuOpen(false);
+  }
+
+  function handleRemoveAdvancedFilter(filterId: ProductAdvancedFilterId) {
+    updateFilterParams((params) => {
+      if (RANGE_FILTER_IDS.has(filterId)) {
+        const keys = getRangeParamKeys(filterId);
+        params.delete(keys.min);
+        params.delete(keys.max);
+        return;
+      }
+
+      params.delete(filterId);
+    }, "push");
+  }
+
+  function handleClearFilters() {
+    updateFilterParams((params) => {
+      params.delete("filter");
+      PRODUCT_ADVANCED_FILTERS.forEach((filter) => {
+        if (RANGE_FILTER_IDS.has(filter.id)) {
+          const keys = getRangeParamKeys(filter.id);
+          params.delete(keys.min);
+          params.delete(keys.max);
+          return;
+        }
+
+        params.delete(filter.id);
+      });
+    }, "push");
+  }
+
+  function renderAdvancedFilterControl(filterId: ProductAdvancedFilterId) {
+    const filter = getProductAdvancedFilter(filterId);
+
+    if (!filter) {
+      return null;
+    }
+
+    if (RANGE_FILTER_IDS.has(filterId)) {
+      const keys = getRangeParamKeys(filterId);
+
+      return (
+        <div className="flex items-center gap-2">
+          <input
+            type="number"
+            inputMode="decimal"
+            value={searchParams.get(keys.min) ?? ""}
+            onChange={(event) =>
+              updateFilterParams((params) => {
+                params.set(keys.min, event.target.value);
+              })
+            }
+            placeholder="Min"
+            className="h-8 w-20 rounded border border-gray-300 px-2 text-xs text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+          />
+          <input
+            type="number"
+            inputMode="decimal"
+            value={searchParams.get(keys.max) ?? ""}
+            onChange={(event) =>
+              updateFilterParams((params) => {
+                params.set(keys.max, event.target.value);
+              })
+            }
+            placeholder="Max"
+            className="h-8 w-20 rounded border border-gray-300 px-2 text-xs text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+          />
+        </div>
+      );
+    }
+
+    if (filter.control === "select") {
+      const options = getSelectOptions(filterId);
+
+      return (
+        <select
+          value={searchParams.get(filterId) ?? ""}
+          onChange={(event) =>
+            updateFilterParams((params) => {
+              params.set(filterId, event.target.value);
+            })
+          }
+          className="h-8 rounded border border-gray-300 bg-white px-2 text-xs text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+        >
+          {options.length === 0 && <option value="">None</option>}
+          {options.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      );
+    }
+
+    return (
+      <input
+        type="text"
+        value={searchParams.get(filterId) ?? ""}
+        onChange={(event) =>
+          updateFilterParams((params) => {
+            params.set(filterId, event.target.value);
+          })
+        }
+        placeholder={filter.label}
+        className="h-8 w-44 rounded border border-gray-300 px-2 text-xs text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+      />
+    );
+  }
+
+  const activeAdvancedFilters = PRODUCT_ADVANCED_FILTERS.filter((filter) =>
+    isAdvancedFilterActive(filter.id)
+  );
+  const canClearFilters =
+    productFilter !== "all" || activeAdvancedFilters.length > 0;
+
   const handleExportCsv = async () => {
     setIsExporting(true);
 
@@ -485,6 +712,56 @@ export default function ProductsPageClient({
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setIsFilterMenuOpen((open) => !open)}
+              className="inline-flex items-center gap-2 rounded-md border border-amber-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 shadow-sm transition-colors hover:bg-amber-50"
+            >
+              <svg
+                className="h-4 w-4 text-gray-600"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                strokeWidth={1.8}
+                aria-hidden="true"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M4 6h16M7 12h10M10 18h4"
+                />
+              </svg>
+              Add Filter
+            </button>
+            {isFilterMenuOpen && (
+              <div className="absolute left-0 top-full z-20 mt-2 w-52 overflow-hidden rounded-md border border-gray-200 bg-white py-2 shadow-lg">
+                {PRODUCT_ADVANCED_FILTERS.map((filter) => {
+                  const active = isAdvancedFilterActive(filter.id);
+                  const disabled = !filter.enabled || active;
+
+                  return (
+                    <button
+                      key={filter.id}
+                      type="button"
+                      disabled={disabled}
+                      onClick={() => handleAddAdvancedFilter(filter.id)}
+                      title={!filter.enabled ? "No matching product field yet" : undefined}
+                      className={`block w-full px-4 py-2 text-left text-sm font-medium transition-colors ${
+                        active
+                          ? "bg-gray-50 text-gray-400"
+                          : filter.enabled
+                            ? "text-gray-700 hover:bg-amber-50"
+                            : "cursor-not-allowed text-gray-300"
+                      }`}
+                    >
+                      {filter.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
           <div className="inline-flex overflow-hidden rounded-md border border-gray-300 bg-white shadow-sm">
             {PRODUCT_FILTER_OPTIONS.map((option) => {
               const selected = option.value === productFilter;
@@ -571,6 +848,46 @@ export default function ProductsPageClient({
           </button>
         </div>
       </div>
+
+      {canClearFilters && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          {activeAdvancedFilters.map((filter) => (
+            <div
+              key={filter.id}
+              className="inline-flex min-h-10 items-center gap-2 rounded-md border border-gray-200 bg-white px-2 py-1 shadow-sm"
+            >
+              <span className="px-1 text-xs font-semibold text-gray-700">
+                {filter.label}
+              </span>
+              {renderAdvancedFilterControl(filter.id)}
+              <button
+                type="button"
+                onClick={() => handleRemoveAdvancedFilter(filter.id)}
+                className="inline-flex h-7 w-7 items-center justify-center rounded text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                aria-label={`Remove ${filter.label} filter`}
+              >
+                <svg
+                  className="h-3.5 w-3.5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  strokeWidth={2}
+                  aria-hidden="true"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={handleClearFilters}
+            className="rounded-md px-3 py-2 text-sm font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-800"
+          >
+            Clear filters
+          </button>
+        </div>
+      )}
 
       <DraftsTable
         products={products}

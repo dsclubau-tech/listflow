@@ -71,7 +71,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const historyItems = await prisma.priceHistory.findMany({
+  const targetHistoryItems = await prisma.priceHistory.findMany({
     where: {
       productId: target.productId,
       createdAt: target.createdAt,
@@ -80,20 +80,27 @@ export async function POST(request: Request) {
     select: { id: true },
   });
 
-  if (historyItems.length === 0) {
+  if (targetHistoryItems.length === 0) {
     return NextResponse.json(
       { error: "The pending price change has already been reviewed" },
       { status: 409 }
     );
   }
 
-  const historyIds = historyItems.map((item) => item.id);
+  const pendingProductHistory = await prisma.priceHistory.findMany({
+    where: {
+      productId: target.productId,
+      appliedAt: null,
+    },
+    select: { id: true },
+  });
+  const historyIds = pendingProductHistory.map((item) => item.id);
   const reviewedAt = new Date();
 
   await prisma.$transaction(async (tx) => {
     await tx.priceHistory.updateMany({
       where: {
-        id: { in: historyIds },
+        productId: target.productId,
         appliedAt: null,
       },
       data: {

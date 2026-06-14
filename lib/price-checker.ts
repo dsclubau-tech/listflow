@@ -432,6 +432,18 @@ export async function runPriceCheck(
             ((currentAmazonPrice - primaryBuyPrice) / primaryBuyPrice) * 100;
 
           await prisma.$transaction(async (tx) => {
+            await tx.priceHistory.updateMany({
+              where: {
+                productId: product.id,
+                appliedAt: null,
+              },
+              data: {
+                appliedAt: checkedAt,
+                ebayRevised: false,
+                errorMessage: null,
+              },
+            });
+
             await tx.product.update({
               where: { id: product.id },
               data: {
@@ -568,6 +580,18 @@ export async function runPriceCheck(
         }
 
         await prisma.$transaction(async (tx) => {
+          await tx.priceHistory.updateMany({
+            where: {
+              productId: product.id,
+              appliedAt: null,
+            },
+            data: {
+              appliedAt: checkedAt,
+              ebayRevised: false,
+              errorMessage: null,
+            },
+          });
+
           await tx.product.update({
             where: { id: product.id },
             data: {

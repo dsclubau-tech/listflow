@@ -13,7 +13,12 @@ function createPrismaClient() {
 }
 
 function hasCurrentPrismaDelegates(client: PrismaClient | undefined) {
-  return Boolean(client && "priceCheckJob" in client);
+  return Boolean(
+    client &&
+      "priceCheckJob" in client &&
+      "ebayImportStatsCache" in client &&
+      "ebayImportJob" in client,
+  );
 }
 
 export const prisma = hasCurrentPrismaDelegates(globalForPrisma.prisma)

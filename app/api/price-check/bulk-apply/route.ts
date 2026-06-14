@@ -98,7 +98,16 @@ export async function POST(request: Request) {
 
   // Process each product sequentially to avoid eBay rate limits
   for (const productId of productIds) {
-    const historyItems = productGroups.get(productId)!;
+    const allHistoryItems = productGroups.get(productId)!;
+    const newestCreatedAtMs = Math.max(
+      ...allHistoryItems.map((item) => item.createdAt.getTime())
+    );
+    const historyItems = allHistoryItems.filter(
+      (item) => item.createdAt.getTime() === newestCreatedAtMs
+    );
+    const obsoleteHistoryIds = allHistoryItems
+      .filter((item) => item.createdAt.getTime() < newestCreatedAtMs)
+      .map((item) => item.id);
 
     try {
       const product = await prisma.product.findUnique({
@@ -162,7 +171,6 @@ export async function POST(request: Request) {
       const reviewedAt = new Date();
       const historyIds = historyItems.map((item) => item.id);
 
-      // Apply prices in a transaction
       await prisma.$transaction(async (tx) => {
         await Promise.all(
           variantsToUpdate.map((variant) => {
@@ -197,6 +205,20 @@ export async function POST(request: Request) {
             errorMessage: null,
           },
         });
+
+        if (obsoleteHistoryIds.length > 0) {
+          await tx.priceHistory.updateMany({
+            where: {
+              id: { in: obsoleteHistoryIds },
+              appliedAt: null,
+            },
+            data: {
+              appliedAt: reviewedAt,
+              ebayRevised: false,
+              errorMessage: null,
+            },
+          });
+        }
       });
 
       // Revise eBay listing
