@@ -3,17 +3,19 @@ import { ProductStatus } from "@/app/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { createRequestLogger } from "@/lib/logger";
 import { NextResponse } from "next/server";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 const DELETABLE_STATUSES = [ProductStatus.DRAFT, ProductStatus.FAILED];
 
 export async function POST(request: Request) {
   const session = await auth();
+  const storeSession = await getCurrentStoreSession();
   const log = createRequestLogger(
     request,
-    session?.user ? { userId: session.user.id } : {},
+    storeSession ? { storeId: storeSession.storeId } : {},
   );
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("api/products/bulk-delete/POST", "Unauthorized delete attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -53,6 +55,7 @@ export async function POST(request: Request) {
 
   const productWhere = {
     id: { in: productIds },
+    storeId: storeSession.storeId,
     status: { in: DELETABLE_STATUSES },
   };
 

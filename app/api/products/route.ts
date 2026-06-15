@@ -2,11 +2,13 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { applyKeywordFilter } from "@/lib/keyword-filter";
+import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 
 export async function POST(request: Request) {
   const session = await auth();
+  const storeSession = await getCurrentStoreSession();
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -64,9 +66,9 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
-  if (!storeId) {
+  if (storeId && storeId !== storeSession.storeId) {
     return NextResponse.json(
-      { error: "Store is required" },
+      { error: "Store not found" },
       { status: 400 }
     );
   }
@@ -79,7 +81,7 @@ export async function POST(request: Request) {
 
   // Validate store exists
   const store = await prisma.store.findUnique({
-    where: { id: storeId },
+    where: { id: storeSession.storeId },
   });
 
   if (!store) {
@@ -101,10 +103,10 @@ export async function POST(request: Request) {
     if (normalizedPolicyTemplateId) {
       const policyTemplate = await prisma.policyTemplate.findUnique({
         where: { id: normalizedPolicyTemplateId },
-        select: { id: true },
+        select: { id: true, storeId: true },
       });
 
-      if (!policyTemplate) {
+      if (!policyTemplate || policyTemplate.storeId !== storeSession.storeId) {
         return NextResponse.json(
           { error: "Policy template not found" },
           { status: 400 },
@@ -114,7 +116,12 @@ export async function POST(request: Request) {
   }
 
   // Apply keyword blacklist filter
-  const filtered = await applyKeywordFilter(title.trim(), description.trim());
+  const filtered = await applyKeywordFilter(
+    title.trim(),
+    description.trim(),
+    storeSession.storeId
+  );
+  const createdById = await getInternalUserId();
 
   // Create product
   const product = await prisma.product.create({
@@ -129,8 +136,8 @@ export async function POST(request: Request) {
       images,
       itemSpecifics: itemSpecifics || {},
       status: "DRAFT",
-      storeId,
-      createdById: session.user.id,
+      storeId: storeSession.storeId,
+      createdById,
       asin: asin || null,
       shippingPolicyId: shippingPolicyId || null,
       returnPolicyId: returnPolicyId || null,

@@ -3,6 +3,7 @@ import { logger } from "@/lib/logger";
 import { normalizeBuiltinDescriptionTemplate } from "@/lib/builtin-description-templates";
 
 interface ProductForTemplate {
+  storeId: string;
   title: string;
   description: string;
   images: string[];
@@ -46,11 +47,15 @@ export async function resolveDescriptionTemplate(product: ProductForTemplate): P
     template = await prisma.descriptionTemplate.findUnique({
       where: { id: product.templateId },
     });
+
+    if (template?.storeId !== product.storeId) {
+      template = null;
+    }
   }
 
   if (!template) {
     template = await prisma.descriptionTemplate.findFirst({
-      where: { isDefault: true },
+      where: { storeId: product.storeId, isDefault: true },
     });
   }
 

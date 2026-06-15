@@ -9,15 +9,15 @@ export default async function DashboardLayout({
 }) {
   const session = await auth();
 
-  if (!session?.user) {
+  if (!session?.user?.storeId) {
     redirect("/login");
   }
 
   return (
     <div className="flex min-h-screen">
       <Sidebar
-        userName={session.user.name || "User"}
-        userEmail={session.user.email || ""}
+        userName={session.user.storeName || session.user.name || "Store"}
+        userEmail={session.user.storeLoginId || session.user.email || ""}
       />
       <main className="flex-1 ml-64 overflow-auto bg-gray-50">
         {children}

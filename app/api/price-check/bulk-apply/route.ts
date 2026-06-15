@@ -4,6 +4,7 @@ import { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { reviseProductPrice } from "@/lib/price-checker";
 import { createRequestLogger } from "@/lib/logger";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 const EBAY_MIN_PRICE = 1.0;
 
@@ -30,12 +31,13 @@ function getErrorMessage(error: unknown) {
 
 export async function POST(request: Request) {
   const session = await auth();
+  const storeSession = await getCurrentStoreSession();
   const log = createRequestLogger(
     request,
-    session?.user ? { userId: session.user.id } : {}
+    storeSession ? { storeId: storeSession.storeId } : {}
   );
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("price-check/bulk-apply", "Unauthorized bulk apply attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -61,6 +63,7 @@ export async function POST(request: Request) {
   const pendingHistory = await prisma.priceHistory.findMany({
     where: {
       appliedAt: null,
+      product: { storeId: storeSession.storeId },
       ...(filterProductIds && filterProductIds.length > 0
         ? { productId: { in: filterProductIds } }
         : {}),
@@ -120,7 +123,7 @@ export async function POST(request: Request) {
         },
       });
 
-      if (!product) {
+      if (!product || product.storeId !== storeSession.storeId) {
         skipped += 1;
         continue;
       }

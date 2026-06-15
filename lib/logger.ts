@@ -108,6 +108,7 @@ function buildLogEntry(options: WriteLogOptions): LogEntry {
     pathname: options.pathname,
     method: options.method,
     userId: options.userId,
+    storeId: options.storeId,
     tags: mergeTags(options.tags),
     data: options.data === undefined ? undefined : sanitizeForLog(options.data),
     error: normalizedError,
@@ -178,6 +179,7 @@ function coerceLogEntry(value: unknown): LogEntry | null {
     pathname: typeof raw.pathname === "string" ? raw.pathname : undefined,
     method: typeof raw.method === "string" ? raw.method : undefined,
     userId: typeof raw.userId === "string" ? raw.userId : undefined,
+    storeId: typeof raw.storeId === "string" ? raw.storeId : undefined,
     tags:
       Array.isArray(raw.tags) && raw.tags.every((tag) => typeof tag === "string")
         ? raw.tags
@@ -254,6 +256,7 @@ export function createRequestLogger(request: Request, scope: LogScope = {}): Log
     pathname: scope.pathname ?? url.pathname,
     method: scope.method ?? request.method,
     userId: scope.userId,
+    storeId: scope.storeId,
     tags: scope.tags,
   });
 }

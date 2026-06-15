@@ -1,6 +1,7 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 const DEFAULT_SUPPLIER = "amazon";
 const DEFAULT_REGION = "au";
@@ -61,14 +62,15 @@ function escapeCsvCell(value: string) {
 
 export async function GET() {
   const session = await auth();
+  const storeSession = await getCurrentStoreSession();
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const [products, supplierSettings] = await Promise.all([
     prisma.product.findMany({
-      where: { status: "IMPORTED" },
+      where: { status: "IMPORTED", storeId: storeSession.storeId },
       orderBy: { createdAt: "desc" },
       select: {
         ebayItemId: true,
@@ -80,6 +82,7 @@ export async function GET() {
       },
     }),
     prisma.supplierSettings.findFirst({
+      where: { storeId: storeSession.storeId },
       orderBy: { createdAt: "asc" },
       select: { supplierName: true },
     }),

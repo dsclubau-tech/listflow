@@ -1,14 +1,17 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 export async function GET() {
   const session = await auth();
-  if (!session?.user) {
+  const storeSession = await getCurrentStoreSession();
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const keywords = await prisma.keywordBlacklist.findMany({
+    where: { storeId: storeSession.storeId },
     orderBy: { createdAt: "asc" },
   });
 
@@ -17,7 +20,8 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const session = await auth();
-  if (!session?.user) {
+  const storeSession = await getCurrentStoreSession();
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -43,6 +47,7 @@ export async function POST(request: Request) {
 
   const entry = await prisma.keywordBlacklist.create({
     data: {
+      storeId: storeSession.storeId,
       keyword: keyword.trim(),
       removeFromTitle: !!removeFromTitle,
       removeFromDescription: !!removeFromDescription,

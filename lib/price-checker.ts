@@ -28,6 +28,7 @@ export interface PriceCheckResult {
 export type PriceCheckProgress = PriceCheckResult & { total: number };
 
 interface RunPriceCheckOptions {
+  storeId?: string;
   productIds?: string[];
   ignoreSchedule?: boolean;
   simulatedPrices?: Record<string, number>;
@@ -75,12 +76,36 @@ function getProductDelayMs() {
   );
 }
 
-async function getSupplierSettings() {
-  return prisma.supplierSettings.upsert({
-    where: { supplierName: SUPPLIER_NAME },
-    update: {},
-    create: { supplierName: SUPPLIER_NAME },
+async function getSupplierSettings(storeId?: string) {
+  if (storeId) {
+    const settings = await prisma.supplierSettings.findUnique({
+      where: {
+        storeId_supplierName: {
+          storeId,
+          supplierName: SUPPLIER_NAME,
+        },
+      },
+    });
+
+    if (settings) {
+      return settings;
+    }
+
+    return prisma.supplierSettings.create({
+      data: { storeId, supplierName: SUPPLIER_NAME },
+    });
+  }
+
+  const globalSettings = await prisma.supplierSettings.findFirst({
+    where: { storeId: null, supplierName: SUPPLIER_NAME },
   });
+
+  return (
+    globalSettings ??
+    prisma.supplierSettings.create({
+      data: { supplierName: SUPPLIER_NAME },
+    })
+  );
 }
 
 export async function reviseProductPrice(
@@ -131,7 +156,7 @@ function getAmazonStockUpdate(stockLeft: number | null | undefined) {
 export async function runPriceCheck(
   options: RunPriceCheckOptions = {}
 ): Promise<PriceCheckResult> {
-  const supplierSettings = await getSupplierSettings();
+  const supplierSettings = await getSupplierSettings(options.storeId);
 
   if (!options.ignoreSchedule && !supplierSettings.priceTrackingEnabled) {
     return {
@@ -167,6 +192,7 @@ export async function runPriceCheck(
   const productsFromDb = await prisma.product.findMany({
     where: {
       status: "IMPORTED",
+      ...(options.storeId ? { storeId: options.storeId } : {}),
       ...(restrictToIds ? { id: { in: normalizedIds } } : {}),
     },
     include: {

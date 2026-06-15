@@ -18,6 +18,7 @@ export interface LogScope {
   pathname?: string;
   method?: string;
   userId?: string;
+  storeId?: string;
   tags?: string[];
 }
 
@@ -34,6 +35,7 @@ export interface LogEntry {
   pathname?: string;
   method?: string;
   userId?: string;
+  storeId?: string;
   tags?: string[];
   data?: unknown;
   error?: NormalizedError;

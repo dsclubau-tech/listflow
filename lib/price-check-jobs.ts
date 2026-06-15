@@ -21,6 +21,7 @@ const ACTIVE_JOB_STATUSES: PriceCheckJobStatus[] = [
 
 type PriceCheckJobRecord = {
   id: string;
+  storeId: string | null;
   status: PriceCheckJobStatus;
   scope: PriceCheckJobScope;
   productIds: string[];
@@ -37,10 +38,12 @@ type PriceCheckJobRecord = {
   updatedAt: Date;
   startedAt: Date | null;
   completedAt: Date | null;
+  dismissedAt: Date | null;
 };
 
 type CreateJobInput = {
   userId: string;
+  storeId: string;
   productIds?: unknown[];
   all?: boolean;
 };
@@ -173,6 +176,7 @@ export function serializePriceCheckJob(job: PriceCheckJobRecord) {
     updatedAt: job.updatedAt.toISOString(),
     startedAt: job.startedAt?.toISOString() ?? null,
     completedAt: job.completedAt?.toISOString() ?? null,
+    dismissedAt: job.dismissedAt?.toISOString() ?? null,
   };
 }
 
@@ -194,6 +198,7 @@ async function resolveJobCheckpoint(job: PriceCheckJobRecord): Promise<JobCheckp
     const checkedProducts = await prisma.product.findMany({
       where: {
         id: { in: job.productIds },
+        ...(job.storeId ? { storeId: job.storeId } : {}),
         lastPriceCheck: { gte: job.startedAt },
       },
       select: { id: true },
@@ -248,11 +253,12 @@ async function persistCheckpoint(job: PriceCheckJobRecord, checkpoint: JobCheckp
   });
 }
 
-async function findActivePriceCheckJob(userId: string) {
+async function findActivePriceCheckJob(storeId: string) {
   return prisma.priceCheckJob.findFirst({
     where: {
-      userId,
+      storeId,
       status: { in: [...ACTIVE_JOB_STATUSES] },
+      dismissedAt: null,
     },
     orderBy: { createdAt: "desc" },
   });
@@ -283,11 +289,12 @@ async function markJobProductCompleted(
   });
 }
 
-async function resolveEligibleProductIds(productIds: string[]) {
+async function resolveEligibleProductIds(storeId: string, productIds: string[]) {
   const restrictToIds = productIds.length > 0;
   const requestedOrder = new Map(productIds.map((id, index) => [id, index]));
   const products = await prisma.product.findMany({
     where: {
+      storeId,
       status: ProductStatus.IMPORTED,
       asin: { not: null },
       ...(restrictToIds ? { id: { in: productIds } } : {}),
@@ -422,6 +429,7 @@ async function runPriceCheckJob(jobId: string) {
 
   try {
     const result = await runPriceCheck({
+      storeId: job.storeId ?? undefined,
       productIds: checkpoint.productIdsToCheck,
       ignoreSchedule: true,
       onProgress: (progress) =>
@@ -493,9 +501,9 @@ async function runPriceCheckJob(jobId: string) {
   }
 }
 
-export async function cancelPriceCheckJob(jobId: string, userId: string) {
+export async function cancelPriceCheckJob(jobId: string, storeId: string) {
   const job = await prisma.priceCheckJob.findFirst({
-    where: { id: jobId, userId },
+    where: { id: jobId, storeId },
   });
 
   if (!job) {
@@ -549,7 +557,7 @@ export function ensurePriceCheckJobRunning(jobId: string) {
 }
 
 export async function createPriceCheckJob(input: CreateJobInput) {
-  const activeJob = await findActivePriceCheckJob(input.userId);
+  const activeJob = await findActivePriceCheckJob(input.storeId);
 
   if (activeJob) {
     ensurePriceCheckJobRunning(activeJob.id);
@@ -566,7 +574,10 @@ export async function createPriceCheckJob(input: CreateJobInput) {
   const scope = isSelectedScope
     ? PriceCheckJobScope.SELECTED
     : PriceCheckJobScope.ALL;
-  const eligibleProductIds = await resolveEligibleProductIds(requestedProductIds);
+  const eligibleProductIds = await resolveEligibleProductIds(
+    input.storeId,
+    requestedProductIds
+  );
   const completedAt = eligibleProductIds.length === 0 ? new Date() : null;
   const reason =
     eligibleProductIds.length === 0
@@ -577,6 +588,7 @@ export async function createPriceCheckJob(input: CreateJobInput) {
   const job = await prisma.priceCheckJob.create({
     data: {
       userId: input.userId,
+      storeId: input.storeId,
       scope,
       status:
         eligibleProductIds.length > 0
@@ -596,9 +608,13 @@ export async function createPriceCheckJob(input: CreateJobInput) {
   return { job: serializePriceCheckJob(job), reused: false };
 }
 
-export async function resumePriceCheckJob(jobId: string, userId: string) {
+export async function resumePriceCheckJob(
+  jobId: string,
+  storeId: string,
+  userId: string
+) {
   const sourceJob = await prisma.priceCheckJob.findFirst({
-    where: { id: jobId, userId },
+    where: { id: jobId, storeId },
   });
 
   if (!sourceJob) {
@@ -619,7 +635,7 @@ export async function resumePriceCheckJob(jobId: string, userId: string) {
   };
   const remainingProductIds = checkpoint.productIdsToCheck;
 
-  const activeJob = await findActivePriceCheckJob(userId);
+  const activeJob = await findActivePriceCheckJob(storeId);
 
   if (activeJob) {
     ensurePriceCheckJobRunning(activeJob.id);
@@ -640,7 +656,10 @@ export async function resumePriceCheckJob(jobId: string, userId: string) {
     };
   }
 
-  const eligibleProductIds = await resolveEligibleProductIds(remainingProductIds);
+  const eligibleProductIds = await resolveEligibleProductIds(
+    storeId,
+    remainingProductIds
+  );
 
   if (eligibleProductIds.length === 0) {
     return {
@@ -654,6 +673,7 @@ export async function resumePriceCheckJob(jobId: string, userId: string) {
   const resumedJob = await prisma.priceCheckJob.create({
     data: {
       userId,
+      storeId,
       scope: sourceJob.scope,
       status: PriceCheckJobStatus.QUEUED,
       productIds: eligibleProductIds,
@@ -672,8 +692,8 @@ export async function resumePriceCheckJob(jobId: string, userId: string) {
   };
 }
 
-export async function getCurrentPriceCheckJob(userId: string) {
-  const job = await findActivePriceCheckJob(userId);
+export async function getCurrentPriceCheckJob(storeId: string) {
+  const job = await findActivePriceCheckJob(storeId);
 
   if (job) {
     ensurePriceCheckJobRunning(job.id);
@@ -682,11 +702,12 @@ export async function getCurrentPriceCheckJob(userId: string) {
   return job ? serializePriceCheckJob(job) : null;
 }
 
-export async function getPriceCheckJobForUser(jobId: string, userId: string) {
+export async function getPriceCheckJobForStore(jobId: string, storeId: string) {
   const job = await prisma.priceCheckJob.findFirst({
     where: {
       id: jobId,
-      userId,
+      storeId,
+      dismissedAt: null,
     },
   });
 
@@ -695,4 +716,30 @@ export async function getPriceCheckJobForUser(jobId: string, userId: string) {
   }
 
   return job ? serializePriceCheckJob(job) : null;
+}
+
+export async function dismissPriceCheckJob(jobId: string, storeId: string) {
+  const terminalStatuses = [
+    PriceCheckJobStatus.COMPLETED,
+    PriceCheckJobStatus.FAILED,
+    PriceCheckJobStatus.CANCELLED,
+  ];
+  const job = await prisma.priceCheckJob.findFirst({
+    where: {
+      id: jobId,
+      storeId,
+      status: { in: terminalStatuses },
+    },
+  });
+
+  if (!job) {
+    return null;
+  }
+
+  const updated = await prisma.priceCheckJob.update({
+    where: { id: job.id },
+    data: { dismissedAt: job.dismissedAt ?? new Date() },
+  });
+
+  return serializePriceCheckJob(updated);
 }

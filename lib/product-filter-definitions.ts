@@ -10,6 +10,7 @@ export const PRODUCT_ADVANCED_FILTERS = [
   { id: "sellPrice", label: "Sell Price", control: "range", enabled: true },
   { id: "buyPrice", label: "Buy Price", control: "range", enabled: true },
   { id: "buyItemId", label: "Buy Item ID", control: "text", enabled: true },
+  { id: "productId", label: "Product ID", control: "text", enabled: true },
   { id: "profit", label: "Profit", control: "range", enabled: true },
   { id: "quantity", label: "Quantity", control: "range", enabled: true },
   { id: "inventoryStatus", label: "Inventory Status", control: "select", enabled: true },

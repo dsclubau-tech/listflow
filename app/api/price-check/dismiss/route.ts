@@ -2,13 +2,14 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { createRequestLogger } from "@/lib/logger";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 interface ReviewRequestBody {
   priceHistoryId?: string;
   productId?: string;
 }
 
-async function findPendingHistoryTarget(body: ReviewRequestBody) {
+async function findPendingHistoryTarget(body: ReviewRequestBody, storeId: string) {
   const priceHistoryId = body.priceHistoryId?.trim();
   const productId = body.productId?.trim();
 
@@ -17,6 +18,7 @@ async function findPendingHistoryTarget(body: ReviewRequestBody) {
       where: {
         id: priceHistoryId,
         appliedAt: null,
+        product: { storeId },
       },
     });
   }
@@ -26,6 +28,7 @@ async function findPendingHistoryTarget(body: ReviewRequestBody) {
       where: {
         productId,
         appliedAt: null,
+        product: { storeId },
       },
       orderBy: { createdAt: "desc" },
     });
@@ -36,12 +39,13 @@ async function findPendingHistoryTarget(body: ReviewRequestBody) {
 
 export async function POST(request: Request) {
   const session = await auth();
+  const storeSession = await getCurrentStoreSession();
   const log = createRequestLogger(
     request,
-    session?.user ? { userId: session.user.id } : {}
+    storeSession ? { storeId: storeSession.storeId } : {}
   );
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("price-check/dismiss", "Unauthorized price dismiss attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -62,7 +66,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const target = await findPendingHistoryTarget(body);
+  const target = await findPendingHistoryTarget(body, storeSession.storeId);
 
   if (!target) {
     return NextResponse.json(
@@ -76,6 +80,7 @@ export async function POST(request: Request) {
       productId: target.productId,
       createdAt: target.createdAt,
       appliedAt: null,
+      product: { storeId: storeSession.storeId },
     },
     select: { id: true },
   });
@@ -91,6 +96,7 @@ export async function POST(request: Request) {
     where: {
       productId: target.productId,
       appliedAt: null,
+      product: { storeId: storeSession.storeId },
     },
     select: { id: true },
   });
@@ -102,6 +108,7 @@ export async function POST(request: Request) {
       where: {
         productId: target.productId,
         appliedAt: null,
+        product: { storeId: storeSession.storeId },
       },
       data: {
         appliedAt: reviewedAt,

@@ -4,6 +4,7 @@ import { getEbayImportStats, importEbayListings } from "@/lib/ebay-import";
 import { createRequestLogger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 
 export const maxDuration = 300;
 
@@ -67,16 +68,22 @@ async function resolveImportStore(
 
 export async function GET(request: Request) {
   const session = await auth();
-  const log = createRequestLogger(request, session?.user ? { userId: session.user.id } : {});
+  const storeSession = await getCurrentStoreSession();
+  const log = createRequestLogger(request, storeSession ? { storeId: storeSession.storeId } : {});
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("ebay-import/route", "Unauthorized eBay import stats attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const url = new URL(request.url);
-  const storeId = url.searchParams.get("storeId")?.trim() ?? "";
-  const context = await resolveImportStore(storeId, log);
+  const requestedStoreId = url.searchParams.get("storeId")?.trim() ?? "";
+
+  if (requestedStoreId && requestedStoreId !== storeSession.storeId) {
+    return NextResponse.json({ error: "Store not found" }, { status: 400 });
+  }
+
+  const context = await resolveImportStore(storeSession.storeId, log);
 
   if ("error" in context) {
     return context.error;
@@ -84,18 +91,18 @@ export async function GET(request: Request) {
 
   try {
     const stats = await getEbayImportStats({
-      storeId,
+      storeId: storeSession.storeId,
       storeNumber: context.storeNumber,
     });
 
     return NextResponse.json({
-      storeId,
+      storeId: storeSession.storeId,
       storeName: context.store.name,
       ...stats,
     });
   } catch (error) {
     log.error("ebay-import/route", "Failed to load eBay import stats", error, {
-      storeId,
+      storeId: storeSession.storeId,
       storeNumber: context.storeNumber,
     });
     return NextResponse.json({ error: getErrorMessage(error) }, { status: 500 });
@@ -104,9 +111,10 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const session = await auth();
-  const log = createRequestLogger(request, session?.user ? { userId: session.user.id } : {});
+  const storeSession = await getCurrentStoreSession();
+  const log = createRequestLogger(request, storeSession ? { storeId: storeSession.storeId } : {});
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("ebay-import/route", "Unauthorized eBay import attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -123,7 +131,7 @@ export async function POST(request: Request) {
   const storeId =
     body && typeof body === "object" && "storeId" in body
       ? String((body as { storeId?: unknown }).storeId ?? "").trim()
-      : "";
+      : storeSession.storeId;
   const quantity =
     body && typeof body === "object" && "quantity" in body
       ? Number((body as { quantity?: unknown }).quantity)
@@ -136,7 +144,11 @@ export async function POST(request: Request) {
     );
   }
 
-  const context = await resolveImportStore(storeId, log);
+  if (storeId && storeId !== storeSession.storeId) {
+    return NextResponse.json({ error: "Store not found" }, { status: 400 });
+  }
+
+  const context = await resolveImportStore(storeSession.storeId, log);
 
   if ("error" in context) {
     return context.error;
@@ -161,15 +173,16 @@ export async function POST(request: Request) {
 
       try {
         log.info("ebay-import/route", "Starting eBay import stream", {
-          storeId,
+          storeId: storeSession.storeId,
           storeNumber: context.storeNumber,
           quantity,
         });
 
+        const userId = await getInternalUserId();
         const result = await importEbayListings({
-          storeId,
+          storeId: storeSession.storeId,
           storeNumber: context.storeNumber,
-          userId: session.user.id,
+          userId,
           quantity,
           onProgress: (progress) => {
             send({ type: "progress", ...progress });

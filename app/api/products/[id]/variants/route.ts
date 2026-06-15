@@ -6,21 +6,23 @@ import {
   serializeVariant,
 } from "@/lib/variants";
 import { NextResponse } from "next/server";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
+  const storeSession = await getCurrentStoreSession();
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id: productId } = await params;
 
-  const product = await prisma.product.findUnique({
-    where: { id: productId },
+  const product = await prisma.product.findFirst({
+    where: { id: productId, storeId: storeSession.storeId },
     select: { id: true },
   });
 
@@ -43,15 +45,16 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
+  const storeSession = await getCurrentStoreSession();
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id: productId } = await params;
 
-  const product = await prisma.product.findUnique({
-    where: { id: productId },
+  const product = await prisma.product.findFirst({
+    where: { id: productId, storeId: storeSession.storeId },
     select: { id: true },
   });
 

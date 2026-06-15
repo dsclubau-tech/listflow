@@ -1,6 +1,7 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 type PolicyTemplateBody = {
   name?: unknown;
@@ -36,7 +37,8 @@ function normalizePolicyTemplateBody(body: PolicyTemplateBody) {
 
 export async function GET(request: Request) {
   const session = await auth();
-  if (!session?.user) {
+  const storeSession = await getCurrentStoreSession();
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -44,7 +46,10 @@ export async function GET(request: Request) {
   const storeId = searchParams.get("storeId")?.trim();
 
   const templates = await prisma.policyTemplate.findMany({
-    where: storeId ? { storeId } : undefined,
+    where: {
+      storeId: storeSession.storeId,
+      ...(storeId && storeId !== storeSession.storeId ? { id: "__no-store__" } : {}),
+    },
     include: {
       store: {
         select: {
@@ -61,7 +66,8 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const session = await auth();
-  if (!session?.user) {
+  const storeSession = await getCurrentStoreSession();
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -79,15 +85,8 @@ export async function POST(request: Request) {
   }
 
   if (!normalized.storeId) {
-    return NextResponse.json({ error: "Store is required" }, { status: 400 });
-  }
-
-  const store = await prisma.store.findUnique({
-    where: { id: normalized.storeId },
-    select: { id: true },
-  });
-
-  if (!store) {
+    normalized.storeId = storeSession.storeId;
+  } else if (normalized.storeId !== storeSession.storeId) {
     return NextResponse.json({ error: "Store not found" }, { status: 400 });
   }
 
@@ -99,7 +98,10 @@ export async function POST(request: Request) {
   }
 
   const template = await prisma.policyTemplate.create({
-    data: normalized,
+    data: {
+      ...normalized,
+      storeId: storeSession.storeId,
+    },
     include: {
       store: {
         select: {

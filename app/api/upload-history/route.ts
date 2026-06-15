@@ -2,18 +2,22 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { createRequestLogger } from "@/lib/logger";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 export async function DELETE(request: Request) {
   const session = await auth();
-  const log = createRequestLogger(request, session?.user ? { userId: session.user.id } : {});
+  const storeSession = await getCurrentStoreSession();
+  const log = createRequestLogger(request, storeSession ? { storeId: storeSession.storeId } : {});
 
-  if (!session?.user || (session.user as { role?: string }).role !== "admin") {
+  if (!session?.user || !storeSession) {
     log.warn("upload-history/DELETE", "Unauthorized upload-history clear attempt");
-    return NextResponse.json({ error: "Unauthorized - admin access required" }, { status: 401 });
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
-    const result = await prisma.uploadLog.deleteMany({});
+    const result = await prisma.uploadLog.deleteMany({
+      where: { storeId: storeSession.storeId },
+    });
     log.info("upload-history/DELETE", "Upload history cleared", {
       deleted: result.count,
     });

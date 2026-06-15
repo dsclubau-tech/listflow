@@ -6,7 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
 function LoginForm() {
-  const [email, setEmail] = useState("");
+  const [storeId, setStoreId] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -21,13 +21,13 @@ function LoginForm() {
 
     try {
       const result = await signIn("credentials", {
-        email,
+        storeId,
         password,
         redirect: false,
       });
 
       if (result?.error) {
-        setError("Invalid email or password. Please try again.");
+        setError("Invalid store ID or password. Please try again.");
         setIsLoading(false);
       } else {
         window.location.href = callbackUrl;
@@ -52,19 +52,21 @@ function LoginForm() {
           <form onSubmit={handleSubmit} className="space-y-6">
             <div>
               <label
-                htmlFor="email"
+                htmlFor="storeId"
                 className="block text-sm font-medium text-gray-700 mb-1"
               >
-                Email
+                Store ID
               </label>
               <input
-                id="email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
+                id="storeId"
+                type="text"
+                value={storeId}
+                onChange={(e) => setStoreId(e.target.value)}
                 required
+                autoCapitalize="none"
+                autoCorrect="off"
                 className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-800 focus:border-gray-800 text-gray-900"
-                placeholder="you@example.com"
+                placeholder="store-1"
                 disabled={isLoading}
               />
             </div>

@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { runPriceCheck } from "@/lib/price-checker";
 import { createRequestLogger } from "@/lib/logger";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
@@ -10,12 +11,13 @@ function roundMoney(value: number) {
 
 export async function POST(request: Request) {
   const session = await auth();
+  const storeSession = await getCurrentStoreSession();
   const log = createRequestLogger(
     request,
-    session?.user ? { userId: session.user.id } : {}
+    storeSession ? { storeId: storeSession.storeId } : {}
   );
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("price-check/simulate/route", "Unauthorized simulation attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -57,6 +59,7 @@ export async function POST(request: Request) {
     where: { id: productId },
     select: {
       id: true,
+      storeId: true,
       status: true,
       asin: true,
       amazonPrice: true,
@@ -67,7 +70,7 @@ export async function POST(request: Request) {
     },
   });
 
-  if (!product) {
+  if (!product || product.storeId !== storeSession.storeId) {
     return NextResponse.json({ error: "Product not found" }, { status: 404 });
   }
 
@@ -114,6 +117,7 @@ export async function POST(request: Request) {
 
   try {
     const result = await runPriceCheck({
+      storeId: storeSession.storeId,
       productIds: [productId],
       ignoreSchedule: true,
       simulatedPrices: {

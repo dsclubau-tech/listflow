@@ -3,6 +3,7 @@ import { createEbayImportJob } from "@/lib/ebay-import-jobs";
 import { resolveEbayImportStore } from "@/lib/ebay-import-store";
 import { createRequestLogger } from "@/lib/logger";
 import { NextResponse } from "next/server";
+import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unknown error";
@@ -10,9 +11,10 @@ function getErrorMessage(error: unknown) {
 
 export async function POST(request: Request) {
   const session = await auth();
-  const log = createRequestLogger(request, session?.user ? { userId: session.user.id } : {});
+  const storeSession = await getCurrentStoreSession();
+  const log = createRequestLogger(request, storeSession ? { storeId: storeSession.storeId } : {});
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("ebay-import/jobs/POST", "Unauthorized eBay import job attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -29,7 +31,7 @@ export async function POST(request: Request) {
   const storeId =
     body && typeof body === "object" && "storeId" in body
       ? String((body as { storeId?: unknown }).storeId ?? "").trim()
-      : "";
+      : storeSession.storeId;
   const quantity =
     body && typeof body === "object" && "quantity" in body
       ? Number((body as { quantity?: unknown }).quantity)
@@ -43,10 +45,15 @@ export async function POST(request: Request) {
   }
 
   try {
-    const context = await resolveEbayImportStore(storeId);
+    if (storeId && storeId !== storeSession.storeId) {
+      return NextResponse.json({ error: "Store not found" }, { status: 400 });
+    }
+
+    const context = await resolveEbayImportStore(storeSession.storeId);
+    const userId = await getInternalUserId();
     const result = await createEbayImportJob({
-      userId: session.user.id,
-      storeId,
+      userId,
+      storeId: storeSession.storeId,
       storeNumber: context.storeNumber,
       quantity,
     });

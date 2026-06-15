@@ -2,19 +2,21 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { createRequestLogger } from "@/lib/logger";
 import { resumePriceCheckJob } from "@/lib/price-check-jobs";
+import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
+  const storeSession = await getCurrentStoreSession();
   const { id } = await params;
   const log = createRequestLogger(
     request,
-    session?.user ? { userId: session.user.id } : {}
+    storeSession ? { storeId: storeSession.storeId } : {}
   );
 
-  if (!session?.user?.id) {
+  if (!session?.user?.id || !storeSession) {
     log.warn("price-check/jobs/[id]/resume/POST", "Unauthorized resume request", {
       id,
     });
@@ -22,7 +24,8 @@ export async function POST(
   }
 
   try {
-    const result = await resumePriceCheckJob(id, session.user.id);
+    const userId = await getInternalUserId();
+    const result = await resumePriceCheckJob(id, storeSession.storeId, userId);
 
     if (!result) {
       return NextResponse.json({ error: "Job not found" }, { status: 404 });

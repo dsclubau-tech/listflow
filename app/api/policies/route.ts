@@ -2,12 +2,14 @@ import { auth } from "@/auth";
 import { NextResponse } from "next/server";
 import { getEbayBusinessPolicies, getStoreNumber } from "@/lib/ebay";
 import { createRequestLogger } from "@/lib/logger";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 export async function GET(request: Request) {
   const session = await auth();
-  const log = createRequestLogger(request, session?.user ? { userId: session.user.id } : {});
+  const storeSession = await getCurrentStoreSession();
+  const log = createRequestLogger(request, storeSession ? { storeId: storeSession.storeId } : {});
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("policies/route", "Unauthorized policies request");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -24,12 +26,18 @@ export async function GET(request: Request) {
   }
 
   let storeNumber: 1 | 2 | 3;
+  const resolvedStoreParam = storeParam === storeSession.storeId ? storeParam : storeSession.storeId;
 
   if (["1", "2", "3"].includes(storeParam)) {
+    const currentStoreNumber = await getStoreNumber(storeSession.storeId);
     storeNumber = parseInt(storeParam, 10) as 1 | 2 | 3;
+
+    if (storeNumber !== currentStoreNumber) {
+      return NextResponse.json({ error: "Invalid store" }, { status: 400 });
+    }
   } else {
     try {
-      storeNumber = await getStoreNumber(storeParam);
+      storeNumber = await getStoreNumber(resolvedStoreParam);
     } catch {
       log.warn("policies/route", "Invalid store supplied for policies request", {
         storeParam,

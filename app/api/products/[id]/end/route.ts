@@ -5,6 +5,7 @@ import { buildEndItemXML } from "@/lib/ebay-xml";
 import { callEbayEndItem, getStoreNumber } from "@/lib/ebay";
 import { createRequestLogger } from "@/lib/logger";
 import { ProductStatus } from "@/app/generated/prisma/enums";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 const ENDABLE_STATUSES: ProductStatus[] = [
   ProductStatus.IMPORTED,
@@ -16,9 +17,10 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const session = await auth();
-  const log = createRequestLogger(request, session?.user ? { userId: session.user.id } : {});
+  const storeSession = await getCurrentStoreSession();
+  const log = createRequestLogger(request, storeSession ? { storeId: storeSession.storeId } : {});
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("end-listing/route", "Unauthorized end-listing attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -30,7 +32,7 @@ export async function POST(
     include: { store: true },
   });
 
-  if (!product) {
+  if (!product || product.storeId !== storeSession.storeId) {
     log.warn("end-listing/route", "Product not found for end-listing", { productId });
     return NextResponse.json({ error: "Product not found" }, { status: 404 });
   }

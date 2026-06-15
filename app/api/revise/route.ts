@@ -5,12 +5,14 @@ import { buildReviseItemXML } from "@/lib/ebay-xml";
 import { callEbayReviseItem, getStoreNumber } from "@/lib/ebay";
 import { resolveDescriptionTemplate } from "@/lib/template-resolver";
 import { createRequestLogger } from "@/lib/logger";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 export async function POST(request: Request) {
   const session = await auth();
-  const log = createRequestLogger(request, session?.user ? { userId: session.user.id } : {});
+  const storeSession = await getCurrentStoreSession();
+  const log = createRequestLogger(request, storeSession ? { storeId: storeSession.storeId } : {});
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("revise/route", "Unauthorized revise attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -30,8 +32,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "productId is required" }, { status: 400 });
   }
 
-  const product = await prisma.product.findUnique({
-    where: { id: productId },
+  const product = await prisma.product.findFirst({
+    where: { id: productId, storeId: storeSession.storeId },
     include: { store: true },
   });
 

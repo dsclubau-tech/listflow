@@ -3,6 +3,8 @@ import ProductsPageClient from "@/components/ProductsPageClient";
 import { ProductStatus } from "@/app/generated/prisma/enums";
 import type { Prisma } from "@/app/generated/prisma/client";
 import { PRODUCT_ADVANCED_FILTER_IDS } from "@/lib/product-filter-definitions";
+import { getCurrentStoreSession } from "@/lib/store-session";
+import { redirect } from "next/navigation";
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 const DEFAULT_PAGE_SIZE = 100;
@@ -116,6 +118,12 @@ export default async function ProductsPage({
   searchParams?: Promise<Record<string, SearchParamValue>>;
 }) {
   const params = (await searchParams) ?? {};
+  const storeSession = await getCurrentStoreSession();
+
+  if (!storeSession) {
+    redirect("/login");
+  }
+
   const pageSize = parsePageSize(params.pageSize);
   const requestedPage = parsePositiveInteger(params.page, 1);
   const importedFilter =
@@ -124,6 +132,7 @@ export default async function ProductsPage({
   const todayRange = importedFilter === "today" ? getTodayRange() : null;
   const whereClauses: Prisma.ProductWhereInput[] = [
     { status: { in: [ProductStatus.IMPORTED, ProductStatus.ON_HOLD] } },
+    { storeId: storeSession.storeId },
   ];
 
   if (todayRange) {
@@ -155,7 +164,7 @@ export default async function ProductsPage({
   }
 
   const supplier = getTextParam(params, "supplier");
-  if (supplier) {
+  if (supplier && supplier === storeSession.storeId) {
     whereClauses.push({ storeId: supplier });
   }
 
@@ -187,6 +196,19 @@ export default async function ProductsPage({
   if (buyItemId) {
     whereClauses.push({
       asin: { contains: buyItemId, mode: "insensitive" },
+    });
+  }
+
+  const productId = getTextParam(params, "productId");
+  if (productId) {
+    whereClauses.push({
+      OR: [
+        { id: { contains: productId, mode: "insensitive" } },
+        { asin: { contains: productId, mode: "insensitive" } },
+        { ebayItemId: { contains: productId, mode: "insensitive" } },
+        { variants: { some: { id: { contains: productId, mode: "insensitive" } } } },
+        { variants: { some: { sku: { contains: productId, mode: "insensitive" } } } },
+      ],
     });
   }
 
@@ -317,7 +339,7 @@ export default async function ProductsPage({
   const [totalCount, storeOptions] = await Promise.all([
     prisma.product.count({ where }),
     prisma.store.findMany({
-      orderBy: { name: "asc" },
+      where: { id: storeSession.storeId },
       select: { id: true, name: true },
     }),
   ]);

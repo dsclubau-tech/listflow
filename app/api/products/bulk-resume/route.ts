@@ -5,6 +5,7 @@ import { buildReviseQuantityXML } from "@/lib/ebay-xml";
 import { callEbayReviseItem, getStoreNumber } from "@/lib/ebay";
 import { createRequestLogger } from "@/lib/logger";
 import { ProductStatus } from "@/app/generated/prisma/enums";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 interface ProductFailure {
   productId: string;
@@ -14,12 +15,13 @@ interface ProductFailure {
 
 export async function POST(request: Request) {
   const session = await auth();
+  const storeSession = await getCurrentStoreSession();
   const log = createRequestLogger(
     request,
-    session?.user ? { userId: session.user.id } : {}
+    storeSession ? { storeId: storeSession.storeId } : {}
   );
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("products/bulk-resume", "Unauthorized bulk resume attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -58,8 +60,8 @@ export async function POST(request: Request) {
   // Process sequentially to prevent eBay rate limits
   for (const productId of productIds) {
     try {
-      const product = await prisma.product.findUnique({
-        where: { id: productId },
+      const product = await prisma.product.findFirst({
+        where: { id: productId, storeId: storeSession.storeId },
       });
 
       if (!product) {

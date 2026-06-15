@@ -1,6 +1,7 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 type PolicyTemplateBody = {
   name?: unknown;
@@ -20,7 +21,8 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const session = await auth();
-  if (!session?.user) {
+  const storeSession = await getCurrentStoreSession();
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -38,24 +40,18 @@ export async function PATCH(
     select: { id: true, storeId: true, isDefault: true },
   });
 
-  if (!existing) {
+  if (!existing || existing.storeId !== storeSession.storeId) {
     return NextResponse.json({ error: "Template not found" }, { status: 404 });
   }
 
-  const nextStoreId =
-    typeof body.storeId === "string" && body.storeId.trim()
-      ? body.storeId.trim()
-      : existing.storeId;
+  const nextStoreId = existing.storeId;
   const nextIsDefault =
     body.isDefault === undefined ? existing.isDefault : body.isDefault === true;
 
   if (typeof body.storeId === "string") {
-    const store = await prisma.store.findUnique({
-      where: { id: nextStoreId },
-      select: { id: true },
-    });
+    const requestedStoreId = body.storeId.trim();
 
-    if (!store) {
+    if (requestedStoreId && requestedStoreId !== storeSession.storeId) {
       return NextResponse.json({ error: "Store not found" }, { status: 400 });
     }
   }
@@ -81,9 +77,6 @@ export async function PATCH(
   }
 
   if (body.storeId !== undefined) {
-    if (!nextStoreId) {
-      return NextResponse.json({ error: "Store is required" }, { status: 400 });
-    }
     data.storeId = nextStoreId;
   }
 
@@ -124,7 +117,8 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const session = await auth();
-  if (!session?.user) {
+  const storeSession = await getCurrentStoreSession();
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -132,10 +126,10 @@ export async function DELETE(
 
   const existing = await prisma.policyTemplate.findUnique({
     where: { id },
-    select: { id: true },
+    select: { id: true, storeId: true },
   });
 
-  if (!existing) {
+  if (!existing || existing.storeId !== storeSession.storeId) {
     return NextResponse.json({ error: "Template not found" }, { status: 404 });
   }
 

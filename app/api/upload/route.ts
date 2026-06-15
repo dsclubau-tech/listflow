@@ -6,12 +6,14 @@ import { callEbayAddItem, getStoreNumber } from "@/lib/ebay";
 import { resolveDescriptionTemplate } from "@/lib/template-resolver";
 import { createRequestLogger } from "@/lib/logger";
 import { ProductStatus } from "@/app/generated/prisma/enums";
+import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 
 export async function POST(request: Request) {
   const session = await auth();
-  const log = createRequestLogger(request, session?.user ? { userId: session.user.id } : {});
+  const storeSession = await getCurrentStoreSession();
+  const log = createRequestLogger(request, storeSession ? { storeId: storeSession.storeId } : {});
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("upload/route", "Unauthorized upload attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -36,8 +38,8 @@ export async function POST(request: Request) {
 
   log.info("upload/route", "Upload request received", { productId });
 
-  const product = await prisma.product.findUnique({
-    where: { id: productId },
+  const product = await prisma.product.findFirst({
+    where: { id: productId, storeId: storeSession.storeId },
     include: { store: true },
   });
 
@@ -63,6 +65,7 @@ export async function POST(request: Request) {
   }
 
   try {
+    const userId = await getInternalUserId();
     const storeNumber = await getStoreNumber(product.storeId);
     const finalDescription = await resolveDescriptionTemplate(product);
     const productWithResolvedDesc = { ...product, description: finalDescription };
@@ -92,7 +95,7 @@ export async function POST(request: Request) {
         data: {
           productId,
           storeId: product.storeId,
-          userId: session.user.id,
+          userId,
           status: "SUCCESS",
           ebayItemId: result.itemId,
         },
@@ -114,10 +117,10 @@ export async function POST(request: Request) {
 
     await prisma.uploadLog.create({
       data: {
-        productId,
-        storeId: product.storeId,
-        userId: session.user.id,
-        status: "FAILED",
+          productId,
+          storeId: product.storeId,
+          userId,
+          status: "FAILED",
         errorMessage: result.errorMessage,
       },
     });
@@ -137,7 +140,7 @@ export async function POST(request: Request) {
       data: {
         productId,
         storeId: product.storeId,
-        userId: session.user.id,
+        userId: await getInternalUserId(),
         status: "FAILED",
         errorMessage: message,
       },

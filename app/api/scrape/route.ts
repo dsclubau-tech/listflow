@@ -4,12 +4,14 @@ import { scrapeAmazonProduct } from "@/lib/amazon-scraper";
 import { getEbaySuggestedCategories } from "@/lib/ebay";
 import { createRequestLogger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 export async function POST(request: Request) {
   const session = await auth();
-  const log = createRequestLogger(request, session?.user ? { userId: session.user.id } : {});
+  const storeSession = await getCurrentStoreSession();
+  const log = createRequestLogger(request, storeSession ? { storeId: storeSession.storeId } : {});
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("scrape/route", "Unauthorized scrape attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -41,7 +43,7 @@ export async function POST(request: Request) {
 
   try {
     const supplierSettings = await prisma.supplierSettings.findFirst({
-      where: { supplierName: "Amazon AU" },
+      where: { supplierName: "Amazon AU", storeId: storeSession.storeId },
     });
 
     const product = await scrapeAmazonProduct(

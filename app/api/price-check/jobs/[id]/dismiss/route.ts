@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { createRequestLogger } from "@/lib/logger";
-import { cancelPriceCheckJob } from "@/lib/price-check-jobs";
+import { dismissPriceCheckJob } from "@/lib/price-check-jobs";
 import { getCurrentStoreSession } from "@/lib/store-session";
 
 export async function POST(
@@ -17,19 +17,22 @@ export async function POST(
   );
 
   if (!session?.user?.id || !storeSession) {
-    log.warn("price-check/jobs/[id]/cancel/POST", "Unauthorized cancel request", {
+    log.warn("price-check/jobs/[id]/dismiss/POST", "Unauthorized dismiss request", {
       id,
     });
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const job = await cancelPriceCheckJob(id, storeSession.storeId);
+  const job = await dismissPriceCheckJob(id, storeSession.storeId);
 
   if (!job) {
-    return NextResponse.json({ error: "Job not found" }, { status: 404 });
+    return NextResponse.json(
+      { error: "Only completed, failed, or cancelled jobs can be dismissed" },
+      { status: 404 }
+    );
   }
 
-  log.info("price-check/jobs/[id]/cancel/POST", "Price check cancel requested", {
+  log.info("price-check/jobs/[id]/dismiss/POST", "Price check job dismissed", {
     jobId: job.id,
     status: job.status,
   });

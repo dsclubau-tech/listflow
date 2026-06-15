@@ -1,5 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import ClearHistoryButton from "@/components/ClearHistoryButton";
+import { getCurrentStoreSession } from "@/lib/store-session";
+import { redirect } from "next/navigation";
 
 const storeBadgeColors: Record<string, string> = {
   "Store 1": "bg-blue-100 text-blue-800",
@@ -22,7 +24,14 @@ function formatDate(date: Date): string {
 }
 
 export default async function HistoryPage() {
+  const storeSession = await getCurrentStoreSession();
+
+  if (!storeSession) {
+    redirect("/login");
+  }
+
   const logs = await prisma.uploadLog.findMany({
+    where: { storeId: storeSession.storeId },
     orderBy: { createdAt: "desc" },
     include: {
       product: true,

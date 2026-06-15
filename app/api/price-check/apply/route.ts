@@ -4,6 +4,7 @@ import { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { reviseProductPrice } from "@/lib/price-checker";
 import { createRequestLogger } from "@/lib/logger";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 const EBAY_MIN_PRICE = 1.0;
 
@@ -25,7 +26,7 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unexpected price review error";
 }
 
-async function findPendingHistoryTarget(body: ReviewRequestBody) {
+async function findPendingHistoryTarget(body: ReviewRequestBody, storeId: string) {
   const priceHistoryId = body.priceHistoryId?.trim();
   const productId = body.productId?.trim();
 
@@ -34,6 +35,7 @@ async function findPendingHistoryTarget(body: ReviewRequestBody) {
       where: {
         id: priceHistoryId,
         appliedAt: null,
+        product: { storeId },
       },
     });
 
@@ -45,6 +47,7 @@ async function findPendingHistoryTarget(body: ReviewRequestBody) {
       where: {
         productId: selectedHistory.productId,
         appliedAt: null,
+        product: { storeId },
       },
       orderBy: { createdAt: "desc" },
     });
@@ -55,6 +58,7 @@ async function findPendingHistoryTarget(body: ReviewRequestBody) {
       where: {
         productId,
         appliedAt: null,
+        product: { storeId },
       },
       orderBy: { createdAt: "desc" },
     });
@@ -65,12 +69,13 @@ async function findPendingHistoryTarget(body: ReviewRequestBody) {
 
 export async function POST(request: Request) {
   const session = await auth();
+  const storeSession = await getCurrentStoreSession();
   const log = createRequestLogger(
     request,
-    session?.user ? { userId: session.user.id } : {}
+    storeSession ? { storeId: storeSession.storeId } : {}
   );
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("price-check/apply", "Unauthorized price apply attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -91,7 +96,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const target = await findPendingHistoryTarget(body);
+  const target = await findPendingHistoryTarget(body, storeSession.storeId);
 
   if (!target) {
     return NextResponse.json(
@@ -115,11 +120,12 @@ export async function POST(request: Request) {
         productId: target.productId,
         createdAt: target.createdAt,
         appliedAt: null,
+        product: { storeId: storeSession.storeId },
       },
     }),
   ]);
 
-  if (!product) {
+  if (!product || product.storeId !== storeSession.storeId) {
     return NextResponse.json({ error: "Product not found" }, { status: 404 });
   }
 
@@ -220,6 +226,7 @@ export async function POST(request: Request) {
         productId: product.id,
         id: { notIn: historyIds },
         appliedAt: null,
+        product: { storeId: storeSession.storeId },
       },
       data: {
         appliedAt: reviewedAt,

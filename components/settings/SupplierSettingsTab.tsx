@@ -236,7 +236,8 @@ export default function SupplierSettingsTab() {
           <select
             value={selectedStore}
             onChange={(e) => setSelectedStore(e.target.value)}
-            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+            disabled
+            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-gray-50 text-gray-600 focus:outline-none"
           >
             <option value="1">Store 1</option>
             <option value="2">Store 2</option>

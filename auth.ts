@@ -10,36 +10,39 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     Credentials({
       name: "Credentials",
       credentials: {
-        email: { label: "Email", type: "email" },
+        storeId: { label: "Store ID", type: "text" },
         password: { label: "Password", type: "password" },
       },
       async authorize(credentials) {
-        if (!credentials?.email || !credentials?.password) {
+        if (!credentials?.storeId || !credentials?.password) {
           return null;
         }
 
-        const email = credentials.email as string;
+        const loginId = (credentials.storeId as string).trim().toLowerCase();
         const password = credentials.password as string;
 
-        const user = await prisma.user.findUnique({
-          where: { email },
+        const store = await prisma.store.findUnique({
+          where: { loginId },
         });
 
-        if (!user) {
+        if (!store?.password || !store.isActive) {
           return null;
         }
 
-        const isPasswordValid = await bcrypt.compare(password, user.password);
+        const isPasswordValid = await bcrypt.compare(password, store.password);
 
         if (!isPasswordValid) {
           return null;
         }
 
         return {
-          id: user.id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
+          id: store.id,
+          name: store.name,
+          email: loginId,
+          role: "store",
+          storeId: store.id,
+          storeName: store.name,
+          storeLoginId: loginId,
         };
       },
     }),

@@ -39,6 +39,7 @@ type EbayImportJobRecord = {
   updatedAt: Date;
   startedAt: Date | null;
   completedAt: Date | null;
+  dismissedAt: Date | null;
 };
 
 type CreateEbayImportJobInput = {
@@ -110,15 +111,16 @@ export function serializeEbayImportJob(job: EbayImportJobRecord) {
     updatedAt: job.updatedAt.toISOString(),
     startedAt: job.startedAt?.toISOString() ?? null,
     completedAt: job.completedAt?.toISOString() ?? null,
+    dismissedAt: job.dismissedAt?.toISOString() ?? null,
   };
 }
 
-async function findActiveEbayImportJob(userId: string, storeId?: string) {
+async function findActiveEbayImportJob(storeId: string) {
   return prisma.ebayImportJob.findFirst({
     where: {
-      userId,
-      ...(storeId ? { storeId } : {}),
+      storeId,
       status: { in: [...ACTIVE_IMPORT_JOB_STATUSES] },
+      dismissedAt: null,
     },
     orderBy: { createdAt: "desc" },
   });
@@ -225,7 +227,7 @@ export function ensureEbayImportJobRunning(jobId: string) {
 }
 
 export async function createEbayImportJob(input: CreateEbayImportJobInput) {
-  const activeJob = await findActiveEbayImportJob(input.userId, input.storeId);
+  const activeJob = await findActiveEbayImportJob(input.storeId);
 
   if (activeJob) {
     ensureEbayImportJobRunning(activeJob.id);
@@ -247,8 +249,8 @@ export async function createEbayImportJob(input: CreateEbayImportJobInput) {
   return { job: serializeEbayImportJob(job), reused: false };
 }
 
-export async function getCurrentEbayImportJob(userId: string, storeId?: string) {
-  const job = await findActiveEbayImportJob(userId, storeId);
+export async function getCurrentEbayImportJob(storeId: string) {
+  const job = await findActiveEbayImportJob(storeId);
 
   if (job) {
     ensureEbayImportJobRunning(job.id);
@@ -257,11 +259,12 @@ export async function getCurrentEbayImportJob(userId: string, storeId?: string) 
   return job ? serializeEbayImportJob(job) : null;
 }
 
-export async function getEbayImportJobForUser(jobId: string, userId: string) {
+export async function getEbayImportJobForStore(jobId: string, storeId: string) {
   const job = await prisma.ebayImportJob.findFirst({
     where: {
       id: jobId,
-      userId,
+      storeId,
+      dismissedAt: null,
     },
   });
 
@@ -270,4 +273,29 @@ export async function getEbayImportJobForUser(jobId: string, userId: string) {
   }
 
   return job ? serializeEbayImportJob(job) : null;
+}
+
+export async function dismissEbayImportJob(jobId: string, storeId: string) {
+  const terminalStatuses = [
+    EbayImportJobStatus.COMPLETED,
+    EbayImportJobStatus.FAILED,
+  ];
+  const job = await prisma.ebayImportJob.findFirst({
+    where: {
+      id: jobId,
+      storeId,
+      status: { in: terminalStatuses },
+    },
+  });
+
+  if (!job) {
+    return null;
+  }
+
+  const updated = await prisma.ebayImportJob.update({
+    where: { id: job.id },
+    data: { dismissedAt: job.dismissedAt ?? new Date() },
+  });
+
+  return serializeEbayImportJob(updated);
 }

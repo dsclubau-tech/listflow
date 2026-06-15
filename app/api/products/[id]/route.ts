@@ -3,23 +3,27 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { createRequestLogger } from "@/lib/logger";
 import { applyKeywordFilter } from "@/lib/keyword-filter";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const session = await auth();
+  const storeSession = await getCurrentStoreSession();
   const { id } = await params;
-  const log = createRequestLogger(request, session?.user ? { userId: session.user.id } : {});
+  const log = createRequestLogger(request, storeSession ? { storeId: storeSession.storeId } : {});
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("api/products/PATCH", "Unauthorized attempt", { id });
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   log.info("api/products/PATCH", "Update request received", { id });
 
-  const product = await prisma.product.findUnique({ where: { id } });
+  const product = await prisma.product.findFirst({
+    where: { id, storeId: storeSession.storeId },
+  });
 
   if (!product) {
     log.warn("api/products/PATCH", "Product not found", { id });
@@ -144,10 +148,10 @@ export async function PATCH(
     if (normalizedPolicyTemplateId) {
       const policyTemplate = await prisma.policyTemplate.findUnique({
         where: { id: normalizedPolicyTemplateId },
-        select: { id: true },
+        select: { id: true, storeId: true },
       });
 
-      if (!policyTemplate) {
+      if (!policyTemplate || policyTemplate.storeId !== storeSession.storeId) {
         return NextResponse.json(
           { error: "Policy template not found" },
           { status: 400 },
@@ -181,6 +185,7 @@ export async function PATCH(
       const filtered = await applyKeywordFilter(
         titleStr || product.title,
         descStr || product.description,
+        storeSession.storeId,
       );
       if (titleStr) data.title = filtered.title;
       if (descStr) data.description = filtered.description;
@@ -206,15 +211,18 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const session = await auth();
+  const storeSession = await getCurrentStoreSession();
   const { id } = await params;
-  const log = createRequestLogger(request, session?.user ? { userId: session.user.id } : {});
+  const log = createRequestLogger(request, storeSession ? { storeId: storeSession.storeId } : {});
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("api/products/DELETE", "Unauthorized delete attempt", { id });
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const product = await prisma.product.findUnique({ where: { id } });
+  const product = await prisma.product.findFirst({
+    where: { id, storeId: storeSession.storeId },
+  });
 
   if (!product) {
     log.warn("api/products/DELETE", "Product not found", { id });
@@ -222,7 +230,9 @@ export async function DELETE(
   }
 
   try {
-    await prisma.uploadLog.deleteMany({ where: { productId: id } });
+    await prisma.uploadLog.deleteMany({
+      where: { productId: id, storeId: storeSession.storeId },
+    });
     await prisma.variant.deleteMany({ where: { productId: id } });
     await prisma.product.delete({ where: { id } });
 

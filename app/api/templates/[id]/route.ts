@@ -1,13 +1,15 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
-  if (!session?.user) {
+  const storeSession = await getCurrentStoreSession();
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -20,7 +22,9 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const existing = await prisma.descriptionTemplate.findUnique({ where: { id } });
+  const existing = await prisma.descriptionTemplate.findFirst({
+    where: { id, storeId: storeSession.storeId },
+  });
   if (!existing) {
     return NextResponse.json({ error: "Template not found" }, { status: 404 });
   }
@@ -28,6 +32,7 @@ export async function PATCH(
   // If setting as default, clear all others first
   if (body.isDefault) {
     await prisma.descriptionTemplate.updateMany({
+      where: { storeId: storeSession.storeId },
       data: { isDefault: false },
     });
   }
@@ -50,19 +55,31 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
-  if (!session?.user) {
+  const storeSession = await getCurrentStoreSession();
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id } = await params;
 
   // Check that this isn't the last template
-  const count = await prisma.descriptionTemplate.count();
+  const count = await prisma.descriptionTemplate.count({
+    where: { storeId: storeSession.storeId },
+  });
   if (count <= 1) {
     return NextResponse.json(
       { error: "You must have at least one template" },
       { status: 400 }
     );
+  }
+
+  const existing = await prisma.descriptionTemplate.findFirst({
+    where: { id, storeId: storeSession.storeId },
+    select: { id: true },
+  });
+
+  if (!existing) {
+    return NextResponse.json({ error: "Template not found" }, { status: 404 });
   }
 
   await prisma.descriptionTemplate.delete({ where: { id } });

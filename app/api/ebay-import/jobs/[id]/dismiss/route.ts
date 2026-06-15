@@ -1,10 +1,10 @@
 import { auth } from "@/auth";
-import { getEbayImportJobForStore } from "@/lib/ebay-import-jobs";
+import { dismissEbayImportJob } from "@/lib/ebay-import-jobs";
 import { createRequestLogger } from "@/lib/logger";
-import { NextResponse } from "next/server";
 import { getCurrentStoreSession } from "@/lib/store-session";
+import { NextResponse } from "next/server";
 
-export async function GET(
+export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
@@ -14,14 +14,19 @@ export async function GET(
   const log = createRequestLogger(request, storeSession ? { storeId: storeSession.storeId } : {});
 
   if (!session?.user || !storeSession) {
-    log.warn("ebay-import/jobs/[id]/GET", "Unauthorized import job request", { id });
+    log.warn("ebay-import/jobs/[id]/dismiss/POST", "Unauthorized import job dismiss", {
+      id,
+    });
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const job = await getEbayImportJobForStore(id, storeSession.storeId);
+  const job = await dismissEbayImportJob(id, storeSession.storeId);
 
   if (!job) {
-    return NextResponse.json({ error: "Import job not found" }, { status: 404 });
+    return NextResponse.json(
+      { error: "Only completed or failed import jobs can be dismissed" },
+      { status: 404 },
+    );
   }
 
   return NextResponse.json({ job });

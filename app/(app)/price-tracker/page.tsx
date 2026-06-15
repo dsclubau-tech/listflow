@@ -1,9 +1,17 @@
 import { prisma } from "@/lib/prisma";
 import PriceTrackerClient from "@/components/PriceTrackerClient";
 import { dismissObsoletePendingPriceChanges } from "@/lib/price-history-cleanup";
+import { getCurrentStoreSession } from "@/lib/store-session";
+import { redirect } from "next/navigation";
 
 export default async function PriceTrackerPage() {
-  await dismissObsoletePendingPriceChanges();
+  const storeSession = await getCurrentStoreSession();
+
+  if (!storeSession) {
+    redirect("/login");
+  }
+
+  await dismissObsoletePendingPriceChanges(storeSession.storeId);
 
   const todayUtc = new Date();
   todayUtc.setUTCHours(0, 0, 0, 0);
@@ -20,6 +28,7 @@ export default async function PriceTrackerPage() {
   ] = await Promise.all([
     prisma.product.count({
       where: {
+        storeId: storeSession.storeId,
         status: "IMPORTED",
         asin: { not: null },
         variants: { some: {} },
@@ -27,6 +36,7 @@ export default async function PriceTrackerPage() {
     }),
     prisma.priceHistory.findMany({
       where: {
+        product: { storeId: storeSession.storeId },
         createdAt: {
           gte: todayUtc,
         },
@@ -38,6 +48,7 @@ export default async function PriceTrackerPage() {
     }),
     prisma.product.findMany({
       where: {
+        storeId: storeSession.storeId,
         status: "IMPORTED",
         asin: { not: null },
         variants: { some: {} },
@@ -54,6 +65,7 @@ export default async function PriceTrackerPage() {
     }),
     prisma.product.findFirst({
       where: {
+        storeId: storeSession.storeId,
         status: "IMPORTED",
         asin: { not: null },
         variants: { some: {} },
@@ -63,6 +75,7 @@ export default async function PriceTrackerPage() {
       select: { lastPriceCheck: true },
     }),
     prisma.priceHistory.findMany({
+      where: { product: { storeId: storeSession.storeId } },
       orderBy: { createdAt: "desc" },
       take: 50,
       include: {
@@ -84,6 +97,7 @@ export default async function PriceTrackerPage() {
     }),
     prisma.product.findMany({
       where: {
+        storeId: storeSession.storeId,
         status: "IMPORTED",
         asin: { not: null },
         variants: { some: {} },
@@ -106,10 +120,11 @@ export default async function PriceTrackerPage() {
       },
     }),
     prisma.priceHistory.count({
-      where: { appliedAt: null },
+      where: { appliedAt: null, product: { storeId: storeSession.storeId } },
     }),
     prisma.product.findMany({
       where: {
+        storeId: storeSession.storeId,
         status: "IMPORTED",
         asin: { not: null },
         amazonStockLeft: { not: null, lte: 3 },

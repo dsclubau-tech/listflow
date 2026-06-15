@@ -61,19 +61,40 @@ async function main() {
 
   // --- Seed Stores (Part 2) ---
   const storeData = [
-    { id: "seed-store-1", name: "Store 1" },
-    { id: "seed-store-2", name: "Store 2" },
-    { id: "seed-store-3", name: "Store 3" },
+    {
+      id: "seed-store-1",
+      name: "Store 1",
+      loginId: "store-1",
+      password: process.env.STORE_1_PASSWORD || process.env.STORE_DEFAULT_PASSWORD || "Store@1234",
+    },
+    {
+      id: "seed-store-2",
+      name: "Store 2",
+      loginId: "store-2",
+      password: process.env.STORE_2_PASSWORD || process.env.STORE_DEFAULT_PASSWORD || "Store@1234",
+    },
+    {
+      id: "seed-store-3",
+      name: "Store 3",
+      loginId: "store-3",
+      password: process.env.STORE_3_PASSWORD || process.env.STORE_DEFAULT_PASSWORD || "Store@1234",
+    },
   ];
   const stores: Record<string, string> = {};
 
   for (const s of storeData) {
+    const hashedStorePassword = await bcrypt.hash(s.password, 12);
     const store = await prisma.store.upsert({
       where: { id: s.id },
-      update: {},
+      update: {
+        loginId: s.loginId,
+        password: hashedStorePassword,
+      },
       create: {
         id: s.id,
         name: s.name,
+        loginId: s.loginId,
+        password: hashedStorePassword,
         ebayToken: null,
         ebayUserId: null,
         ebayStoreId: null,
@@ -176,24 +197,30 @@ async function main() {
     },
   ];
 
-  for (const t of templates) {
-    const templateId = "id" in t ? t.id : `seed-template-${t.name.replace(/\s+/g, "-").toLowerCase()}`;
+  for (const storeId of Object.values(stores)) {
+    for (const t of templates) {
+      const baseTemplateId =
+        "id" in t ? t.id : `seed-template-${t.name.replace(/\s+/g, "-").toLowerCase()}`;
+      const templateId = `${storeId}-${baseTemplateId}`;
 
-    await prisma.descriptionTemplate.upsert({
-      where: { id: templateId },
-      update: {
-        name: t.name,
-        content: t.content,
-        isDefault: t.isDefault,
-      },
-      create: {
-        id: templateId,
-        name: t.name,
-        content: t.content,
-        isDefault: t.isDefault,
-      },
-    });
-    console.log(`Seeded template: ${t.name}`);
+      await prisma.descriptionTemplate.upsert({
+        where: { id: templateId },
+        update: {
+          storeId,
+          name: t.name,
+          content: t.content,
+          isDefault: t.isDefault,
+        },
+        create: {
+          id: templateId,
+          storeId,
+          name: t.name,
+          content: t.content,
+          isDefault: t.isDefault,
+        },
+      });
+      console.log(`Seeded template for ${storeId}: ${t.name}`);
+    }
   }
 
   // --- Seed Keyword Blacklist ---
@@ -204,26 +231,46 @@ async function main() {
     { keyword: "Amazon.", removeFromTitle: true, removeFromDescription: true },
   ];
 
-  for (const k of keywords) {
-    await prisma.keywordBlacklist.upsert({
-      where: { id: `seed-keyword-${k.keyword.replace(/\W/g, "_")}` },
-      update: {},
-      create: {
-        id: `seed-keyword-${k.keyword.replace(/\W/g, "_")}`,
-        keyword: k.keyword,
-        removeFromTitle: k.removeFromTitle,
-        removeFromDescription: k.removeFromDescription,
-      },
-    });
-    console.log(`Seeded keyword: ${k.keyword}`);
+  for (const storeId of Object.values(stores)) {
+    for (const k of keywords) {
+      const keywordId = `${storeId}-seed-keyword-${k.keyword.replace(/\W/g, "_")}`;
+
+      await prisma.keywordBlacklist.upsert({
+        where: { id: keywordId },
+        update: {
+          storeId,
+          keyword: k.keyword,
+          removeFromTitle: k.removeFromTitle,
+          removeFromDescription: k.removeFromDescription,
+        },
+        create: {
+          id: keywordId,
+          storeId,
+          keyword: k.keyword,
+          removeFromTitle: k.removeFromTitle,
+          removeFromDescription: k.removeFromDescription,
+        },
+      });
+      console.log(`Seeded keyword for ${storeId}: ${k.keyword}`);
+    }
   }
+
   // --- Seed Supplier Settings ---
-  await prisma.supplierSettings.upsert({
-    where: { supplierName: "Amazon AU" },
-    update: {},
-    create: { supplierName: "Amazon AU" },
-  });
-  console.log("Seeded supplier settings: Amazon AU");
+  for (const [storeName, storeId] of Object.entries(stores)) {
+    const storeNumber = Number(storeName.replace(/\D/g, "")) || 1;
+
+    await prisma.supplierSettings.upsert({
+      where: {
+        storeId_supplierName: {
+          storeId,
+          supplierName: "Amazon AU",
+        },
+      },
+      update: { storeNumber },
+      create: { storeId, supplierName: "Amazon AU", storeNumber },
+    });
+    console.log(`Seeded supplier settings for ${storeName}: Amazon AU`);
+  }
 
   console.log("Seeding complete!");
 }

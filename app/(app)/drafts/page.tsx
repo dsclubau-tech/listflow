@@ -1,9 +1,18 @@
 import { prisma } from "@/lib/prisma";
 import DraftsPageClient from "@/components/DraftsPageClient";
+import { getCurrentStoreSession } from "@/lib/store-session";
+import { redirect } from "next/navigation";
 
 export default async function DraftsPage() {
+  const storeSession = await getCurrentStoreSession();
+
+  if (!storeSession) {
+    redirect("/login");
+  }
+
   const products = await prisma.product.findMany({
     where: {
+      storeId: storeSession.storeId,
       status: {
         in: ["DRAFT", "FAILED"],
       },

@@ -1,13 +1,15 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 const PAGE_SIZE = 50;
 
 export async function GET(request: Request) {
   const session = await auth();
+  const storeSession = await getCurrentStoreSession();
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -19,7 +21,10 @@ export async function GET(request: Request) {
   );
   const skip = (page - 1) * PAGE_SIZE;
 
-  const where = productId ? { productId } : {};
+  const where = {
+    ...(productId ? { productId } : {}),
+    product: { storeId: storeSession.storeId },
+  };
 
   const [items, total] = await Promise.all([
     prisma.priceHistory.findMany({

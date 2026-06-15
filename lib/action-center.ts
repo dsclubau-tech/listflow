@@ -87,6 +87,7 @@ export interface ActionCenterPriceCheckJob {
   updatedAt: string;
   startedAt: string | null;
   completedAt: string | null;
+  dismissedAt: string | null;
 }
 
 export interface ActionCenterEbayImportJob {
@@ -107,6 +108,7 @@ export interface ActionCenterEbayImportJob {
   updatedAt: string;
   startedAt: string | null;
   completedAt: string | null;
+  dismissedAt: string | null;
 }
 
 export interface ActionCenterData {
@@ -143,10 +145,10 @@ function serializeProduct(product: {
   };
 }
 
-export async function getActionCenterData(userId: string): Promise<ActionCenterData> {
+export async function getActionCenterData(storeId: string): Promise<ActionCenterData> {
   const pendingGroups = await prisma.priceHistory.groupBy({
     by: ["productId"],
-    where: { appliedAt: null },
+    where: { appliedAt: null, product: { storeId } },
     _count: { _all: true },
     _max: { createdAt: true },
   });
@@ -180,6 +182,7 @@ export async function getActionCenterData(userId: string): Promise<ActionCenterD
           where: {
             appliedAt: null,
             productId: { in: visiblePendingProductIds },
+            product: { storeId },
           },
           orderBy: { createdAt: "desc" },
           include: {
@@ -197,6 +200,7 @@ export async function getActionCenterData(userId: string): Promise<ActionCenterD
     prisma.product.findMany({
       where: {
         status: ProductStatus.IMPORTED,
+        storeId,
         asin: { not: null },
         variants: { some: {} },
         priceCheckError: { not: null },
@@ -215,6 +219,7 @@ export async function getActionCenterData(userId: string): Promise<ActionCenterD
     prisma.product.count({
       where: {
         status: ProductStatus.IMPORTED,
+        storeId,
         asin: { not: null },
         variants: { some: {} },
         priceCheckError: { not: null },
@@ -223,6 +228,7 @@ export async function getActionCenterData(userId: string): Promise<ActionCenterD
     prisma.product.findMany({
       where: {
         status: ProductStatus.IMPORTED,
+        storeId,
         asin: { not: null },
         amazonStockLeft: { not: null, lte: 3 },
       },
@@ -239,12 +245,13 @@ export async function getActionCenterData(userId: string): Promise<ActionCenterD
     prisma.product.count({
       where: {
         status: ProductStatus.IMPORTED,
+        storeId,
         asin: { not: null },
         amazonStockLeft: { not: null, lte: 3 },
       },
     }),
     prisma.product.findMany({
-      where: { status: ProductStatus.ON_HOLD },
+      where: { status: ProductStatus.ON_HOLD, storeId },
       orderBy: { updatedAt: "desc" },
       take: QUEUE_LIMIT,
       select: {
@@ -255,14 +262,14 @@ export async function getActionCenterData(userId: string): Promise<ActionCenterD
         quantity: true,
       },
     }),
-    prisma.product.count({ where: { status: ProductStatus.ON_HOLD } }),
+    prisma.product.count({ where: { status: ProductStatus.ON_HOLD, storeId } }),
     prisma.priceCheckJob.findMany({
-      where: { userId },
+      where: { storeId },
       orderBy: { createdAt: "desc" },
       take: RECENT_JOB_LIMIT,
     }),
     prisma.ebayImportJob.findMany({
-      where: { userId },
+      where: { storeId },
       orderBy: { createdAt: "desc" },
       take: RECENT_JOB_LIMIT,
       include: {

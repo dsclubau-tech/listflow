@@ -1,13 +1,15 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
-  if (!session?.user) {
+  const storeSession = await getCurrentStoreSession();
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -20,7 +22,9 @@ export async function PATCH(
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const existing = await prisma.keywordBlacklist.findUnique({ where: { id } });
+  const existing = await prisma.keywordBlacklist.findFirst({
+    where: { id, storeId: storeSession.storeId },
+  });
   if (!existing) {
     return NextResponse.json({ error: "Keyword not found" }, { status: 404 });
   }
@@ -43,11 +47,21 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const session = await auth();
-  if (!session?.user) {
+  const storeSession = await getCurrentStoreSession();
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const { id } = await params;
+
+  const existing = await prisma.keywordBlacklist.findFirst({
+    where: { id, storeId: storeSession.storeId },
+    select: { id: true },
+  });
+
+  if (!existing) {
+    return NextResponse.json({ error: "Keyword not found" }, { status: 404 });
+  }
 
   await prisma.keywordBlacklist.delete({ where: { id } });
   return NextResponse.json({ success: true });

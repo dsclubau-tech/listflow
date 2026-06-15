@@ -30,6 +30,8 @@ model User {
 model Store {
   id          String    @id @default(cuid())
   name        String
+  loginId     String?   @unique
+  password    String?
   ebayToken   String?
   ebayUserId  String?
   ebayStoreId String?
@@ -42,6 +44,10 @@ model Store {
   policyTemplates      PolicyTemplate[]
   ebayImportStatsCache EbayImportStatsCache?
   ebayImportJobs       EbayImportJob[]
+  priceCheckJobs       PriceCheckJob[]
+  descriptionTemplates DescriptionTemplate[]
+  keywordBlacklist     KeywordBlacklist[]
+  supplierSettings     SupplierSettings[]
 }
 
 enum ProductStatus {
@@ -173,6 +179,7 @@ model PriceHistory {
 model PriceCheckJob {
   id            String              @id @default(cuid())
   userId        String
+  storeId       String?
   scope         PriceCheckJobScope
   status        PriceCheckJobStatus @default(QUEUED)
   productIds    String[]            @default([])
@@ -189,11 +196,15 @@ model PriceCheckJob {
   updatedAt     DateTime            @updatedAt
   startedAt     DateTime?
   completedAt   DateTime?
+  dismissedAt   DateTime?
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store Store? @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([userId, status])
+  @@index([storeId, status])
   @@index([createdAt])
+  @@index([dismissedAt])
 }
 
 enum UploadStatus {
@@ -254,6 +265,7 @@ model EbayImportJob {
   updatedAt             DateTime            @updatedAt
   startedAt             DateTime?
   completedAt           DateTime?
+  dismissedAt           DateTime?
 
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
@@ -261,17 +273,23 @@ model EbayImportJob {
   @@index([userId, status])
   @@index([storeId, status])
   @@index([createdAt])
+  @@index([dismissedAt])
 }
 
 // TODO: Part 3
 
 model DescriptionTemplate {
   id        String   @id @default(cuid())
+  storeId   String?
   name      String
   content   String   @db.Text
   isDefault Boolean  @default(false)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  store     Store?   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
 }
 
 model PolicyTemplate {
@@ -292,15 +310,21 @@ model PolicyTemplate {
 
 model KeywordBlacklist {
   id                     String   @id @default(cuid())
+  storeId                String?
   keyword                String
   removeFromTitle        Boolean  @default(false)
   removeFromDescription  Boolean  @default(true)
   createdAt              DateTime @default(now())
+
+  store                  Store?   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId])
 }
 
 model SupplierSettings {
   id                    String   @id @default(cuid())
-  supplierName          String   @unique @default("Amazon AU")
+  storeId               String?
+  supplierName          String   @default("Amazon AU")
 
   defaultQuantity       Int      @default(1)
   defaultCountry        String   @default("Australia")
@@ -338,4 +362,9 @@ model SupplierSettings {
 
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
+
+  store                 Store?   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, supplierName])
+  @@index([storeId])
 }

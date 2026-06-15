@@ -2,15 +2,17 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { createRequestLogger } from "@/lib/logger";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 export async function GET(request: Request) {
   const session = await auth();
+  const storeSession = await getCurrentStoreSession();
   const log = createRequestLogger(
     request,
-    session?.user ? { userId: session.user.id } : {}
+    storeSession ? { storeId: storeSession.storeId } : {}
   );
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("price-check/tracked-products/route", "Unauthorized request");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -18,6 +20,7 @@ export async function GET(request: Request) {
   try {
     const products = await prisma.product.findMany({
       where: {
+        storeId: storeSession.storeId,
         status: "IMPORTED",
         asin: { not: null },
         variants: { some: {} },

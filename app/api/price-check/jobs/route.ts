@@ -2,15 +2,17 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { createRequestLogger } from "@/lib/logger";
 import { createPriceCheckJob } from "@/lib/price-check-jobs";
+import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 
 export async function POST(request: Request) {
   const session = await auth();
+  const storeSession = await getCurrentStoreSession();
   const log = createRequestLogger(
     request,
-    session?.user ? { userId: session.user.id } : {}
+    storeSession ? { storeId: storeSession.storeId } : {}
   );
 
-  if (!session?.user?.id) {
+  if (!session?.user?.id || !storeSession) {
     log.warn("price-check/jobs/POST", "Unauthorized price check job attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -24,8 +26,10 @@ export async function POST(request: Request) {
   }
 
   try {
+    const userId = await getInternalUserId();
     const result = await createPriceCheckJob({
-      userId: session.user.id,
+      userId,
+      storeId: storeSession.storeId,
       productIds: body.productIds,
       all: body.all === true,
     });

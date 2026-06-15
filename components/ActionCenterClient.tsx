@@ -27,7 +27,7 @@ type ActionCenterFilter =
   | "lowStock"
   | "onHold"
   | "jobs";
-type JobPanelFilter = "current" | "start" | "recent";
+type JobPanelFilter = "current" | "start" | "recent" | "dismissed";
 const FILTER_OPTIONS: Array<{
   id: ActionCenterFilter;
   label: string;
@@ -63,6 +63,7 @@ const JOB_PANEL_FILTERS: Array<{ id: JobPanelFilter; label: string }> = [
   { id: "current", label: "Current / paused" },
   { id: "start", label: "Start new job" },
   { id: "recent", label: "Recent" },
+  { id: "dismissed", label: "Dismissed" },
 ];
 
 function formatMoney(value: string | number | null) {
@@ -90,7 +91,7 @@ function formatDateTime(value: string | null) {
 }
 
 function productHref(product: ActionCenterProductSummary) {
-  return `/products?title=${encodeURIComponent(product.title)}`;
+  return `/products?productId=${encodeURIComponent(product.id)}`;
 }
 
 async function postJson<T>(url: string, body?: unknown): Promise<T> {
@@ -122,11 +123,25 @@ function isActiveImportJob(job: ActionCenterEbayImportJob) {
   return ACTIVE_IMPORT_JOB_STATUSES.has(job.status);
 }
 
+function isTerminalPriceJob(job: ActionCenterPriceCheckJob) {
+  return (
+    job.status === "COMPLETED" ||
+    job.status === "FAILED" ||
+    job.status === "CANCELLED"
+  );
+}
+
+function isTerminalImportJob(job: ActionCenterEbayImportJob) {
+  return job.status === "COMPLETED" || job.status === "FAILED";
+}
+
 function getCurrentJobCount(data: ActionCenterData) {
   const currentPriceJobs = data.jobs.priceChecks.filter(
-    (job) => isActivePriceJob(job) || isResumablePriceJob(job)
+    (job) => !job.dismissedAt && (isActivePriceJob(job) || isResumablePriceJob(job))
   );
-  const currentImportJobs = data.jobs.ebayImports.filter(isActiveImportJob);
+  const currentImportJobs = data.jobs.ebayImports.filter(
+    (job) => !job.dismissedAt && isActiveImportJob(job)
+  );
 
   return currentPriceJobs.length + currentImportJobs.length;
 }
@@ -309,12 +324,28 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
   const currentPriceJobs = useMemo(
     () =>
       data.jobs.priceChecks.filter(
-        (job) => isActivePriceJob(job) || isResumablePriceJob(job)
+        (job) => !job.dismissedAt && (isActivePriceJob(job) || isResumablePriceJob(job))
       ),
     [data.jobs.priceChecks]
   );
   const activeImportJobs = useMemo(
-    () => data.jobs.ebayImports.filter(isActiveImportJob),
+    () => data.jobs.ebayImports.filter((job) => !job.dismissedAt && isActiveImportJob(job)),
+    [data.jobs.ebayImports]
+  );
+  const recentPriceJobs = useMemo(
+    () => data.jobs.priceChecks.filter((job) => !job.dismissedAt),
+    [data.jobs.priceChecks]
+  );
+  const recentImportJobs = useMemo(
+    () => data.jobs.ebayImports.filter((job) => !job.dismissedAt),
+    [data.jobs.ebayImports]
+  );
+  const dismissedPriceJobs = useMemo(
+    () => data.jobs.priceChecks.filter((job) => Boolean(job.dismissedAt)),
+    [data.jobs.priceChecks]
+  );
+  const dismissedImportJobs = useMemo(
+    () => data.jobs.ebayImports.filter((job) => Boolean(job.dismissedAt)),
     [data.jobs.ebayImports]
   );
   const hasActivePriceJobs = activePriceJobs.length > 0;
@@ -506,6 +537,25 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
       }
 
       return "No remaining products to resume.";
+    });
+  }
+
+  function dismissPriceJob(job: ActionCenterPriceCheckJob) {
+    void runAction(`dismiss-price-job:${job.id}`, async () => {
+      await postJson<{ job?: ActionCenterPriceCheckJob }>(
+        `/api/price-check/jobs/${job.id}/dismiss`
+      );
+      window.localStorage.removeItem(PRICE_CHECK_JOB_STORAGE_KEY);
+      return "Price check job dismissed.";
+    });
+  }
+
+  function dismissImportJob(job: ActionCenterEbayImportJob) {
+    void runAction(`dismiss-import-job:${job.id}`, async () => {
+      await postJson<{ job?: ActionCenterEbayImportJob }>(
+        `/api/ebay-import/jobs/${job.id}/dismiss`
+      );
+      return "eBay import job dismissed.";
     });
   }
 
@@ -1061,13 +1111,13 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
 
             {jobPanelFilter === "recent" && (
               <div className="divide-y divide-gray-100">
-                {data.jobs.priceChecks.length === 0 && data.jobs.ebayImports.length === 0 ? (
+                {recentPriceJobs.length === 0 && recentImportJobs.length === 0 ? (
                   <div className="px-4 py-8 text-center text-sm text-gray-500">
                     No recent jobs.
                   </div>
                 ) : (
                   <>
-                    {data.jobs.priceChecks.map((job) => (
+                    {recentPriceJobs.map((job) => (
                       <div
                         key={`recent-price-${job.id}`}
                         className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
@@ -1088,15 +1138,27 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                             {job.failed} failed
                           </div>
                         </div>
-                        <Link
-                          href="/products"
-                          className="text-xs font-medium text-gray-600 hover:text-gray-900"
-                        >
-                          Products
-                        </Link>
+                        <div className="flex items-center gap-2">
+                          {isTerminalPriceJob(job) && (
+                            <ActionButton
+                              onClick={() => dismissPriceJob(job)}
+                              disabled={runningAction === `dismiss-price-job:${job.id}`}
+                            >
+                              {runningAction === `dismiss-price-job:${job.id}`
+                                ? "Dismissing..."
+                                : "Dismiss"}
+                            </ActionButton>
+                          )}
+                          <Link
+                            href="/products"
+                            className="text-xs font-medium text-gray-600 hover:text-gray-900"
+                          >
+                            Products
+                          </Link>
+                        </div>
                       </div>
                     ))}
-                    {data.jobs.ebayImports.map((job) => (
+                    {recentImportJobs.map((job) => (
                       <div
                         key={`recent-import-${job.id}`}
                         className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
@@ -1114,6 +1176,89 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                           </div>
                           <div className="mt-1 text-xs text-gray-500">
                             {job.processed}/{job.total || job.quantity} processed,{" "}
+                            {job.created} imported, {job.failed} failed
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {isTerminalImportJob(job) && (
+                            <ActionButton
+                              onClick={() => dismissImportJob(job)}
+                              disabled={runningAction === `dismiss-import-job:${job.id}`}
+                            >
+                              {runningAction === `dismiss-import-job:${job.id}`
+                                ? "Dismissing..."
+                                : "Dismiss"}
+                            </ActionButton>
+                          )}
+                          <Link
+                            href="/ebay-import"
+                            className="text-xs font-medium text-gray-600 hover:text-gray-900"
+                          >
+                            eBay Import
+                          </Link>
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
+
+            {jobPanelFilter === "dismissed" && (
+              <div className="divide-y divide-gray-100">
+                {dismissedPriceJobs.length === 0 && dismissedImportJobs.length === 0 ? (
+                  <div className="px-4 py-8 text-center text-sm text-gray-500">
+                    No dismissed jobs.
+                  </div>
+                ) : (
+                  <>
+                    {dismissedPriceJobs.map((job) => (
+                      <div
+                        key={`dismissed-price-${job.id}`}
+                        className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                      >
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-medium text-gray-900">
+                              Product price check
+                            </span>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClasses(job.status)}`}
+                            >
+                              {job.status}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-xs text-gray-500">
+                            Dismissed {formatDateTime(job.dismissedAt)} - {job.checked}/{job.total} checked,{" "}
+                            {job.pendingReview} pending, {job.failed} failed
+                          </div>
+                        </div>
+                        <Link
+                          href="/products"
+                          className="text-xs font-medium text-gray-600 hover:text-gray-900"
+                        >
+                          Products
+                        </Link>
+                      </div>
+                    ))}
+                    {dismissedImportJobs.map((job) => (
+                      <div
+                        key={`dismissed-import-${job.id}`}
+                        className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                      >
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-medium text-gray-900">
+                              eBay import - {job.storeName}
+                            </span>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClasses(job.status)}`}
+                            >
+                              {job.status}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-xs text-gray-500">
+                            Dismissed {formatDateTime(job.dismissedAt)} - {job.processed}/{job.total || job.quantity} processed,{" "}
                             {job.created} imported, {job.failed} failed
                           </div>
                         </div>

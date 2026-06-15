@@ -101,6 +101,7 @@ interface PriceCheckJob {
   updatedAt: string;
   startedAt: string | null;
   completedAt: string | null;
+  dismissedAt: string | null;
 }
 
 function isActivePriceCheckJob(job: PriceCheckJob | null) {
@@ -251,10 +252,34 @@ export default function ProductsPageClient({
     [router, showToast]
   );
 
-  const dismissPriceCheckJob = useCallback(() => {
+  const dismissPriceCheckJob = useCallback(async () => {
+    const job = priceCheckJob;
     window.localStorage.removeItem(PRICE_CHECK_JOB_STORAGE_KEY);
     setPriceCheckJob(null);
-  }, []);
+
+    if (!job || !isTerminalPriceCheckJob(job)) {
+      return;
+    }
+
+    try {
+      const response = await fetch(`/api/price-check/jobs/${job.id}/dismiss`, {
+        method: "POST",
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        const data = (await response.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(data.error || "Failed to dismiss job.");
+      }
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : "Failed to dismiss job.",
+        "error"
+      );
+    }
+  }, [priceCheckJob, showToast]);
 
   const applyPriceCheckJob = useCallback(
     (job: PriceCheckJob | null, notifyTerminal = false) => {
@@ -854,7 +879,7 @@ export default function ProductsPageClient({
             {isTerminalPriceCheckJob(priceCheckJob) && (
               <button
                 type="button"
-                onClick={dismissPriceCheckJob}
+                onClick={() => void dismissPriceCheckJob()}
                 className="text-sm font-medium underline-offset-4 hover:underline"
               >
                 Dismiss

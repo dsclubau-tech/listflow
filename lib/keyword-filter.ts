@@ -48,9 +48,12 @@ function removeKeywordFromDescriptionHtml(description: string, keyword: string):
  */
 export async function applyKeywordFilter(
   title: string,
-  description: string
+  description: string,
+  storeId?: string
 ): Promise<{ title: string; description: string; removedKeywords: string[] }> {
-  const keywords = await prisma.keywordBlacklist.findMany();
+  const keywords = await prisma.keywordBlacklist.findMany({
+    where: storeId ? { storeId } : undefined,
+  });
 
   let cleanedTitle = title;
   let cleanedDescription = description;

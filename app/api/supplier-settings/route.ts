@@ -1,30 +1,86 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { getCurrentStoreSession } from "@/lib/store-session";
+
+const SUPPLIER_NAME = "Amazon AU";
+
+async function getOrCreateStoreSupplierSettings(storeId: string) {
+  let settings = await prisma.supplierSettings.findUnique({
+    where: {
+      storeId_supplierName: {
+        storeId,
+        supplierName: SUPPLIER_NAME,
+      },
+    },
+  });
+
+  if (settings) {
+    return settings;
+  }
+
+  const globalSettings = await prisma.supplierSettings.findFirst({
+    where: { storeId: null, supplierName: SUPPLIER_NAME },
+  });
+
+  const storeNumber = await prisma.store
+    .findUnique({ where: { id: storeId }, select: { name: true } })
+    .then((store) => Number(store?.name.replace(/\D/g, "")) || globalSettings?.storeNumber || 1);
+
+  settings = await prisma.supplierSettings.create({
+    data: {
+      storeId,
+      supplierName: SUPPLIER_NAME,
+      defaultQuantity: globalSettings?.defaultQuantity ?? 1,
+      defaultCountry: globalSettings?.defaultCountry ?? "Australia",
+      defaultZipcode: globalSettings?.defaultZipcode ?? "3170",
+      defaultShippingMethod:
+        globalSettings?.defaultShippingMethod ?? "Cheapest with tracking",
+      defaultTemplateId: globalSettings?.defaultTemplateId ?? null,
+      defaultShippingPolicyId: globalSettings?.defaultShippingPolicyId ?? null,
+      defaultPaymentPolicyId: globalSettings?.defaultPaymentPolicyId ?? null,
+      defaultReturnPolicyId: globalSettings?.defaultReturnPolicyId ?? null,
+      ebayFeePercent: globalSettings?.ebayFeePercent ?? 13,
+      fixedFeeAmount: globalSettings?.fixedFeeAmount ?? 0.33,
+      additionalProfitPercent: globalSettings?.additionalProfitPercent ?? 0,
+      additionalProfitFixed: globalSettings?.additionalProfitFixed ?? 0,
+      minimumProfit: globalSettings?.minimumProfit ?? 1,
+      capitalizeTitle: globalSettings?.capitalizeTitle ?? false,
+      autofillBrand: globalSettings?.autofillBrand ?? true,
+      allowVeroKeywords: globalSettings?.allowVeroKeywords ?? false,
+      privateListing: globalSettings?.privateListing ?? false,
+      defaultWeightUnit: globalSettings?.defaultWeightUnit ?? "Kg",
+      automaticSkuFilling: globalSettings?.automaticSkuFilling ?? true,
+      minProductQuantity: globalSettings?.minProductQuantity ?? 2,
+      maxShippingDays: globalSettings?.maxShippingDays ?? 25,
+      primeOnly: globalSettings?.primeOnly ?? true,
+      priceTrackingEnabled: globalSettings?.priceTrackingEnabled ?? false,
+      priceCheckHour: globalSettings?.priceCheckHour ?? 6,
+      scrapePostcode: globalSettings?.scrapePostcode ?? "2217",
+      storeNumber,
+      defaultItemSpecifics: globalSettings?.defaultItemSpecifics ?? {},
+    },
+  });
+
+  return settings;
+}
 
 export async function GET() {
   const session = await auth();
-  if (!session?.user) {
+  const storeSession = await getCurrentStoreSession();
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  // Find or create the Amazon AU settings record
-  let settings = await prisma.supplierSettings.findFirst({
-    where: { supplierName: "Amazon AU" },
-  });
-
-  if (!settings) {
-    settings = await prisma.supplierSettings.create({
-      data: { supplierName: "Amazon AU" },
-    });
-  }
+  const settings = await getOrCreateStoreSupplierSettings(storeSession.storeId);
 
   return NextResponse.json(settings);
 }
 
 export async function PATCH(request: Request) {
   const session = await auth();
-  if (!session?.user) {
+  const storeSession = await getCurrentStoreSession();
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -35,16 +91,7 @@ export async function PATCH(request: Request) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  // Find or create the settings record first
-  let settings = await prisma.supplierSettings.findFirst({
-    where: { supplierName: "Amazon AU" },
-  });
-
-  if (!settings) {
-    settings = await prisma.supplierSettings.create({
-      data: { supplierName: "Amazon AU" },
-    });
-  }
+  const settings = await getOrCreateStoreSupplierSettings(storeSession.storeId);
 
   // Only allow known fields to be updated
   const allowedFields = [
@@ -73,7 +120,6 @@ export async function PATCH(request: Request) {
     "priceTrackingEnabled",
     "priceCheckHour",
     "scrapePostcode",
-    "storeNumber",
     "defaultItemSpecifics",
   ];
 

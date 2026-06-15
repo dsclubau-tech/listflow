@@ -2,14 +2,17 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { normalizeBuiltinDescriptionTemplate } from "@/lib/builtin-description-templates";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 export async function GET() {
   const session = await auth();
-  if (!session?.user) {
+  const storeSession = await getCurrentStoreSession();
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const templates = await prisma.descriptionTemplate.findMany({
+    where: { storeId: storeSession.storeId },
     orderBy: { createdAt: "asc" },
   });
 
@@ -40,7 +43,8 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const session = await auth();
-  if (!session?.user) {
+  const storeSession = await getCurrentStoreSession();
+  if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -60,12 +64,14 @@ export async function POST(request: Request) {
   // If this template is being set as default, clear all others first
   if (isDefault) {
     await prisma.descriptionTemplate.updateMany({
+      where: { storeId: storeSession.storeId },
       data: { isDefault: false },
     });
   }
 
   const template = await prisma.descriptionTemplate.create({
     data: {
+      storeId: storeSession.storeId,
       name: name.trim(),
       content: content || "",
       isDefault: !!isDefault,

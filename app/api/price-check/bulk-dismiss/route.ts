@@ -2,15 +2,17 @@ import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { createRequestLogger } from "@/lib/logger";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 export async function POST(request: Request) {
   const session = await auth();
+  const storeSession = await getCurrentStoreSession();
   const log = createRequestLogger(
     request,
-    session?.user ? { userId: session.user.id } : {}
+    storeSession ? { storeId: storeSession.storeId } : {}
   );
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("price-check/bulk-dismiss", "Unauthorized bulk dismiss attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -35,6 +37,7 @@ export async function POST(request: Request) {
   const pendingHistory = await prisma.priceHistory.findMany({
     where: {
       appliedAt: null,
+      product: { storeId: storeSession.storeId },
       ...(filterProductIds && filterProductIds.length > 0
         ? { productId: { in: filterProductIds } }
         : {}),
@@ -57,6 +60,7 @@ export async function POST(request: Request) {
       where: {
         id: { in: historyIds },
         appliedAt: null,
+        product: { storeId: storeSession.storeId },
       },
       data: {
         appliedAt: reviewedAt,
@@ -66,7 +70,7 @@ export async function POST(request: Request) {
     });
 
     await tx.product.updateMany({
-      where: { id: { in: affectedProductIds } },
+      where: { id: { in: affectedProductIds }, storeId: storeSession.storeId },
       data: { priceCheckError: null },
     });
   });

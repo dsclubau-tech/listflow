@@ -3,15 +3,17 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { runPriceCheck } from "@/lib/price-checker";
 import { createRequestLogger } from "@/lib/logger";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 export async function POST(request: Request) {
   const session = await auth();
+  const storeSession = await getCurrentStoreSession();
   const log = createRequestLogger(
     request,
-    session?.user ? { userId: session.user.id } : {}
+    storeSession ? { storeId: storeSession.storeId } : {}
   );
 
-  if (!session?.user) {
+  if (!session?.user || !storeSession) {
     log.warn("price-check/route", "Unauthorized price check attempt");
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
@@ -70,6 +72,7 @@ export async function POST(request: Request) {
     const products = await prisma.product.findMany({
       where: {
         asin: { in: asins },
+        storeId: storeSession.storeId,
         status: "IMPORTED",
       },
       select: {
@@ -102,6 +105,7 @@ export async function POST(request: Request) {
 
     try {
       const result = await runPriceCheck({
+        storeId: storeSession.storeId,
         productIds: eligible.map((p) => p.id),
         ignoreSchedule: true,
       });
@@ -138,7 +142,7 @@ export async function POST(request: Request) {
   // Targeted product flow.
   if (productIds.length > 0) {
     const products = await prisma.product.findMany({
-      where: { id: { in: productIds } },
+      where: { id: { in: productIds }, storeId: storeSession.storeId },
       select: {
         id: true,
         title: true,
@@ -178,6 +182,7 @@ export async function POST(request: Request) {
 
     try {
       const result = await runPriceCheck({
+        storeId: storeSession.storeId,
         productIds: eligible.map((product) => product.id),
         ignoreSchedule: true,
       });
@@ -213,6 +218,7 @@ export async function POST(request: Request) {
 
   try {
     const result = await runPriceCheck({
+      storeId: storeSession.storeId,
       ignoreSchedule: true,
     });
 
