@@ -64,6 +64,8 @@ enum PriceCheckSource {
 enum PriceCheckJobStatus {
   QUEUED
   RUNNING
+  CANCELLING
+  CANCELLED
   COMPLETED
   FAILED
 }
@@ -174,6 +176,7 @@ model PriceCheckJob {
   scope         PriceCheckJobScope
   status        PriceCheckJobStatus @default(QUEUED)
   productIds    String[]            @default([])
+  completedProductIds String[]       @default([])
   total         Int                 @default(0)
   checked       Int                 @default(0)
   changed       Int                 @default(0)

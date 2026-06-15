@@ -1,0 +1,2 @@
+ALTER TYPE "PriceCheckJobStatus" ADD VALUE 'CANCELLING';
+ALTER TYPE "PriceCheckJobStatus" ADD VALUE 'CANCELLED';

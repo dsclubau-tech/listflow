@@ -1,0 +1,1145 @@
+"use client";
+
+import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
+import Toast from "@/components/Toast";
+import { useToast } from "@/hooks/useToast";
+import type {
+  ActionCenterData,
+  ActionCenterProductSummary,
+  ActionCenterPriceCheckJob,
+  ActionCenterEbayImportJob,
+  FailedCheckActionItem,
+  LowStockActionItem,
+  OnHoldActionItem,
+  PendingReviewActionItem,
+} from "@/lib/action-center";
+
+type ToastVariant = "success" | "error";
+
+const ACTIVE_PRICE_JOB_STATUSES = new Set(["QUEUED", "RUNNING", "CANCELLING"]);
+const ACTIVE_IMPORT_JOB_STATUSES = new Set(["QUEUED", "RUNNING"]);
+const PRICE_CHECK_JOB_STORAGE_KEY = "listflow.products.activePriceCheckJobId";
+type ActionCenterFilter =
+  | "pendingReviews"
+  | "failedChecks"
+  | "lowStock"
+  | "onHold"
+  | "jobs";
+type JobPanelFilter = "current" | "start" | "recent";
+const FILTER_OPTIONS: Array<{
+  id: ActionCenterFilter;
+  label: string;
+  helper: string;
+}> = [
+  {
+    id: "pendingReviews",
+    label: "Pending reviews",
+    helper: "Price changes",
+  },
+  {
+    id: "failedChecks",
+    label: "Failed checks",
+    helper: "Needs retry",
+  },
+  {
+    id: "lowStock",
+    label: "Low stock",
+    helper: "Amazon stock",
+  },
+  {
+    id: "onHold",
+    label: "On hold",
+    helper: "Paused listings",
+  },
+  {
+    id: "jobs",
+    label: "Jobs",
+    helper: "Running/recent",
+  },
+];
+const JOB_PANEL_FILTERS: Array<{ id: JobPanelFilter; label: string }> = [
+  { id: "current", label: "Current / paused" },
+  { id: "start", label: "Start new job" },
+  { id: "recent", label: "Recent" },
+];
+
+function formatMoney(value: string | number | null) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? `A$${parsed.toFixed(2)}` : "-";
+}
+
+function formatDateTime(value: string | null) {
+  if (!value) {
+    return "-";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function productHref(product: ActionCenterProductSummary) {
+  return `/products?title=${encodeURIComponent(product.title)}`;
+}
+
+async function postJson<T>(url: string, body?: unknown): Promise<T> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const data = (await response.json().catch(() => ({}))) as T & {
+    error?: string;
+  };
+
+  if (!response.ok) {
+    throw new Error(data.error || "Action failed.");
+  }
+
+  return data;
+}
+
+function isActivePriceJob(job: ActionCenterPriceCheckJob) {
+  return ACTIVE_PRICE_JOB_STATUSES.has(job.status);
+}
+
+function isResumablePriceJob(job: ActionCenterPriceCheckJob) {
+  return job.status === "CANCELLED" && job.canResume && job.remaining > 0;
+}
+
+function isActiveImportJob(job: ActionCenterEbayImportJob) {
+  return ACTIVE_IMPORT_JOB_STATUSES.has(job.status);
+}
+
+function getCurrentJobCount(data: ActionCenterData) {
+  const currentPriceJobs = data.jobs.priceChecks.filter(
+    (job) => isActivePriceJob(job) || isResumablePriceJob(job)
+  );
+  const currentImportJobs = data.jobs.ebayImports.filter(isActiveImportJob);
+
+  return currentPriceJobs.length + currentImportJobs.length;
+}
+
+function statusClasses(status: string) {
+  if (status === "FAILED") {
+    return "bg-red-100 text-red-700";
+  }
+
+  if (status === "COMPLETED") {
+    return "bg-emerald-100 text-emerald-700";
+  }
+
+  if (status === "CANCELLED" || status === "CANCELLING") {
+    return "bg-amber-100 text-amber-800";
+  }
+
+  return "bg-blue-100 text-blue-700";
+}
+
+function ProductLinks({ product }: { product: ActionCenterProductSummary }) {
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+      {product.asin && (
+        <a
+          href={`https://www.amazon.com.au/dp/${product.asin}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-orange-600 hover:text-orange-800"
+        >
+          Amazon
+        </a>
+      )}
+      {product.ebayItemId && (
+        <a
+          href={`https://www.ebay.com.au/itm/${product.ebayItemId}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-600 hover:text-blue-800"
+        >
+          eBay
+        </a>
+      )}
+      <Link href={productHref(product)} className="text-gray-500 hover:text-gray-900">
+        View product
+      </Link>
+    </div>
+  );
+}
+
+function EmptyRow({ message, colSpan }: { message: string; colSpan: number }) {
+  return (
+    <tr>
+      <td colSpan={colSpan} className="px-4 py-8 text-center text-sm text-gray-500">
+        {message}
+      </td>
+    </tr>
+  );
+}
+
+function ActionButton({
+  children,
+  onClick,
+  disabled,
+  tone = "default",
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  tone?: "default" | "primary" | "danger";
+}) {
+  const classes =
+    tone === "primary"
+      ? "border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700"
+      : tone === "danger"
+        ? "border-red-200 bg-white text-red-700 hover:bg-red-50"
+        : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`rounded border px-2.5 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${classes}`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function SectionHeader({
+  title,
+  count,
+  viewAllHref,
+  children,
+}: {
+  title: string;
+  count: number;
+  viewAllHref: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 px-4 py-3">
+      <div className="flex items-center gap-3">
+        <h2 className="text-sm font-semibold text-gray-900">{title}</h2>
+        <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+          {count}
+        </span>
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        {children}
+        <Link href={viewAllHref} className="text-xs font-medium text-gray-600 hover:text-gray-900">
+          View all
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+function getFilterCount(data: ActionCenterData, filter: ActionCenterFilter) {
+  if (filter === "pendingReviews") {
+    return data.summary.pendingReviews;
+  }
+
+  if (filter === "failedChecks") {
+    return data.summary.failedChecks;
+  }
+
+  if (filter === "lowStock") {
+    return data.summary.lowStock;
+  }
+
+  if (filter === "onHold") {
+    return data.summary.onHold;
+  }
+
+  return getCurrentJobCount(data);
+}
+
+function hasFilterContent(data: ActionCenterData, filter: ActionCenterFilter) {
+  if (filter === "pendingReviews") {
+    return data.queues.pendingReviews.length > 0;
+  }
+
+  if (filter === "failedChecks") {
+    return data.queues.failedChecks.length > 0;
+  }
+
+  if (filter === "lowStock") {
+    return data.queues.lowStock.length > 0;
+  }
+
+  if (filter === "onHold") {
+    return data.queues.onHold.length > 0;
+  }
+
+  return data.jobs.priceChecks.length > 0 || data.jobs.ebayImports.length > 0;
+}
+
+function getDefaultFilter(data: ActionCenterData): ActionCenterFilter {
+  return (
+    FILTER_OPTIONS.find((option) => hasFilterContent(data, option.id))?.id ??
+    "pendingReviews"
+  );
+}
+
+export default function ActionCenterClient({ data }: { data: ActionCenterData }) {
+  const router = useRouter();
+  const { toast, showToast, hideToast } = useToast();
+  const [runningAction, setRunningAction] = useState<string | null>(null);
+  const [activeFilter, setActiveFilter] = useState<ActionCenterFilter>(() =>
+    getDefaultFilter(data)
+  );
+  const [jobPanelFilter, setJobPanelFilter] =
+    useState<JobPanelFilter>("current");
+  const activePriceJobs = useMemo(
+    () => data.jobs.priceChecks.filter(isActivePriceJob),
+    [data.jobs.priceChecks]
+  );
+  const currentPriceJobs = useMemo(
+    () =>
+      data.jobs.priceChecks.filter(
+        (job) => isActivePriceJob(job) || isResumablePriceJob(job)
+      ),
+    [data.jobs.priceChecks]
+  );
+  const activeImportJobs = useMemo(
+    () => data.jobs.ebayImports.filter(isActiveImportJob),
+    [data.jobs.ebayImports]
+  );
+  const hasActivePriceJobs = activePriceJobs.length > 0;
+  const hasActiveJobs = useMemo(
+    () => activePriceJobs.length > 0 || activeImportJobs.length > 0,
+    [activeImportJobs.length, activePriceJobs.length]
+  );
+
+  useEffect(() => {
+    if (!hasActiveJobs) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      router.refresh();
+    }, 2000);
+
+    return () => window.clearInterval(interval);
+  }, [hasActiveJobs, router]);
+
+  useEffect(() => {
+    if (hasFilterContent(data, activeFilter)) {
+      return;
+    }
+
+    setActiveFilter(getDefaultFilter(data));
+  }, [activeFilter, data]);
+
+  async function runAction(
+    key: string,
+    task: () => Promise<string>,
+    variant: ToastVariant = "success"
+  ) {
+    setRunningAction(key);
+
+    try {
+      const message = await task();
+      showToast(message, variant);
+      router.refresh();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Action failed.";
+      showToast(message, "error");
+    } finally {
+      setRunningAction(null);
+    }
+  }
+
+  function applyReview(item: PendingReviewActionItem) {
+    void runAction(`apply:${item.product.id}`, async () => {
+      await postJson("/api/price-check/apply", { productId: item.product.id });
+      return "Applied pending price change.";
+    });
+  }
+
+  function dismissReview(item: PendingReviewActionItem) {
+    void runAction(`dismiss:${item.product.id}`, async () => {
+      await postJson("/api/price-check/dismiss", { productId: item.product.id });
+      return "Dismissed pending price change.";
+    });
+  }
+
+  function bulkReview(action: "apply" | "dismiss") {
+    const productIds = data.queues.pendingReviews.map((item) => item.product.id);
+    const endpoint =
+      action === "apply" ? "/api/price-check/bulk-apply" : "/api/price-check/bulk-dismiss";
+
+    void runAction(`bulk-${action}`, async () => {
+      if (productIds.length === 0) {
+        return "No visible pending reviews to update.";
+      }
+
+      const result = await postJson<{
+        applied?: number;
+        dismissed?: number;
+        failed?: number;
+      }>(endpoint, { productIds });
+
+      if (action === "apply") {
+        return `Applied ${result.applied ?? 0} visible price change(s). ${result.failed ?? 0} failed.`;
+      }
+
+      return `Dismissed ${result.dismissed ?? 0} visible price change(s).`;
+    });
+  }
+
+  function startPriceCheckJob(
+    key: string,
+    body: { all?: boolean; productIds?: string[] },
+    emptyMessage: string,
+    startedLabel: (total: number) => string
+  ) {
+    void runAction(key, async () => {
+      if (!body.all && (!body.productIds || body.productIds.length === 0)) {
+        return emptyMessage;
+      }
+
+      const result = await postJson<{
+        job?: ActionCenterPriceCheckJob;
+        reused?: boolean;
+      }>("/api/price-check/jobs", body);
+
+      if (result.job && isActivePriceJob(result.job)) {
+        window.localStorage.setItem(PRICE_CHECK_JOB_STORAGE_KEY, result.job.id);
+        setJobPanelFilter("current");
+      }
+
+      if (result.reused) {
+        return "A price check is already running.";
+      }
+
+      const total = result.job?.total ?? 0;
+      return startedLabel(total);
+    });
+  }
+
+  function retryCheck(product: ActionCenterProductSummary) {
+    startPriceCheckJob(
+      `retry:${product.id}`,
+      { productIds: [product.id] },
+      "No product selected.",
+      (total) => `Price check started for ${total} product${total === 1 ? "" : "s"}.`
+    );
+  }
+
+  function holdProduct(product: ActionCenterProductSummary) {
+    void runAction(`hold:${product.id}`, async () => {
+      const result = await postJson<{ held?: number; failed?: number }>(
+        "/api/products/bulk-hold",
+        { productIds: [product.id] }
+      );
+      return `Put ${result.held ?? 0} product(s) on hold. ${result.failed ?? 0} failed.`;
+    });
+  }
+
+  function resumeProduct(product: ActionCenterProductSummary) {
+    void runAction(`resume:${product.id}`, async () => {
+      const result = await postJson<{ resumed?: number; failed?: number }>(
+        "/api/products/bulk-resume",
+        { productIds: [product.id] }
+      );
+      return `Resumed ${result.resumed ?? 0} product(s). ${result.failed ?? 0} failed.`;
+    });
+  }
+
+  function endProduct(product: ActionCenterProductSummary) {
+    const confirmed = window.confirm(
+      `End this eBay listing and delete it from ListFlow?\n\n${product.title}`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    void runAction(`end:${product.id}`, async () => {
+      const result = await postJson<{ ended?: number; failed?: number }>(
+        "/api/products/bulk-end",
+        { productIds: [product.id] }
+      );
+      return `Ended ${result.ended ?? 0} listing(s). ${result.failed ?? 0} failed.`;
+    });
+  }
+
+  function cancelPriceJob(job: ActionCenterPriceCheckJob) {
+    void runAction(`stop-job:${job.id}`, async () => {
+      await postJson(`/api/price-check/jobs/${job.id}/cancel`);
+      return "Pausing price check after current product.";
+    });
+  }
+
+  function resumePriceJob(job: ActionCenterPriceCheckJob) {
+    void runAction(`resume-job:${job.id}`, async () => {
+      const result = await postJson<{
+        job?: ActionCenterPriceCheckJob;
+        reused?: boolean;
+        resumed?: boolean;
+      }>(`/api/price-check/jobs/${job.id}/resume`);
+
+      if (result.job && isActivePriceJob(result.job)) {
+        window.localStorage.setItem(PRICE_CHECK_JOB_STORAGE_KEY, result.job.id);
+        setJobPanelFilter("current");
+      }
+
+      if (result.reused) {
+        return "A price check is already running.";
+      }
+
+      if (result.resumed && result.job) {
+        return `Resumed price check for ${result.job.total} product${result.job.total === 1 ? "" : "s"}.`;
+      }
+
+      return "No remaining products to resume.";
+    });
+  }
+
+  function startAllProductsPriceCheck() {
+    startPriceCheckJob(
+      "start-all-products",
+      { all: true },
+      "No eligible tracked products found.",
+      (total) => `Started all-products price check for ${total} product${total === 1 ? "" : "s"}.`
+    );
+  }
+
+  function startVisibleFailedPriceCheck() {
+    const productIds = data.queues.failedChecks.map((item) => item.product.id);
+
+    startPriceCheckJob(
+      "start-visible-failed",
+      { productIds },
+      "No visible failed checks to retry.",
+      (total) => `Started failed-check retry job for ${total} product${total === 1 ? "" : "s"}.`
+    );
+  }
+
+  function startVisibleLowStockPriceCheck() {
+    const productIds = data.queues.lowStock.map((item) => item.product.id);
+
+    startPriceCheckJob(
+      "start-visible-low-stock",
+      { productIds },
+      "No visible low-stock products to check.",
+      (total) => `Started low-stock price check for ${total} product${total === 1 ? "" : "s"}.`
+    );
+  }
+
+  return (
+    <>
+      <div className="mb-6">
+        <h1 className="text-xl font-semibold text-gray-900">Action Center</h1>
+        <p className="mt-1 text-sm text-gray-500">
+          Review the listings, checks, stock alerts, and jobs that need attention.
+        </p>
+      </div>
+
+      <div className="mb-6 grid gap-3 md:grid-cols-5">
+        {FILTER_OPTIONS.map((option) => {
+          const selected = activeFilter === option.id;
+          const count = getFilterCount(data, option.id);
+
+          return (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => setActiveFilter(option.id)}
+              aria-pressed={selected}
+              className={`rounded-md border px-4 py-3 text-left transition-colors ${
+                selected
+                  ? "border-gray-900 bg-gray-900 text-white shadow-sm"
+                  : "border-gray-200 bg-white text-gray-900 hover:border-gray-300 hover:bg-gray-50"
+              }`}
+            >
+              <div
+                className={`text-xs font-medium uppercase tracking-wide ${
+                  selected ? "text-gray-300" : "text-gray-500"
+                }`}
+              >
+                {option.label}
+              </div>
+              <div className="mt-1 text-2xl font-semibold">{count}</div>
+              <div
+                className={`mt-1 text-xs ${
+                  selected ? "text-gray-300" : "text-gray-500"
+                }`}
+              >
+                {option.helper}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="space-y-6">
+        {activeFilter === "pendingReviews" && (
+          <section className="overflow-hidden rounded-md border border-gray-200 bg-white">
+            <SectionHeader
+              title="Needs Price Review"
+              count={data.summary.pendingReviews}
+              viewAllHref="/products?filter=needs-changing-price"
+            >
+              <ActionButton
+                onClick={() => bulkReview("apply")}
+                disabled={
+                  data.queues.pendingReviews.length === 0 ||
+                  runningAction === "bulk-apply"
+                }
+                tone="primary"
+              >
+                {runningAction === "bulk-apply" ? "Applying..." : "Apply visible"}
+              </ActionButton>
+              <ActionButton
+                onClick={() => bulkReview("dismiss")}
+                disabled={
+                  data.queues.pendingReviews.length === 0 ||
+                  runningAction === "bulk-dismiss"
+                }
+              >
+                {runningAction === "bulk-dismiss" ? "Dismissing..." : "Dismiss visible"}
+              </ActionButton>
+            </SectionHeader>
+            <table className="w-full text-left">
+              <thead className="bg-gray-50 text-xs font-medium uppercase tracking-wide text-gray-500">
+                <tr>
+                  <th className="px-4 py-3">Product</th>
+                  <th className="px-4 py-3">Buy Price</th>
+                  <th className="px-4 py-3">Sell Price</th>
+                  <th className="px-4 py-3">Change</th>
+                  <th className="px-4 py-3">Detected</th>
+                  <th className="px-4 py-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {data.queues.pendingReviews.length === 0 ? (
+                  <EmptyRow colSpan={6} message="No pending price reviews." />
+                ) : (
+                  data.queues.pendingReviews.map((item) => (
+                    <tr key={item.product.id}>
+                      <td className="px-4 py-3 align-top">
+                        <div className="font-medium text-gray-900">{item.product.title}</div>
+                        {item.pendingCount > 1 && (
+                          <div className="mt-1 text-xs text-amber-700">
+                            {item.pendingCount} pending variant changes
+                          </div>
+                        )}
+                        <ProductLinks product={item.product} />
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-700">
+                        {formatMoney(item.previousPrice)} {"->"} {formatMoney(item.newPrice)}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-700">
+                        {formatMoney(item.previousSellPrice)} {"->"}{" "}
+                        {formatMoney(item.newSellPrice)}
+                      </td>
+                      <td
+                        className={`px-4 py-3 text-sm font-medium ${
+                          item.changePercent >= 0 ? "text-red-700" : "text-emerald-700"
+                        }`}
+                      >
+                        {item.changePercent >= 0 ? "+" : ""}
+                        {item.changePercent.toFixed(2)}%
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-500">
+                        {formatDateTime(item.createdAt)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex justify-end gap-2">
+                          <ActionButton
+                            onClick={() => applyReview(item)}
+                            disabled={runningAction === `apply:${item.product.id}`}
+                            tone="primary"
+                          >
+                            {runningAction === `apply:${item.product.id}` ? "Applying..." : "Apply"}
+                          </ActionButton>
+                          <ActionButton
+                            onClick={() => dismissReview(item)}
+                            disabled={runningAction === `dismiss:${item.product.id}`}
+                          >
+                            {runningAction === `dismiss:${item.product.id}`
+                              ? "Dismissing..."
+                              : "Dismiss"}
+                          </ActionButton>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </section>
+        )}
+
+        {activeFilter === "failedChecks" && (
+          <section className="overflow-hidden rounded-md border border-gray-200 bg-white">
+          <SectionHeader
+            title="Failed Price Checks"
+            count={data.summary.failedChecks}
+            viewAllHref="/products?filter=failed-on-hold"
+          />
+          <table className="w-full text-left">
+            <thead className="bg-gray-50 text-xs font-medium uppercase tracking-wide text-gray-500">
+              <tr>
+                <th className="px-4 py-3">Product</th>
+                <th className="px-4 py-3">Error</th>
+                <th className="px-4 py-3">Last Check</th>
+                <th className="px-4 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {data.queues.failedChecks.length === 0 ? (
+                <EmptyRow colSpan={4} message="No failed price checks." />
+              ) : (
+                data.queues.failedChecks.map((item: FailedCheckActionItem) => (
+                  <tr key={item.product.id}>
+                    <td className="px-4 py-3 align-top">
+                      <div className="font-medium text-gray-900">{item.product.title}</div>
+                      <ProductLinks product={item.product} />
+                    </td>
+                    <td className="max-w-lg px-4 py-3 text-sm text-red-700">
+                      <div className="line-clamp-2" title={item.errorMessage}>
+                        {item.errorMessage}
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-500">
+                      {formatDateTime(item.lastPriceCheck)}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex justify-end gap-2">
+                        <ActionButton
+                          onClick={() => retryCheck(item.product)}
+                          disabled={runningAction === `retry:${item.product.id}`}
+                          tone="primary"
+                        >
+                          {runningAction === `retry:${item.product.id}` ? "Starting..." : "Retry"}
+                        </ActionButton>
+                        <ActionButton
+                          onClick={() => holdProduct(item.product)}
+                          disabled={runningAction === `hold:${item.product.id}`}
+                        >
+                          Hold
+                        </ActionButton>
+                        <ActionButton
+                          onClick={() => endProduct(item.product)}
+                          disabled={runningAction === `end:${item.product.id}`}
+                          tone="danger"
+                        >
+                          End
+                        </ActionButton>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </section>
+        )}
+
+        {activeFilter === "lowStock" && (
+          <section className="overflow-hidden rounded-md border border-gray-200 bg-white">
+          <SectionHeader
+            title="Low Amazon Stock"
+            count={data.summary.lowStock}
+            viewAllHref="/products?stockMonitoring=low-stock"
+          />
+          <table className="w-full text-left">
+            <thead className="bg-gray-50 text-xs font-medium uppercase tracking-wide text-gray-500">
+              <tr>
+                <th className="px-4 py-3">Product</th>
+                <th className="px-4 py-3">Stock Left</th>
+                <th className="px-4 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {data.queues.lowStock.length === 0 ? (
+                <EmptyRow colSpan={3} message="No low-stock products." />
+              ) : (
+                data.queues.lowStock.map((item: LowStockActionItem) => (
+                  <tr key={item.product.id}>
+                    <td className="px-4 py-3 align-top">
+                      <div className="font-medium text-gray-900">{item.product.title}</div>
+                      <ProductLinks product={item.product} />
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-800">
+                        {item.amazonStockLeft ?? "?"} left
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex justify-end gap-2">
+                        <ActionButton
+                          onClick={() => holdProduct(item.product)}
+                          disabled={runningAction === `hold:${item.product.id}`}
+                          tone="primary"
+                        >
+                          Hold
+                        </ActionButton>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </section>
+        )}
+
+        {activeFilter === "onHold" && (
+          <section className="overflow-hidden rounded-md border border-gray-200 bg-white">
+          <SectionHeader
+            title="On Hold"
+            count={data.summary.onHold}
+            viewAllHref="/products?filter=failed-on-hold"
+          />
+          <table className="w-full text-left">
+            <thead className="bg-gray-50 text-xs font-medium uppercase tracking-wide text-gray-500">
+              <tr>
+                <th className="px-4 py-3">Product</th>
+                <th className="px-4 py-3">Quantity</th>
+                <th className="px-4 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {data.queues.onHold.length === 0 ? (
+                <EmptyRow colSpan={3} message="No on-hold products." />
+              ) : (
+                data.queues.onHold.map((item: OnHoldActionItem) => (
+                  <tr key={item.product.id}>
+                    <td className="px-4 py-3 align-top">
+                      <div className="font-medium text-gray-900">{item.product.title}</div>
+                      <ProductLinks product={item.product} />
+                    </td>
+                    <td className="px-4 py-3 text-sm text-gray-700">{item.quantity}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex justify-end gap-2">
+                        <ActionButton
+                          onClick={() => resumeProduct(item.product)}
+                          disabled={runningAction === `resume:${item.product.id}`}
+                          tone="primary"
+                        >
+                          Resume
+                        </ActionButton>
+                        <ActionButton
+                          onClick={() => endProduct(item.product)}
+                          disabled={runningAction === `end:${item.product.id}`}
+                          tone="danger"
+                        >
+                          End
+                        </ActionButton>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </section>
+        )}
+
+        {activeFilter === "jobs" && (
+          <section className="overflow-hidden rounded-md border border-gray-200 bg-white">
+            <SectionHeader
+              title="Jobs"
+              count={getCurrentJobCount(data)}
+              viewAllHref="/price-tracker"
+            />
+            <div className="border-b border-gray-200 px-4 py-3">
+              <div className="inline-flex overflow-hidden rounded-md border border-gray-300 bg-white">
+                {JOB_PANEL_FILTERS.map((option) => {
+                  const selected = jobPanelFilter === option.id;
+
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      onClick={() => setJobPanelFilter(option.id)}
+                      aria-pressed={selected}
+                      className={`border-r border-gray-300 px-3 py-1.5 text-xs font-medium transition-colors last:border-r-0 ${
+                        selected
+                          ? "bg-gray-900 text-white"
+                          : "text-gray-700 hover:bg-gray-50"
+                      }`}
+                    >
+                      {option.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {jobPanelFilter === "current" && (
+              <div className="divide-y divide-gray-100">
+                {currentPriceJobs.length === 0 && activeImportJobs.length === 0 ? (
+                  <div className="px-4 py-8 text-center text-sm text-gray-500">
+                    No current or paused jobs.
+                  </div>
+                ) : (
+                  <>
+                    {currentPriceJobs.map((job) => (
+                      <div
+                        key={`current-price-${job.id}`}
+                        className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                      >
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-medium text-gray-900">
+                              Product price check
+                            </span>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClasses(job.status)}`}
+                            >
+                              {job.status === "CANCELLED" ? "PAUSED" : job.status}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-xs text-gray-500">
+                            {job.checked}/{job.total} checked, {job.pendingReview} pending,{" "}
+                            {job.failed} failed
+                            {isResumablePriceJob(job) ? `, ${job.remaining} remaining` : ""}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {isActivePriceJob(job) && (
+                            <ActionButton
+                              onClick={() => cancelPriceJob(job)}
+                              disabled={
+                                job.status === "CANCELLING" ||
+                                runningAction === `stop-job:${job.id}`
+                              }
+                              tone="danger"
+                            >
+                              {job.status === "CANCELLING" ||
+                              runningAction === `stop-job:${job.id}`
+                                ? "Pausing..."
+                                : "Pause"}
+                            </ActionButton>
+                          )}
+                          {isResumablePriceJob(job) && (
+                            <ActionButton
+                              onClick={() => resumePriceJob(job)}
+                              disabled={runningAction === `resume-job:${job.id}`}
+                              tone="primary"
+                            >
+                              {runningAction === `resume-job:${job.id}`
+                                ? "Resuming..."
+                                : "Resume"}
+                            </ActionButton>
+                          )}
+                          <Link
+                            href="/products"
+                            className="text-xs font-medium text-gray-600 hover:text-gray-900"
+                          >
+                            Products
+                          </Link>
+                        </div>
+                      </div>
+                    ))}
+                    {activeImportJobs.map((job) => (
+                      <div
+                        key={`current-import-${job.id}`}
+                        className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                      >
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-medium text-gray-900">
+                              eBay import - {job.storeName}
+                            </span>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClasses(job.status)}`}
+                            >
+                              {job.status}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-xs text-gray-500">
+                            {job.processed}/{job.total || job.quantity} processed,{" "}
+                            {job.created} imported, {job.failed} failed
+                          </div>
+                        </div>
+                        <Link
+                          href="/ebay-import"
+                          className="text-xs font-medium text-gray-600 hover:text-gray-900"
+                        >
+                          eBay Import
+                        </Link>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
+
+            {jobPanelFilter === "start" && (
+              <div className="divide-y divide-gray-100">
+                {hasActivePriceJobs && (
+                  <div className="bg-blue-50 px-4 py-3 text-sm text-blue-800">
+                    A product price check is already active. Pause it or wait for it to finish
+                    before starting another one.
+                  </div>
+                )}
+                <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                  <div>
+                    <div className="text-sm font-medium text-gray-900">
+                      Check all imported products
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      Starts a full Products page price-check job.
+                    </div>
+                  </div>
+                  <ActionButton
+                    onClick={startAllProductsPriceCheck}
+                    disabled={
+                      hasActivePriceJobs || runningAction === "start-all-products"
+                    }
+                    tone="primary"
+                  >
+                    {runningAction === "start-all-products" ? "Starting..." : "Start all"}
+                  </ActionButton>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                  <div>
+                    <div className="text-sm font-medium text-gray-900">
+                      Retry visible failed checks
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      {data.queues.failedChecks.length} visible failed product
+                      {data.queues.failedChecks.length === 1 ? "" : "s"}.
+                    </div>
+                  </div>
+                  <ActionButton
+                    onClick={startVisibleFailedPriceCheck}
+                    disabled={
+                      hasActivePriceJobs ||
+                      data.queues.failedChecks.length === 0 ||
+                      runningAction === "start-visible-failed"
+                    }
+                    tone="primary"
+                  >
+                    {runningAction === "start-visible-failed" ? "Starting..." : "Retry failed"}
+                  </ActionButton>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                  <div>
+                    <div className="text-sm font-medium text-gray-900">
+                      Check visible low-stock products
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      {data.queues.lowStock.length} visible low-stock product
+                      {data.queues.lowStock.length === 1 ? "" : "s"}.
+                    </div>
+                  </div>
+                  <ActionButton
+                    onClick={startVisibleLowStockPriceCheck}
+                    disabled={
+                      hasActivePriceJobs ||
+                      data.queues.lowStock.length === 0 ||
+                      runningAction === "start-visible-low-stock"
+                    }
+                    tone="primary"
+                  >
+                    {runningAction === "start-visible-low-stock"
+                      ? "Starting..."
+                      : "Check low stock"}
+                  </ActionButton>
+                </div>
+              </div>
+            )}
+
+            {jobPanelFilter === "recent" && (
+              <div className="divide-y divide-gray-100">
+                {data.jobs.priceChecks.length === 0 && data.jobs.ebayImports.length === 0 ? (
+                  <div className="px-4 py-8 text-center text-sm text-gray-500">
+                    No recent jobs.
+                  </div>
+                ) : (
+                  <>
+                    {data.jobs.priceChecks.map((job) => (
+                      <div
+                        key={`recent-price-${job.id}`}
+                        className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                      >
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-medium text-gray-900">
+                              Product price check
+                            </span>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClasses(job.status)}`}
+                            >
+                              {job.status}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-xs text-gray-500">
+                            {job.checked}/{job.total} checked, {job.pendingReview} pending,{" "}
+                            {job.failed} failed
+                          </div>
+                        </div>
+                        <Link
+                          href="/products"
+                          className="text-xs font-medium text-gray-600 hover:text-gray-900"
+                        >
+                          Products
+                        </Link>
+                      </div>
+                    ))}
+                    {data.jobs.ebayImports.map((job) => (
+                      <div
+                        key={`recent-import-${job.id}`}
+                        className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                      >
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-medium text-gray-900">
+                              eBay import - {job.storeName}
+                            </span>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClasses(job.status)}`}
+                            >
+                              {job.status}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-xs text-gray-500">
+                            {job.processed}/{job.total || job.quantity} processed,{" "}
+                            {job.created} imported, {job.failed} failed
+                          </div>
+                        </div>
+                        <Link
+                          href="/ebay-import"
+                          className="text-xs font-medium text-gray-600 hover:text-gray-900"
+                        >
+                          eBay Import
+                        </Link>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
+          </section>
+        )}
+      </div>
+
+      {toast.visible && (
+        <Toast
+          message={toast.message}
+          variant={toast.variant}
+          onClose={hideToast}
+        />
+      )}
+    </>
+  );
+}

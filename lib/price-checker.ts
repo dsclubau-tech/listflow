@@ -22,6 +22,7 @@ export interface PriceCheckResult {
   failed: number;
   skipped: number;
   reason?: string;
+  cancelled?: boolean;
 }
 
 export type PriceCheckProgress = PriceCheckResult & { total: number };
@@ -31,6 +32,11 @@ interface RunPriceCheckOptions {
   ignoreSchedule?: boolean;
   simulatedPrices?: Record<string, number>;
   onProgress?: (progress: PriceCheckProgress) => void | Promise<void>;
+  onProductComplete?: (
+    productId: string,
+    progress: PriceCheckProgress
+  ) => void | Promise<void>;
+  shouldCancel?: () => boolean | Promise<boolean>;
 }
 
 type ProductRecord = NonNullable<Awaited<ReturnType<typeof prisma.product.findFirst>>>;
@@ -157,7 +163,8 @@ export async function runPriceCheck(
     options.productIds?.map((id) => id.trim()).filter(Boolean) ?? [];
   const restrictToIds = normalizedIds.length > 0;
 
-  const products = await prisma.product.findMany({
+  const requestedOrder = new Map(normalizedIds.map((id, index) => [id, index]));
+  const productsFromDb = await prisma.product.findMany({
     where: {
       status: "IMPORTED",
       ...(restrictToIds ? { id: { in: normalizedIds } } : {}),
@@ -170,6 +177,13 @@ export async function runPriceCheck(
     },
     orderBy: { updatedAt: "desc" },
   });
+  const products = restrictToIds
+    ? [...productsFromDb].sort(
+        (left, right) =>
+          (requestedOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+          (requestedOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)
+      )
+    : productsFromDb;
 
   if (products.length === 0) {
     return { checked: 0, changed: 0, pendingReview: 0, failed: 0, skipped: 0 };
@@ -195,6 +209,41 @@ export async function runPriceCheck(
       });
     }
   };
+  const reportProductComplete = async (productId: string) => {
+    await reportProgress();
+
+    if (!options.onProductComplete) {
+      return;
+    }
+
+    try {
+      await options.onProductComplete(productId, { ...result, total: products.length });
+    } catch (error) {
+      logger.warn("price-checker/run", "Price check completion callback failed", {
+        productId,
+        errorMessage: getErrorMessage(error),
+      });
+    }
+  };
+  const checkCancelled = async () => {
+    if (!options.shouldCancel) {
+      return false;
+    }
+
+    try {
+      return await options.shouldCancel();
+    } catch (error) {
+      logger.warn("price-checker/run", "Price check cancellation check failed", {
+        errorMessage: getErrorMessage(error),
+      });
+      return false;
+    }
+  };
+  const finishCancelled = () => ({
+    ...result,
+    reason: "Price check cancelled.",
+    cancelled: true,
+  });
 
   await reportProgress();
 
@@ -234,11 +283,15 @@ export async function runPriceCheck(
   };
 
   for (const [index, product] of products.entries()) {
+    if (await checkCancelled()) {
+      return finishCancelled();
+    }
+
     result.checked += 1;
 
       if (!product.asin || product.variants.length === 0) {
         result.skipped += 1;
-        await reportProgress();
+        await reportProductComplete(product.id);
         continue;
       }
 
@@ -283,7 +336,7 @@ export async function runPriceCheck(
             asin: product.asin,
           });
 
-          await reportProgress();
+          await reportProductComplete(product.id);
           continue;
         }
 
@@ -326,7 +379,7 @@ export async function runPriceCheck(
             baselinePrice: currentAmazonPrice,
           });
 
-          await reportProgress();
+          await reportProductComplete(product.id);
           continue;
         }
 
@@ -346,7 +399,7 @@ export async function runPriceCheck(
             asin: product.asin,
           });
 
-          await reportProgress();
+          await reportProductComplete(product.id);
           continue;
         }
 
@@ -378,7 +431,7 @@ export async function runPriceCheck(
               },
             });
 
-            await reportProgress();
+            await reportProductComplete(product.id);
             continue;
           }
 
@@ -483,7 +536,7 @@ export async function runPriceCheck(
             newSellPrice: mismatchVariants[0]?.nextSellPrice,
           });
 
-          await reportProgress();
+          await reportProductComplete(product.id);
           continue;
         }
 
@@ -519,7 +572,7 @@ export async function runPriceCheck(
             threshold: MAX_CHANGE_PERCENT,
           });
 
-          await reportProgress();
+          await reportProductComplete(product.id);
           continue;
         }
         const nextVariants = product.variants.map((variant, variantIndex) => {
@@ -575,7 +628,7 @@ export async function runPriceCheck(
 
         if (nextPrimarySellPrice === undefined) {
           result.skipped += 1;
-          await reportProgress();
+          await reportProductComplete(product.id);
           continue;
         }
 
@@ -650,9 +703,17 @@ export async function runPriceCheck(
         });
       }
 
-      await reportProgress();
+      await reportProductComplete(product.id);
+
+      if (await checkCancelled()) {
+        return finishCancelled();
+      }
 
       if (simulatedAmazonPrice === null && index < products.length - 1) {
+        if (await checkCancelled()) {
+          return finishCancelled();
+        }
+
         await sleep(getProductDelayMs());
       }
   }

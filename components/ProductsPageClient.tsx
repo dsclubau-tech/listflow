@@ -27,7 +27,13 @@ const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 const PAGE_SIZE_STORAGE_KEY = "listflow.products.pageSize";
 const PRICE_CHECK_JOB_STORAGE_KEY = "listflow.products.activePriceCheckJobId";
 
-type PriceCheckJobStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
+type PriceCheckJobStatus =
+  | "QUEUED"
+  | "RUNNING"
+  | "CANCELLING"
+  | "CANCELLED"
+  | "COMPLETED"
+  | "FAILED";
 type PriceCheckJobScope = "SELECTED" | "ALL";
 type ProductFilter = "all" | "needs-changing-price" | "failed-on-hold";
 
@@ -87,6 +93,8 @@ interface PriceCheckJob {
   pendingReview: number;
   failed: number;
   skipped: number;
+  remaining: number;
+  canResume: boolean;
   reason: string | null;
   errorMessage: string | null;
   createdAt: string;
@@ -96,16 +104,32 @@ interface PriceCheckJob {
 }
 
 function isActivePriceCheckJob(job: PriceCheckJob | null) {
-  return job?.status === "QUEUED" || job?.status === "RUNNING";
+  return (
+    job?.status === "QUEUED" ||
+    job?.status === "RUNNING" ||
+    job?.status === "CANCELLING"
+  );
 }
 
 function isTerminalPriceCheckJob(job: PriceCheckJob | null) {
-  return job?.status === "COMPLETED" || job?.status === "FAILED";
+  return (
+    job?.status === "COMPLETED" ||
+    job?.status === "FAILED" ||
+    job?.status === "CANCELLED"
+  );
+}
+
+function isResumablePriceCheckJob(job: PriceCheckJob | null): job is PriceCheckJob {
+  return job?.status === "CANCELLED" && job.canResume && job.remaining > 0;
 }
 
 function getPriceCheckJobSummary(job: PriceCheckJob) {
   if (job.status === "FAILED") {
     return job.errorMessage || "Price check failed.";
+  }
+
+  if (job.status === "CANCELLED") {
+    return `Price check cancelled. Checked ${job.checked} product${job.checked === 1 ? "" : "s"}. ${job.pendingReview} pending review, ${job.failed} failed, ${job.skipped} unchanged.`;
   }
 
   if (job.reason) {
@@ -122,6 +146,10 @@ function getPriceCheckJobStatusText(job: PriceCheckJob) {
 
   if (job.status === "RUNNING") {
     return `Checking prices ${job.checked}/${job.total}...`;
+  }
+
+  if (job.status === "CANCELLING") {
+    return "Stopping after current product...";
   }
 
   if (job.status === "COMPLETED") {
@@ -146,6 +174,9 @@ export default function ProductsPageClient({
   const searchParams = useSearchParams();
   const [isExporting, setIsExporting] = useState(false);
   const [isStartingPriceCheckJob, setIsStartingPriceCheckJob] = useState(false);
+  const [isCancellingPriceCheckJob, setIsCancellingPriceCheckJob] =
+    useState(false);
+  const [isResumingPriceCheckJob, setIsResumingPriceCheckJob] = useState(false);
   const [priceCheckJob, setPriceCheckJob] = useState<PriceCheckJob | null>(null);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
@@ -189,7 +220,7 @@ export default function ProductsPageClient({
   const storePriceCheckJob = useCallback((job: PriceCheckJob | null) => {
     setPriceCheckJob(job);
 
-    if (!job || isTerminalPriceCheckJob(job)) {
+    if (!job || (isTerminalPriceCheckJob(job) && !isResumablePriceCheckJob(job))) {
       window.localStorage.removeItem(PRICE_CHECK_JOB_STORAGE_KEY);
       return;
     }
@@ -199,13 +230,18 @@ export default function ProductsPageClient({
 
   const handleTerminalPriceCheckJob = useCallback(
     (job: PriceCheckJob, notify: boolean) => {
-      window.localStorage.removeItem(PRICE_CHECK_JOB_STORAGE_KEY);
-      router.refresh();
+      if (!isResumablePriceCheckJob(job)) {
+        window.localStorage.removeItem(PRICE_CHECK_JOB_STORAGE_KEY);
+      }
+
+      setIsCancellingPriceCheckJob(false);
+      setIsResumingPriceCheckJob(false);
 
       if (!notify || notifiedTerminalJobIds.current.has(job.id)) {
         return;
       }
 
+      router.refresh();
       notifiedTerminalJobIds.current.add(job.id);
       showToast(
         getPriceCheckJobSummary(job),
@@ -214,6 +250,11 @@ export default function ProductsPageClient({
     },
     [router, showToast]
   );
+
+  const dismissPriceCheckJob = useCallback(() => {
+    window.localStorage.removeItem(PRICE_CHECK_JOB_STORAGE_KEY);
+    setPriceCheckJob(null);
+  }, []);
 
   const applyPriceCheckJob = useCallback(
     (job: PriceCheckJob | null, notifyTerminal = false) => {
@@ -263,22 +304,115 @@ export default function ProductsPageClient({
     return data.job ?? null;
   }, []);
 
+  const cancelActivePriceCheckJob = useCallback(async () => {
+    if (!priceCheckJob || !isActivePriceCheckJob(priceCheckJob)) {
+      return;
+    }
+
+    setIsCancellingPriceCheckJob(true);
+
+    try {
+      const response = await fetch(
+        `/api/price-check/jobs/${priceCheckJob.id}/cancel`,
+        {
+          method: "POST",
+          cache: "no-store",
+        }
+      );
+      const data = (await response.json().catch(() => ({}))) as {
+        job?: PriceCheckJob | null;
+        error?: string;
+      };
+
+      if (!response.ok || !data.job) {
+        throw new Error(data.error || "Failed to stop price check.");
+      }
+
+      applyPriceCheckJob(data.job, true);
+
+      if (data.job.status === "CANCELLING") {
+        showToast("Stopping after current product...", "success");
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to stop price check.";
+      showToast(message, "error");
+      setIsCancellingPriceCheckJob(false);
+    }
+  }, [applyPriceCheckJob, priceCheckJob, showToast]);
+
+  const resumeCancelledPriceCheckJob = useCallback(async () => {
+    const jobToResume = priceCheckJob;
+
+    if (!isResumablePriceCheckJob(jobToResume)) {
+      showToast("No remaining products to resume.", "error");
+      return;
+    }
+
+    setIsResumingPriceCheckJob(true);
+
+    try {
+      const response = await fetch(
+        `/api/price-check/jobs/${jobToResume.id}/resume`,
+        {
+          method: "POST",
+          cache: "no-store",
+        }
+      );
+      const data = (await response.json().catch(() => ({}))) as {
+        job?: PriceCheckJob;
+        reused?: boolean;
+        resumed?: boolean;
+        error?: string;
+      };
+
+      if (!response.ok || !data.job) {
+        throw new Error(data.error || "Failed to resume price check.");
+      }
+
+      applyPriceCheckJob(data.job, true);
+
+      if (data.reused) {
+        showToast("A price check is already running.", "success");
+      } else if (data.resumed && isActivePriceCheckJob(data.job)) {
+        showToast(
+          `Resumed price check for ${data.job.total} product${data.job.total === 1 ? "" : "s"}.`,
+          "success"
+        );
+      } else {
+        showToast("No remaining products to resume.", "success");
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to resume price check.";
+      showToast(message, "error");
+    } finally {
+      setIsResumingPriceCheckJob(false);
+    }
+  }, [applyPriceCheckJob, priceCheckJob, showToast]);
+
   useEffect(() => {
     let cancelled = false;
 
     async function restorePriceCheckJob() {
       try {
         const savedJobId = window.localStorage.getItem(PRICE_CHECK_JOB_STORAGE_KEY);
+        let restoredSavedJob = false;
         let job: PriceCheckJob | null = savedJobId
           ? await fetchPriceCheckJob(savedJobId)
           : null;
+
+        restoredSavedJob = Boolean(job && savedJobId);
 
         if (!job) {
           job = await fetchCurrentPriceCheckJob();
         }
 
         if (!cancelled && job) {
-          applyPriceCheckJob(job, true);
+          applyPriceCheckJob(
+            job,
+            !(restoredSavedJob && isTerminalPriceCheckJob(job))
+          );
         }
       } catch {
         if (!cancelled) {
@@ -658,6 +792,9 @@ export default function ProductsPageClient({
   const handleCheckPrices = () => {
     void startPriceCheckJob(selectedProductIds);
   };
+  const isPriceCheckJobStopping =
+    isCancellingPriceCheckJob || priceCheckJob?.status === "CANCELLING";
+  const isPriceCheckJobResumable = isResumablePriceCheckJob(priceCheckJob);
 
   return (
     <>
@@ -666,6 +803,8 @@ export default function ProductsPageClient({
           className={`mb-4 flex flex-wrap items-center justify-between gap-3 rounded-md border px-4 py-3 text-sm ${
             priceCheckJob.status === "FAILED" || priceCheckJob.failed > 0
               ? "border-red-200 bg-red-50 text-red-800"
+              : priceCheckJob.status === "CANCELLED"
+                ? "border-amber-200 bg-amber-50 text-amber-800"
               : isActivePriceCheckJob(priceCheckJob)
                 ? "border-blue-200 bg-blue-50 text-blue-800"
                 : "border-green-200 bg-green-50 text-green-800"
@@ -691,15 +830,37 @@ export default function ProductsPageClient({
             )}
             <span className="font-medium">{getPriceCheckJobStatusText(priceCheckJob)}</span>
           </div>
-          {isTerminalPriceCheckJob(priceCheckJob) && (
-            <button
-              type="button"
-              onClick={() => setPriceCheckJob(null)}
-              className="text-sm font-medium underline-offset-4 hover:underline"
-            >
-              Dismiss
-            </button>
-          )}
+          <div className="flex items-center gap-3">
+            {isActivePriceCheckJob(priceCheckJob) && (
+              <button
+                type="button"
+                onClick={cancelActivePriceCheckJob}
+                disabled={isPriceCheckJobStopping}
+                className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-700 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isPriceCheckJobStopping ? "Stopping..." : "Stop"}
+              </button>
+            )}
+            {isPriceCheckJobResumable && (
+              <button
+                type="button"
+                onClick={resumeCancelledPriceCheckJob}
+                disabled={isResumingPriceCheckJob}
+                className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isResumingPriceCheckJob ? "Resuming..." : "Resume"}
+              </button>
+            )}
+            {isTerminalPriceCheckJob(priceCheckJob) && (
+              <button
+                type="button"
+                onClick={dismissPriceCheckJob}
+                className="text-sm font-medium underline-offset-4 hover:underline"
+              >
+                Dismiss
+              </button>
+            )}
+          </div>
         </div>
       )}
 
@@ -819,6 +980,8 @@ export default function ProductsPageClient({
             </svg>
             {isStartingPriceCheckJob
               ? "Starting..."
+              : isPriceCheckJobStopping
+                ? "Stopping..."
               : isPriceCheckJobActive
                 ? `Checking ${priceCheckJob?.checked ?? 0}/${priceCheckJob?.total ?? 0}`
               : selectedProductIds.length > 0

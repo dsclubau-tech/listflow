@@ -14,6 +14,20 @@ export default function Sidebar({ userName, userEmail }: SidebarProps) {
 
   const links = [
     {
+      href: "/action-center",
+      label: "Action Center",
+      icon: (
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M9 6.75h11.25M9 12h11.25M9 17.25h11.25M3.75 6.75h.008v.008H3.75V6.75Zm0 5.25h.008v.008H3.75V12Zm0 5.25h.008v.008H3.75v-.008Z"
+          />
+        </svg>
+      ),
+    },
+    {
       href: "/products",
       label: "Products",
       icon: (
