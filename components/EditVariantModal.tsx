@@ -314,8 +314,27 @@ export default function EditVariantModal({
 
   function handleSellPriceChange(value: string) {
     setForm((prev) => {
+      const sellPrice = toNumber(value);
+      const profitFixed = calculateProfitFixedFromSellPrice({
+        buyPrice: toNumber(prev.buyPrice),
+        sellPrice,
+        feesPercent: toNumber(prev.feesPercent),
+        feesFixed: toNumber(prev.feesFixed),
+        profitPercent: toNumber(prev.profitPercent),
+      });
+
+      return {
+        ...prev,
+        sellPrice: value,
+        profitFixed: toMoneyString(profitFixed),
+      };
+    });
+  }
+
+  function handleSellPriceBlur() {
+    setForm((prev) => {
       const normalizedSellPrice = toMoneyString(
-        applyRoundCents(toNumber(value), roundCents)
+        applyRoundCents(toNumber(prev.sellPrice), prev.roundCentsEnabled ? 0.99 : null)
       );
       const profitFixed = calculateProfitFixedFromSellPrice({
         buyPrice: toNumber(prev.buyPrice),
@@ -523,6 +542,7 @@ export default function EditVariantModal({
                     step="0.01"
                     value={form.sellPrice}
                     onChange={(event) => handleSellPriceChange(event.target.value)}
+                    onBlur={handleSellPriceBlur}
                     className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
                 </div>

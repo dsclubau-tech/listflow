@@ -9,6 +9,7 @@ import type { ScrapedProduct } from "@/components/AddProductModal";
 import ProductVariantsEditor from "@/components/ProductVariantsEditor";
 import RichTextEditor from "@/components/RichTextEditor";
 import { reportClientError } from "@/lib/client-logger";
+import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
 
 // ----- Types -----
 
@@ -390,7 +391,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       category: category.trim(),
       categoryName: categoryName.trim() || null,
       images,
-      itemSpecifics: specificsObj,
+      itemSpecifics: sanitizeEbayItemSpecifics(specificsObj),
       shippingPolicyId: shippingPolicyId || null,
       returnPolicyId: returnPolicyId || null,
       paymentPolicyId: paymentPolicyId || null,

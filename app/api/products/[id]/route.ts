@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { createRequestLogger } from "@/lib/logger";
 import { applyKeywordFilter } from "@/lib/keyword-filter";
 import { getCurrentStoreSession } from "@/lib/store-session";
+import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
 
 export async function PATCH(
   request: Request,
@@ -127,6 +128,10 @@ export async function PATCH(
     }
 
     data.images = data.images.map((image) => image.trim());
+  }
+
+  if (data.itemSpecifics !== undefined) {
+    data.itemSpecifics = sanitizeEbayItemSpecifics(data.itemSpecifics);
   }
 
   if (data.policyTemplateId !== undefined) {

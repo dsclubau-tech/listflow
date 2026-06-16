@@ -1,7 +1,16 @@
 import type { Product, Store } from "@/app/generated/prisma/client";
+import {
+  normalizeItemSpecifics,
+  sanitizeEbayItemSpecifics,
+  type ItemSpecificsRecord,
+} from "@/lib/item-specifics";
 
 type ProductWithStore = Product & { store: Store };
-type ProductSpecifics = Record<string, string>;
+type ProductSpecifics = ItemSpecificsRecord;
+
+type AddItemOptions = {
+  privateListing?: boolean;
+};
 
 /**
  * Escapes XML special characters in text content.
@@ -16,20 +25,9 @@ function escapeXml(str: string): string {
 }
 
 function getProductSpecifics(product: Product): ProductSpecifics | null {
-  const rawSpecifics = product.itemSpecifics;
-
-  if (!rawSpecifics || typeof rawSpecifics !== "object" || Array.isArray(rawSpecifics)) {
+  const specifics = normalizeItemSpecifics(product.itemSpecifics);
+  if (Object.keys(specifics).length === 0) {
     return null;
-  }
-
-  const specifics: ProductSpecifics = {};
-
-  for (const [key, value] of Object.entries(rawSpecifics as Record<string, unknown>)) {
-    if (value === null || value === undefined) {
-      continue;
-    }
-
-    specifics[key] = typeof value === "string" ? value : String(value);
   }
 
   return specifics;
@@ -53,14 +51,15 @@ function getValidatedPolicyIds(product: Product) {
   };
 }
 
-function getValidatedPrice(product: Product): string {
-  const numericPrice = Number(product.price);
+function getValidatedPrice(product: Product, overrideStartPrice?: string | number): string {
+  const price = overrideStartPrice ?? product.price;
+  const numericPrice = Number(price);
 
   if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
     throw new Error("Price must be greater than 0 before sending the listing to eBay.");
   }
 
-  return product.price.toString();
+  return numericPrice.toFixed(2);
 }
 
 function getValidatedQuantity(product: Product): string {
@@ -108,7 +107,7 @@ function buildPictureDetailsXml(images: string[]): string {
 
 function buildItemSpecificsXml(product: Product, specifics: ProductSpecifics | null): string {
   if (specifics) {
-    const normalizedSpecifics = { ...specifics };
+    const normalizedSpecifics = sanitizeEbayItemSpecifics(specifics);
     const hasType = Object.keys(normalizedSpecifics).some(
       (key) => key.toLowerCase() === "type"
     );
@@ -138,7 +137,15 @@ function buildItemSpecificsXml(product: Product, specifics: ProductSpecifics | n
   }
 
   const defaultType = product.categoryName?.split(">").pop()?.trim() || "Other";
-  return `    <ItemSpecifics>\n      <NameValueList>\n        <Name>Type</Name>\n        <Value>${escapeXml(defaultType)}</Value>\n      </NameValueList>\n    </ItemSpecifics>`;
+  const defaultSpecifics = sanitizeEbayItemSpecifics({ Type: defaultType });
+  const nameValueLists = Object.entries(defaultSpecifics)
+    .map(
+      ([key, value]) =>
+        `      <NameValueList>\n        <Name>${escapeXml(key)}</Name>\n        <Value>${escapeXml(value)}</Value>\n      </NameValueList>`
+    )
+    .join("\n");
+
+  return `    <ItemSpecifics>\n${nameValueLists}\n    </ItemSpecifics>`;
 }
 
 function buildProductListingDetailsXml(specifics: ProductSpecifics | null): string {
@@ -160,11 +167,15 @@ function buildSellerProfilesXml(product: Product): string {
  * Location/country/currency/site are read from itemSpecifics using _-prefixed
  * internal keys set by InlineEditForm. These keys are NOT emitted as ItemSpecifics.
  */
-export function buildAddItemXML(product: ProductWithStore): string {
+export function buildAddItemXML(
+  product: ProductWithStore,
+  overrideStartPrice?: string | number,
+  options: AddItemOptions = {},
+): string {
   const specifics = getProductSpecifics(product);
   const { country, currency, site, location, postalCode } = getLocationMetadata(specifics);
   const categoryId = getValidatedCategoryId(product);
-  const startPrice = getValidatedPrice(product);
+  const startPrice = getValidatedPrice(product, overrideStartPrice);
   const quantity = getValidatedQuantity(product);
   const conditionId = product.condition === "New" ? "1000" : "3000";
   const pictureDetailsXml = buildPictureDetailsXml(product.images);
@@ -189,6 +200,7 @@ export function buildAddItemXML(product: ProductWithStore): string {
     <DispatchTimeMax>3</DispatchTimeMax>
     <ListingDuration>GTC</ListingDuration>
     <ListingType>FixedPriceItem</ListingType>
+    <PrivateListing>${options.privateListing ? "true" : "false"}</PrivateListing>
     <Quantity>${quantity}</Quantity>
     <ConditionID>${conditionId}</ConditionID>
 ${productListingDetailsXml}

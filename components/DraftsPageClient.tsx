@@ -9,6 +9,7 @@ import DraftEditForm from "@/components/DraftEditForm";
 import Toast from "@/components/Toast";
 import { useToast } from "@/hooks/useToast";
 import type { SerializedProductRow } from "@/types/product-row";
+import { createDraftFromScrapedProduct } from "@/components/draft-autosave";
 
 interface DraftsPageClientProps {
   products: SerializedProductRow[];
@@ -20,18 +21,24 @@ export default function DraftsPageClient({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isDraftFormOpen, setIsDraftFormOpen] = useState(false);
   const [scrapedData, setScrapedData] = useState<ScrapedProduct | null>(null);
+  const [draftProductId, setDraftProductId] = useState<string | null>(null);
   const router = useRouter();
   const { toast, showToast, hideToast } = useToast();
 
-  const handleScraped = (data: ScrapedProduct) => {
+  const handleScraped = async (data: ScrapedProduct) => {
+    const result = await createDraftFromScrapedProduct(data);
     setScrapedData(data);
+    setDraftProductId(result.productId);
     setIsModalOpen(false);
     setIsDraftFormOpen(true);
+    showToast("Draft created. Review and save changes when ready.", "success");
+    router.refresh();
   };
 
   const handleDraftSuccess = () => {
     setIsDraftFormOpen(false);
     setScrapedData(null);
+    setDraftProductId(null);
     showToast("Product saved as draft", "success");
     router.refresh();
   };
@@ -69,11 +76,14 @@ export default function DraftsPageClient({
         <DraftEditForm
           isOpen={isDraftFormOpen}
           scrapedData={scrapedData}
+          productId={draftProductId ?? undefined}
           onSuccess={handleDraftSuccess}
           onError={handleDraftError}
           onClose={() => {
             setIsDraftFormOpen(false);
             setScrapedData(null);
+            setDraftProductId(null);
+            router.refresh();
           }}
         />
       )}

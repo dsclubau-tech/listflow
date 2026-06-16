@@ -69,12 +69,38 @@ export async function POST(request: Request) {
     const storeNumber = await getStoreNumber(product.storeId);
     const finalDescription = await resolveDescriptionTemplate(product);
     const productWithResolvedDesc = { ...product, description: finalDescription };
-    const xml = buildAddItemXML(productWithResolvedDesc);
+    const supplierSettings = await prisma.supplierSettings.findUnique({
+      where: {
+        storeId_supplierName: {
+          storeId: product.storeId,
+          supplierName: "Amazon AU",
+        },
+      },
+      select: {
+        privateListing: true,
+      },
+    });
+    const variants = await prisma.variant.findMany({
+      where: { productId: product.id },
+      orderBy: { createdAt: "asc" },
+    });
+    const primarySellPrice = variants.length > 0
+      ? Number(variants[0].sellPrice)
+      : null;
+    const overrideStartPrice =
+      primarySellPrice !== null && Number.isFinite(primarySellPrice) && primarySellPrice > 0
+        ? primarySellPrice
+        : undefined;
+    const xml = buildAddItemXML(productWithResolvedDesc, overrideStartPrice, {
+      privateListing: supplierSettings?.privateListing ?? false,
+    });
 
     log.info("upload/route", "Sending AddItem request to eBay", {
       productId,
       storeNumber,
       productTitle: product.title,
+      startPrice: overrideStartPrice ?? Number(product.price),
+      privateListing: supplierSettings?.privateListing ?? false,
     });
 
     const result = await callEbayAddItem(xml, storeNumber);
@@ -88,7 +114,12 @@ export async function POST(request: Request) {
 
       await prisma.product.update({
         where: { id: productId },
-        data: { status: "IMPORTED", ebayItemId: result.itemId },
+        data: {
+          status: "IMPORTED",
+          ebayItemId: result.itemId,
+          errorMessage: null,
+          ...(overrideStartPrice !== undefined ? { price: overrideStartPrice } : {}),
+        },
       });
 
       await prisma.uploadLog.create({
@@ -117,10 +148,10 @@ export async function POST(request: Request) {
 
     await prisma.uploadLog.create({
       data: {
-          productId,
-          storeId: product.storeId,
-          userId,
-          status: "FAILED",
+        productId,
+        storeId: product.storeId,
+        userId,
+        status: "FAILED",
         errorMessage: result.errorMessage,
       },
     });

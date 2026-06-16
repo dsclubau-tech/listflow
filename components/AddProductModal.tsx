@@ -5,7 +5,7 @@ import { useState } from "react";
 interface AddProductModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onScraped: (data: ScrapedProduct) => void;
+  onScraped: (data: ScrapedProduct) => void | Promise<void>;
 }
 
 export interface ScrapedProduct {
@@ -73,12 +73,16 @@ export default function AddProductModal({
 
       if (res.ok) {
         setUrl("");
-        onScraped(data as ScrapedProduct);
+        await onScraped(data as ScrapedProduct);
       } else {
         setError(data.error || "Scraping failed. Please try again.");
       }
-    } catch {
-      setError("Request timed out or failed. Please try again.");
+    } catch (error) {
+      setError(
+        error instanceof Error
+          ? error.message
+          : "Request timed out or failed. Please try again."
+      );
     } finally {
       setIsLoading(false);
     }
@@ -148,7 +152,7 @@ export default function AddProductModal({
                     d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
                   />
                 </svg>
-                Scraping Amazon… this may take 20–30 seconds
+                Scraping Amazon and saving draft… this may take 20–30 seconds
               </div>
             ) : (
               <>

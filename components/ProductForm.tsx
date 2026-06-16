@@ -3,6 +3,7 @@
 
 import { useState, useEffect } from "react";
 import { reportClientError } from "@/lib/client-logger";
+import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
 
 interface Store {
   id: string;
@@ -129,7 +130,7 @@ export default function ProductForm({
       condition,
       category: category.trim(),
       images: images.filter((url) => url.trim() !== ""),
-      itemSpecifics: specificsObj,
+      itemSpecifics: sanitizeEbayItemSpecifics(specificsObj),
       storeId,
     };
 

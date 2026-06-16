@@ -7,6 +7,7 @@ interface SlideOverProps {
   onClose: () => void;
   title: string;
   children: React.ReactNode;
+  closeOnOverlayClick?: boolean;
 }
 
 export default function SlideOver({
@@ -14,6 +15,7 @@ export default function SlideOver({
   onClose,
   title,
   children,
+  closeOnOverlayClick = true,
 }: SlideOverProps) {
   // Prevent body scroll when open
   useEffect(() => {
@@ -34,7 +36,7 @@ export default function SlideOver({
         className={`fixed inset-0 bg-black/40 z-40 transition-opacity duration-300 ${
           isOpen ? "opacity-100" : "opacity-0 pointer-events-none"
         }`}
-        onClick={onClose}
+        onClick={closeOnOverlayClick ? onClose : undefined}
       />
 
       {/* Panel */}

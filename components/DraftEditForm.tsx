@@ -8,6 +8,7 @@ import SlideOver from "@/components/SlideOver";
 import RichTextEditor from "@/components/RichTextEditor";
 import type { ScrapedProduct } from "@/components/AddProductModal";
 import { reportClientError } from "@/lib/client-logger";
+import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
 
 interface Store {
   id: string;
@@ -38,6 +39,7 @@ interface PolicyTemplate {
 interface DraftEditFormProps {
   isOpen: boolean;
   scrapedData: ScrapedProduct;
+  productId?: string;
   onSuccess: () => void;
   onError: (message: string) => void;
   onClose: () => void;
@@ -54,6 +56,7 @@ const tabs = ["Product", "Description", "Images", "Item Specifications"];
 export default function DraftEditForm({
   isOpen,
   scrapedData,
+  productId,
   onSuccess,
   onError,
   onClose,
@@ -375,6 +378,12 @@ export default function DraftEditForm({
         specificsObj[spec.key.trim()] = spec.value.trim();
       }
     });
+    if (brand.trim()) {
+      specificsObj.Brand = brand.trim();
+    }
+    if (variant.trim()) {
+      specificsObj.Variant = variant.trim();
+    }
 
     const body = {
       title: title.trim().slice(0, 80),
@@ -385,7 +394,7 @@ export default function DraftEditForm({
       category: category.trim(),
       categoryName: categoryName.trim() || null,
       images,
-      itemSpecifics: specificsObj,
+      itemSpecifics: sanitizeEbayItemSpecifics(specificsObj),
       storeId,
       asin: scrapedData.asin || undefined,
       shippingPolicyId: shippingPolicyId || undefined,
@@ -396,11 +405,14 @@ export default function DraftEditForm({
     };
 
     try {
-      const res = await fetch("/api/products", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
+      const res = await fetch(
+        productId ? `/api/products/${productId}` : "/api/products",
+        {
+          method: productId ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }
+      );
 
       if (res.ok) {
         const data = await res.json();
@@ -437,7 +449,12 @@ export default function DraftEditForm({
   }
 
   return (
-    <SlideOver isOpen={isOpen} onClose={onClose} title="Edit Draft">
+    <SlideOver
+      isOpen={isOpen}
+      onClose={onClose}
+      title="Edit Draft"
+      closeOnOverlayClick={false}
+    >
       <form onSubmit={handleSubmit} className="flex flex-col h-full">
         {/* Tabs */}
         <div className="border-b border-gray-200 px-6">

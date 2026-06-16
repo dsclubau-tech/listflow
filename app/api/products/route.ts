@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { applyKeywordFilter } from "@/lib/keyword-filter";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
+import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -36,7 +37,16 @@ export async function POST(request: Request) {
     paymentPolicyId,
     policyTemplateId,
     templateId,
+    allowIncompleteDraft,
   } = body;
+  const isIncompleteDraftAllowed = allowIncompleteDraft === true;
+  const normalizedPrice =
+    price === undefined || price === null || price === "" ? 0 : Number(price);
+  const normalizedQuantity =
+    quantity === undefined || quantity === null || quantity === ""
+      ? 1
+      : Number(quantity);
+  const normalizedCategory = typeof category === "string" ? category.trim() : "";
 
   // Validate required fields
   if (!title?.trim()) {
@@ -48,19 +58,23 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
-  if (price === undefined || price === null || price < 0) {
+  if (
+    !Number.isFinite(normalizedPrice) ||
+    normalizedPrice < 0 ||
+    (!isIncompleteDraftAllowed && (price === undefined || price === null))
+  ) {
     return NextResponse.json(
       { error: "Valid price is required" },
       { status: 400 }
     );
   }
-  if (!quantity || quantity < 1) {
+  if (!Number.isInteger(normalizedQuantity) || normalizedQuantity < 1) {
     return NextResponse.json(
       { error: "Quantity must be at least 1" },
       { status: 400 }
     );
   }
-  if (!category?.trim()) {
+  if (!isIncompleteDraftAllowed && !normalizedCategory) {
     return NextResponse.json(
       { error: "Category is required" },
       { status: 400 }
@@ -128,13 +142,13 @@ export async function POST(request: Request) {
     data: {
       title: filtered.title,
       description: filtered.description,
-      price,
-      quantity,
-      category: category.trim(),
+      price: normalizedPrice,
+      quantity: normalizedQuantity,
+      category: normalizedCategory,
       categoryName: categoryName || null,
       condition: condition || "New",
       images,
-      itemSpecifics: itemSpecifics || {},
+      itemSpecifics: sanitizeEbayItemSpecifics(itemSpecifics),
       status: "DRAFT",
       storeId: storeSession.storeId,
       createdById,
