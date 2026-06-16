@@ -51,7 +51,6 @@ export async function createDraftFromScrapedProduct(data: ScrapedProduct) {
       shippingPolicyId: defaults?.shippingPolicyId || undefined,
       returnPolicyId: defaults?.returnPolicyId || undefined,
       paymentPolicyId: defaults?.paymentPolicyId || undefined,
-      templateId: defaults?.templateId || undefined,
       allowIncompleteDraft: true,
     }),
   });

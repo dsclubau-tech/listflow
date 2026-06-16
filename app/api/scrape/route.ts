@@ -84,7 +84,6 @@ export async function POST(request: Request) {
       zipcode: supplierSettings?.defaultZipcode ?? "3170",
       shippingMethod: supplierSettings?.defaultShippingMethod ?? "Cheapest with tracking",
       storeNumber: supplierSettings?.storeNumber ?? 1,
-      templateId: supplierSettings?.defaultTemplateId ?? null,
       shippingPolicyId: supplierSettings?.defaultShippingPolicyId ?? null,
       paymentPolicyId: supplierSettings?.defaultPaymentPolicyId ?? null,
       returnPolicyId: supplierSettings?.defaultReturnPolicyId ?? null,

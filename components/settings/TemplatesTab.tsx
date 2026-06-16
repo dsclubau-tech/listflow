@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import type { ClipboardEvent } from "react";
 import RichTextEditor from "@/components/RichTextEditor";
 
 interface DescriptionTemplate {
@@ -47,6 +48,40 @@ const placeholderTokens = [
 ];
 
 type ActiveSubTab = "description" | "policy";
+type DescriptionModalMode = "edit" | "source" | "preview";
+
+const escapedHtmlSourcePattern =
+  /&lt;\/?(?:!doctype|html|head|body|meta|link|style|div|table|section|article|h[1-6]|p|span|font|ul|ol|li|img|a)\b/i;
+const rawFullTemplatePattern =
+  /<(?:!doctype|html|head|body|meta|link|style|div\s+(?:id|class)=["'][^"']*(?:wrapper|container|template)|table|section)\b/i;
+
+function normalizePastedTemplateSource(content: string) {
+  if (!escapedHtmlSourcePattern.test(content)) {
+    return content;
+  }
+
+  if (typeof document === "undefined") {
+    return content;
+  }
+
+  const container = document.createElement("div");
+  container.innerHTML = content
+    .replace(/<\/p>\s*<p>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n");
+  return (container.textContent || content).trim();
+}
+
+function isFullTemplateSource(content: string) {
+  return rawFullTemplatePattern.test(normalizePastedTemplateSource(content));
+}
+
+function getFullTemplateSourceFromClipboard(event: ClipboardEvent) {
+  const plainText = event.clipboardData.getData("text/plain");
+  const htmlText = event.clipboardData.getData("text/html");
+  const candidates = [plainText, htmlText].filter(Boolean);
+  const match = candidates.find((candidate) => isFullTemplateSource(candidate));
+  return match ? normalizePastedTemplateSource(match) : null;
+}
 
 function getPolicyLabel(policyId: string | null, options: PolicyEntry[] | undefined) {
   if (!policyId) {
@@ -73,6 +108,10 @@ export default function TemplatesTab() {
   const [descriptionFormName, setDescriptionFormName] = useState("");
   const [descriptionFormContent, setDescriptionFormContent] = useState("");
   const [descriptionFormIsDefault, setDescriptionFormIsDefault] = useState(false);
+  const [descriptionSaveError, setDescriptionSaveError] = useState<string | null>(null);
+  const [descriptionEditorNotice, setDescriptionEditorNotice] = useState<string | null>(null);
+  const [descriptionModalMode, setDescriptionModalMode] =
+    useState<DescriptionModalMode>("edit");
   const [savingDescription, setSavingDescription] = useState(false);
 
   const [policyModalOpen, setPolicyModalOpen] = useState(false);
@@ -178,6 +217,9 @@ export default function TemplatesTab() {
     setDescriptionFormName("");
     setDescriptionFormContent("");
     setDescriptionFormIsDefault(false);
+    setDescriptionSaveError(null);
+    setDescriptionEditorNotice(null);
+    setDescriptionModalMode("source");
     setDescriptionModalOpen(true);
   }
 
@@ -186,11 +228,51 @@ export default function TemplatesTab() {
     setDescriptionFormName(template.name);
     setDescriptionFormContent(template.content);
     setDescriptionFormIsDefault(template.isDefault);
+    setDescriptionSaveError(null);
+    setDescriptionEditorNotice(null);
+    setDescriptionModalMode("source");
     setDescriptionModalOpen(true);
+  }
+
+  function showDescriptionVisualEditor() {
+    const normalizedContent = normalizePastedTemplateSource(descriptionFormContent);
+    if (isFullTemplateSource(normalizedContent)) {
+      if (normalizedContent !== descriptionFormContent) {
+        setDescriptionFormContent(normalizedContent);
+      }
+      setDescriptionEditorNotice(
+        "Full HTML templates are protected from the visual editor. Use Source to edit and Preview to inspect the rendered template.",
+      );
+      setDescriptionModalMode("source");
+      return;
+    }
+
+    setDescriptionEditorNotice(null);
+    setDescriptionModalMode("edit");
+  }
+
+  function showDescriptionPreview() {
+    setDescriptionFormContent((current) => normalizePastedTemplateSource(current));
+    setDescriptionEditorNotice(null);
+    setDescriptionModalMode("preview");
   }
 
   function insertPlaceholder(token: string) {
     setDescriptionFormContent((current) => `${current}${current ? "\n" : ""}{{ ${token} }}`);
+  }
+
+  function handleDescriptionVisualPaste(event: ClipboardEvent<HTMLDivElement>) {
+    const source = getFullTemplateSourceFromClipboard(event);
+    if (!source) {
+      return;
+    }
+
+    event.preventDefault();
+    setDescriptionFormContent(source);
+    setDescriptionEditorNotice(
+      "Detected full HTML source and switched to Source mode so the template is not stripped.",
+    );
+    setDescriptionModalMode("source");
   }
 
   function openAddPolicy() {
@@ -220,31 +302,43 @@ export default function TemplatesTab() {
     }
 
     setSavingDescription(true);
+    setDescriptionSaveError(null);
     try {
-      if (editingDescriptionId) {
-        await fetch(`/api/templates/${editingDescriptionId}`, {
+      const normalizedContent = normalizePastedTemplateSource(descriptionFormContent);
+      if (normalizedContent !== descriptionFormContent) {
+        setDescriptionFormContent(normalizedContent);
+      }
+
+      const res = editingDescriptionId
+        ? await fetch(`/api/templates/${editingDescriptionId}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             name: descriptionFormName,
-            content: descriptionFormContent,
+            content: normalizedContent,
             isDefault: descriptionFormIsDefault,
           }),
-        });
-      } else {
-        await fetch("/api/templates", {
+        })
+        : await fetch("/api/templates", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             name: descriptionFormName,
-            content: descriptionFormContent,
+            content: normalizedContent,
             isDefault: descriptionFormIsDefault,
           }),
         });
+
+      if (!res.ok) {
+        const data = await res.json().catch(() => null) as { error?: string } | null;
+        setDescriptionSaveError(data?.error || "Failed to save template");
+        return;
       }
 
       setDescriptionModalOpen(false);
       await fetchDescriptionTemplates();
+    } catch {
+      setDescriptionSaveError("Network error while saving template");
     } finally {
       setSavingDescription(false);
     }
@@ -326,6 +420,7 @@ export default function TemplatesTab() {
 
   const activePolicyOptions = policyFormStoreId ? policyOptionsByStore[policyFormStoreId] : undefined;
   const activePolicyOptionsLoading = Boolean(policyFormStoreId && loadingPolicyOptionsByStore[policyFormStoreId]);
+  const descriptionPreviewContent = normalizePastedTemplateSource(descriptionFormContent);
 
   return (
     <>
@@ -515,14 +610,14 @@ export default function TemplatesTab() {
       )}
 
       {descriptionModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="max-h-[92vh] w-full max-w-5xl overflow-hidden rounded-lg bg-white shadow-xl">
-            <div className="border-b border-gray-200 px-6 py-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="flex max-h-[92vh] w-full max-w-5xl flex-col overflow-hidden rounded-lg bg-white shadow-xl">
+            <div className="shrink-0 border-b border-gray-200 px-6 py-4">
               <h2 className="text-lg font-semibold text-gray-900">
                 {editingDescriptionId ? "Edit Template" : "Add Template"}
               </h2>
             </div>
-            <div className="max-h-[calc(92vh-84px)] space-y-4 overflow-y-auto px-6 py-4">
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-6 py-4">
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700">Template Name</label>
                 <input
@@ -539,7 +634,41 @@ export default function TemplatesTab() {
                     <span className="truncate font-medium text-gray-700">
                       {descriptionFormName || "Untitled template"}
                     </span>
-                    <span className="text-xs font-semibold text-blue-600">Preview</span>
+                    <div className="flex overflow-hidden rounded-md border border-gray-200">
+                      <button
+                        type="button"
+                        onClick={showDescriptionVisualEditor}
+                        className={`px-2.5 py-1 text-xs font-semibold transition-colors ${
+                          descriptionModalMode === "edit"
+                            ? "bg-gray-900 text-white"
+                            : "bg-white text-gray-600 hover:bg-gray-50"
+                        }`}
+                      >
+                        Visual
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDescriptionModalMode("source")}
+                        className={`border-l border-gray-200 px-2.5 py-1 text-xs font-semibold transition-colors ${
+                          descriptionModalMode === "source"
+                            ? "bg-gray-900 text-white"
+                            : "bg-white text-gray-600 hover:bg-gray-50"
+                        }`}
+                      >
+                        Source
+                      </button>
+                      <button
+                        type="button"
+                        onClick={showDescriptionPreview}
+                        className={`border-l border-gray-200 px-2.5 py-1 text-xs font-semibold transition-colors ${
+                          descriptionModalMode === "preview"
+                            ? "bg-blue-600 text-white"
+                            : "bg-white text-blue-600 hover:bg-blue-50"
+                        }`}
+                      >
+                        Preview
+                      </button>
+                    </div>
                   </div>
                   <div className="flex flex-wrap items-center gap-y-1 text-xs text-gray-500">
                     <span className="mr-1">Insert:</span>
@@ -561,15 +690,39 @@ export default function TemplatesTab() {
                 </div>
 
                 <div className="bg-white">
-                  <RichTextEditor
-                    value={descriptionFormContent}
-                    onChange={setDescriptionFormContent}
-                    minHeight="560px"
-                    placeholder="Paste the full AutoDS HTML template here"
-                    toolbarVariant="compact"
-                  />
+                  {descriptionModalMode === "edit" ? (
+                    <div onPasteCapture={handleDescriptionVisualPaste}>
+                      <RichTextEditor
+                        value={descriptionFormContent}
+                        onChange={setDescriptionFormContent}
+                        minHeight="560px"
+                        placeholder="Paste the full AutoDS HTML template here"
+                        toolbarVariant="compact"
+                      />
+                    </div>
+                  ) : descriptionModalMode === "source" ? (
+                    <textarea
+                      value={descriptionFormContent}
+                      onChange={(event) => setDescriptionFormContent(event.target.value)}
+                      spellCheck={false}
+                      className="h-[560px] w-full resize-y border-0 bg-white px-4 py-3 font-mono text-xs leading-6 text-gray-900 outline-none focus:ring-2 focus:ring-orange-500"
+                      placeholder="Paste the full AutoDS HTML source here"
+                    />
+                  ) : (
+                    <iframe
+                      title={`${descriptionFormName || "Template"} preview`}
+                      srcDoc={descriptionPreviewContent || "<div></div>"}
+                      sandbox="allow-same-origin"
+                      className="h-[560px] w-full border-0 bg-white"
+                    />
+                  )}
                 </div>
               </div>
+              {descriptionEditorNotice && (
+                <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+                  {descriptionEditorNotice}
+                </div>
+              )}
               <label className="mt-2 flex items-center gap-2 text-sm text-gray-700">
                 <input
                   type="checkbox"
@@ -579,8 +732,14 @@ export default function TemplatesTab() {
                 />
                 Set as default template
               </label>
+              {descriptionSaveError && (
+                <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {descriptionSaveError}
+                </div>
+              )}
             </div>
-            <div className="flex justify-end gap-3 border-t border-gray-200 px-6 py-4">
+            <div className="shrink-0 border-t border-gray-200 bg-white px-6 py-4">
+              <div className="flex justify-end gap-3">
               <button
                 onClick={() => setDescriptionModalOpen(false)}
                 className="rounded-md border border-gray-300 px-4 py-2 text-sm text-gray-700 transition-colors hover:bg-gray-50"
@@ -594,6 +753,7 @@ export default function TemplatesTab() {
               >
                 {savingDescription ? "Saving..." : "Save"}
               </button>
+              </div>
             </div>
           </div>
         </div>

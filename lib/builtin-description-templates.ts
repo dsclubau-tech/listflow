@@ -196,7 +196,7 @@ export function isExactBuiltinDescriptionTemplateContent(content: string): boole
 export function normalizeBuiltinDescriptionTemplate<T extends { id: string; content: string }>(template: T): T {
   if (
     template.id === RK_ECOM_30_DAY_FREE_RETURN_TEMPLATE_ID &&
-    !isExactBuiltinDescriptionTemplateContent(template.content)
+    template.content.trim() === RK_ECOM_30_DAY_FREE_RETURN_LEGACY_CONTENT.trim()
   ) {
     return {
       ...template,

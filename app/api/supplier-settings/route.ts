@@ -36,7 +36,6 @@ async function getOrCreateStoreSupplierSettings(storeId: string) {
       defaultZipcode: globalSettings?.defaultZipcode ?? "3170",
       defaultShippingMethod:
         globalSettings?.defaultShippingMethod ?? "Cheapest with tracking",
-      defaultTemplateId: globalSettings?.defaultTemplateId ?? null,
       defaultShippingPolicyId: globalSettings?.defaultShippingPolicyId ?? null,
       defaultPaymentPolicyId: globalSettings?.defaultPaymentPolicyId ?? null,
       defaultReturnPolicyId: globalSettings?.defaultReturnPolicyId ?? null,
@@ -99,7 +98,6 @@ export async function PATCH(request: Request) {
     "defaultCountry",
     "defaultZipcode",
     "defaultShippingMethod",
-    "defaultTemplateId",
     "defaultShippingPolicyId",
     "defaultPaymentPolicyId",
     "defaultReturnPolicyId",

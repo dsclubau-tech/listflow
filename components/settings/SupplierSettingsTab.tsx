@@ -9,7 +9,6 @@ interface SupplierSettingsData {
   defaultCountry: string;
   defaultZipcode: string;
   defaultShippingMethod: string;
-  defaultTemplateId: string | null;
   defaultShippingPolicyId: string | null;
   defaultPaymentPolicyId: string | null;
   defaultReturnPolicyId: string | null;
@@ -32,12 +31,6 @@ interface SupplierSettingsData {
   scrapePostcode: string;
   storeNumber: number;
   defaultItemSpecifics: Record<string, string>;
-}
-
-interface Template {
-  id: string;
-  name: string;
-  isDefault: boolean;
 }
 
 interface PolicyProfile {
@@ -81,8 +74,7 @@ export default function SupplierSettingsTab() {
   // Sidebar
   const [selectedStore, setSelectedStore] = useState("1");
 
-  // Templates & Policies
-  const [templates, setTemplates] = useState<Template[]>([]);
+  // Policies
   const [policies, setPolicies] = useState<Policies | null>(null);
   const [policiesLoading, setPoliciesLoading] = useState(false);
 
@@ -104,14 +96,6 @@ export default function SupplierSettingsTab() {
     }
   }, []);
 
-  // Fetch templates
-  const fetchTemplates = useCallback(async () => {
-    try {
-      const res = await fetch("/api/templates");
-      if (res.ok) setTemplates(await res.json());
-    } catch { /* ignore */ }
-  }, []);
-
   // Fetch policies for selected store
   const fetchPolicies = useCallback(async (storeNum: string) => {
     setPoliciesLoading(true);
@@ -131,8 +115,7 @@ export default function SupplierSettingsTab() {
 
   useEffect(() => {
     fetchSettings();
-    fetchTemplates();
-  }, [fetchSettings, fetchTemplates]);
+  }, [fetchSettings]);
 
   useEffect(() => {
     fetchPolicies(selectedStore);
@@ -172,7 +155,6 @@ export default function SupplierSettingsTab() {
           defaultCountry: settings.defaultCountry,
           defaultZipcode: settings.defaultZipcode,
           defaultShippingMethod: settings.defaultShippingMethod,
-          defaultTemplateId: settings.defaultTemplateId,
           defaultShippingPolicyId: settings.defaultShippingPolicyId,
           defaultPaymentPolicyId: settings.defaultPaymentPolicyId,
           defaultReturnPolicyId: settings.defaultReturnPolicyId,
@@ -221,7 +203,7 @@ export default function SupplierSettingsTab() {
   }, [settings]);
 
   if (loading || !settings) {
-    return <p className="text-sm text-gray-500">Loading supplier settings…</p>;
+    return <p className="text-sm text-gray-500">Loading supplier settings...</p>;
   }
 
   return (
@@ -333,21 +315,6 @@ export default function SupplierSettingsTab() {
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
                 </div>
-                <div className="col-span-2">
-                  <label className="block text-xs text-gray-500 mb-1">Default Template</label>
-                  <select
-                    value={settings.defaultTemplateId || ""}
-                    onChange={(e) => updateField("defaultTemplateId", e.target.value || null)}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  >
-                    <option value="">— None —</option>
-                    {templates.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.name}{t.isDefault ? " (Default)" : ""}
-                      </option>
-                    ))}
-                  </select>
-                </div>
               </div>
             </section>
 
@@ -355,7 +322,7 @@ export default function SupplierSettingsTab() {
             <section>
               <h3 className="text-sm font-semibold text-gray-800 mb-4">Selling Platform Policies</h3>
               {policiesLoading ? (
-                <p className="text-xs text-gray-400">Loading policies for Store {selectedStore}…</p>
+                <p className="text-xs text-gray-400">Loading policies for Store {selectedStore}...</p>
               ) : !policies ? (
                 <p className="text-xs text-red-400">Could not load policies. Check store credentials.</p>
               ) : (
@@ -367,7 +334,7 @@ export default function SupplierSettingsTab() {
                       onChange={(e) => updateField("defaultPaymentPolicyId", e.target.value || null)}
                       className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
                     >
-                      <option value="">— Select —</option>
+                      <option value="">-- Select --</option>
                       {policies.payment.map((p) => (
                         <option key={p.profileId} value={p.profileId}>{p.profileName}</option>
                       ))}
@@ -380,7 +347,7 @@ export default function SupplierSettingsTab() {
                       onChange={(e) => updateField("defaultShippingPolicyId", e.target.value || null)}
                       className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
                     >
-                      <option value="">— Select —</option>
+                      <option value="">-- Select --</option>
                       {policies.shipping.map((p) => (
                         <option key={p.profileId} value={p.profileId}>{p.profileName}</option>
                       ))}
@@ -393,7 +360,7 @@ export default function SupplierSettingsTab() {
                       onChange={(e) => updateField("defaultReturnPolicyId", e.target.value || null)}
                       className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
                     >
-                      <option value="">— Select —</option>
+                      <option value="">-- Select --</option>
                       {policies.returns.map((p) => (
                         <option key={p.profileId} value={p.profileId}>{p.profileName}</option>
                       ))}
@@ -496,7 +463,7 @@ export default function SupplierSettingsTab() {
                               onClick={() => removeItemSpecific(k)}
                               className="text-red-400 hover:text-red-600 transition-colors"
                             >
-                              ✕
+                              x
                             </button>
                           </td>
                         </tr>
@@ -606,7 +573,7 @@ export default function SupplierSettingsTab() {
                 </div>
               </div>
 
-              {/* Dynamic profit toggle — UI only */}
+              {/* Dynamic profit toggle - UI only */}
               <div className="flex items-center gap-3 mb-6">
                 <ToggleSwitch checked={false} disabled />
                 <span className="text-sm text-gray-500">Dynamic profit</span>
@@ -779,7 +746,7 @@ export default function SupplierSettingsTab() {
             disabled={saving}
             className="px-6 py-2.5 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-50"
           >
-            {saving ? "Saving…" : "Save"}
+            {saving ? "Saving..." : "Save"}
           </button>
         </div>
       </div>

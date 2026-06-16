@@ -11,6 +11,7 @@ interface DraftsTableProps {
   products: SerializedProductRow[];
   onToast: (message: string, variant: "success" | "error") => void;
   view?: "drafts" | "products";
+  autoExpandProductId?: string | null;
   onSelectionChange?: (selectedIds: string[]) => void;
   onPriceCheckSelected?: (productIds: string[]) => Promise<void>;
   isPriceCheckJobActive?: boolean;
@@ -339,6 +340,7 @@ export default function DraftsTable({
   products,
   onToast,
   view = "drafts",
+  autoExpandProductId = null,
   onSelectionChange,
   onPriceCheckSelected,
   isPriceCheckJobActive = false,
@@ -372,6 +374,16 @@ export default function DraftsTable({
   useEffect(() => {
     onSelectionChange?.(selectedIds);
   }, [onSelectionChange, selectedIds]);
+
+  useEffect(() => {
+    if (!autoExpandProductId) {
+      return;
+    }
+
+    if (products.some((product) => product.id === autoExpandProductId)) {
+      setExpandedProductId(autoExpandProductId);
+    }
+  }, [autoExpandProductId, products]);
 
   function getStatusBadgeClasses(status: string) {
     if (status === "FAILED" && isDraftsView) {

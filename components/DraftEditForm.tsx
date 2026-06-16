@@ -167,8 +167,6 @@ export default function DraftEditForm({
       setPaymentPolicyId(defaults?.paymentPolicyId ?? "");
       setReturnPolicyId(defaults?.returnPolicyId ?? "");
 
-      // Pre-select template from supplier defaults
-      setSelectedTemplateId(defaults?.templateId ?? "");
     }
   }, [scrapedData]);
 

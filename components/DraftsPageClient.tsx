@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import DraftsTable from "@/components/DraftsTable";
 import AddProductModal from "@/components/AddProductModal";
 import type { ScrapedProduct } from "@/components/AddProductModal";
-import DraftEditForm from "@/components/DraftEditForm";
 import Toast from "@/components/Toast";
 import { useToast } from "@/hooks/useToast";
 import type { SerializedProductRow } from "@/types/product-row";
@@ -19,32 +18,16 @@ export default function DraftsPageClient({
   products,
 }: DraftsPageClientProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
-  const [isDraftFormOpen, setIsDraftFormOpen] = useState(false);
-  const [scrapedData, setScrapedData] = useState<ScrapedProduct | null>(null);
-  const [draftProductId, setDraftProductId] = useState<string | null>(null);
+  const [autoExpandProductId, setAutoExpandProductId] = useState<string | null>(null);
   const router = useRouter();
   const { toast, showToast, hideToast } = useToast();
 
   const handleScraped = async (data: ScrapedProduct) => {
     const result = await createDraftFromScrapedProduct(data);
-    setScrapedData(data);
-    setDraftProductId(result.productId);
+    setAutoExpandProductId(result.productId);
     setIsModalOpen(false);
-    setIsDraftFormOpen(true);
     showToast("Draft created. Review and save changes when ready.", "success");
     router.refresh();
-  };
-
-  const handleDraftSuccess = () => {
-    setIsDraftFormOpen(false);
-    setScrapedData(null);
-    setDraftProductId(null);
-    showToast("Product saved as draft", "success");
-    router.refresh();
-  };
-
-  const handleDraftError = (message: string) => {
-    showToast(message, "error");
   };
 
   return (
@@ -64,29 +47,18 @@ export default function DraftsPageClient({
         </button>
       </div>
 
-      <DraftsTable products={products} onToast={showToast} view="drafts" />
+      <DraftsTable
+        products={products}
+        onToast={showToast}
+        view="drafts"
+        autoExpandProductId={autoExpandProductId}
+      />
 
       <AddProductModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onScraped={handleScraped}
       />
-
-      {scrapedData && (
-        <DraftEditForm
-          isOpen={isDraftFormOpen}
-          scrapedData={scrapedData}
-          productId={draftProductId ?? undefined}
-          onSuccess={handleDraftSuccess}
-          onError={handleDraftError}
-          onClose={() => {
-            setIsDraftFormOpen(false);
-            setScrapedData(null);
-            setDraftProductId(null);
-            router.refresh();
-          }}
-        />
-      )}
 
       {toast.visible && (
         <Toast
