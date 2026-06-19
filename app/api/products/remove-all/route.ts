@@ -1,0 +1,184 @@
+import { auth } from "@/auth";
+import {
+  EbayImportJobStatus,
+  PriceCheckJobStatus,
+  ProductStatus,
+} from "@/app/generated/prisma/enums";
+import { prisma } from "@/lib/prisma";
+import { createRequestLogger } from "@/lib/logger";
+import { getCurrentStoreSession } from "@/lib/store-session";
+import { NextResponse } from "next/server";
+
+const ACTIVE_PRICE_CHECK_STATUSES = [
+  PriceCheckJobStatus.QUEUED,
+  PriceCheckJobStatus.RUNNING,
+  PriceCheckJobStatus.CANCELLING,
+];
+
+const ACTIVE_EBAY_IMPORT_STATUSES = [
+  EbayImportJobStatus.QUEUED,
+  EbayImportJobStatus.RUNNING,
+];
+
+type ProductCounts = Record<ProductStatus, number>;
+
+function emptyProductCounts(): ProductCounts {
+  return {
+    [ProductStatus.DRAFT]: 0,
+    [ProductStatus.FAILED]: 0,
+    [ProductStatus.IMPORTED]: 0,
+    [ProductStatus.ON_HOLD]: 0,
+  };
+}
+
+async function getRemovalSnapshot(storeId: string) {
+  const [statusGroups, total, activePriceCheckJobs, activeEbayImportJobs] =
+    await Promise.all([
+      prisma.product.groupBy({
+        by: ["status"],
+        where: { storeId },
+        _count: { _all: true },
+      }),
+      prisma.product.count({ where: { storeId } }),
+      prisma.priceCheckJob.count({
+        where: {
+          storeId,
+          status: { in: ACTIVE_PRICE_CHECK_STATUSES },
+          dismissedAt: null,
+        },
+      }),
+      prisma.ebayImportJob.count({
+        where: {
+          storeId,
+          status: { in: ACTIVE_EBAY_IMPORT_STATUSES },
+          dismissedAt: null,
+        },
+      }),
+    ]);
+
+  const counts = emptyProductCounts();
+  for (const group of statusGroups) {
+    counts[group.status] = group._count._all;
+  }
+
+  return {
+    total,
+    counts,
+    activeJobs: {
+      priceCheck: activePriceCheckJobs,
+      ebayImport: activeEbayImportJobs,
+    },
+    isBlocked: activePriceCheckJobs > 0 || activeEbayImportJobs > 0,
+  };
+}
+
+export async function GET(request: Request) {
+  const session = await auth();
+  const storeSession = await getCurrentStoreSession();
+  const log = createRequestLogger(
+    request,
+    storeSession ? { storeId: storeSession.storeId } : {},
+  );
+
+  if (!session?.user || !storeSession) {
+    log.warn("products/remove-all/GET", "Unauthorized removal snapshot request");
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const snapshot = await getRemovalSnapshot(storeSession.storeId);
+
+  return NextResponse.json({
+    storeName: storeSession.storeName,
+    storeLoginId: storeSession.storeLoginId,
+    confirmationPhrase: `REMOVE ${storeSession.storeLoginId}`,
+    ...snapshot,
+  });
+}
+
+export async function POST(request: Request) {
+  const session = await auth();
+  const storeSession = await getCurrentStoreSession();
+  const log = createRequestLogger(
+    request,
+    storeSession ? { storeId: storeSession.storeId } : {},
+  );
+
+  if (!session?.user || !storeSession) {
+    log.warn("products/remove-all/POST", "Unauthorized removal attempt");
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let body;
+  try {
+    body = await request.json();
+  } catch (error) {
+    log.error("products/remove-all/POST", "Invalid JSON body", error);
+    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  const confirmationPhrase = `REMOVE ${storeSession.storeLoginId}`;
+  if (body?.confirmationPhrase !== confirmationPhrase) {
+    log.warn("products/remove-all/POST", "Incorrect confirmation phrase");
+    return NextResponse.json(
+      { error: "Confirmation phrase does not match" },
+      { status: 400 },
+    );
+  }
+
+  const snapshot = await getRemovalSnapshot(storeSession.storeId);
+  if (snapshot.isBlocked) {
+    return NextResponse.json(
+      {
+        error:
+          "Cannot remove listings while a price check or eBay import job is active",
+        ...snapshot,
+      },
+      { status: 409 },
+    );
+  }
+
+  try {
+    const [
+      uploadLogs,
+      priceHistory,
+      variants,
+      ebayImportStatsCache,
+      products,
+    ] = await prisma.$transaction([
+      prisma.uploadLog.deleteMany({ where: { storeId: storeSession.storeId } }),
+      prisma.priceHistory.deleteMany({
+        where: { product: { is: { storeId: storeSession.storeId } } },
+      }),
+      prisma.variant.deleteMany({
+        where: { product: { is: { storeId: storeSession.storeId } } },
+      }),
+      prisma.ebayImportStatsCache.deleteMany({
+        where: { storeId: storeSession.storeId },
+      }),
+      prisma.product.deleteMany({ where: { storeId: storeSession.storeId } }),
+    ]);
+
+    log.warn("products/remove-all/POST", "All store products removed from ListFlow", {
+      deletedProducts: products.count,
+      deletedVariants: variants.count,
+      deletedPriceHistory: priceHistory.count,
+      deletedUploadLogs: uploadLogs.count,
+      deletedEbayImportStatsCache: ebayImportStatsCache.count,
+    });
+
+    return NextResponse.json({
+      success: true,
+      deletedProducts: products.count,
+      deletedVariants: variants.count,
+      deletedPriceHistory: priceHistory.count,
+      deletedUploadLogs: uploadLogs.count,
+      deletedEbayImportStatsCache: ebayImportStatsCache.count,
+    });
+  } catch (error) {
+    log.error("products/remove-all/POST", "Removal failed", error);
+    return NextResponse.json(
+      { error: "Failed to remove listings from ListFlow" },
+      { status: 500 },
+    );
+  }
+}

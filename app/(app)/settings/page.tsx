@@ -4,8 +4,9 @@ import { useState } from "react";
 import SupplierSettingsTab from "@/components/settings/SupplierSettingsTab";
 import TemplatesTab from "@/components/settings/TemplatesTab";
 import KeywordsTab from "@/components/settings/KeywordsTab";
+import DangerZoneTab from "@/components/settings/DangerZoneTab";
 
-const tabs = ["Supplier Settings", "Templates", "Keywords"] as const;
+const tabs = ["Supplier Settings", "Templates", "Keywords", "Danger Zone"] as const;
 type Tab = (typeof tabs)[number];
 
 export default function SettingsPage() {
@@ -38,6 +39,7 @@ export default function SettingsPage() {
       {activeTab === "Supplier Settings" && <SupplierSettingsTab />}
       {activeTab === "Templates" && <TemplatesTab />}
       {activeTab === "Keywords" && <KeywordsTab />}
+      {activeTab === "Danger Zone" && <DangerZoneTab />}
     </div>
   );
 }
