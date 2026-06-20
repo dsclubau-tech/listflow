@@ -1,5 +1,5 @@
 import { PrismaClient } from "../app/generated/prisma/client";
-import { PrismaNeon } from "@prisma/adapter-neon";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { writeFileSync } from "fs";
 import { resolve } from "path";
 
@@ -9,7 +9,7 @@ async function main() {
   const log = (msg: string) => lines.push(msg);
 
   try {
-    const adapter = new PrismaNeon({ connectionString: process.env.DATABASE_URL! });
+    const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
     const prisma = new PrismaClient({ adapter });
 
     const products = await prisma.product.findMany({

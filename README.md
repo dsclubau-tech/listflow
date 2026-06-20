@@ -1,57 +1,159 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# ListFlow
 
-## Getting Started
+ListFlow is a store-scoped eBay listing operations app built with Next.js,
+Prisma, and PostgreSQL. The current production-ready setup is local-first:
+ListFlow runs on this PC and stores data in Supabase Postgres.
 
-First, run the development server:
+## Current Stack
+
+- App runtime: local Windows PC running `npm.cmd run dev` or `npm.cmd run start`
+- Database: Supabase Postgres
+- ORM: Prisma with `@prisma/adapter-pg`
+- Auth: store ID and password through NextAuth credentials
+- Scheduled work: protected Next.js cron routes called manually or by a local scheduler
+
+ListFlow does not require Supabase anon keys or service-role keys. Database
+access stays server-side through Prisma.
+
+## Environment
+
+Copy `.env.example` and fill the production values.
+
+Use `DATABASE_URL` for the running app. For local Windows, the Supabase pooler
+connection string is preferred because the direct database host can be IPv6-only.
+
+Use `DIRECT_URL` for Prisma migrations when available. If the direct Supabase
+database host is not reachable from this PC, use the Supabase session pooler
+connection string for `DIRECT_URL` too. Prisma commands in this repo prefer
+`DIRECT_URL` and fall back to `DATABASE_URL`.
+
+Required production values:
+
+- `DATABASE_URL`
+- `DIRECT_URL`
+- `AUTH_SECRET`
+- `NEXTAUTH_URL=http://localhost:3000`
+- `AUTH_TRUST_HOST=true`
+- `CRON_SECRET`
+- eBay developer credentials and store tokens
+- `STORE_BOOTSTRAP_PASSWORD` or per-store seed passwords before running
+  `prisma db seed`
+
+Do not commit real `.env` files or Supabase passwords.
+
+## Supabase Setup
+
+1. Create a Supabase project.
+2. Create or choose a dedicated database user/password for Prisma.
+3. Copy the app/runtime connection string into `DATABASE_URL`.
+4. Copy the direct database connection string into `DIRECT_URL`.
+5. Keep Supabase client APIs disabled or unused unless row-level security
+   policies are intentionally designed. ListFlow reads/writes through the server.
+
+## Database Migration
+
+Install dependencies:
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+npm install
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Validate and generate Prisma:
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm.cmd exec prisma validate
+npm.cmd exec prisma generate
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Deploy migrations to Supabase:
 
-## Learn More
+```bash
+npm.cmd exec prisma migrate deploy
+```
 
-To learn more about Next.js, take a look at the following resources:
+Seed a fresh production database:
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+```bash
+npm.cmd exec prisma db seed
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Local Run
 
-## Deploy on Vercel
+Build locally:
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+```bash
+npm.cmd run lint
+npm.cmd run build
+```
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Start local production mode:
 
-## Price Tracking Cron
+```bash
+npm run start
+```
 
-ListFlow includes an automated Amazon AU to eBay price tracker.
+Or use development mode:
 
-1. Set `CRON_SECRET` in your environment.
-2. Enable price tracking in `Settings > Supplier Settings > General > Price Tracking`.
-3. Match your Railway cron schedule to the configured UTC hour.
+```bash
+npm.cmd run dev
+```
 
-Example Railway cron:
+Open [http://localhost:3000](http://localhost:3000).
+
+## Health Check
+
+Check database connectivity while the local app is running:
+
+```bash
+curl http://localhost:3000/api/health/db
+```
+
+Expected response:
+
+```json
+{ "ok": true }
+```
+
+## Cron Routes
+
+All cron routes require:
+
+```bash
+Authorization: Bearer $CRON_SECRET
+```
+
+Daily price tracking while the local app is running:
+
+```bash
+curl -H "Authorization: Bearer $CRON_SECRET" \
+  http://localhost:3000/api/cron/price-check
+```
+
+Suggested schedule:
 
 ```bash
 0 6 * * *
 ```
 
-Example request:
+Expired eBay Research cleanup:
 
 ```bash
 curl -H "Authorization: Bearer $CRON_SECRET" \
-  https://your-app.railway.app/api/cron/price-check
+  http://localhost:3000/api/cron/ebay-research-cleanup
 ```
+
+Suggested schedule:
+
+```bash
+*/30 * * * *
+```
+
+eBay Research records expire two hours after a research job or batch reaches a
+terminal state. Queued, running, pausing, and paused research work is preserved
+for recovery.
+
+## Hosting Later
+
+If you later want ListFlow available 24/7, the app can be moved to a host such
+as Railway or another Node.js host. Vercel is possible for the UI/API, but the
+long-running price-check and queue workers need extra care on serverless hosting.

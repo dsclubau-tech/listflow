@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { PrismaClient } from "../app/generated/prisma/client.js";
-import { PrismaNeon } from "@prisma/adapter-neon";
+import { PrismaPg } from "@prisma/adapter-pg";
 import bcrypt from "bcryptjs";
 import {
   RK_ECOM_30_DAY_FREE_RETURN_TEMPLATE_CONTENT,
@@ -8,7 +8,7 @@ import {
   RK_ECOM_30_DAY_FREE_RETURN_TEMPLATE_ID,
 } from "../lib/builtin-description-templates";
 
-const adapter = new PrismaNeon({
+const adapter = new PrismaPg({
   connectionString: process.env.DATABASE_URL!,
 });
 const prisma = new PrismaClient({ adapter });
@@ -65,19 +65,31 @@ async function main() {
       id: "seed-store-1",
       name: "Store 1",
       loginId: "store-1",
-      password: process.env.STORE_1_PASSWORD || process.env.STORE_DEFAULT_PASSWORD || "Store@1234",
+      password:
+        process.env.STORE_1_PASSWORD ||
+        process.env.STORE_BOOTSTRAP_PASSWORD ||
+        process.env.STORE_DEFAULT_PASSWORD ||
+        "Store@1234",
     },
     {
       id: "seed-store-2",
       name: "Store 2",
       loginId: "store-2",
-      password: process.env.STORE_2_PASSWORD || process.env.STORE_DEFAULT_PASSWORD || "Store@1234",
+      password:
+        process.env.STORE_2_PASSWORD ||
+        process.env.STORE_BOOTSTRAP_PASSWORD ||
+        process.env.STORE_DEFAULT_PASSWORD ||
+        "Store@1234",
     },
     {
       id: "seed-store-3",
       name: "Store 3",
       loginId: "store-3",
-      password: process.env.STORE_3_PASSWORD || process.env.STORE_DEFAULT_PASSWORD || "Store@1234",
+      password:
+        process.env.STORE_3_PASSWORD ||
+        process.env.STORE_BOOTSTRAP_PASSWORD ||
+        process.env.STORE_DEFAULT_PASSWORD ||
+        "Store@1234",
     },
   ];
   const stores: Record<string, string> = {};
@@ -105,6 +117,7 @@ async function main() {
     console.log(`Seeded store: ${s.name}`);
   }
 
+  if (process.env.SEED_SAMPLE_PRODUCTS === "true") {
   // --- Get Admin user for product creation ---
   const adminUser = await prisma.user.findUnique({
     where: { email: "admin@listflow.com" },
@@ -164,6 +177,9 @@ async function main() {
     },
   });
   console.log(`Seeded product: ${product2.title}`);
+  } else {
+    console.log("Skipped sample products. Set SEED_SAMPLE_PRODUCTS=true to include demo products.");
+  }
 
   // --- Seed Description Templates ---
   const templates = [

@@ -1,6 +1,6 @@
 import "dotenv/config";
 import { PrismaClient } from "../app/generated/prisma/client.js";
-import { PrismaNeon } from "@prisma/adapter-neon";
+import { PrismaPg } from "@prisma/adapter-pg";
 
 /**
  * Data-fix script: Dismiss stale pending price history entries.
@@ -16,7 +16,7 @@ import { PrismaNeon } from "@prisma/adapter-neon";
  * Usage: npx tsx scratch/sync-product-prices.ts
  */
 
-const adapter = new PrismaNeon({
+const adapter = new PrismaPg({
   connectionString: process.env.DATABASE_URL!,
 });
 const prisma = new PrismaClient({ adapter });

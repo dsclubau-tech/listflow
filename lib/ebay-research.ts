@@ -14,7 +14,18 @@ const VALID_LIMITS = [10, 25] as const;
 const DEFAULT_POSTCODE = "2217";
 const ACTIVE_SEARCH_CACHE_TTL_MS = 45 * 60 * 1000;
 const RESEARCH_BATCH_COOLDOWN_MS = 30 * 1000;
+const RESEARCH_RETENTION_MS = 2 * 60 * 60 * 1000;
 const MAX_BATCH_QUERIES = 5;
+const TERMINAL_RESEARCH_JOB_STATUSES: EbayResearchJobStatus[] = [
+  EbayResearchJobStatus.COMPLETED,
+  EbayResearchJobStatus.PARTIAL,
+  EbayResearchJobStatus.FAILED,
+];
+const TERMINAL_RESEARCH_BATCH_STATUSES: EbayResearchBatchStatus[] = [
+  EbayResearchBatchStatus.COMPLETED,
+  EbayResearchBatchStatus.PARTIAL,
+  EbayResearchBatchStatus.FAILED,
+];
 
 type EbayResearchJobRecord = {
   id: string;
@@ -37,6 +48,7 @@ type EbayResearchJobRecord = {
   updatedAt: Date;
   startedAt: Date | null;
   completedAt: Date | null;
+  expiresAt: Date | null;
   batch?: EbayResearchBatchRecord | null;
 };
 
@@ -54,6 +66,7 @@ type EbayResearchBatchRecord = {
   startedAt: Date | null;
   completedAt: Date | null;
   pausedAt: Date | null;
+  expiresAt: Date | null;
   jobs?: EbayResearchJobRecord[];
 };
 
@@ -152,6 +165,10 @@ function getActiveSearchCache() {
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unexpected eBay research error";
+}
+
+function getResearchExpiresAt(completedAt: Date) {
+  return new Date(completedAt.getTime() + RESEARCH_RETENTION_MS);
 }
 
 function getBrowseApiErrorMessage(status: number) {
@@ -954,6 +971,7 @@ function serializeEbayResearchBatch(batch: EbayResearchBatchRecord) {
     startedAt: batch.startedAt?.toISOString() ?? null,
     completedAt: batch.completedAt?.toISOString() ?? null,
     pausedAt: batch.pausedAt?.toISOString() ?? null,
+    expiresAt: batch.expiresAt?.toISOString() ?? null,
     jobs: jobs.map((job) => ({
       ...serializeEbayResearchJob({ ...job, batch }),
       queuePosition: queuedJobIds.includes(job.id)
@@ -992,6 +1010,7 @@ async function refreshResearchBatch(batchId: string) {
   let status = batch.status;
   let completedAt = batch.completedAt;
   let pausedAt = batch.pausedAt;
+  let expiresAt = batch.expiresAt;
 
   if (terminalCount >= batch.total) {
     status =
@@ -1001,19 +1020,23 @@ async function refreshResearchBatch(batchId: string) {
           ? EbayResearchBatchStatus.PARTIAL
           : EbayResearchBatchStatus.COMPLETED;
     completedAt = batch.completedAt ?? new Date();
+    expiresAt = batch.expiresAt ?? getResearchExpiresAt(completedAt);
   } else if (running) {
     status =
       batch.status === EbayResearchBatchStatus.PAUSING
         ? EbayResearchBatchStatus.PAUSING
         : EbayResearchBatchStatus.RUNNING;
+    expiresAt = null;
   } else if (paused && !queued) {
     status = EbayResearchBatchStatus.PAUSED;
     pausedAt = batch.pausedAt ?? new Date();
+    expiresAt = null;
   } else if (queued) {
     status =
       batch.status === EbayResearchBatchStatus.PAUSED
         ? EbayResearchBatchStatus.PAUSED
         : EbayResearchBatchStatus.QUEUED;
+    expiresAt = null;
   }
 
   return prisma.ebayResearchBatch.update({
@@ -1024,6 +1047,7 @@ async function refreshResearchBatch(batchId: string) {
       failed,
       completedAt,
       pausedAt,
+      expiresAt,
       cooldownUntil:
         status === EbayResearchBatchStatus.COMPLETED ||
         status === EbayResearchBatchStatus.PARTIAL ||
@@ -1073,6 +1097,7 @@ async function recoverStaleResearchJobs(storeId: string) {
           : EbayResearchJobStatus.QUEUED,
         startedAt: null,
         errorMessage: null,
+        expiresAt: null,
       },
     });
 
@@ -1154,6 +1179,7 @@ export function serializeEbayResearchJob(
     updatedAt: job.updatedAt.toISOString(),
     startedAt: job.startedAt?.toISOString() ?? null,
     completedAt: job.completedAt?.toISOString() ?? null,
+    expiresAt: job.expiresAt?.toISOString() ?? null,
   };
 }
 
@@ -1179,6 +1205,7 @@ async function runEbayResearchJob(jobId: string) {
       startedAt: job.startedAt ?? new Date(),
       warningMessage: null,
       errorMessage: null,
+      expiresAt: null,
     },
   });
 
@@ -1189,6 +1216,7 @@ async function runEbayResearchJob(jobId: string) {
         status: EbayResearchBatchStatus.RUNNING,
         startedAt: job.batch?.startedAt ?? new Date(),
         pausedAt: null,
+        expiresAt: null,
       },
     });
   }
@@ -1283,6 +1311,7 @@ async function runEbayResearchJob(jobId: string) {
           ? warnings.join(" ") || "eBay research failed."
           : null,
       completedAt,
+      expiresAt: getResearchExpiresAt(completedAt),
     },
   });
 
@@ -1362,6 +1391,34 @@ async function runEbayResearchQueue(storeId: string) {
       runningJobIds.delete(nextJob.id);
     }
   }
+}
+
+export async function cleanupExpiredEbayResearchRecords(storeId?: string) {
+  const now = new Date();
+  const storeFilter = storeId ? { storeId } : {};
+
+  return prisma.$transaction(async (tx) => {
+    const batches = await tx.ebayResearchBatch.deleteMany({
+      where: {
+        ...storeFilter,
+        expiresAt: { lte: now },
+        status: { in: TERMINAL_RESEARCH_BATCH_STATUSES },
+      },
+    });
+    const standaloneJobs = await tx.ebayResearchJob.deleteMany({
+      where: {
+        ...storeFilter,
+        batchId: null,
+        expiresAt: { lte: now },
+        status: { in: TERMINAL_RESEARCH_JOB_STATUSES },
+      },
+    });
+
+    return {
+      deletedBatches: batches.count,
+      deletedJobs: standaloneJobs.count,
+    };
+  });
 }
 
 export async function createEbayResearchJob(input: CreateEbayResearchJobInput) {
@@ -1458,6 +1515,7 @@ export async function getEbayResearchJobForStore(jobId: string, storeId: string)
 }
 
 export async function recoverEbayResearchQueue(storeId: string) {
+  await cleanupExpiredEbayResearchRecords(storeId);
   await recoverStaleResearchJobs(storeId);
   ensureEbayResearchQueueRunning(storeId);
 }
@@ -1504,6 +1562,7 @@ export async function pauseEbayResearchBatch(batchId: string, storeId: string) {
         status: nextBatchStatus,
         pausedAt: hasRunningJob ? null : new Date(),
         cooldownUntil: null,
+        expiresAt: null,
       },
     }),
     prisma.ebayResearchJob.updateMany({
@@ -1541,6 +1600,7 @@ export async function resumeEbayResearchBatch(batchId: string, storeId: string) 
         status: EbayResearchBatchStatus.QUEUED,
         pausedAt: null,
         cooldownUntil: null,
+        expiresAt: null,
       },
     }),
     prisma.ebayResearchJob.updateMany({
@@ -1550,7 +1610,7 @@ export async function resumeEbayResearchBatch(batchId: string, storeId: string) 
           in: [EbayResearchJobStatus.PAUSED, EbayResearchJobStatus.PAUSING],
         },
       },
-      data: { status: EbayResearchJobStatus.QUEUED },
+      data: { status: EbayResearchJobStatus.QUEUED, expiresAt: null },
     }),
   ]);
 

@@ -1,6 +1,6 @@
 import "dotenv/config";
 
-import { PrismaNeon } from "@prisma/adapter-neon";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient, ProductStatus } from "../app/generated/prisma/client";
 
 const ASIN_PATTERN = /^B0[A-Z0-9]{8,}$/i;
@@ -21,7 +21,7 @@ async function main() {
     throw new Error("DATABASE_URL is not set");
   }
 
-  const adapter = new PrismaNeon({ connectionString });
+  const adapter = new PrismaPg({ connectionString });
   const prisma = new PrismaClient({ adapter });
 
   try {

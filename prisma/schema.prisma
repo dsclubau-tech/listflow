@@ -153,6 +153,13 @@ model Product {
   uploadLogs    UploadLog[]
   variants      Variant[]
   priceHistory  PriceHistory[]
+
+  @@index([storeId, status])
+  @@index([storeId, asin])
+  @@index([storeId, ebayItemId])
+  @@index([storeId, createdAt])
+  @@index([storeId, updatedAt])
+  @@index([createdById])
 }
 
 model Variant {
@@ -252,9 +259,13 @@ model UploadLog {
   errorMessage String?      @db.Text
   createdAt    DateTime     @default(now())
 
-  product      Product      @relation(fields: [productId], references: [id])
+  product      Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
   store        Store        @relation(fields: [storeId], references: [id])
   user         User         @relation(fields: [userId], references: [id])
+
+  @@index([productId])
+  @@index([storeId, createdAt])
+  @@index([userId])
 }
 
 model EbayImportStatsCache {
@@ -327,6 +338,7 @@ model EbayResearchJob {
   updatedAt      DateTime              @updatedAt
   startedAt      DateTime?
   completedAt    DateTime?
+  expiresAt      DateTime?
 
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
@@ -335,7 +347,9 @@ model EbayResearchJob {
   @@index([batchId])
   @@index([storeId, status])
   @@index([storeId, createdAt])
+  @@index([storeId, expiresAt])
   @@index([createdAt])
+  @@index([expiresAt])
 }
 
 model EbayResearchBatch {
@@ -352,6 +366,7 @@ model EbayResearchBatch {
   startedAt   DateTime?
   completedAt DateTime?
   pausedAt    DateTime?
+  expiresAt   DateTime?
 
   user  User @relation(fields: [userId], references: [id], onDelete: Cascade)
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
@@ -359,7 +374,9 @@ model EbayResearchBatch {
 
   @@index([storeId, status])
   @@index([storeId, createdAt])
+  @@index([storeId, expiresAt])
   @@index([createdAt])
+  @@index([expiresAt])
 }
 
 // TODO: Part 3
