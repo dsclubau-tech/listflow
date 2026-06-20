@@ -122,6 +122,8 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
   const [description, setDescription] = useState(product.description);
   const [templates, setTemplates] = useState<{ id: string; name: string; content: string; isDefault: boolean }[]>([]);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>(product.templateId || "");
+  const [isLoadingEbayDescription, setIsLoadingEbayDescription] = useState(false);
+  const requestedEbayDescriptionRef = useRef(false);
 
   // Images
   const [images, setImages] = useState<string[]>([...product.images]);
@@ -327,6 +329,56 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
         : [],
     [bannerMessage]
   );
+
+  useEffect(() => {
+    if (
+      requestedEbayDescriptionRef.current ||
+      description.trim() ||
+      !isListed ||
+      !product.ebayItemId
+    ) {
+      return;
+    }
+
+    requestedEbayDescriptionRef.current = true;
+    setIsLoadingEbayDescription(true);
+
+    async function refreshDescription() {
+      try {
+        const response = await fetch(
+          `/api/products/${product.id}/refresh-ebay-description`,
+          {
+            method: "POST",
+            cache: "no-store",
+          },
+        );
+        const data = (await response.json().catch(() => ({}))) as {
+          description?: string;
+          error?: string;
+        };
+
+        if (!response.ok || !data.description) {
+          throw new Error(data.error || "Failed to refresh eBay description.");
+        }
+
+        setDescription(data.description);
+        router.refresh();
+      } catch (error) {
+        setSaveMessage({
+          title: "Description refresh failed",
+          text:
+            error instanceof Error
+              ? error.message
+              : "Failed to refresh eBay description.",
+          variant: "error",
+        });
+      } finally {
+        setIsLoadingEbayDescription(false);
+      }
+    }
+
+    void refreshDescription();
+  }, [description, isListed, product.ebayItemId, product.id, router]);
 
   // ----- Save -----
 
@@ -1237,6 +1289,11 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
               </div>
             )}
             <label className="block text-sm font-medium text-gray-700 mb-2">Description</label>
+            {isLoadingEbayDescription && (
+              <div className="mb-3 rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-700">
+                Loading description from eBay...
+              </div>
+            )}
             <div className="flex items-center gap-3 text-sm text-gray-600 mb-3">
                 <span className="text-sm text-gray-500">Selected Template:</span>
                 <select

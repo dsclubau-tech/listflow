@@ -17,7 +17,8 @@ function hasCurrentPrismaDelegates(client: PrismaClient | undefined) {
     client &&
       "priceCheckJob" in client &&
       "ebayImportStatsCache" in client &&
-      "ebayImportJob" in client,
+      "ebayImportJob" in client &&
+      "ebayResearchJob" in client,
   );
 }
 

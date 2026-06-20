@@ -74,6 +74,10 @@ const parser = new XMLParser({
   ignoreAttributes: false,
   parseAttributeValue: false,
   parseTagValue: false,
+  processEntities: {
+    maxTotalExpansions: 20000,
+    maxExpandedLength: 5_000_000,
+  },
   removeNSPrefix: true,
   trimValues: true,
 });
@@ -147,6 +151,10 @@ function toText(value: unknown): string {
 
 function getString(source: unknown, ...path: string[]) {
   return toText(getPath(source, ...path)).trim();
+}
+
+function getItemDescription(item: EbayNode) {
+  return toText(getPath(item, "Description")).trim();
 }
 
 function extractAsinFromText(value: string) {
@@ -432,7 +440,7 @@ function mapEbayItemToProduct(
 
   return {
     title,
-    description: toText(getPath(item, "Description")),
+    description: getItemDescription(item),
     price: getProductPrice(item, variants),
     quantity,
     category: categoryId,
@@ -692,6 +700,35 @@ async function fetchEbayItemDetails(
   return item;
 }
 
+export async function refreshProductDescriptionFromEbay(
+  storeId: string,
+  storeNumber: 1 | 2 | 3,
+  productId: string,
+) {
+  const product = await prisma.product.findFirst({
+    where: { id: productId, storeId },
+    select: { id: true, ebayItemId: true },
+  });
+
+  if (!product?.ebayItemId) {
+    throw new Error("Product does not have an eBay item ID.");
+  }
+
+  const item = await fetchEbayItemDetails(storeNumber, product.ebayItemId);
+  const description = getItemDescription(item);
+
+  if (!description) {
+    throw new Error("eBay did not return a description for this listing.");
+  }
+
+  await prisma.product.update({
+    where: { id: product.id },
+    data: { description },
+  });
+
+  return description;
+}
+
 async function fetchSelectedEbayItemDetails(
   storeNumber: 1 | 2 | 3,
   itemIds: string[],
@@ -828,9 +865,11 @@ export async function importEbayListings(
     let title = "(loading)";
 
     try {
+      const batchedItem = itemsById.get(itemId);
       const item =
-        itemsById.get(itemId) ??
-        (await fetchEbayItemDetails(options.storeNumber, itemId));
+        batchedItem && getItemDescription(batchedItem)
+          ? batchedItem
+          : await fetchEbayItemDetails(options.storeNumber, itemId);
       title = getString(item, "Title") || "(no title)";
 
       if (!isImportableListing(item)) {

@@ -23,6 +23,8 @@ model User {
   uploadLogs UploadLog[]
   priceCheckJobs PriceCheckJob[]
   ebayImportJobs EbayImportJob[]
+  ebayResearchJobs EbayResearchJob[]
+  ebayResearchBatches EbayResearchBatch[]
 }
 
 // --- Part 2 Models ---
@@ -45,6 +47,8 @@ model Store {
   ebayImportStatsCache EbayImportStatsCache?
   ebayImportJobs       EbayImportJob[]
   priceCheckJobs       PriceCheckJob[]
+  ebayResearchJobs     EbayResearchJob[]
+  ebayResearchBatches  EbayResearchBatch[]
   descriptionTemplates DescriptionTemplate[]
   keywordBlacklist     KeywordBlacklist[]
   supplierSettings     SupplierSettings[]
@@ -85,6 +89,32 @@ enum EbayImportJobStatus {
   QUEUED
   RUNNING
   COMPLETED
+  FAILED
+}
+
+enum EbayResearchJobStatus {
+  QUEUED
+  RUNNING
+  PAUSING
+  PAUSED
+  COMPLETED
+  PARTIAL
+  FAILED
+}
+
+enum EbayResearchMode {
+  ACTIVE
+  SOLD
+  BOTH
+}
+
+enum EbayResearchBatchStatus {
+  QUEUED
+  RUNNING
+  PAUSING
+  PAUSED
+  COMPLETED
+  PARTIAL
   FAILED
 }
 
@@ -274,6 +304,62 @@ model EbayImportJob {
   @@index([storeId, status])
   @@index([createdAt])
   @@index([dismissedAt])
+}
+
+model EbayResearchJob {
+  id             String                @id @default(cuid())
+  userId         String
+  storeId        String
+  batchId        String?
+  status         EbayResearchJobStatus @default(QUEUED)
+  mode           EbayResearchMode
+  query          String
+  limit          Int                   @default(50)
+  activeCount    Int                   @default(0)
+  soldCount      Int                   @default(0)
+  activeSummary  Json                  @default("{}")
+  soldSummary    Json                  @default("{}")
+  activeResults  Json                  @default("[]")
+  soldResults    Json                  @default("[]")
+  warningMessage String?               @db.Text
+  errorMessage   String?               @db.Text
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+  startedAt      DateTime?
+  completedAt    DateTime?
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  batch EbayResearchBatch? @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@index([batchId])
+  @@index([storeId, status])
+  @@index([storeId, createdAt])
+  @@index([createdAt])
+}
+
+model EbayResearchBatch {
+  id          String                  @id @default(cuid())
+  userId      String
+  storeId     String
+  status      EbayResearchBatchStatus @default(QUEUED)
+  total       Int                     @default(0)
+  completed   Int                     @default(0)
+  failed      Int                     @default(0)
+  cooldownUntil DateTime?
+  createdAt   DateTime                @default(now())
+  updatedAt   DateTime                @updatedAt
+  startedAt   DateTime?
+  completedAt DateTime?
+  pausedAt    DateTime?
+
+  user  User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  jobs  EbayResearchJob[]
+
+  @@index([storeId, status])
+  @@index([storeId, createdAt])
+  @@index([createdAt])
 }
 
 // TODO: Part 3

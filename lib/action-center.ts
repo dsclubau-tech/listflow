@@ -1,6 +1,7 @@
 import "server-only";
 
 import {
+  EbayResearchBatchStatus,
   EbayImportJobStatus,
   PriceCheckJobStatus,
   ProductStatus,
@@ -8,6 +9,7 @@ import {
 import type { Prisma } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
 import { serializeEbayImportJob } from "@/lib/ebay-import-jobs";
+import { getCurrentEbayResearchBatches } from "@/lib/ebay-research";
 import { serializePriceCheckJob } from "@/lib/price-check-jobs";
 
 const QUEUE_LIMIT = 10;
@@ -20,6 +22,12 @@ const ACTIVE_PRICE_JOB_STATUSES = [
 const ACTIVE_IMPORT_JOB_STATUSES = [
   EbayImportJobStatus.QUEUED,
   EbayImportJobStatus.RUNNING,
+] as const;
+const ACTIVE_RESEARCH_BATCH_STATUSES = [
+  EbayResearchBatchStatus.QUEUED,
+  EbayResearchBatchStatus.RUNNING,
+  EbayResearchBatchStatus.PAUSING,
+  EbayResearchBatchStatus.PAUSED,
 ] as const;
 
 function money(value: Prisma.Decimal | number | null | undefined) {
@@ -111,6 +119,35 @@ export interface ActionCenterEbayImportJob {
   dismissedAt: string | null;
 }
 
+export interface ActionCenterEbayResearchJob {
+  id: string;
+  status: string;
+  query: string;
+  activeCount: number;
+  queuePosition: number | null;
+}
+
+export interface ActionCenterEbayResearchBatch {
+  id: string;
+  storeId: string;
+  status: string;
+  total: number;
+  completed: number;
+  failed: number;
+  running: number;
+  queued: number;
+  paused: number;
+  canPause: boolean;
+  canResume: boolean;
+  cooldownUntil: string | null;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  pausedAt: string | null;
+  jobs: ActionCenterEbayResearchJob[];
+}
+
 export interface ActionCenterData {
   summary: {
     pendingReviews: number;
@@ -128,6 +165,7 @@ export interface ActionCenterData {
   jobs: {
     priceChecks: ActionCenterPriceCheckJob[];
     ebayImports: ActionCenterEbayImportJob[];
+    ebayResearchBatches: ActionCenterEbayResearchBatch[];
   };
 }
 
@@ -176,6 +214,7 @@ export async function getActionCenterData(storeId: string): Promise<ActionCenter
     onHoldCount,
     priceCheckJobs,
     ebayImportJobs,
+    ebayResearchBatches,
   ] = await Promise.all([
     visiblePendingProductIds.length > 0
       ? prisma.priceHistory.findMany({
@@ -276,6 +315,7 @@ export async function getActionCenterData(storeId: string): Promise<ActionCenter
         store: { select: { name: true } },
       },
     }),
+    getCurrentEbayResearchBatches(storeId),
   ]);
 
   const visiblePendingByProduct = new Map<string, typeof visiblePendingHistory>();
@@ -317,6 +357,11 @@ export async function getActionCenterData(storeId: string): Promise<ActionCenter
   const activeImportJobs = ebayImportJobs.filter((job) =>
     ACTIVE_IMPORT_JOB_STATUSES.includes(job.status as (typeof ACTIVE_IMPORT_JOB_STATUSES)[number])
   );
+  const activeResearchBatches = ebayResearchBatches.filter((batch) =>
+    ACTIVE_RESEARCH_BATCH_STATUSES.includes(
+      batch.status as (typeof ACTIVE_RESEARCH_BATCH_STATUSES)[number]
+    )
+  );
 
   return {
     summary: {
@@ -324,7 +369,8 @@ export async function getActionCenterData(storeId: string): Promise<ActionCenter
       failedChecks: failedChecksCount,
       lowStock: lowStockCount,
       onHold: onHoldCount,
-      runningJobs: activePriceJobs.length + activeImportJobs.length,
+      runningJobs:
+        activePriceJobs.length + activeImportJobs.length + activeResearchBatches.length,
     },
     queues: {
       pendingReviews,
@@ -348,6 +394,7 @@ export async function getActionCenterData(storeId: string): Promise<ActionCenter
         ...serializeEbayImportJob(job),
         storeName: job.store.name,
       })),
+      ebayResearchBatches,
     },
   };
 }

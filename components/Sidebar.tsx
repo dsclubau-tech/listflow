@@ -56,6 +56,20 @@ export default function Sidebar({ userName, userEmail }: SidebarProps) {
       ),
     },
     {
+      href: "/ebay-research",
+      label: "eBay Research",
+      icon: (
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="m21 21-4.35-4.35M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Zm2.25-9.75h-4.5m4.5 3h-4.5"
+          />
+        </svg>
+      ),
+    },
+    {
       href: "/drafts",
       label: "Drafts",
       icon: (

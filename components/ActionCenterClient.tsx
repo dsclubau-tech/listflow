@@ -10,6 +10,7 @@ import type {
   ActionCenterProductSummary,
   ActionCenterPriceCheckJob,
   ActionCenterEbayImportJob,
+  ActionCenterEbayResearchBatch,
   FailedCheckActionItem,
   LowStockActionItem,
   OnHoldActionItem,
@@ -20,6 +21,13 @@ type ToastVariant = "success" | "error";
 
 const ACTIVE_PRICE_JOB_STATUSES = new Set(["QUEUED", "RUNNING", "CANCELLING"]);
 const ACTIVE_IMPORT_JOB_STATUSES = new Set(["QUEUED", "RUNNING"]);
+const CURRENT_RESEARCH_BATCH_STATUSES = new Set([
+  "QUEUED",
+  "RUNNING",
+  "PAUSING",
+  "PAUSED",
+]);
+const ACTIVE_RESEARCH_BATCH_STATUSES = new Set(["QUEUED", "RUNNING", "PAUSING"]);
 const PRICE_CHECK_JOB_STORAGE_KEY = "listflow.products.activePriceCheckJobId";
 type ActionCenterFilter =
   | "pendingReviews"
@@ -123,6 +131,14 @@ function isActiveImportJob(job: ActionCenterEbayImportJob) {
   return ACTIVE_IMPORT_JOB_STATUSES.has(job.status);
 }
 
+function isCurrentResearchBatch(batch: ActionCenterEbayResearchBatch) {
+  return CURRENT_RESEARCH_BATCH_STATUSES.has(batch.status);
+}
+
+function isActiveResearchBatch(batch: ActionCenterEbayResearchBatch) {
+  return ACTIVE_RESEARCH_BATCH_STATUSES.has(batch.status);
+}
+
 function isTerminalPriceJob(job: ActionCenterPriceCheckJob) {
   return (
     job.status === "COMPLETED" ||
@@ -142,8 +158,11 @@ function getCurrentJobCount(data: ActionCenterData) {
   const currentImportJobs = data.jobs.ebayImports.filter(
     (job) => !job.dismissedAt && isActiveImportJob(job)
   );
+  const currentResearchBatches = data.jobs.ebayResearchBatches.filter(
+    isCurrentResearchBatch
+  );
 
-  return currentPriceJobs.length + currentImportJobs.length;
+  return currentPriceJobs.length + currentImportJobs.length + currentResearchBatches.length;
 }
 
 function statusClasses(status: string) {
@@ -155,7 +174,13 @@ function statusClasses(status: string) {
     return "bg-emerald-100 text-emerald-700";
   }
 
-  if (status === "CANCELLED" || status === "CANCELLING") {
+  if (
+    status === "CANCELLED" ||
+    status === "CANCELLING" ||
+    status === "PAUSED" ||
+    status === "PAUSING" ||
+    status === "PARTIAL"
+  ) {
     return "bg-amber-100 text-amber-800";
   }
 
@@ -298,7 +323,11 @@ function hasFilterContent(data: ActionCenterData, filter: ActionCenterFilter) {
     return data.queues.onHold.length > 0;
   }
 
-  return data.jobs.priceChecks.length > 0 || data.jobs.ebayImports.length > 0;
+  return (
+    data.jobs.priceChecks.length > 0 ||
+    data.jobs.ebayImports.length > 0 ||
+    data.jobs.ebayResearchBatches.length > 0
+  );
 }
 
 function getDefaultFilter(data: ActionCenterData): ActionCenterFilter {
@@ -332,6 +361,14 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
     () => data.jobs.ebayImports.filter((job) => !job.dismissedAt && isActiveImportJob(job)),
     [data.jobs.ebayImports]
   );
+  const currentResearchBatches = useMemo(
+    () => data.jobs.ebayResearchBatches.filter(isCurrentResearchBatch),
+    [data.jobs.ebayResearchBatches]
+  );
+  const activeResearchBatches = useMemo(
+    () => data.jobs.ebayResearchBatches.filter(isActiveResearchBatch),
+    [data.jobs.ebayResearchBatches]
+  );
   const recentPriceJobs = useMemo(
     () => data.jobs.priceChecks.filter((job) => !job.dismissedAt),
     [data.jobs.priceChecks]
@@ -339,6 +376,10 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
   const recentImportJobs = useMemo(
     () => data.jobs.ebayImports.filter((job) => !job.dismissedAt),
     [data.jobs.ebayImports]
+  );
+  const recentResearchBatches = useMemo(
+    () => data.jobs.ebayResearchBatches,
+    [data.jobs.ebayResearchBatches]
   );
   const dismissedPriceJobs = useMemo(
     () => data.jobs.priceChecks.filter((job) => Boolean(job.dismissedAt)),
@@ -350,8 +391,11 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
   );
   const hasActivePriceJobs = activePriceJobs.length > 0;
   const hasActiveJobs = useMemo(
-    () => activePriceJobs.length > 0 || activeImportJobs.length > 0,
-    [activeImportJobs.length, activePriceJobs.length]
+    () =>
+      activePriceJobs.length > 0 ||
+      activeImportJobs.length > 0 ||
+      activeResearchBatches.length > 0,
+    [activeImportJobs.length, activePriceJobs.length, activeResearchBatches.length]
   );
 
   useEffect(() => {
@@ -556,6 +600,22 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
         `/api/ebay-import/jobs/${job.id}/dismiss`
       );
       return "eBay import job dismissed.";
+    });
+  }
+
+  function pauseResearchBatch(batch: ActionCenterEbayResearchBatch) {
+    void runAction(`pause-research-batch:${batch.id}`, async () => {
+      await postJson(`/api/ebay-research/batches/${batch.id}/pause`);
+      return batch.running > 0
+        ? "Research batch will pause after the current search."
+        : "Research batch paused.";
+    });
+  }
+
+  function resumeResearchBatch(batch: ActionCenterEbayResearchBatch) {
+    void runAction(`resume-research-batch:${batch.id}`, async () => {
+      await postJson(`/api/ebay-research/batches/${batch.id}/resume`);
+      return "Research batch resumed.";
     });
   }
 
@@ -935,7 +995,9 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
 
             {jobPanelFilter === "current" && (
               <div className="divide-y divide-gray-100">
-                {currentPriceJobs.length === 0 && activeImportJobs.length === 0 ? (
+                {currentPriceJobs.length === 0 &&
+                activeImportJobs.length === 0 &&
+                currentResearchBatches.length === 0 ? (
                   <div className="px-4 py-8 text-center text-sm text-gray-500">
                     No current or paused jobs.
                   </div>
@@ -1028,6 +1090,66 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                         </Link>
                       </div>
                     ))}
+                    {currentResearchBatches.map((batch) => (
+                      <div
+                        key={`current-research-${batch.id}`}
+                        className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                      >
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-medium text-gray-900">
+                              eBay research batch
+                            </span>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClasses(batch.status)}`}
+                            >
+                              {batch.status}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-xs text-gray-500">
+                            {batch.completed}/{batch.total} complete, {batch.failed} failed,{" "}
+                            {batch.running} running, {batch.queued} queued, {batch.paused} paused
+                            {batch.cooldownUntil
+                              ? `, next after ${formatDateTime(batch.cooldownUntil)}`
+                              : ""}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {batch.canPause && (
+                            <ActionButton
+                              onClick={() => pauseResearchBatch(batch)}
+                              disabled={
+                                runningAction === `pause-research-batch:${batch.id}`
+                              }
+                              tone="danger"
+                            >
+                              {runningAction === `pause-research-batch:${batch.id}`
+                                ? "Pausing..."
+                                : "Pause"}
+                            </ActionButton>
+                          )}
+                          {batch.canResume && (
+                            <ActionButton
+                              onClick={() => resumeResearchBatch(batch)}
+                              disabled={
+                                runningAction === `resume-research-batch:${batch.id}`
+                              }
+                              tone="primary"
+                            >
+                              {runningAction === `resume-research-batch:${batch.id}`
+                                ? "Resuming..."
+                                : "Resume"}
+                            </ActionButton>
+                          )}
+                          <Link
+                            href="/ebay-research"
+                            className="text-xs font-medium text-gray-600 hover:text-gray-900"
+                          >
+                            eBay Research
+                          </Link>
+                        </div>
+                      </div>
+                    ))}
                   </>
                 )}
               </div>
@@ -1106,12 +1228,30 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                       : "Check low stock"}
                   </ActionButton>
                 </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                  <div>
+                    <div className="text-sm font-medium text-gray-900">
+                      Batch Safe eBay research
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      Queue up to 5 product names with 30 seconds between API searches.
+                    </div>
+                  </div>
+                  <Link
+                    href="/ebay-research"
+                    className="rounded border border-gray-300 bg-white px-2.5 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                  >
+                    Open eBay Research
+                  </Link>
+                </div>
               </div>
             )}
 
             {jobPanelFilter === "recent" && (
               <div className="divide-y divide-gray-100">
-                {recentPriceJobs.length === 0 && recentImportJobs.length === 0 ? (
+                {recentPriceJobs.length === 0 &&
+                recentImportJobs.length === 0 &&
+                recentResearchBatches.length === 0 ? (
                   <div className="px-4 py-8 text-center text-sm text-gray-500">
                     No recent jobs.
                   </div>
@@ -1195,6 +1335,59 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                             className="text-xs font-medium text-gray-600 hover:text-gray-900"
                           >
                             eBay Import
+                          </Link>
+                        </div>
+                      </div>
+                    ))}
+                    {recentResearchBatches.map((batch) => (
+                      <div
+                        key={`recent-research-${batch.id}`}
+                        className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                      >
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-medium text-gray-900">
+                              eBay research batch
+                            </span>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClasses(batch.status)}`}
+                            >
+                              {batch.status}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-xs text-gray-500">
+                            {batch.completed}/{batch.total} complete, {batch.failed} failed,{" "}
+                            created {formatDateTime(batch.createdAt)}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {batch.canPause && (
+                            <ActionButton
+                              onClick={() => pauseResearchBatch(batch)}
+                              disabled={
+                                runningAction === `pause-research-batch:${batch.id}`
+                              }
+                              tone="danger"
+                            >
+                              Pause
+                            </ActionButton>
+                          )}
+                          {batch.canResume && (
+                            <ActionButton
+                              onClick={() => resumeResearchBatch(batch)}
+                              disabled={
+                                runningAction === `resume-research-batch:${batch.id}`
+                              }
+                              tone="primary"
+                            >
+                              Resume
+                            </ActionButton>
+                          )}
+                          <Link
+                            href="/ebay-research"
+                            className="text-xs font-medium text-gray-600 hover:text-gray-900"
+                          >
+                            eBay Research
                           </Link>
                         </div>
                       </div>
