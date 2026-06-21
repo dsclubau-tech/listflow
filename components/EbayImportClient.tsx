@@ -14,6 +14,8 @@ interface ImportStats {
   activeListings: number;
   alreadyImported: number;
   remaining: number;
+  staleInListFlow: number;
+  fetchedAt: string | null;
 }
 
 interface ImportProgress {
@@ -126,6 +128,8 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
   const [selectedStore, setSelectedStore] = useState(stores[0]?.id ?? "");
   const [stats, setStats] = useState<ImportStats | null>(null);
   const [statsLoading, setStatsLoading] = useState(false);
+  const [statsRefreshing, setStatsRefreshing] = useState(false);
+  const [staleRemoving, setStaleRemoving] = useState(false);
   const [statsError, setStatsError] = useState<string | null>(null);
   const [quantity, setQuantity] = useState("100");
   const [quantityNotice, setQuantityNotice] = useState<string | null>(null);
@@ -184,18 +188,25 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
     return `${stats.storeName} has ${formatNumber(stats.activeListings)} active eBay listings - ${formatNumber(stats.alreadyImported)} already in ListFlow - ${formatNumber(stats.remaining)} remaining`;
   }, [selectedStore, stats, statsError, statsLoading]);
 
-  const loadStats = useCallback(async () => {
+  const loadStats = useCallback(async (forceRefresh = false) => {
     if (!selectedStore) {
       setStats(null);
       return;
     }
 
     setStatsLoading(true);
+    setStatsRefreshing(forceRefresh);
     setStatsError(null);
 
     try {
+      const params = new URLSearchParams({ storeId: selectedStore });
+
+      if (forceRefresh) {
+        params.set("refresh", "1");
+      }
+
       const response = await fetch(
-        `/api/ebay-import?storeId=${encodeURIComponent(selectedStore)}`,
+        `/api/ebay-import?${params.toString()}`,
       );
       const data = (await response.json().catch(() => ({}))) as
         | ImportStats
@@ -214,6 +225,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
       setStatsError(getErrorMessage(caughtError));
     } finally {
       setStatsLoading(false);
+      setStatsRefreshing(false);
     }
   }, [selectedStore]);
 
@@ -271,6 +283,51 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
     setQuantity(String(stats.remaining));
     setQuantityNotice(null);
     openConfirmation(stats.remaining);
+  }
+
+  async function removeStaleProducts() {
+    if (!stats || stats.staleInListFlow < 1 || staleRemoving || activeImportRunning) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Remove ${formatNumber(stats.staleInListFlow)} ListFlow product(s) that are no longer active on eBay? This does not end or revise anything on eBay.`,
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setStaleRemoving(true);
+    setStatsError(null);
+
+    try {
+      const response = await fetch("/api/ebay-import/stale", {
+        method: "POST",
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        deleted?: number;
+        stats?: ImportStats;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to remove stale ListFlow products");
+      }
+
+      if (data.stats) {
+        setStats(data.stats);
+        setQuantity(data.stats.remaining > 0 ? String(Math.min(100, data.stats.remaining)) : "0");
+      } else {
+        await loadStats(true);
+      }
+
+      router.refresh();
+    } catch (caughtError) {
+      setStatsError(getErrorMessage(caughtError));
+    } finally {
+      setStaleRemoving(false);
+    }
   }
 
   const applyImportJob = useCallback(
@@ -555,7 +612,33 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
           {quantityNotice || "Duplicates are skipped automatically"}
         </div>
 
+        {stats && stats.staleInListFlow > 0 && (
+          <div className="mt-3 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <span>
+                {formatNumber(stats.staleInListFlow)} ListFlow product{stats.staleInListFlow === 1 ? "" : "s"} are no longer active on eBay.
+              </span>
+              <button
+                type="button"
+                onClick={removeStaleProducts}
+                disabled={staleRemoving || activeImportRunning}
+                className="inline-flex items-center justify-center rounded-md border border-blue-300 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 transition-colors hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {staleRemoving ? "Removing..." : "Remove stale from ListFlow"}
+              </button>
+            </div>
+          </div>
+        )}
+
         <div className="mt-5 flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => void loadStats(true)}
+            disabled={statsLoading || importing || activeImportRunning}
+            className="inline-flex items-center justify-center rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {statsRefreshing ? "Refreshing..." : "Refresh eBay Count"}
+          </button>
           <button
             type="button"
             onClick={() => openConfirmation()}

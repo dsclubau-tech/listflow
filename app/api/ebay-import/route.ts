@@ -78,6 +78,7 @@ export async function GET(request: Request) {
 
   const url = new URL(request.url);
   const requestedStoreId = url.searchParams.get("storeId")?.trim() ?? "";
+  const forceRefresh = url.searchParams.get("refresh") === "1";
 
   if (requestedStoreId && requestedStoreId !== storeSession.storeId) {
     return NextResponse.json({ error: "Store not found" }, { status: 400 });
@@ -93,6 +94,7 @@ export async function GET(request: Request) {
     const stats = await getEbayImportStats({
       storeId: storeSession.storeId,
       storeNumber: context.storeNumber,
+      forceRefresh,
     });
 
     return NextResponse.json({

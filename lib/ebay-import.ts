@@ -36,6 +36,8 @@ export interface EbayImportStats {
   activeListings: number;
   alreadyImported: number;
   remaining: number;
+  staleInListFlow: number;
+  fetchedAt: string | null;
 }
 
 export interface EbayImportResult {
@@ -83,7 +85,7 @@ const parser = new XMLParser({
 });
 
 const ASIN_PATTERN = /\bB0[A-Z0-9]{8}\b/i;
-const IMPORT_STATS_CACHE_TTL_MS = 3 * 60 * 60 * 1000;
+const IMPORT_STATS_CACHE_TTL_MS = 10 * 60 * 1000;
 
 function delay(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -590,6 +592,7 @@ async function fetchAllEbayListingIds(storeNumber: 1 | 2 | 3) {
 async function getCachedEbayListingIds(
   storeId: string,
   storeNumber: 1 | 2 | 3,
+  options: { forceRefresh?: boolean } = {},
 ) {
   const cached = await prisma.ebayImportStatsCache.findUnique({
     where: { storeId },
@@ -601,13 +604,18 @@ async function getCachedEbayListingIds(
   const now = Date.now();
 
   if (
+    !options.forceRefresh &&
     cached &&
     now - cached.fetchedAt.getTime() < IMPORT_STATS_CACHE_TTL_MS
   ) {
-    return cached.listingIds;
+    return {
+      listingIds: cached.listingIds,
+      fetchedAt: cached.fetchedAt,
+    };
   }
 
   const listingIds = await fetchAllEbayListingIds(storeNumber);
+  const fetchedAt = new Date(now);
 
   await prisma.ebayImportStatsCache.upsert({
     where: { storeId },
@@ -615,16 +623,16 @@ async function getCachedEbayListingIds(
       storeId,
       activeListings: listingIds.length,
       listingIds,
-      fetchedAt: new Date(now),
+      fetchedAt,
     },
     update: {
       activeListings: listingIds.length,
       listingIds,
-      fetchedAt: new Date(now),
+      fetchedAt,
     },
   });
 
-  return listingIds;
+  return { listingIds, fetchedAt };
 }
 
 export async function invalidateEbayImportStatsCache(storeId: string) {
@@ -656,19 +664,58 @@ async function getExistingEbayItemIds(storeId: string, itemIds: string[]) {
 }
 
 export async function getEbayImportStats(
-  options: Pick<EbayImportOptions, "storeId" | "storeNumber">,
+  options: Pick<EbayImportOptions, "storeId" | "storeNumber"> & {
+    forceRefresh?: boolean;
+  },
 ): Promise<EbayImportStats> {
-  const listingIds = await getCachedEbayListingIds(
+  const { listingIds, fetchedAt } = await getCachedEbayListingIds(
     options.storeId,
     options.storeNumber,
+    { forceRefresh: options.forceRefresh },
   );
   const existingIds = await getExistingEbayItemIds(options.storeId, listingIds);
   const remaining = listingIds.filter((itemId) => !existingIds.has(itemId));
+  const staleInListFlow = await prisma.product.count({
+    where: {
+      storeId: options.storeId,
+      ebayItemId: {
+        not: null,
+        notIn: listingIds,
+      },
+    },
+  });
 
   return {
     activeListings: listingIds.length,
     alreadyImported: existingIds.size,
     remaining: remaining.length,
+    staleInListFlow,
+    fetchedAt: fetchedAt.toISOString(),
+  };
+}
+
+export async function removeStaleListFlowEbayProducts(
+  options: Pick<EbayImportOptions, "storeId" | "storeNumber">,
+) {
+  const { listingIds, fetchedAt } = await getCachedEbayListingIds(
+    options.storeId,
+    options.storeNumber,
+    { forceRefresh: true },
+  );
+  const result = await prisma.product.deleteMany({
+    where: {
+      storeId: options.storeId,
+      ebayItemId: {
+        not: null,
+        notIn: listingIds,
+      },
+    },
+  });
+
+  return {
+    deleted: result.count,
+    activeListings: listingIds.length,
+    fetchedAt: fetchedAt.toISOString(),
   };
 }
 
@@ -810,9 +857,10 @@ export async function importEbayListings(
     quantity: options.quantity,
   });
 
-  const listingIds = await getCachedEbayListingIds(
+  const { listingIds } = await getCachedEbayListingIds(
     options.storeId,
     options.storeNumber,
+    { forceRefresh: true },
   );
   const existingIds = await getExistingEbayItemIds(options.storeId, listingIds);
   const remainingIds = listingIds.filter((itemId) => !existingIds.has(itemId));
