@@ -30,6 +30,7 @@ export interface ScrapedProduct {
     shippingPolicyId: string | null;
     paymentPolicyId: string | null;
     returnPolicyId: string | null;
+    policyTemplateId: string | null;
     capitalizeTitle: boolean;
   };
 }

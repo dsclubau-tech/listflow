@@ -13,6 +13,11 @@ import {
   buildGetSellerListIdsXML,
 } from "@/lib/ebay-xml";
 import { logger } from "@/lib/logger";
+import {
+  getStorePolicyDefaults,
+  policyIdsMatch,
+  type ResolvedPolicyDefaults,
+} from "@/lib/policy-defaults";
 import { prisma } from "@/lib/prisma";
 
 export interface EbayImportOptions {
@@ -433,12 +438,24 @@ function mapEbayItemToProduct(
   item: EbayNode,
   storeId: string,
   userId: string,
+  policyDefaults: ResolvedPolicyDefaults,
 ): Prisma.ProductCreateInput {
   const variants = mapVariations(item);
   const categoryId = getString(item, "PrimaryCategory", "CategoryID");
   const title = getString(item, "Title") || "(no title)";
   const quantity = getAvailableQuantity(item);
   const itemSpecifics = getItemSpecifics(item);
+  const policyIds = {
+    shippingPolicyId:
+      getPolicyId(item, "SellerShippingProfile", "ShippingProfileID") ??
+      policyDefaults.shippingPolicyId,
+    returnPolicyId:
+      getPolicyId(item, "SellerReturnProfile", "ReturnProfileID") ??
+      policyDefaults.returnPolicyId,
+    paymentPolicyId:
+      getPolicyId(item, "SellerPaymentProfile", "PaymentProfileID") ??
+      policyDefaults.paymentPolicyId,
+  };
 
   return {
     title,
@@ -455,18 +472,12 @@ function mapEbayItemToProduct(
     errorMessage: null,
     asin: extractAsin(item, itemSpecifics),
     amazonPrice: null,
-    shippingPolicyId: getPolicyId(
-      item,
-      "SellerShippingProfile",
-      "ShippingProfileID",
-    ),
-    returnPolicyId: getPolicyId(item, "SellerReturnProfile", "ReturnProfileID"),
-    paymentPolicyId: getPolicyId(
-      item,
-      "SellerPaymentProfile",
-      "PaymentProfileID",
-    ),
-    policyTemplateId: null,
+    shippingPolicyId: policyIds.shippingPolicyId,
+    returnPolicyId: policyIds.returnPolicyId,
+    paymentPolicyId: policyIds.paymentPolicyId,
+    policyTemplateId: policyIdsMatch(policyIds, policyDefaults)
+      ? policyDefaults.policyTemplateId
+      : null,
     templateId: null,
     store: { connect: { id: storeId } },
     createdBy: { connect: { id: userId } },
@@ -818,6 +829,7 @@ async function importSingleItem(
   item: EbayNode,
   storeId: string,
   userId: string,
+  policyDefaults: ResolvedPolicyDefaults,
 ): Promise<boolean> {
   const itemId = getString(item, "ItemID");
 
@@ -840,7 +852,7 @@ async function importSingleItem(
     }
 
     await tx.product.create({
-      data: mapEbayItemToProduct(item, storeId, userId),
+      data: mapEbayItemToProduct(item, storeId, userId, policyDefaults),
     });
 
     return true;
@@ -869,6 +881,7 @@ export async function importEbayListings(
     remainingIds.length,
   );
   const selectedIds = remainingIds.slice(0, requested);
+  const policyDefaults = await getStorePolicyDefaults(options.storeId);
   const result: EbayImportResult = {
     requested,
     activeListings: listingIds.length,
@@ -927,6 +940,7 @@ export async function importEbayListings(
           item,
           options.storeId,
           options.userId,
+          policyDefaults,
         );
 
         if (wasCreated) {

@@ -5,6 +5,7 @@ import { createRequestLogger } from "@/lib/logger";
 import { applyKeywordFilter } from "@/lib/keyword-filter";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
+import { resolveProductPolicySelection } from "@/lib/policy-defaults";
 
 export async function PATCH(
   request: Request,
@@ -134,37 +135,50 @@ export async function PATCH(
     data.itemSpecifics = sanitizeEbayItemSpecifics(data.itemSpecifics);
   }
 
-  if (data.policyTemplateId !== undefined) {
-    if (
-      data.policyTemplateId !== null &&
-      typeof data.policyTemplateId !== "string"
-    ) {
+  const includesPolicyUpdate =
+    data.shippingPolicyId !== undefined ||
+    data.returnPolicyId !== undefined ||
+    data.paymentPolicyId !== undefined ||
+    data.policyTemplateId !== undefined;
+
+  if (includesPolicyUpdate) {
+    try {
+      const policySelection = await resolveProductPolicySelection(
+        storeSession.storeId,
+        {
+          shippingPolicyId:
+            data.shippingPolicyId !== undefined
+              ? data.shippingPolicyId
+              : product.shippingPolicyId,
+          returnPolicyId:
+            data.returnPolicyId !== undefined
+              ? data.returnPolicyId
+              : product.returnPolicyId,
+          paymentPolicyId:
+            data.paymentPolicyId !== undefined
+              ? data.paymentPolicyId
+              : product.paymentPolicyId,
+        },
+        data.policyTemplateId !== undefined
+          ? data.policyTemplateId
+          : product.policyTemplateId,
+      );
+
+      data.shippingPolicyId = policySelection.shippingPolicyId;
+      data.returnPolicyId = policySelection.returnPolicyId;
+      data.paymentPolicyId = policySelection.paymentPolicyId;
+      data.policyTemplateId = policySelection.policyTemplateId;
+    } catch (error) {
       return NextResponse.json(
-        { error: "policyTemplateId must be a string or null" },
+        {
+          error:
+            error instanceof Error
+              ? error.message
+              : "Policy template not found",
+        },
         { status: 400 },
       );
     }
-
-    const normalizedPolicyTemplateId =
-      typeof data.policyTemplateId === "string"
-        ? data.policyTemplateId.trim() || null
-        : null;
-
-    if (normalizedPolicyTemplateId) {
-      const policyTemplate = await prisma.policyTemplate.findUnique({
-        where: { id: normalizedPolicyTemplateId },
-        select: { id: true, storeId: true },
-      });
-
-      if (!policyTemplate || policyTemplate.storeId !== storeSession.storeId) {
-        return NextResponse.json(
-          { error: "Policy template not found" },
-          { status: 400 },
-        );
-      }
-    }
-
-    data.policyTemplateId = normalizedPolicyTemplateId;
   }
 
   if (data.internalNote !== undefined) {

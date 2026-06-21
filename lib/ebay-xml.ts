@@ -1,7 +1,7 @@
 import type { Product, Store } from "@/app/generated/prisma/client";
 import {
+  getListingItemSpecifics,
   normalizeItemSpecifics,
-  sanitizeEbayItemSpecifics,
   type ItemSpecificsRecord,
 } from "@/lib/item-specifics";
 
@@ -10,6 +10,7 @@ type ProductSpecifics = ItemSpecificsRecord;
 
 type AddItemOptions = {
   privateListing?: boolean;
+  itemSpecificMaxCount?: number;
 };
 
 /**
@@ -105,40 +106,18 @@ function buildPictureDetailsXml(images: string[]): string {
   return `    <PictureDetails>\n${pictureUrls}\n    </PictureDetails>`;
 }
 
-function buildItemSpecificsXml(product: Product, specifics: ProductSpecifics | null): string {
-  if (specifics) {
-    const normalizedSpecifics = sanitizeEbayItemSpecifics(specifics);
-    const hasType = Object.keys(normalizedSpecifics).some(
-      (key) => key.toLowerCase() === "type"
-    );
-
-    if (!hasType) {
-      const defaultType = product.categoryName?.split(">").pop()?.trim() || "Other";
-      normalizedSpecifics.Type = defaultType;
-    }
-
-    const entries = Object.entries(normalizedSpecifics).filter(
-      ([key, value]) =>
-        !key.startsWith("_") &&
-        key.trim() !== "" &&
-        value.trim() !== ""
-    );
-
-    if (entries.length > 0) {
-      const nameValueLists = entries
-        .map(
-          ([key, value]) =>
-            `      <NameValueList>\n        <Name>${escapeXml(key)}</Name>\n        <Value>${escapeXml(value)}</Value>\n      </NameValueList>`
-        )
-        .join("\n");
-
-      return `    <ItemSpecifics>\n${nameValueLists}\n    </ItemSpecifics>`;
-    }
-  }
-
+function buildItemSpecificsXml(
+  product: Product,
+  specifics: ProductSpecifics | null,
+  maxCount?: number,
+): string {
   const defaultType = product.categoryName?.split(">").pop()?.trim() || "Other";
-  const defaultSpecifics = sanitizeEbayItemSpecifics({ Type: defaultType });
-  const nameValueLists = Object.entries(defaultSpecifics)
+  const listingSpecifics = getListingItemSpecifics(
+    specifics && Object.keys(specifics).length > 0 ? specifics : { Type: defaultType },
+    defaultType,
+    maxCount,
+  );
+  const nameValueLists = Object.entries(listingSpecifics)
     .map(
       ([key, value]) =>
         `      <NameValueList>\n        <Name>${escapeXml(key)}</Name>\n        <Value>${escapeXml(value)}</Value>\n      </NameValueList>`
@@ -179,7 +158,11 @@ export function buildAddItemXML(
   const quantity = getValidatedQuantity(product);
   const conditionId = product.condition === "New" ? "1000" : "3000";
   const pictureDetailsXml = buildPictureDetailsXml(product.images);
-  const itemSpecificsXml = buildItemSpecificsXml(product, specifics);
+  const itemSpecificsXml = buildItemSpecificsXml(
+    product,
+    specifics,
+    options.itemSpecificMaxCount,
+  );
   const productListingDetailsXml = buildProductListingDetailsXml(specifics);
   const sellerProfilesXml = buildSellerProfilesXml(product);
 

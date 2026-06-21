@@ -27,6 +27,119 @@ export const ebayConfig = {
   environment: isProduction ? "production" : "sandbox",
 } as const;
 
+type EbayErrorNode = {
+  ShortMessage?: unknown;
+  LongMessage?: unknown;
+  ErrorCode?: unknown;
+  ErrorParameters?: unknown;
+};
+
+function asArray<T>(value: T | T[] | undefined | null): T[] {
+  if (value === undefined || value === null) {
+    return [];
+  }
+
+  return Array.isArray(value) ? value : [value];
+}
+
+function textValue(value: unknown) {
+  if (value === undefined || value === null) {
+    return "";
+  }
+
+  return String(value).trim();
+}
+
+function decodeEbayText(value: string) {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+function cleanEbayText(value: unknown) {
+  return decodeEbayText(textValue(value))
+    .replace(/<a\b[^>]*>(.*?)<\/a>/gi, "$1")
+    .replace(/<font\b[^>]*>.*?<\/font>/gi, "")
+    .replace(/<[^>]*>/g, "")
+    .replace(/\{[a-z0-9-]+x\}/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function getErrorParameterValues(error: EbayErrorNode) {
+  return asArray(error.ErrorParameters)
+    .map((parameter) => {
+      if (!parameter || typeof parameter !== "object") {
+        return "";
+      }
+
+      return cleanEbayText((parameter as { Value?: unknown }).Value);
+    })
+    .filter((value) => {
+      if (!value || /^\d+$/.test(value) || /^\{[^}]+\}$/.test(value)) {
+        return false;
+      }
+
+      if (/^https?:\/\//i.test(value) || /^PI_/i.test(value)) {
+        return false;
+      }
+
+      return true;
+    });
+}
+
+function uniqueMessages(messages: string[]) {
+  const seen = new Set<string>();
+  const unique: string[] = [];
+
+  for (const message of messages) {
+    const normalized = message.toLowerCase();
+    if (!message || seen.has(normalized)) {
+      continue;
+    }
+
+    seen.add(normalized);
+    unique.push(message);
+  }
+
+  return unique;
+}
+
+function formatEbayApiErrors(errors: unknown, fallback?: unknown) {
+  const messages = asArray(errors as EbayErrorNode | EbayErrorNode[])
+    .flatMap((error) => {
+      if (!error || typeof error !== "object") {
+        return [cleanEbayText(error)];
+      }
+
+      const errorNode = error as EbayErrorNode;
+      const parameterValues = getErrorParameterValues(errorNode);
+      const explanatoryParameters = parameterValues.filter(
+        (value) => value.length > 25 && /\s/.test(value),
+      );
+      const shortParameters = parameterValues.filter(
+        (value) => !explanatoryParameters.includes(value),
+      );
+
+      return [
+        ...explanatoryParameters,
+        cleanEbayText(errorNode.LongMessage),
+        cleanEbayText(errorNode.ShortMessage),
+        ...shortParameters,
+      ];
+    })
+    .filter(Boolean);
+
+  const fallbackMessage = cleanEbayText(fallback);
+  const unique = uniqueMessages(fallbackMessage ? [...messages, fallbackMessage] : messages);
+
+  return unique.length > 0 ? unique.join("; ") : "Unknown eBay error";
+}
+
 /**
  * Gets the static eBay token for a specific store from environment variables.
  */
@@ -205,19 +318,13 @@ export async function callEbayAddItem(
       return { success: true, itemId };
     }
 
-    // Extract error message
-    const errors = addItemResponse.Errors;
-    let errorMessage = "Unknown eBay error";
-
-    if (errors) {
-      if (Array.isArray(errors)) {
-        errorMessage = errors.map((e: { ShortMessage?: string }) => e.ShortMessage || "Unknown error").join("; ");
-      } else {
-        errorMessage = errors.ShortMessage || errors.LongMessage || "Unknown error";
-      }
-    }
-
-    return { success: false, errorMessage };
+    return {
+      success: false,
+      errorMessage: formatEbayApiErrors(
+        addItemResponse.Errors,
+        addItemResponse.Message,
+      ),
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return { success: false, errorMessage: message };
@@ -282,19 +389,13 @@ export async function callEbayEndItem(
       return { success: true };
     }
 
-    // Extract error message
-    const errors = endItemResponse.Errors;
-    let errorMessage = "Unknown eBay error";
-
-    if (errors) {
-      if (Array.isArray(errors)) {
-        errorMessage = errors.map((e: { ShortMessage?: string }) => e.ShortMessage || "Unknown error").join("; ");
-      } else {
-        errorMessage = errors.ShortMessage || errors.LongMessage || "Unknown error";
-      }
-    }
-
-    return { success: false, errorMessage };
+    return {
+      success: false,
+      errorMessage: formatEbayApiErrors(
+        endItemResponse.Errors,
+        endItemResponse.Message,
+      ),
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return { success: false, errorMessage: message };
@@ -359,18 +460,13 @@ export async function callEbayReviseItem(
       return { success: true };
     }
 
-    const errors = reviseItemResponse.Errors;
-    let errorMessage = "Unknown eBay error";
-
-    if (errors) {
-      if (Array.isArray(errors)) {
-        errorMessage = errors.map((e: { ShortMessage?: string }) => e.ShortMessage || "Unknown error").join("; ");
-      } else {
-        errorMessage = errors.ShortMessage || errors.LongMessage || "Unknown error";
-      }
-    }
-
-    return { success: false, errorMessage };
+    return {
+      success: false,
+      errorMessage: formatEbayApiErrors(
+        reviseItemResponse.Errors,
+        reviseItemResponse.Message,
+      ),
+    };
   } catch (err) {
     const message = err instanceof Error ? err.message : "Unknown error";
     return { success: false, errorMessage: message };

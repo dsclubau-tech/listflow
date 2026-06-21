@@ -7,6 +7,11 @@ import { resolveDescriptionTemplate } from "@/lib/template-resolver";
 import { createRequestLogger } from "@/lib/logger";
 import { ProductStatus } from "@/app/generated/prisma/enums";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
+import { policyIdsMatch, resolveProductPolicySelection } from "@/lib/policy-defaults";
+
+function isTooManyItemSpecificsError(message: string | undefined) {
+  return /too many item specifics|maximum.+item specifics/i.test(message ?? "");
+}
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -67,8 +72,37 @@ export async function POST(request: Request) {
   try {
     const userId = await getInternalUserId();
     const storeNumber = await getStoreNumber(product.storeId);
-    const finalDescription = await resolveDescriptionTemplate(product);
-    const productWithResolvedDesc = { ...product, description: finalDescription };
+    const policySelection = await resolveProductPolicySelection(
+      product.storeId,
+      {
+        shippingPolicyId: product.shippingPolicyId,
+        returnPolicyId: product.returnPolicyId,
+        paymentPolicyId: product.paymentPolicyId,
+      },
+      product.policyTemplateId,
+    );
+    const productWithPolicies = {
+      ...product,
+      shippingPolicyId: policySelection.shippingPolicyId,
+      returnPolicyId: policySelection.returnPolicyId,
+      paymentPolicyId: policySelection.paymentPolicyId,
+      policyTemplateId: policySelection.policyTemplateId,
+    };
+
+    if (!policyIdsMatch(product, productWithPolicies)) {
+      await prisma.product.update({
+        where: { id: product.id },
+        data: {
+          shippingPolicyId: policySelection.shippingPolicyId,
+          returnPolicyId: policySelection.returnPolicyId,
+          paymentPolicyId: policySelection.paymentPolicyId,
+          policyTemplateId: policySelection.policyTemplateId,
+        },
+      });
+    }
+
+    const finalDescription = await resolveDescriptionTemplate(productWithPolicies);
+    const productWithResolvedDesc = { ...productWithPolicies, description: finalDescription };
     const supplierSettings = await prisma.supplierSettings.findUnique({
       where: {
         storeId_supplierName: {
@@ -91,9 +125,10 @@ export async function POST(request: Request) {
       primarySellPrice !== null && Number.isFinite(primarySellPrice) && primarySellPrice > 0
         ? primarySellPrice
         : undefined;
-    const xml = buildAddItemXML(productWithResolvedDesc, overrideStartPrice, {
+    const addItemOptions = {
       privateListing: supplierSettings?.privateListing ?? false,
-    });
+    };
+    let xml = buildAddItemXML(productWithResolvedDesc, overrideStartPrice, addItemOptions);
 
     log.info("upload/route", "Sending AddItem request to eBay", {
       productId,
@@ -103,7 +138,21 @@ export async function POST(request: Request) {
       privateListing: supplierSettings?.privateListing ?? false,
     });
 
-    const result = await callEbayAddItem(xml, storeNumber);
+    let result = await callEbayAddItem(xml, storeNumber);
+
+    if (!result.success && isTooManyItemSpecificsError(result.errorMessage)) {
+      log.warn("upload/route", "Retrying AddItem with reduced item specifics", {
+        productId,
+        storeNumber,
+        ebayError: result.errorMessage,
+      });
+
+      xml = buildAddItemXML(productWithResolvedDesc, overrideStartPrice, {
+        ...addItemOptions,
+        itemSpecificMaxCount: 12,
+      });
+      result = await callEbayAddItem(xml, storeNumber);
+    }
 
     if (result.success) {
       log.info("upload/route", "eBay AddItem succeeded", {

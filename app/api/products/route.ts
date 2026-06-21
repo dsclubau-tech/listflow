@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { applyKeywordFilter } from "@/lib/keyword-filter";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
+import { resolveProductPolicySelection } from "@/lib/policy-defaults";
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -102,31 +103,27 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Store not found" }, { status: 400 });
   }
 
-  let normalizedPolicyTemplateId: string | null = null;
-  if (policyTemplateId !== undefined) {
-    if (policyTemplateId !== null && typeof policyTemplateId !== "string") {
-      return NextResponse.json(
-        { error: "policyTemplateId must be a string or null" },
-        { status: 400 },
-      );
-    }
-
-    normalizedPolicyTemplateId =
-      typeof policyTemplateId === "string" ? policyTemplateId.trim() || null : null;
-
-    if (normalizedPolicyTemplateId) {
-      const policyTemplate = await prisma.policyTemplate.findUnique({
-        where: { id: normalizedPolicyTemplateId },
-        select: { id: true, storeId: true },
-      });
-
-      if (!policyTemplate || policyTemplate.storeId !== storeSession.storeId) {
-        return NextResponse.json(
-          { error: "Policy template not found" },
-          { status: 400 },
-        );
-      }
-    }
+  let policySelection;
+  try {
+    policySelection = await resolveProductPolicySelection(
+      storeSession.storeId,
+      {
+        shippingPolicyId,
+        returnPolicyId,
+        paymentPolicyId,
+      },
+      policyTemplateId,
+    );
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Policy template not found",
+      },
+      { status: 400 },
+    );
   }
 
   // Apply keyword blacklist filter
@@ -153,10 +150,10 @@ export async function POST(request: Request) {
       storeId: storeSession.storeId,
       createdById,
       asin: asin || null,
-      shippingPolicyId: shippingPolicyId || null,
-      returnPolicyId: returnPolicyId || null,
-      paymentPolicyId: paymentPolicyId || null,
-      policyTemplateId: normalizedPolicyTemplateId,
+      shippingPolicyId: policySelection.shippingPolicyId,
+      returnPolicyId: policySelection.returnPolicyId,
+      paymentPolicyId: policySelection.paymentPolicyId,
+      policyTemplateId: policySelection.policyTemplateId,
       templateId: templateId || null,
     },
     include: {

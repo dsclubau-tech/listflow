@@ -5,6 +5,7 @@ import { getEbaySuggestedCategories } from "@/lib/ebay";
 import { createRequestLogger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { getCurrentStoreSession } from "@/lib/store-session";
+import { getStorePolicyDefaults } from "@/lib/policy-defaults";
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -78,15 +79,17 @@ export async function POST(request: Request) {
       });
     }
 
+    const policyDefaults = await getStorePolicyDefaults(storeSession.storeId);
     const supplierDefaults = {
       quantity: supplierSettings?.defaultQuantity ?? 1,
       country: supplierSettings?.defaultCountry ?? "Australia",
       zipcode: supplierSettings?.defaultZipcode ?? "3170",
       shippingMethod: supplierSettings?.defaultShippingMethod ?? "Cheapest with tracking",
       storeNumber: supplierSettings?.storeNumber ?? 1,
-      shippingPolicyId: supplierSettings?.defaultShippingPolicyId ?? null,
-      paymentPolicyId: supplierSettings?.defaultPaymentPolicyId ?? null,
-      returnPolicyId: supplierSettings?.defaultReturnPolicyId ?? null,
+      shippingPolicyId: policyDefaults.shippingPolicyId,
+      paymentPolicyId: policyDefaults.paymentPolicyId,
+      returnPolicyId: policyDefaults.returnPolicyId,
+      policyTemplateId: policyDefaults.policyTemplateId,
       capitalizeTitle: supplierSettings?.capitalizeTitle ?? false,
     };
 

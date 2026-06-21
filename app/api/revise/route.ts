@@ -6,6 +6,7 @@ import { callEbayReviseItem, getStoreNumber } from "@/lib/ebay";
 import { resolveDescriptionTemplate } from "@/lib/template-resolver";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession } from "@/lib/store-session";
+import { policyIdsMatch, resolveProductPolicySelection } from "@/lib/policy-defaults";
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -54,8 +55,37 @@ export async function POST(request: Request) {
 
   try {
     const storeNumber = await getStoreNumber(product.storeId);
-    const finalDescription = await resolveDescriptionTemplate(product);
-    const productWithResolvedDesc = { ...product, description: finalDescription };
+    const policySelection = await resolveProductPolicySelection(
+      product.storeId,
+      {
+        shippingPolicyId: product.shippingPolicyId,
+        returnPolicyId: product.returnPolicyId,
+        paymentPolicyId: product.paymentPolicyId,
+      },
+      product.policyTemplateId,
+    );
+    const productWithPolicies = {
+      ...product,
+      shippingPolicyId: policySelection.shippingPolicyId,
+      returnPolicyId: policySelection.returnPolicyId,
+      paymentPolicyId: policySelection.paymentPolicyId,
+      policyTemplateId: policySelection.policyTemplateId,
+    };
+
+    if (!policyIdsMatch(product, productWithPolicies)) {
+      await prisma.product.update({
+        where: { id: product.id },
+        data: {
+          shippingPolicyId: policySelection.shippingPolicyId,
+          returnPolicyId: policySelection.returnPolicyId,
+          paymentPolicyId: policySelection.paymentPolicyId,
+          policyTemplateId: policySelection.policyTemplateId,
+        },
+      });
+    }
+
+    const finalDescription = await resolveDescriptionTemplate(productWithPolicies);
+    const productWithResolvedDesc = { ...productWithPolicies, description: finalDescription };
 
     // Fetch variants so we can use the primary variant's sellPrice as the
     // eBay listing price instead of the potentially stale product.price.

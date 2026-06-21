@@ -111,6 +111,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
   const [policyTemplates, setPolicyTemplates] = useState<PolicyTemplate[]>([]);
   const [selectedPolicyTemplateId, setSelectedPolicyTemplateId] = useState(product.policyTemplateId || "");
   const hasInferredPolicyTemplateRef = useRef(Boolean(product.policyTemplateId));
+  const hasAppliedDefaultPolicyTemplateRef = useRef(false);
   const [countryLocation, setCountryLocation] = useState("Australia");
   const [defaultZipcode, setDefaultZipcode] = useState("3170");
   const [brand, setBrand] = useState("");
@@ -246,7 +247,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
   }, [product.id]);
 
   useEffect(() => {
-    if (!selectedPolicyTemplateId) {
+    if (!selectedPolicyTemplateId || policyTemplates.length === 0) {
       return;
     }
 
@@ -264,12 +265,55 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       (selectedTemplate.returnPolicyId ?? "") === returnPolicyId &&
       (selectedTemplate.paymentPolicyId ?? "") === paymentPolicyId;
 
+    if (!stillMatches && !shippingPolicyId && !returnPolicyId && !paymentPolicyId) {
+      setShippingPolicyId(selectedTemplate.shippingPolicyId ?? "");
+      setReturnPolicyId(selectedTemplate.returnPolicyId ?? "");
+      setPaymentPolicyId(selectedTemplate.paymentPolicyId ?? "");
+      return;
+    }
+
     if (!stillMatches) {
       setSelectedPolicyTemplateId("");
     }
   }, [
     paymentPolicyId,
     policyTemplates,
+    returnPolicyId,
+    selectedPolicyTemplateId,
+    shippingPolicyId,
+  ]);
+
+  useEffect(() => {
+    if (
+      hasAppliedDefaultPolicyTemplateRef.current ||
+      product.paymentPolicyId ||
+      product.shippingPolicyId ||
+      product.returnPolicyId ||
+      selectedPolicyTemplateId ||
+      shippingPolicyId ||
+      returnPolicyId ||
+      paymentPolicyId ||
+      policyTemplates.length === 0
+    ) {
+      return;
+    }
+
+    const defaultTemplate = policyTemplates.find((template) => template.isDefault);
+    if (!defaultTemplate) {
+      return;
+    }
+
+    hasAppliedDefaultPolicyTemplateRef.current = true;
+    setSelectedPolicyTemplateId(defaultTemplate.id);
+    setShippingPolicyId(defaultTemplate.shippingPolicyId ?? "");
+    setReturnPolicyId(defaultTemplate.returnPolicyId ?? "");
+    setPaymentPolicyId(defaultTemplate.paymentPolicyId ?? "");
+  }, [
+    paymentPolicyId,
+    policyTemplates,
+    product.paymentPolicyId,
+    product.returnPolicyId,
+    product.shippingPolicyId,
     returnPolicyId,
     selectedPolicyTemplateId,
     shippingPolicyId,
@@ -759,6 +803,15 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
 
       if (scraped.categoryName || scraped.category) {
         setCategoryName(scraped.categoryName || scraped.category);
+      }
+
+      if (scraped.supplierDefaults) {
+        setShippingPolicyId((current) => current || scraped.supplierDefaults?.shippingPolicyId || "");
+        setReturnPolicyId((current) => current || scraped.supplierDefaults?.returnPolicyId || "");
+        setPaymentPolicyId((current) => current || scraped.supplierDefaults?.paymentPolicyId || "");
+        setSelectedPolicyTemplateId(
+          (current) => current || scraped.supplierDefaults?.policyTemplateId || "",
+        );
       }
 
       setSaveMessage({

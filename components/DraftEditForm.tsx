@@ -1,7 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import SlideOver from "@/components/SlideOver";
@@ -77,6 +77,7 @@ export default function DraftEditForm({
   const [paymentPolicyId, setPaymentPolicyId] = useState("");
   const [policyTemplates, setPolicyTemplates] = useState<PolicyTemplate[]>([]);
   const [selectedPolicyTemplateId, setSelectedPolicyTemplateId] = useState("");
+  const hasAppliedDefaultPolicyTemplateRef = useRef(false);
 
   // Product fields
   const [title, setTitle] = useState("");
@@ -126,6 +127,7 @@ export default function DraftEditForm({
   // Pre-fill from scraped data
   useEffect(() => {
     if (scrapedData) {
+      hasAppliedDefaultPolicyTemplateRef.current = false;
       const defaults = scrapedData.supplierDefaults;
 
       // Apply title — capitalize if supplier setting is enabled
@@ -160,7 +162,7 @@ export default function DraftEditForm({
       setErrors({});
       setStoreId("");
       setPolicies(null);
-      setSelectedPolicyTemplateId("");
+      setSelectedPolicyTemplateId(defaults?.policyTemplateId ?? "");
 
       // Pre-fill policies from supplier defaults
       setShippingPolicyId(defaults?.shippingPolicyId ?? "");
@@ -306,7 +308,7 @@ export default function DraftEditForm({
   }, [storeId]);
 
   useEffect(() => {
-    if (!selectedPolicyTemplateId) {
+    if (!selectedPolicyTemplateId || policyTemplates.length === 0) {
       return;
     }
 
@@ -324,8 +326,67 @@ export default function DraftEditForm({
       (selectedTemplate.returnPolicyId ?? "") === returnPolicyId &&
       (selectedTemplate.paymentPolicyId ?? "") === paymentPolicyId;
 
+    if (!stillMatches && !shippingPolicyId && !returnPolicyId && !paymentPolicyId) {
+      setShippingPolicyId(selectedTemplate.shippingPolicyId ?? "");
+      setReturnPolicyId(selectedTemplate.returnPolicyId ?? "");
+      setPaymentPolicyId(selectedTemplate.paymentPolicyId ?? "");
+      return;
+    }
+
     if (!stillMatches) {
       setSelectedPolicyTemplateId("");
+    }
+  }, [
+    paymentPolicyId,
+    policyTemplates,
+    returnPolicyId,
+    selectedPolicyTemplateId,
+    shippingPolicyId,
+  ]);
+
+  useEffect(() => {
+    if (
+      hasAppliedDefaultPolicyTemplateRef.current ||
+      selectedPolicyTemplateId ||
+      shippingPolicyId ||
+      returnPolicyId ||
+      paymentPolicyId ||
+      policyTemplates.length === 0
+    ) {
+      return;
+    }
+
+    const defaultTemplate = policyTemplates.find((template) => template.isDefault);
+    if (!defaultTemplate) {
+      return;
+    }
+
+    hasAppliedDefaultPolicyTemplateRef.current = true;
+    setSelectedPolicyTemplateId(defaultTemplate.id);
+    setShippingPolicyId(defaultTemplate.shippingPolicyId ?? "");
+    setReturnPolicyId(defaultTemplate.returnPolicyId ?? "");
+    setPaymentPolicyId(defaultTemplate.paymentPolicyId ?? "");
+  }, [
+    paymentPolicyId,
+    policyTemplates,
+    returnPolicyId,
+    selectedPolicyTemplateId,
+    shippingPolicyId,
+  ]);
+
+  useEffect(() => {
+    if (selectedPolicyTemplateId || policyTemplates.length === 0) {
+      return;
+    }
+
+    const matchingTemplate = policyTemplates.find((template) =>
+      (template.shippingPolicyId ?? "") === shippingPolicyId &&
+      (template.returnPolicyId ?? "") === returnPolicyId &&
+      (template.paymentPolicyId ?? "") === paymentPolicyId,
+    );
+
+    if (matchingTemplate) {
+      setSelectedPolicyTemplateId(matchingTemplate.id);
     }
   }, [
     paymentPolicyId,
