@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "store:reset-password": "tsx scripts/reset-store-password.ts",
     "postinstall": "playwright install chromium"
   },
   "prisma": {
