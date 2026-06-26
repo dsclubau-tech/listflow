@@ -1,16 +1,16 @@
-import { auth } from "@/auth";
-import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
-import { buildReviseQuantityXML } from "@/lib/ebay-xml";
-import { callEbayReviseItem, getStoreNumber } from "@/lib/ebay";
+import { auth } from "@/auth";
+import { EbayActionJobType } from "@/app/generated/prisma/enums";
+import { createEbayActionJob } from "@/lib/ebay-action-jobs";
 import { createRequestLogger } from "@/lib/logger";
-import { ProductStatus } from "@/app/generated/prisma/enums";
-import { getCurrentStoreSession } from "@/lib/store-session";
+import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
+import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
 
-interface ProductFailure {
-  productId: string;
-  title: string;
-  error: string;
+function getErrorStatus(error: unknown) {
+  return error instanceof Error &&
+    (error.name === "WorkerOfflineError" || error.name === "JobConflictError")
+    ? 409
+    : 400;
 }
 
 export async function POST(request: Request) {
@@ -26,128 +26,36 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let productIds: string[] = [];
+  const body = (await request.json().catch(() => ({}))) as {
+    productIds?: unknown[];
+  };
+
   try {
-    const body = (await request.json().catch(() => ({}))) as {
-      productIds?: unknown[];
-    };
-    if (Array.isArray(body.productIds)) {
-      productIds = Array.from(
-        new Set(
-          body.productIds
-            .map((id) => (typeof id === "string" ? id.trim() : ""))
-            .filter(Boolean)
-        )
-      );
-    }
-  } catch {
-    return NextResponse.json({ error: "Invalid request body" }, { status: 400 });
-  }
-
-  if (productIds.length === 0) {
-    return NextResponse.json({
-      total: 0,
-      held: 0,
-      failed: 0,
-      failures: [],
+    await assertWorkerOnlineForStore(storeSession.storeId);
+    const userId = await getInternalUserId();
+    const result = await createEbayActionJob({
+      userId,
+      storeId: storeSession.storeId,
+      type: EbayActionJobType.HOLD,
+      productIds: body.productIds ?? [],
     });
+
+    return NextResponse.json(
+      {
+        ...result,
+        total: result.job.total,
+        held: 0,
+        failed: 0,
+        failures: [],
+        message: result.queued
+          ? `Queued ${result.job.total} listing(s) to put on hold.`
+          : "No products selected.",
+      },
+      { status: result.queued ? 202 : 200 }
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Bulk hold failed.";
+    log.error("products/bulk-hold", "Failed to queue bulk hold job", error);
+    return NextResponse.json({ error: message }, { status: getErrorStatus(error) });
   }
-
-  let held = 0;
-  let failed = 0;
-  const failures: ProductFailure[] = [];
-
-  // Process sequentially to prevent eBay rate limits
-  for (const productId of productIds) {
-    try {
-      const product = await prisma.product.findFirst({
-        where: { id: productId, storeId: storeSession.storeId },
-      });
-
-      if (!product) {
-        failures.push({
-          productId,
-          title: "(missing)",
-          error: "Product was not found",
-        });
-        failed += 1;
-        continue;
-      }
-
-      if (product.status !== ProductStatus.IMPORTED || !product.ebayItemId) {
-        failures.push({
-          productId: product.id,
-          title: product.title,
-          error: "Product is not imported or lacks an eBay Item ID",
-        });
-        failed += 1;
-        continue;
-      }
-
-      const storeNumber = await getStoreNumber(product.storeId);
-      const xml = buildReviseQuantityXML(product.ebayItemId, 0);
-
-      log.info("products/bulk-hold", "Putting listing on hold on eBay", {
-        productId,
-        ebayItemId: product.ebayItemId,
-      });
-
-      const result = await callEbayReviseItem(xml, storeNumber);
-
-      if (result.success) {
-        log.info("products/bulk-hold", "eBay ReviseItem succeeded, updating product status to ON_HOLD", {
-          productId,
-          ebayItemId: product.ebayItemId,
-        });
-
-        // Set status to ON_HOLD and clear priceCheckError
-        await prisma.product.update({
-          where: { id: product.id },
-          data: {
-            status: ProductStatus.ON_HOLD,
-            priceCheckError: null,
-          },
-        });
-
-        held += 1;
-      } else {
-        const errorMsg = result.errorMessage || "Unknown eBay API error";
-        log.error("products/bulk-hold", "eBay ReviseItem failed", undefined, {
-          productId,
-          ebayItemId: product.ebayItemId,
-          error: errorMsg,
-        });
-
-        failures.push({
-          productId: product.id,
-          title: product.title,
-          error: errorMsg,
-        });
-        failed += 1;
-      }
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : "Internal error";
-      log.error("products/bulk-hold", "Error holding product", error, { productId });
-
-      failures.push({
-        productId,
-        title: "(unknown)",
-        error: errorMsg,
-      });
-      failed += 1;
-    }
-  }
-
-  log.info("products/bulk-hold", "Bulk hold completed", {
-    total: productIds.length,
-    held,
-    failed,
-  });
-
-  return NextResponse.json({
-    total: productIds.length,
-    held,
-    failed,
-    failures,
-  });
 }

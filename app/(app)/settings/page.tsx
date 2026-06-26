@@ -6,8 +6,16 @@ import TemplatesTab from "@/components/settings/TemplatesTab";
 import KeywordsTab from "@/components/settings/KeywordsTab";
 import DangerZoneTab from "@/components/settings/DangerZoneTab";
 import SecurityTab from "@/components/settings/SecurityTab";
+import DiagnosticsTab from "@/components/settings/DiagnosticsTab";
 
-const tabs = ["Supplier Settings", "Templates", "Keywords", "Security", "Danger Zone"] as const;
+const tabs = [
+  "Supplier Settings",
+  "Templates",
+  "Keywords",
+  "Security",
+  "Diagnostics",
+  "Danger Zone",
+] as const;
 type Tab = (typeof tabs)[number];
 
 export default function SettingsPage() {
@@ -41,6 +49,7 @@ export default function SettingsPage() {
       {activeTab === "Templates" && <TemplatesTab />}
       {activeTab === "Keywords" && <KeywordsTab />}
       {activeTab === "Security" && <SecurityTab />}
+      {activeTab === "Diagnostics" && <DiagnosticsTab />}
       {activeTab === "Danger Zone" && <DangerZoneTab />}
     </div>
   );

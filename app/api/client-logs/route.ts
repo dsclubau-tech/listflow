@@ -18,6 +18,7 @@ export async function POST(request: Request) {
   const session = await auth().catch(() => null);
   const log = createRequestLogger(request, {
     userId: session?.user?.id,
+    storeId: session?.user?.storeId,
     tags: ["client-log-ingest"],
   });
 
@@ -45,6 +46,7 @@ export async function POST(request: Request) {
     requestId: payload.requestId,
     pathname: payload.pathname,
     userId: session?.user?.id,
+    storeId: session?.user?.storeId,
     tags: payload.tags,
     data: {
       ...(payload.data && typeof payload.data === "object" && !Array.isArray(payload.data)

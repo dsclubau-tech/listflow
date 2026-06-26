@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { resumeEbayResearchBatch } from "@/lib/ebay-research";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession } from "@/lib/store-session";
+import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
 
 export const runtime = "nodejs";
 
@@ -23,11 +24,33 @@ export async function POST(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const batch = await resumeEbayResearchBatch(id, storeSession.storeId);
+  try {
+    await assertWorkerOnlineForStore(storeSession.storeId);
+    const batch = await resumeEbayResearchBatch(id, storeSession.storeId);
 
-  if (!batch) {
-    return NextResponse.json({ error: "Batch not found" }, { status: 404 });
+    if (!batch) {
+      return NextResponse.json({ error: "Batch not found" }, { status: 404 });
+    }
+
+    return NextResponse.json({ batch });
+  } catch (error) {
+    const message =
+      error instanceof Error ? error.message : "Failed to resume research batch";
+    log.error(
+      "ebay-research/batches/[id]/resume/POST",
+      "Failed to resume research batch",
+      error,
+      { id }
+    );
+    return NextResponse.json(
+      { error: message },
+      {
+        status:
+          error instanceof Error &&
+          (error.name === "WorkerOfflineError" || error.name === "JobConflictError")
+            ? 409
+            : 400,
+      }
+    );
   }
-
-  return NextResponse.json({ batch });
 }

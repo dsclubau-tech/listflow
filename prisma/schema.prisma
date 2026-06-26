@@ -19,12 +19,13 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  products   Product[]
-  uploadLogs UploadLog[]
-  priceCheckJobs PriceCheckJob[]
-  ebayImportJobs EbayImportJob[]
-  ebayResearchJobs EbayResearchJob[]
+  products            Product[]
+  uploadLogs          UploadLog[]
+  priceCheckJobs      PriceCheckJob[]
+  ebayImportJobs      EbayImportJob[]
+  ebayResearchJobs    EbayResearchJob[]
   ebayResearchBatches EbayResearchBatch[]
+  ebayActionJobs      EbayActionJob[]
 }
 
 // --- Part 2 Models ---
@@ -49,9 +50,14 @@ model Store {
   priceCheckJobs       PriceCheckJob[]
   ebayResearchJobs     EbayResearchJob[]
   ebayResearchBatches  EbayResearchBatch[]
+  ebayActionJobs       EbayActionJob[]
   descriptionTemplates DescriptionTemplate[]
   keywordBlacklist     KeywordBlacklist[]
   supplierSettings     SupplierSettings[]
+  workerHeartbeats     WorkerHeartbeat[]
+  jobLeases            JobLease[]
+  ebayRateLimitBuckets EbayRateLimitBucket[]
+  appLogs              AppLog[]
 }
 
 enum ProductStatus {
@@ -116,6 +122,19 @@ enum EbayResearchBatchStatus {
   COMPLETED
   PARTIAL
   FAILED
+}
+
+enum EbayActionJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum EbayActionJobType {
+  HOLD
+  RESUME
+  END
 }
 
 model Product {
@@ -377,6 +396,147 @@ model EbayResearchBatch {
   @@index([storeId, expiresAt])
   @@index([createdAt])
   @@index([expiresAt])
+}
+
+model EbayActionJob {
+  id                  String              @id @default(cuid())
+  userId              String
+  storeId             String
+  type                EbayActionJobType
+  status              EbayActionJobStatus @default(QUEUED)
+  productIds          String[]            @default([])
+  completedProductIds String[]            @default([])
+  total               Int                 @default(0)
+  processed           Int                 @default(0)
+  succeeded           Int                 @default(0)
+  failed              Int                 @default(0)
+  errors              Json                @default("[]")
+  errorMessage        String?             @db.Text
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  startedAt           DateTime?
+  completedAt         DateTime?
+  dismissedAt         DateTime?
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([storeId, status])
+  @@index([storeId, createdAt])
+  @@index([dismissedAt])
+}
+
+model WorkerHeartbeat {
+  id         String   @id @default(cuid())
+  storeId    String
+  workerId   String
+  workerName String
+  status     String   @default("ONLINE")
+  lastSeenAt DateTime @default(now())
+  startedAt  DateTime @default(now())
+  version    String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, workerId])
+  @@index([storeId, lastSeenAt])
+  @@index([lastSeenAt])
+}
+
+model JobLease {
+  id          String   @id @default(cuid())
+  storeId     String
+  resourceKey String
+  jobType     String
+  jobId       String
+  workerId    String
+  workerName  String
+  details     Json     @default("{}")
+  acquiredAt  DateTime @default(now())
+  renewedAt   DateTime @default(now())
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, resourceKey])
+  @@index([storeId, jobType, jobId])
+  @@index([storeId, workerId])
+  @@index([expiresAt])
+}
+
+model EbayRateLimitBucket {
+  id            String   @id @default(cuid())
+  storeId       String
+  apiKind       String
+  nextAllowedAt DateTime @default(now())
+  blockedUntil  DateTime?
+  lastError     String?  @db.Text
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, apiKind])
+  @@index([storeId, nextAllowedAt])
+  @@index([blockedUntil])
+}
+
+model AppLog {
+  id          String   @id @default(cuid())
+  createdAt   DateTime @default(now())
+  level       String
+  source      String
+  runtime     String
+  environment String?
+
+  context     String
+  message     String   @db.Text
+  fingerprint String
+  requestId   String?
+  traceId     String?
+  pathname    String?
+  route       String?
+  method      String?
+  statusCode  Int?
+  durationMs  Int?
+
+  userId     String?
+  storeId    String?
+  workerId   String?
+  workerName String?
+
+  jobType    String?
+  jobId      String?
+  productId  String?
+  variantId  String?
+  ebayItemId String?
+  asin       String?
+
+  errorName    String?
+  errorMessage String? @db.Text
+  stack        String? @db.Text
+
+  tags     String[] @default([])
+  metadata Json     @default("{}")
+
+  store Store? @relation(fields: [storeId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([storeId, createdAt])
+  @@index([level, createdAt])
+  @@index([source, createdAt])
+  @@index([context])
+  @@index([fingerprint])
+  @@index([requestId])
+  @@index([jobId, createdAt])
+  @@index([productId, createdAt])
+  @@index([ebayItemId, createdAt])
+  @@index([workerId, createdAt])
 }
 
 // TODO: Part 3

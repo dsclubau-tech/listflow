@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { createEbayResearchBatch } from "@/lib/ebay-research";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
+import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
 
 export const runtime = "nodejs";
 
@@ -29,6 +30,7 @@ export async function POST(request: Request) {
   }
 
   try {
+    await assertWorkerOnlineForStore(storeSession.storeId);
     const userId = await getInternalUserId();
     const batch = await createEbayResearchBatch({
       userId,
@@ -51,6 +53,15 @@ export async function POST(request: Request) {
       "Failed to create research batch",
       error
     );
-    return NextResponse.json({ error: message }, { status: 400 });
+    return NextResponse.json(
+      { error: message },
+      {
+        status:
+          error instanceof Error &&
+          (error.name === "WorkerOfflineError" || error.name === "JobConflictError")
+            ? 409
+            : 400,
+      }
+    );
   }
 }

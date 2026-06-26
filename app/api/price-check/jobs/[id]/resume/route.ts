@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { createRequestLogger } from "@/lib/logger";
 import { resumePriceCheckJob } from "@/lib/price-check-jobs";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
+import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
 
 export async function POST(
   request: Request,
@@ -24,6 +25,7 @@ export async function POST(
   }
 
   try {
+    await assertWorkerOnlineForStore(storeSession.storeId);
     const userId = await getInternalUserId();
     const result = await resumePriceCheckJob(id, storeSession.storeId, userId);
 
@@ -49,6 +51,15 @@ export async function POST(
     log.error("price-check/jobs/[id]/resume/POST", "Failed to resume job", error, {
       id,
     });
-    return NextResponse.json({ error: message }, { status: 400 });
+    return NextResponse.json(
+      { error: message },
+      {
+        status:
+          error instanceof Error &&
+          (error.name === "WorkerOfflineError" || error.name === "JobConflictError")
+            ? 409
+            : 400,
+      }
+    );
   }
 }

@@ -7,6 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
+    "worker": "tsx scripts/listflow-worker.ts",
+    "worker:shortcut": "powershell -ExecutionPolicy Bypass -File scripts/install-worker-shortcut.ps1",
     "store:reset-password": "tsx scripts/reset-store-password.ts",
     "postinstall": "playwright install chromium"
   },

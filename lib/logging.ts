@@ -1,6 +1,12 @@
-export type LogLevel = "DEBUG" | "INFO" | "WARN" | "ERROR" | "EBAY_RESPONSE";
-export type LogSource = "server" | "client" | "proxy";
-export type LogRuntime = "node" | "browser" | "edge";
+export type LogLevel =
+  | "DEBUG"
+  | "INFO"
+  | "WARN"
+  | "ERROR"
+  | "CRITICAL"
+  | "EBAY_RESPONSE";
+export type LogSource = "server" | "client" | "proxy" | "worker";
+export type LogRuntime = "node" | "browser" | "edge" | "worker";
 
 export interface NormalizedError {
   name?: string;
@@ -14,11 +20,24 @@ export interface NormalizedError {
 export interface LogScope {
   source?: LogSource;
   runtime?: LogRuntime;
+  environment?: string;
   requestId?: string;
+  traceId?: string;
   pathname?: string;
+  route?: string;
   method?: string;
+  statusCode?: number;
+  durationMs?: number;
   userId?: string;
   storeId?: string;
+  workerId?: string;
+  workerName?: string;
+  jobType?: string;
+  jobId?: string;
+  productId?: string;
+  variantId?: string;
+  ebayItemId?: string;
+  asin?: string;
   tags?: string[];
 }
 
@@ -28,14 +47,27 @@ export interface LogEntry {
   level: LogLevel;
   source: LogSource;
   runtime: LogRuntime;
+  environment?: string;
   context: string;
   message: string;
   fingerprint: string;
   requestId?: string;
+  traceId?: string;
   pathname?: string;
+  route?: string;
   method?: string;
+  statusCode?: number;
+  durationMs?: number;
   userId?: string;
   storeId?: string;
+  workerId?: string;
+  workerName?: string;
+  jobType?: string;
+  jobId?: string;
+  productId?: string;
+  variantId?: string;
+  ebayItemId?: string;
+  asin?: string;
   tags?: string[];
   data?: unknown;
   error?: NormalizedError;
@@ -58,6 +90,9 @@ const MAX_DEPTH = 5;
 const MAX_ARRAY_LENGTH = 25;
 const MAX_OBJECT_KEYS = 40;
 const MAX_STRING_LENGTH = 4000;
+const REDACTED_VALUE = "[REDACTED]";
+const SENSITIVE_KEY_PATTERN =
+  /(password|passcode|secret|token|authorization|cookie|cert|client[_-]?secret|database[_-]?url|direct[_-]?url|auth[_-]?secret|nextauth[_-]?secret|cron[_-]?secret|refresh[_-]?token|access[_-]?token|ebay[_-]?(app|dev|cert)?[_-]?id)/i;
 
 function truncateString(value: string): string {
   if (value.length <= MAX_STRING_LENGTH) {
@@ -120,9 +155,14 @@ export function sanitizeForLog(
   value: unknown,
   depth = 0,
   seen: WeakSet<object> = new WeakSet(),
+  keyHint?: string,
 ): unknown {
   if (value == null) {
     return value;
+  }
+
+  if (keyHint && SENSITIVE_KEY_PATTERN.test(keyHint)) {
+    return REDACTED_VALUE;
   }
 
   if (typeof value === "string") {
@@ -164,7 +204,7 @@ export function sanitizeForLog(
   if (Array.isArray(value)) {
     const sanitized = value
       .slice(0, MAX_ARRAY_LENGTH)
-      .map((item) => sanitizeForLog(item, depth + 1, seen));
+      .map((item) => sanitizeForLog(item, depth + 1, seen, keyHint));
 
     if (value.length > MAX_ARRAY_LENGTH) {
       sanitized.push(`[+${value.length - MAX_ARRAY_LENGTH} more items]`);
@@ -187,7 +227,10 @@ export function sanitizeForLog(
   const sanitizedObject: Record<string, unknown> = {};
 
   for (const [key, entryValue] of entries) {
-    sanitizedObject[key] = sanitizeForLog(entryValue, depth + 1, seen);
+    const sanitizedEntry = sanitizeForLog(entryValue, depth + 1, seen, key);
+    if (sanitizedEntry !== undefined) {
+      sanitizedObject[key] = sanitizedEntry;
+    }
   }
 
   if (Object.keys(value).length > MAX_OBJECT_KEYS) {

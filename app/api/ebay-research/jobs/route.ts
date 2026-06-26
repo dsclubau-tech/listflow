@@ -6,6 +6,7 @@ import {
 } from "@/lib/ebay-research";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
+import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
 
 export const runtime = "nodejs";
 
@@ -54,6 +55,7 @@ export async function POST(request: Request) {
   }
 
   try {
+    await assertWorkerOnlineForStore(storeSession.storeId);
     const userId = await getInternalUserId();
     const job = await createEbayResearchJob({
       userId,
@@ -75,6 +77,15 @@ export async function POST(request: Request) {
     const message =
       error instanceof Error ? error.message : "Failed to start eBay research";
     log.error("ebay-research/jobs/POST", "Failed to create research job", error);
-    return NextResponse.json({ error: message }, { status: 400 });
+    return NextResponse.json(
+      { error: message },
+      {
+        status:
+          error instanceof Error &&
+          (error.name === "WorkerOfflineError" || error.name === "JobConflictError")
+            ? 409
+            : 400,
+      }
+    );
   }
 }

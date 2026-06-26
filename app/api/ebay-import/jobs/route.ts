@@ -4,6 +4,7 @@ import { resolveEbayImportStore } from "@/lib/ebay-import-store";
 import { createRequestLogger } from "@/lib/logger";
 import { NextResponse } from "next/server";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
+import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unknown error";
@@ -45,6 +46,8 @@ export async function POST(request: Request) {
   }
 
   try {
+    await assertWorkerOnlineForStore(storeSession.storeId);
+
     if (storeId && storeId !== storeSession.storeId) {
       return NextResponse.json({ error: "Store not found" }, { status: 400 });
     }
@@ -63,6 +66,15 @@ export async function POST(request: Request) {
     log.error("ebay-import/jobs/POST", "Failed to start eBay import job", error, {
       storeId,
     });
-    return NextResponse.json({ error: getErrorMessage(error) }, { status: 400 });
+    return NextResponse.json(
+      { error: getErrorMessage(error) },
+      {
+        status:
+          error instanceof Error &&
+          (error.name === "WorkerOfflineError" || error.name === "JobConflictError")
+            ? 409
+            : 400,
+      }
+    );
   }
 }

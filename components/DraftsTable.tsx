@@ -819,6 +819,7 @@ export default function DraftsTable({
         total?: number;
         resumed?: number;
         failed?: number;
+        message?: string;
         error?: string;
       };
 
@@ -830,6 +831,13 @@ export default function DraftsTable({
 
       const failureCount = data.failed ?? 0;
       const resumedCount = data.resumed ?? 0;
+
+      if (data.message) {
+        onToast(data.message, "success");
+        setSelectedIds([]);
+        router.refresh();
+        return;
+      }
 
       onToast(
         failureCount > 0
@@ -879,6 +887,7 @@ export default function DraftsTable({
         total?: number;
         held?: number;
         failed?: number;
+        message?: string;
         error?: string;
       };
 
@@ -890,6 +899,13 @@ export default function DraftsTable({
 
       const failureCount = data.failed ?? 0;
       const heldCount = data.held ?? 0;
+
+      if (data.message) {
+        onToast(data.message, "success");
+        setSelectedIds([]);
+        router.refresh();
+        return;
+      }
 
       onToast(
         failureCount > 0

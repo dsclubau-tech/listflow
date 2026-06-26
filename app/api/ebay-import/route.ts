@@ -1,10 +1,10 @@
 import { auth } from "@/auth";
 import { getStoreCredentials, getStoreNumber } from "@/lib/ebay";
-import { getEbayImportStats, importEbayListings } from "@/lib/ebay-import";
+import { getEbayImportStats } from "@/lib/ebay-import";
 import { createRequestLogger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
-import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
+import { getCurrentStoreSession } from "@/lib/store-session";
 
 export const maxDuration = 300;
 
@@ -121,104 +121,12 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let body: unknown;
-
-  try {
-    body = await request.json();
-  } catch (error) {
-    log.error("ebay-import/route", "Invalid JSON body", error);
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
-  }
-
-  const storeId =
-    body && typeof body === "object" && "storeId" in body
-      ? String((body as { storeId?: unknown }).storeId ?? "").trim()
-      : storeSession.storeId;
-  const quantity =
-    body && typeof body === "object" && "quantity" in body
-      ? Number((body as { quantity?: unknown }).quantity)
-      : 0;
-
-  if (!Number.isFinite(quantity) || quantity < 1) {
-    return NextResponse.json(
-      { error: "quantity must be at least 1" },
-      { status: 400 },
-    );
-  }
-
-  if (storeId && storeId !== storeSession.storeId) {
-    return NextResponse.json({ error: "Store not found" }, { status: 400 });
-  }
-
-  const context = await resolveImportStore(storeSession.storeId, log);
-
-  if ("error" in context) {
-    return context.error;
-  }
-
-  let streamOpen = true;
-
-  const stream = new ReadableStream({
-    async start(controller) {
-      const encoder = new TextEncoder();
-      const send = (event: object) => {
-        if (!streamOpen) {
-          return;
-        }
-
-        try {
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
-        } catch {
-          streamOpen = false;
-        }
-      };
-
-      try {
-        log.info("ebay-import/route", "Starting eBay import stream", {
-          storeId: storeSession.storeId,
-          storeNumber: context.storeNumber,
-          quantity,
-        });
-
-        const userId = await getInternalUserId();
-        const result = await importEbayListings({
-          storeId: storeSession.storeId,
-          storeNumber: context.storeNumber,
-          userId,
-          quantity,
-          onProgress: (progress) => {
-            send({ type: "progress", ...progress });
-          },
-        });
-
-        send({ type: "complete", ...result });
-      } catch (error) {
-        log.error("ebay-import/route", "eBay import stream failed", error, {
-          storeId,
-          storeNumber: context.storeNumber,
-        });
-        send({ type: "error", message: getErrorMessage(error) });
-      } finally {
-        if (streamOpen) {
-          try {
-            controller.close();
-          } catch {
-            streamOpen = false;
-          }
-        }
-      }
+  log.warn("ebay-import/route", "Direct import stream rejected in manual worker mode");
+  return NextResponse.json(
+    {
+      error:
+        "Manual worker mode is enabled. Start eBay imports from the job flow while the PC 1 worker shortcut is open.",
     },
-    cancel() {
-      streamOpen = false;
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache, no-transform",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no",
-    },
-  });
+    { status: 409 }
+  );
 }

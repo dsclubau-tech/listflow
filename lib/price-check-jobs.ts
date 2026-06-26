@@ -8,6 +8,13 @@ import {
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
 import {
+  assertNoPriceCheckStartConflict,
+  getPriceCheckLeaseInput,
+  JobConflictError,
+  withJobLeases,
+  type WorkerContext,
+} from "@/lib/job-coordination";
+import {
   runPriceCheck,
   type PriceCheckProgress,
   type PriceCheckResult,
@@ -60,18 +67,6 @@ type JobCheckpoint = {
   total: number;
   inferredFromLastCheck: boolean;
 };
-
-const globalForPriceCheckJobs = globalThis as typeof globalThis & {
-  listflowPriceCheckJobIds?: Set<string>;
-};
-
-function getRunningJobIds() {
-  if (!globalForPriceCheckJobs.listflowPriceCheckJobIds) {
-    globalForPriceCheckJobs.listflowPriceCheckJobIds = new Set<string>();
-  }
-
-  return globalForPriceCheckJobs.listflowPriceCheckJobIds;
-}
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unexpected price check job error";
@@ -264,6 +259,29 @@ async function findActivePriceCheckJob(storeId: string) {
   });
 }
 
+async function findNextRunnablePriceCheckJob(storeId: string) {
+  return prisma.priceCheckJob.findFirst({
+    where: {
+      storeId,
+      status: { in: [...ACTIVE_JOB_STATUSES] },
+      dismissedAt: null,
+    },
+    orderBy: { createdAt: "asc" },
+  });
+}
+
+async function findRunnablePriceCheckJobs(storeId: string) {
+  return prisma.priceCheckJob.findMany({
+    where: {
+      storeId,
+      status: { in: [...ACTIVE_JOB_STATUSES] },
+      dismissedAt: null,
+    },
+    orderBy: { createdAt: "asc" },
+    take: 10,
+  });
+}
+
 async function markJobProductCompleted(
   jobId: string,
   productId: string,
@@ -373,7 +391,7 @@ async function markPriceCheckJobCancelled(
   return serializePriceCheckJob(job);
 }
 
-async function runPriceCheckJob(jobId: string) {
+async function runPriceCheckJobClaimed(jobId: string) {
   const job = await prisma.priceCheckJob.findUnique({ where: { id: jobId } });
 
   if (!job || !ACTIVE_JOB_STATUSES.includes(job.status)) {
@@ -501,6 +519,28 @@ async function runPriceCheckJob(jobId: string) {
   }
 }
 
+export async function runPriceCheckJob(jobId: string, worker?: WorkerContext) {
+  if (!worker) {
+    await runPriceCheckJobClaimed(jobId);
+    return;
+  }
+
+  const job = await prisma.priceCheckJob.findUnique({ where: { id: jobId } });
+
+  if (!job || !ACTIVE_JOB_STATUSES.includes(job.status)) {
+    return;
+  }
+
+  const leaseInput = getPriceCheckLeaseInput(job, worker);
+
+  if (!leaseInput) {
+    await runPriceCheckJobClaimed(job.id);
+    return;
+  }
+
+  await withJobLeases(leaseInput, () => runPriceCheckJobClaimed(job.id));
+}
+
 export async function cancelPriceCheckJob(jobId: string, storeId: string) {
   const job = await prisma.priceCheckJob.findFirst({
     where: { id: jobId, storeId },
@@ -531,39 +571,13 @@ export async function cancelPriceCheckJob(jobId: string, storeId: string) {
       },
     });
 
-    ensurePriceCheckJobRunning(updated.id);
     return serializePriceCheckJob(updated);
-  }
-
-  if (job.status === PriceCheckJobStatus.CANCELLING) {
-    ensurePriceCheckJobRunning(job.id);
   }
 
   return serializePriceCheckJob(job);
 }
 
-export function ensurePriceCheckJobRunning(jobId: string) {
-  const runningJobIds = getRunningJobIds();
-
-  if (runningJobIds.has(jobId)) {
-    return;
-  }
-
-  runningJobIds.add(jobId);
-
-  void runPriceCheckJob(jobId).finally(() => {
-    runningJobIds.delete(jobId);
-  });
-}
-
 export async function createPriceCheckJob(input: CreateJobInput) {
-  const activeJob = await findActivePriceCheckJob(input.storeId);
-
-  if (activeJob) {
-    ensurePriceCheckJobRunning(activeJob.id);
-    return { job: serializePriceCheckJob(activeJob), reused: true };
-  }
-
   const requestedProductIds = normalizeProductIds(input.productIds);
   const isSelectedScope = requestedProductIds.length > 0;
 
@@ -578,6 +592,13 @@ export async function createPriceCheckJob(input: CreateJobInput) {
     input.storeId,
     requestedProductIds
   );
+  if (eligibleProductIds.length > 0) {
+    await assertNoPriceCheckStartConflict({
+      storeId: input.storeId,
+      scope,
+      productIds: eligibleProductIds,
+    });
+  }
   const completedAt = eligibleProductIds.length === 0 ? new Date() : null;
   const reason =
     eligibleProductIds.length === 0
@@ -600,10 +621,6 @@ export async function createPriceCheckJob(input: CreateJobInput) {
       completedAt,
     },
   });
-
-  if (eligibleProductIds.length > 0) {
-    ensurePriceCheckJobRunning(job.id);
-  }
 
   return { job: serializePriceCheckJob(job), reused: false };
 }
@@ -635,18 +652,6 @@ export async function resumePriceCheckJob(
   };
   const remainingProductIds = checkpoint.productIdsToCheck;
 
-  const activeJob = await findActivePriceCheckJob(storeId);
-
-  if (activeJob) {
-    ensurePriceCheckJobRunning(activeJob.id);
-    return {
-      job: serializePriceCheckJob(activeJob),
-      sourceJob: serializePriceCheckJob(sourceJobForResponse),
-      reused: true,
-      resumed: false,
-    };
-  }
-
   if (remainingProductIds.length === 0) {
     return {
       job: serializePriceCheckJob(sourceJobForResponse),
@@ -670,6 +675,12 @@ export async function resumePriceCheckJob(
     };
   }
 
+  await assertNoPriceCheckStartConflict({
+    storeId,
+    scope: sourceJob.scope,
+    productIds: eligibleProductIds,
+  });
+
   const resumedJob = await prisma.priceCheckJob.create({
     data: {
       userId,
@@ -682,8 +693,6 @@ export async function resumePriceCheckJob(
     },
   });
 
-  ensurePriceCheckJobRunning(resumedJob.id);
-
   return {
     job: serializePriceCheckJob(resumedJob),
     sourceJob: serializePriceCheckJob(sourceJobForResponse),
@@ -694,10 +703,6 @@ export async function resumePriceCheckJob(
 
 export async function getCurrentPriceCheckJob(storeId: string) {
   const job = await findActivePriceCheckJob(storeId);
-
-  if (job) {
-    ensurePriceCheckJobRunning(job.id);
-  }
 
   return job ? serializePriceCheckJob(job) : null;
 }
@@ -711,11 +716,31 @@ export async function getPriceCheckJobForStore(jobId: string, storeId: string) {
     },
   });
 
-  if (job && ACTIVE_JOB_STATUSES.includes(job.status)) {
-    ensurePriceCheckJobRunning(job.id);
+  return job ? serializePriceCheckJob(job) : null;
+}
+
+export async function runNextPriceCheckJobForStore(
+  storeId: string,
+  worker?: WorkerContext
+) {
+  const jobs = worker
+    ? await findRunnablePriceCheckJobs(storeId)
+    : await findNextRunnablePriceCheckJob(storeId).then((job) => (job ? [job] : []));
+
+  for (const job of jobs) {
+    try {
+      await runPriceCheckJob(job.id, worker);
+      return true;
+    } catch (error) {
+      if (error instanceof JobConflictError) {
+        continue;
+      }
+
+      throw error;
+    }
   }
 
-  return job ? serializePriceCheckJob(job) : null;
+  return false;
 }
 
 export async function dismissPriceCheckJob(jobId: string, storeId: string) {

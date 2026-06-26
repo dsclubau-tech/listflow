@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { createRequestLogger } from "@/lib/logger";
 import { createPriceCheckJob } from "@/lib/price-check-jobs";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
+import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -26,6 +27,7 @@ export async function POST(request: Request) {
   }
 
   try {
+    await assertWorkerOnlineForStore(storeSession.storeId);
     const userId = await getInternalUserId();
     const result = await createPriceCheckJob({
       userId,
@@ -46,6 +48,15 @@ export async function POST(request: Request) {
     const message =
       error instanceof Error ? error.message : "Failed to start price check job";
     log.error("price-check/jobs/POST", "Failed to create price check job", error);
-    return NextResponse.json({ error: message }, { status: 400 });
+    return NextResponse.json(
+      { error: message },
+      {
+        status:
+          error instanceof Error &&
+          (error.name === "WorkerOfflineError" || error.name === "JobConflictError")
+            ? 409
+            : 400,
+      }
+    );
   }
 }

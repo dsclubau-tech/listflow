@@ -9,6 +9,13 @@ import {
 } from "@/lib/ebay-import";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
+import {
+  assertNoEbayLaneStartConflict,
+  getEbayReadLeaseInput,
+  JobConflictError,
+  withJobLeases,
+  type WorkerContext,
+} from "@/lib/job-coordination";
 
 const ACTIVE_IMPORT_JOB_STATUSES: EbayImportJobStatus[] = [
   EbayImportJobStatus.QUEUED,
@@ -48,18 +55,6 @@ type CreateEbayImportJobInput = {
   storeNumber: 1 | 2 | 3;
   quantity: number;
 };
-
-const globalForEbayImportJobs = globalThis as typeof globalThis & {
-  listflowEbayImportJobIds?: Set<string>;
-};
-
-function getRunningJobIds() {
-  if (!globalForEbayImportJobs.listflowEbayImportJobIds) {
-    globalForEbayImportJobs.listflowEbayImportJobIds = new Set<string>();
-  }
-
-  return globalForEbayImportJobs.listflowEbayImportJobIds;
-}
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unexpected eBay import job error";
@@ -126,6 +121,17 @@ async function findActiveEbayImportJob(storeId: string) {
   });
 }
 
+async function findNextRunnableEbayImportJob(storeId: string) {
+  return prisma.ebayImportJob.findFirst({
+    where: {
+      storeId,
+      status: { in: [...ACTIVE_IMPORT_JOB_STATUSES] },
+      dismissedAt: null,
+    },
+    orderBy: { createdAt: "asc" },
+  });
+}
+
 async function updateJobProgress(jobId: string, progress: ImportProgress) {
   await prisma.ebayImportJob.update({
     where: { id: jobId },
@@ -157,7 +163,7 @@ function buildCompleteUpdate(result: EbayImportResult) {
   };
 }
 
-async function runEbayImportJob(jobId: string) {
+async function runEbayImportJobClaimed(jobId: string) {
   const job = await prisma.ebayImportJob.findUnique({ where: { id: jobId } });
 
   if (!job || !ACTIVE_IMPORT_JOB_STATUSES.includes(job.status)) {
@@ -212,25 +218,36 @@ async function runEbayImportJob(jobId: string) {
   }
 }
 
-export function ensureEbayImportJobRunning(jobId: string) {
-  const runningJobIds = getRunningJobIds();
-
-  if (runningJobIds.has(jobId)) {
+export async function runEbayImportJob(jobId: string, worker?: WorkerContext) {
+  if (!worker) {
+    await runEbayImportJobClaimed(jobId);
     return;
   }
 
-  runningJobIds.add(jobId);
+  const job = await prisma.ebayImportJob.findUnique({ where: { id: jobId } });
 
-  void runEbayImportJob(jobId).finally(() => {
-    runningJobIds.delete(jobId);
-  });
+  if (!job || !ACTIVE_IMPORT_JOB_STATUSES.includes(job.status)) {
+    return;
+  }
+
+  await withJobLeases(
+    getEbayReadLeaseInput(
+      job.storeId,
+      "EBAY_IMPORT",
+      job.id,
+      worker,
+      "eBay import"
+    ),
+    () => runEbayImportJobClaimed(job.id)
+  );
 }
 
 export async function createEbayImportJob(input: CreateEbayImportJobInput) {
+  await assertNoEbayLaneStartConflict(input.storeId, "read");
+
   const activeJob = await findActiveEbayImportJob(input.storeId);
 
   if (activeJob) {
-    ensureEbayImportJobRunning(activeJob.id);
     return { job: serializeEbayImportJob(activeJob), reused: true };
   }
 
@@ -244,17 +261,11 @@ export async function createEbayImportJob(input: CreateEbayImportJobInput) {
     },
   });
 
-  ensureEbayImportJobRunning(job.id);
-
   return { job: serializeEbayImportJob(job), reused: false };
 }
 
 export async function getCurrentEbayImportJob(storeId: string) {
   const job = await findActiveEbayImportJob(storeId);
-
-  if (job) {
-    ensureEbayImportJobRunning(job.id);
-  }
 
   return job ? serializeEbayImportJob(job) : null;
 }
@@ -268,11 +279,29 @@ export async function getEbayImportJobForStore(jobId: string, storeId: string) {
     },
   });
 
-  if (job && ACTIVE_IMPORT_JOB_STATUSES.includes(job.status)) {
-    ensureEbayImportJobRunning(job.id);
+  return job ? serializeEbayImportJob(job) : null;
+}
+
+export async function runNextEbayImportJobForStore(
+  storeId: string,
+  worker?: WorkerContext
+) {
+  const job = await findNextRunnableEbayImportJob(storeId);
+
+  if (!job) {
+    return false;
   }
 
-  return job ? serializeEbayImportJob(job) : null;
+  try {
+    await runEbayImportJob(job.id, worker);
+    return true;
+  } catch (error) {
+    if (error instanceof JobConflictError) {
+      return false;
+    }
+
+    throw error;
+  }
 }
 
 export async function dismissEbayImportJob(jobId: string, storeId: string) {

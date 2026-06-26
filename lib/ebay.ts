@@ -10,6 +10,12 @@
 import { XMLParser } from "fast-xml-parser";
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
+import {
+  isEbayRateLimitError,
+  recordEbayRateLimitBackoff,
+  waitForEbayRateLimit,
+  type EbayRateLimitKind,
+} from "@/lib/ebay-rate-limit";
 
 const isProduction = process.env.EBAY_ENVIRONMENT === "production";
 
@@ -186,6 +192,38 @@ export function getStoreCredentials(storeNumber: 1 | 2 | 3) {
   };
 }
 
+async function getStoreIdForStoreNumber(storeNumber: 1 | 2 | 3) {
+  const store = await prisma.store.findFirst({
+    where: { name: `Store ${storeNumber}` },
+    select: { id: true },
+  });
+
+  return store?.id ?? null;
+}
+
+async function waitForStoreEbayLimit(
+  storeNumber: 1 | 2 | 3,
+  kind: EbayRateLimitKind
+) {
+  const storeId = await getStoreIdForStoreNumber(storeNumber);
+
+  if (storeId) {
+    await waitForEbayRateLimit(storeId, kind);
+  }
+
+  return storeId;
+}
+
+async function recordStoreEbayBackoff(
+  storeId: string | null,
+  kind: EbayRateLimitKind,
+  error: unknown
+) {
+  if (storeId && isEbayRateLimitError(error)) {
+    await recordEbayRateLimitBackoff(storeId, kind, error).catch(() => undefined);
+  }
+}
+
 /**
  * Exchanges an OAuth Refresh Token for a short-lived Access Token.
  * Uses the eBay Identity API with client_credentials or refresh_token grant.
@@ -274,6 +312,7 @@ export async function callEbayAddItem(
   }
 
   try {
+    const storeId = await waitForStoreEbayLimit(storeNumber, "TRADING");
     const response = await fetch(EBAY_API_ENDPOINT, {
       method: "POST",
       headers: {
@@ -291,6 +330,10 @@ export async function callEbayAddItem(
     });
 
     const xmlText = await response.text();
+
+    if (response.status === 429) {
+      await recordStoreEbayBackoff(storeId, "TRADING", `HTTP ${response.status}`);
+    }
 
     logger.ebayResponse("ebay/callEbayAddItem", "Raw eBay AddItem response received", xmlText, {
       storeNumber,
@@ -318,14 +361,18 @@ export async function callEbayAddItem(
       return { success: true, itemId };
     }
 
+    const errorMessage = formatEbayApiErrors(
+      addItemResponse.Errors,
+      addItemResponse.Message,
+    );
+    await recordStoreEbayBackoff(storeId, "TRADING", errorMessage);
+
     return {
       success: false,
-      errorMessage: formatEbayApiErrors(
-        addItemResponse.Errors,
-        addItemResponse.Message,
-      ),
+      errorMessage,
     };
   } catch (err) {
+    await recordStoreEbayBackoff(await getStoreIdForStoreNumber(storeNumber), "TRADING", err);
     const message = err instanceof Error ? err.message : "Unknown error";
     return { success: false, errorMessage: message };
   }
@@ -349,6 +396,7 @@ export async function callEbayEndItem(
   }
 
   try {
+    const storeId = await waitForStoreEbayLimit(storeNumber, "TRADING");
     const response = await fetch(EBAY_API_ENDPOINT, {
       method: "POST",
       headers: {
@@ -366,6 +414,10 @@ export async function callEbayEndItem(
     });
 
     const xmlText = await response.text();
+
+    if (response.status === 429) {
+      await recordStoreEbayBackoff(storeId, "TRADING", `HTTP ${response.status}`);
+    }
 
     logger.ebayResponse("ebay/callEbayEndItem", "Raw eBay EndItem response received", xmlText, {
       storeNumber,
@@ -389,14 +441,18 @@ export async function callEbayEndItem(
       return { success: true };
     }
 
+    const errorMessage = formatEbayApiErrors(
+      endItemResponse.Errors,
+      endItemResponse.Message,
+    );
+    await recordStoreEbayBackoff(storeId, "TRADING", errorMessage);
+
     return {
       success: false,
-      errorMessage: formatEbayApiErrors(
-        endItemResponse.Errors,
-        endItemResponse.Message,
-      ),
+      errorMessage,
     };
   } catch (err) {
+    await recordStoreEbayBackoff(await getStoreIdForStoreNumber(storeNumber), "TRADING", err);
     const message = err instanceof Error ? err.message : "Unknown error";
     return { success: false, errorMessage: message };
   }
@@ -420,6 +476,7 @@ export async function callEbayReviseItem(
   }
 
   try {
+    const storeId = await waitForStoreEbayLimit(storeNumber, "TRADING");
     const response = await fetch(EBAY_API_ENDPOINT, {
       method: "POST",
       headers: {
@@ -437,6 +494,10 @@ export async function callEbayReviseItem(
     });
 
     const xmlText = await response.text();
+
+    if (response.status === 429) {
+      await recordStoreEbayBackoff(storeId, "TRADING", `HTTP ${response.status}`);
+    }
 
     logger.ebayResponse("ebay/callEbayReviseItem", "Raw eBay ReviseItem response received", xmlText, {
       storeNumber,
@@ -460,14 +521,18 @@ export async function callEbayReviseItem(
       return { success: true };
     }
 
+    const errorMessage = formatEbayApiErrors(
+      reviseItemResponse.Errors,
+      reviseItemResponse.Message,
+    );
+    await recordStoreEbayBackoff(storeId, "TRADING", errorMessage);
+
     return {
       success: false,
-      errorMessage: formatEbayApiErrors(
-        reviseItemResponse.Errors,
-        reviseItemResponse.Message,
-      ),
+      errorMessage,
     };
   } catch (err) {
+    await recordStoreEbayBackoff(await getStoreIdForStoreNumber(storeNumber), "TRADING", err);
     const message = err instanceof Error ? err.message : "Unknown error";
     return { success: false, errorMessage: message };
   }
@@ -485,6 +550,7 @@ export async function callEbayGetSellerList(
   const accessToken = await getOAuthAccessToken(storeNumber);
 
   try {
+    const storeId = await waitForStoreEbayLimit(storeNumber, "TRADING");
     const response = await fetch(EBAY_API_ENDPOINT, {
       method: "POST",
       headers: {
@@ -503,6 +569,10 @@ export async function callEbayGetSellerList(
 
     const xmlText = await response.text();
 
+    if (response.status === 429) {
+      await recordStoreEbayBackoff(storeId, "TRADING", `HTTP ${response.status}`);
+    }
+
     logger.ebayResponse("ebay/callEbayGetSellerList", "Raw eBay GetSellerList response received", xmlText, {
       storeNumber,
       httpStatus: response.status,
@@ -514,6 +584,7 @@ export async function callEbayGetSellerList(
 
     return xmlText;
   } catch (err) {
+    await recordStoreEbayBackoff(await getStoreIdForStoreNumber(storeNumber), "TRADING", err);
     logger.error("ebay/callEbayGetSellerList", "GetSellerList request failed", err, {
       storeNumber,
     });
@@ -529,6 +600,7 @@ export async function callEbayGetItem(
   const accessToken = await getOAuthAccessToken(storeNumber);
 
   try {
+    const storeId = await waitForStoreEbayLimit(storeNumber, "TRADING");
     const response = await fetch(EBAY_API_ENDPOINT, {
       method: "POST",
       headers: {
@@ -547,6 +619,10 @@ export async function callEbayGetItem(
 
     const xmlText = await response.text();
 
+    if (response.status === 429) {
+      await recordStoreEbayBackoff(storeId, "TRADING", `HTTP ${response.status}`);
+    }
+
     logger.ebayResponse("ebay/callEbayGetItem", "Raw eBay GetItem response received", xmlText, {
       storeNumber,
       httpStatus: response.status,
@@ -558,6 +634,7 @@ export async function callEbayGetItem(
 
     return xmlText;
   } catch (err) {
+    await recordStoreEbayBackoff(await getStoreIdForStoreNumber(storeNumber), "TRADING", err);
     logger.error("ebay/callEbayGetItem", "GetItem request failed", err, {
       storeNumber,
     });
@@ -581,6 +658,7 @@ export async function getEbayBusinessPolicies(storeNumber: 1 | 2 | 3): Promise<{
   <ShowSellerProfilePreferences>true</ShowSellerProfilePreferences>
 </GetUserPreferencesRequest>`;
 
+  const storeId = await waitForStoreEbayLimit(storeNumber, "TRADING");
   const response = await fetch(EBAY_API_ENDPOINT, {
     method: "POST",
     headers: {
@@ -598,6 +676,10 @@ export async function getEbayBusinessPolicies(storeNumber: 1 | 2 | 3): Promise<{
   });
 
   const xmlText = await response.text();
+
+  if (response.status === 429) {
+    await recordStoreEbayBackoff(storeId, "TRADING", `HTTP ${response.status}`);
+  }
 
   logger.ebayResponse("ebay/getEbayBusinessPolicies", "GetUserPreferences response", xmlText, {
     storeNumber,
@@ -680,6 +762,7 @@ export async function getEbaySuggestedCategories(
     // eBay Australia category_tree_id = 15
     const taxonomyUrl = `${EBAY_API_BASE_URL}/commerce/taxonomy/v1/category_tree/15/get_category_suggestions?q=${encodeURIComponent(query)}`;
 
+    const storeId = await waitForStoreEbayLimit(storeNumber, "BROWSE");
     const response = await fetch(taxonomyUrl, {
       method: "GET",
       headers: {
@@ -690,6 +773,10 @@ export async function getEbaySuggestedCategories(
     });
 
     const responseText = await response.text();
+
+    if (response.status === 429) {
+      await recordStoreEbayBackoff(storeId, "BROWSE", `HTTP ${response.status}`);
+    }
 
     logger.info("ebay/getEbaySuggestedCategories", "Taxonomy API response received", {
       storeNumber,

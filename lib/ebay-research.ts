@@ -7,6 +7,17 @@ import {
 } from "@/app/generated/prisma/enums";
 import type { Prisma } from "@/app/generated/prisma/client";
 import { EBAY_API_BASE_URL, getOAuthAccessToken, getStoreNumber } from "@/lib/ebay";
+import {
+  recordEbayRateLimitBackoff,
+  waitForEbayRateLimit,
+} from "@/lib/ebay-rate-limit";
+import {
+  assertNoEbayLaneStartConflict,
+  getEbayReadLeaseInput,
+  JobConflictError,
+  withJobLeases,
+  type WorkerContext,
+} from "@/lib/job-coordination";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 
@@ -132,7 +143,6 @@ type CreateEbayResearchBatchInput = {
 
 const globalForEbayResearchJobs = globalThis as typeof globalThis & {
   listflowEbayResearchJobIds?: Set<string>;
-  listflowEbayResearchStoreIds?: Set<string>;
   listflowEbayResearchActiveCache?: Map<
     string,
     { expiresAt: number; results: EbayResearchResult[] }
@@ -145,14 +155,6 @@ function getRunningJobIds() {
   }
 
   return globalForEbayResearchJobs.listflowEbayResearchJobIds;
-}
-
-function getRunningStoreIds() {
-  if (!globalForEbayResearchJobs.listflowEbayResearchStoreIds) {
-    globalForEbayResearchJobs.listflowEbayResearchStoreIds = new Set<string>();
-  }
-
-  return globalForEbayResearchJobs.listflowEbayResearchStoreIds;
 }
 
 function getActiveSearchCache() {
@@ -647,6 +649,8 @@ async function fetchActiveListings(
   url.searchParams.set("sort", "price");
   url.searchParams.set("filter", "buyingOptions:{FIXED_PRICE}");
 
+  await waitForEbayRateLimit(storeId, "BROWSE");
+
   const response = await fetch(url, {
     method: "GET",
     headers: {
@@ -660,6 +664,10 @@ async function fetchActiveListings(
   });
 
   const responseText = await response.text();
+
+  if (response.status === 429) {
+    await recordEbayRateLimitBackoff(storeId, "BROWSE", `HTTP ${response.status}`);
+  }
 
   if (!response.ok) {
     logger.error(
@@ -1183,7 +1191,7 @@ export function serializeEbayResearchJob(
   };
 }
 
-async function runEbayResearchJob(jobId: string) {
+async function runEbayResearchJobClaimed(jobId: string) {
   const job = await prisma.ebayResearchJob.findUnique({
     where: { id: jobId },
     include: { batch: true },
@@ -1341,31 +1349,39 @@ async function runEbayResearchJob(jobId: string) {
   }
 }
 
-export function ensureEbayResearchJobRunning(jobId: string) {
-  void prisma.ebayResearchJob
-    .findUnique({ where: { id: jobId }, select: { storeId: true } })
-    .then((job) => {
-      if (job) {
-        ensureEbayResearchQueueRunning(job.storeId);
-      }
-    });
-}
-
-export function ensureEbayResearchQueueRunning(storeId: string) {
-  const runningStoreIds = getRunningStoreIds();
-
-  if (runningStoreIds.has(storeId)) {
+async function runEbayResearchJob(jobId: string, worker?: WorkerContext) {
+  if (!worker) {
+    await runEbayResearchJobClaimed(jobId);
     return;
   }
 
-  runningStoreIds.add(storeId);
-
-  void runEbayResearchQueue(storeId).finally(() => {
-    runningStoreIds.delete(storeId);
+  const job = await prisma.ebayResearchJob.findUnique({
+    where: { id: jobId },
+    include: { batch: true },
   });
+
+  if (
+    !job ||
+    job.status !== EbayResearchJobStatus.QUEUED ||
+    job.batch?.status === EbayResearchBatchStatus.PAUSED ||
+    job.batch?.status === EbayResearchBatchStatus.PAUSING
+  ) {
+    return;
+  }
+
+  await withJobLeases(
+    getEbayReadLeaseInput(
+      job.storeId,
+      "EBAY_RESEARCH",
+      job.id,
+      worker,
+      job.batchId ? "eBay research batch" : "eBay research"
+    ),
+    () => runEbayResearchJobClaimed(job.id)
+  );
 }
 
-async function runEbayResearchQueue(storeId: string) {
+async function runEbayResearchQueue(storeId: string, worker?: WorkerContext) {
   await recoverStaleResearchJobs(storeId);
 
   while (true) {
@@ -1386,10 +1402,25 @@ async function runEbayResearchQueue(storeId: string) {
     runningJobIds.add(nextJob.id);
 
     try {
-      await runEbayResearchJob(nextJob.id);
+      await runEbayResearchJob(nextJob.id, worker);
     } finally {
       runningJobIds.delete(nextJob.id);
     }
+  }
+}
+
+export async function runEbayResearchQueueForStore(
+  storeId: string,
+  worker?: WorkerContext
+) {
+  try {
+    await runEbayResearchQueue(storeId, worker);
+  } catch (error) {
+    if (error instanceof JobConflictError) {
+      return;
+    }
+
+    throw error;
   }
 }
 
@@ -1425,6 +1456,7 @@ export async function createEbayResearchJob(input: CreateEbayResearchJobInput) {
   const query = normalizeQuery(input.query);
   const mode = normalizeMode(input.mode);
   const limit = normalizeLimit(input.limit);
+  await assertNoEbayLaneStartConflict(input.storeId, "read");
   const job = await prisma.ebayResearchJob.create({
     data: {
       userId: input.userId,
@@ -1436,14 +1468,13 @@ export async function createEbayResearchJob(input: CreateEbayResearchJobInput) {
     include: { batch: true },
   });
 
-  ensureEbayResearchQueueRunning(input.storeId);
-
   return serializeEbayResearchJob(job);
 }
 
 export async function createEbayResearchBatch(input: CreateEbayResearchBatchInput) {
   const queries = normalizeBatchQueries(input.queries);
   const limit = normalizeLimit(input.limit);
+  await assertNoEbayLaneStartConflict(input.storeId, "read");
   const batch = await prisma.$transaction(async (tx) => {
     const createdBatch = await tx.ebayResearchBatch.create({
       data: {
@@ -1470,13 +1501,11 @@ export async function createEbayResearchBatch(input: CreateEbayResearchBatchInpu
     });
   });
 
-  ensureEbayResearchQueueRunning(input.storeId);
-
   return serializeEbayResearchBatch(batch);
 }
 
 export async function getRecentEbayResearchJobs(storeId: string) {
-  await recoverEbayResearchQueue(storeId);
+  await cleanupExpiredEbayResearchRecords(storeId);
   const jobs = await prisma.ebayResearchJob.findMany({
     where: { storeId },
     orderBy: { createdAt: "desc" },
@@ -1484,40 +1513,21 @@ export async function getRecentEbayResearchJobs(storeId: string) {
     include: { batch: true },
   });
 
-  for (const job of jobs) {
-    if (
-      job.status === EbayResearchJobStatus.QUEUED ||
-      job.status === EbayResearchJobStatus.RUNNING
-    ) {
-      ensureEbayResearchQueueRunning(storeId);
-    }
-  }
-
   return jobs.map((job) => serializeEbayResearchJob(job, { includeResults: false }));
 }
 
 export async function getEbayResearchJobForStore(jobId: string, storeId: string) {
-  await recoverEbayResearchQueue(storeId);
+  await cleanupExpiredEbayResearchRecords(storeId);
   const job = await prisma.ebayResearchJob.findFirst({
     where: { id: jobId, storeId },
     include: { batch: true },
   });
-
-  if (
-    job &&
-    (job.status === EbayResearchJobStatus.QUEUED ||
-      job.status === EbayResearchJobStatus.RUNNING)
-  ) {
-    ensureEbayResearchQueueRunning(storeId);
-  }
 
   return job ? serializeEbayResearchJob(job) : null;
 }
 
 export async function recoverEbayResearchQueue(storeId: string) {
   await cleanupExpiredEbayResearchRecords(storeId);
-  await recoverStaleResearchJobs(storeId);
-  ensureEbayResearchQueueRunning(storeId);
 }
 
 export async function getCurrentEbayResearchBatches(storeId: string) {
@@ -1593,6 +1603,10 @@ export async function resumeEbayResearchBatch(batchId: string, storeId: string) 
     return serializeEbayResearchBatch(batch);
   }
 
+  await assertNoEbayLaneStartConflict(storeId, "read", {
+    excludeResearchBatchId: batch.id,
+  });
+
   await prisma.$transaction([
     prisma.ebayResearchBatch.update({
       where: { id: batch.id },
@@ -1615,7 +1629,6 @@ export async function resumeEbayResearchBatch(batchId: string, storeId: string) 
   ]);
 
   const refreshed = await refreshResearchBatch(batch.id);
-  ensureEbayResearchQueueRunning(storeId);
 
   return refreshed ? serializeEbayResearchBatch(refreshed) : null;
 }

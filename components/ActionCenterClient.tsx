@@ -11,6 +11,7 @@ import type {
   ActionCenterPriceCheckJob,
   ActionCenterEbayImportJob,
   ActionCenterEbayResearchBatch,
+  ActionCenterEbayActionJob,
   FailedCheckActionItem,
   LowStockActionItem,
   OnHoldActionItem,
@@ -21,6 +22,7 @@ type ToastVariant = "success" | "error";
 
 const ACTIVE_PRICE_JOB_STATUSES = new Set(["QUEUED", "RUNNING", "CANCELLING"]);
 const ACTIVE_IMPORT_JOB_STATUSES = new Set(["QUEUED", "RUNNING"]);
+const ACTIVE_ACTION_JOB_STATUSES = new Set(["QUEUED", "RUNNING"]);
 const CURRENT_RESEARCH_BATCH_STATUSES = new Set([
   "QUEUED",
   "RUNNING",
@@ -98,6 +100,33 @@ function formatDateTime(value: string | null) {
   });
 }
 
+function formatWorkerLastSeen(value: string | null) {
+  if (!value) {
+    return "Never seen";
+  }
+
+  const date = new Date(value);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Unknown";
+  }
+
+  const seconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000));
+
+  if (seconds < 60) {
+    return `${seconds}s ago`;
+  }
+
+  const minutes = Math.round(seconds / 60);
+
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+
+  const hours = Math.round(minutes / 60);
+  return `${hours}h ago`;
+}
+
 function productHref(product: ActionCenterProductSummary) {
   return `/products?productId=${encodeURIComponent(product.id)}`;
 }
@@ -131,6 +160,10 @@ function isActiveImportJob(job: ActionCenterEbayImportJob) {
   return ACTIVE_IMPORT_JOB_STATUSES.has(job.status);
 }
 
+function isActiveActionJob(job: ActionCenterEbayActionJob) {
+  return ACTIVE_ACTION_JOB_STATUSES.has(job.status);
+}
+
 function isCurrentResearchBatch(batch: ActionCenterEbayResearchBatch) {
   return CURRENT_RESEARCH_BATCH_STATUSES.has(batch.status);
 }
@@ -161,8 +194,23 @@ function getCurrentJobCount(data: ActionCenterData) {
   const currentResearchBatches = data.jobs.ebayResearchBatches.filter(
     isCurrentResearchBatch
   );
+  const currentActionJobs = data.jobs.ebayActions.filter(
+    (job) => !job.dismissedAt && isActiveActionJob(job)
+  );
 
-  return currentPriceJobs.length + currentImportJobs.length + currentResearchBatches.length;
+  return (
+    currentPriceJobs.length +
+    currentImportJobs.length +
+    currentResearchBatches.length +
+    currentActionJobs.length
+  );
+}
+
+function actionJobLabel(type: string) {
+  if (type === "HOLD") return "Put listings on hold";
+  if (type === "RESUME") return "Resume listings";
+  if (type === "END") return "End listings";
+  return "eBay listing action";
 }
 
 function statusClasses(status: string) {
@@ -326,7 +374,8 @@ function hasFilterContent(data: ActionCenterData, filter: ActionCenterFilter) {
   return (
     data.jobs.priceChecks.length > 0 ||
     data.jobs.ebayImports.length > 0 ||
-    data.jobs.ebayResearchBatches.length > 0
+    data.jobs.ebayResearchBatches.length > 0 ||
+    data.jobs.ebayActions.length > 0
   );
 }
 
@@ -361,6 +410,10 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
     () => data.jobs.ebayImports.filter((job) => !job.dismissedAt && isActiveImportJob(job)),
     [data.jobs.ebayImports]
   );
+  const currentActionJobs = useMemo(
+    () => data.jobs.ebayActions.filter((job) => !job.dismissedAt && isActiveActionJob(job)),
+    [data.jobs.ebayActions]
+  );
   const currentResearchBatches = useMemo(
     () => data.jobs.ebayResearchBatches.filter(isCurrentResearchBatch),
     [data.jobs.ebayResearchBatches]
@@ -376,6 +429,10 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
   const recentImportJobs = useMemo(
     () => data.jobs.ebayImports.filter((job) => !job.dismissedAt),
     [data.jobs.ebayImports]
+  );
+  const recentActionJobs = useMemo(
+    () => data.jobs.ebayActions.filter((job) => !job.dismissedAt),
+    [data.jobs.ebayActions]
   );
   const recentResearchBatches = useMemo(
     () => data.jobs.ebayResearchBatches,
@@ -394,9 +451,19 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
     () =>
       activePriceJobs.length > 0 ||
       activeImportJobs.length > 0 ||
-      activeResearchBatches.length > 0,
-    [activeImportJobs.length, activePriceJobs.length, activeResearchBatches.length]
+      activeResearchBatches.length > 0 ||
+      currentActionJobs.length > 0,
+    [
+      activeImportJobs.length,
+      activePriceJobs.length,
+      activeResearchBatches.length,
+      currentActionJobs.length,
+    ]
   );
+  const workerOffline = !data.worker.online;
+  const workerMessage =
+    data.worker.message ??
+    "Worker offline. Open Start ListFlow Worker on PC 1 to run long jobs.";
 
   useEffect(() => {
     if (!hasActiveJobs) {
@@ -516,20 +583,22 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
 
   function holdProduct(product: ActionCenterProductSummary) {
     void runAction(`hold:${product.id}`, async () => {
-      const result = await postJson<{ held?: number; failed?: number }>(
+      const result = await postJson<{ held?: number; failed?: number; message?: string }>(
         "/api/products/bulk-hold",
         { productIds: [product.id] }
       );
+      if (result.message) return result.message;
       return `Put ${result.held ?? 0} product(s) on hold. ${result.failed ?? 0} failed.`;
     });
   }
 
   function resumeProduct(product: ActionCenterProductSummary) {
     void runAction(`resume:${product.id}`, async () => {
-      const result = await postJson<{ resumed?: number; failed?: number }>(
+      const result = await postJson<{ resumed?: number; failed?: number; message?: string }>(
         "/api/products/bulk-resume",
         { productIds: [product.id] }
       );
+      if (result.message) return result.message;
       return `Resumed ${result.resumed ?? 0} product(s). ${result.failed ?? 0} failed.`;
     });
   }
@@ -544,10 +613,11 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
     }
 
     void runAction(`end:${product.id}`, async () => {
-      const result = await postJson<{ ended?: number; failed?: number }>(
+      const result = await postJson<{ ended?: number; failed?: number; message?: string }>(
         "/api/products/bulk-end",
         { productIds: [product.id] }
       );
+      if (result.message) return result.message;
       return `Ended ${result.ended ?? 0} listing(s). ${result.failed ?? 0} failed.`;
     });
   }
@@ -652,11 +722,53 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
 
   return (
     <>
-      <div className="mb-6">
-        <h1 className="text-xl font-semibold text-gray-900">Action Center</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Review the listings, checks, stock alerts, and jobs that need attention.
-        </p>
+      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold text-gray-900">Action Center</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Review the listings, checks, stock alerts, and jobs that need attention.
+          </p>
+        </div>
+        <div
+          className={`min-w-64 rounded-md border px-3 py-2 text-sm ${
+            data.worker.online
+              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+              : "border-amber-200 bg-amber-50 text-amber-900"
+          }`}
+        >
+          <div className="font-medium">
+            {data.worker.online ? "Worker online" : "Worker offline"}
+          </div>
+          <div className="mt-0.5 text-xs">
+            {data.workers.filter((worker) => worker.online).length}/
+            {Math.max(data.workers.length, 1)} online
+          </div>
+          <div className="mt-2 space-y-1">
+            {data.workers.length === 0 ? (
+              <div className="text-xs">No worker has checked in yet.</div>
+            ) : (
+              data.workers.slice(0, 4).map((worker) => (
+                <div
+                  key={worker.workerId ?? worker.workerName ?? "worker"}
+                  className="flex flex-wrap items-center justify-between gap-2 text-xs"
+                >
+                  <span className="font-medium">
+                    {worker.workerName ?? worker.workerId ?? "Worker"}
+                  </span>
+                  <span>
+                    {worker.online ? "Online" : "Stale"} ·{" "}
+                    {formatWorkerLastSeen(worker.lastSeenAt)}
+                    {worker.currentJobs.length > 0
+                      ? ` · ${worker.currentJobs.length} job lease${
+                          worker.currentJobs.length === 1 ? "" : "s"
+                        }`
+                      : ""}
+                  </span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
       </div>
 
       <div className="mb-6 grid gap-3 md:grid-cols-5">
@@ -997,7 +1109,8 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
               <div className="divide-y divide-gray-100">
                 {currentPriceJobs.length === 0 &&
                 activeImportJobs.length === 0 &&
-                currentResearchBatches.length === 0 ? (
+                currentResearchBatches.length === 0 &&
+                currentActionJobs.length === 0 ? (
                   <div className="px-4 py-8 text-center text-sm text-gray-500">
                     No current or paused jobs.
                   </div>
@@ -1044,7 +1157,9 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                           {isResumablePriceJob(job) && (
                             <ActionButton
                               onClick={() => resumePriceJob(job)}
-                              disabled={runningAction === `resume-job:${job.id}`}
+                              disabled={
+                                workerOffline || runningAction === `resume-job:${job.id}`
+                              }
                               tone="primary"
                             >
                               {runningAction === `resume-job:${job.id}`
@@ -1090,6 +1205,35 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                         </Link>
                       </div>
                     ))}
+                    {currentActionJobs.map((job) => (
+                      <div
+                        key={`current-action-${job.id}`}
+                        className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                      >
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-medium text-gray-900">
+                              {actionJobLabel(job.type)}
+                            </span>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClasses(job.status)}`}
+                            >
+                              {job.status}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-xs text-gray-500">
+                            {job.processed}/{job.total} processed, {job.succeeded} succeeded,{" "}
+                            {job.failed} failed
+                          </div>
+                        </div>
+                        <Link
+                          href="/products"
+                          className="text-xs font-medium text-gray-600 hover:text-gray-900"
+                        >
+                          Products
+                        </Link>
+                      </div>
+                    ))}
                     {currentResearchBatches.map((batch) => (
                       <div
                         key={`current-research-${batch.id}`}
@@ -1132,6 +1276,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                             <ActionButton
                               onClick={() => resumeResearchBatch(batch)}
                               disabled={
+                                workerOffline ||
                                 runningAction === `resume-research-batch:${batch.id}`
                               }
                               tone="primary"
@@ -1157,10 +1302,15 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
 
             {jobPanelFilter === "start" && (
               <div className="divide-y divide-gray-100">
+                {workerOffline && (
+                  <div className="bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                    {workerMessage}
+                  </div>
+                )}
                 {hasActivePriceJobs && (
                   <div className="bg-blue-50 px-4 py-3 text-sm text-blue-800">
-                    A product price check is already active. Pause it or wait for it to finish
-                    before starting another one.
+                    A product price check is already active. Full-store checks wait; selected
+                    checks can still start when the products do not overlap.
                   </div>
                 )}
                 <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
@@ -1175,7 +1325,9 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                   <ActionButton
                     onClick={startAllProductsPriceCheck}
                     disabled={
-                      hasActivePriceJobs || runningAction === "start-all-products"
+                      workerOffline ||
+                      hasActivePriceJobs ||
+                      runningAction === "start-all-products"
                     }
                     tone="primary"
                   >
@@ -1195,7 +1347,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                   <ActionButton
                     onClick={startVisibleFailedPriceCheck}
                     disabled={
-                      hasActivePriceJobs ||
+                      workerOffline ||
                       data.queues.failedChecks.length === 0 ||
                       runningAction === "start-visible-failed"
                     }
@@ -1217,7 +1369,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                   <ActionButton
                     onClick={startVisibleLowStockPriceCheck}
                     disabled={
-                      hasActivePriceJobs ||
+                      workerOffline ||
                       data.queues.lowStock.length === 0 ||
                       runningAction === "start-visible-low-stock"
                     }
@@ -1251,7 +1403,8 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
               <div className="divide-y divide-gray-100">
                 {recentPriceJobs.length === 0 &&
                 recentImportJobs.length === 0 &&
-                recentResearchBatches.length === 0 ? (
+                recentResearchBatches.length === 0 &&
+                recentActionJobs.length === 0 ? (
                   <div className="px-4 py-8 text-center text-sm text-gray-500">
                     No recent jobs.
                   </div>
@@ -1339,6 +1492,35 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                         </div>
                       </div>
                     ))}
+                    {recentActionJobs.map((job) => (
+                      <div
+                        key={`recent-action-${job.id}`}
+                        className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
+                      >
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-sm font-medium text-gray-900">
+                              {actionJobLabel(job.type)}
+                            </span>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClasses(job.status)}`}
+                            >
+                              {job.status}
+                            </span>
+                          </div>
+                          <div className="mt-1 text-xs text-gray-500">
+                            {job.processed}/{job.total} processed, {job.succeeded} succeeded,{" "}
+                            {job.failed} failed
+                          </div>
+                        </div>
+                        <Link
+                          href="/products"
+                          className="text-xs font-medium text-gray-600 hover:text-gray-900"
+                        >
+                          Products
+                        </Link>
+                      </div>
+                    ))}
                     {recentResearchBatches.map((batch) => (
                       <div
                         key={`recent-research-${batch.id}`}
@@ -1376,6 +1558,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                             <ActionButton
                               onClick={() => resumeResearchBatch(batch)}
                               disabled={
+                                workerOffline ||
                                 runningAction === `resume-research-batch:${batch.id}`
                               }
                               tone="primary"

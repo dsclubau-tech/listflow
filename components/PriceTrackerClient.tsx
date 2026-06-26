@@ -258,6 +258,13 @@ export default function PriceTrackerClient({
       if (!response.ok) {
         showToast(data.error || "Failed to put low-stock products on hold.", "error");
       } else {
+        if (data.message) {
+          showToast(data.message, "success");
+          setSelectedLowStockIds([]);
+          router.refresh();
+          return;
+        }
+
         const held = data.held ?? 0;
         const failed = data.failed ?? 0;
         showToast(
@@ -312,6 +319,13 @@ export default function PriceTrackerClient({
       if (!response.ok) {
         showToast(data.error || "Failed to end products.", "error");
       } else {
+        if (data.message) {
+          showToast(data.message, "success");
+          setSelectedFailedIds([]);
+          router.refresh();
+          return;
+        }
+
         const ended = data.ended ?? 0;
         const failed = data.failed ?? 0;
         if (failed > 0) {
@@ -349,6 +363,13 @@ export default function PriceTrackerClient({
       if (!response.ok) {
         showToast(data.error || "Failed to put products on hold.", "error");
       } else {
+        if (data.message) {
+          showToast(data.message, "success");
+          setSelectedFailedIds([]);
+          router.refresh();
+          return;
+        }
+
         const held = data.held ?? 0;
         const failed = data.failed ?? 0;
         if (failed > 0) {
