@@ -5,9 +5,22 @@ const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
 };
 
+function parsePoolMax() {
+  const value =
+    process.env.LISTFLOW_DB_POOL_MAX ??
+    (process.env.NODE_ENV === "production" ? "1" : "5");
+  const parsed = Number.parseInt(value, 10);
+
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
+}
+
 function createPrismaClient() {
   const adapter = new PrismaPg({
     connectionString: process.env.DATABASE_URL!,
+    max: parsePoolMax(),
+    idleTimeoutMillis: 10_000,
+    connectionTimeoutMillis: 10_000,
+    allowExitOnIdle: true,
   });
   return new PrismaClient({ adapter });
 }
