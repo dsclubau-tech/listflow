@@ -192,6 +192,25 @@ export default async function ProductsPage({
     });
   }
 
+  const searchQuery = getTextParam(params, "q");
+  if (searchQuery) {
+    whereClauses.push({
+      OR: [
+        { title: { contains: searchQuery, mode: "insensitive" } },
+        { id: { contains: searchQuery, mode: "insensitive" } },
+        { asin: { contains: searchQuery, mode: "insensitive" } },
+        { ebayItemId: { contains: searchQuery, mode: "insensitive" } },
+        { internalNote: { contains: searchQuery, mode: "insensitive" } },
+        { itemSpecifics: { path: ["Brand"], string_contains: searchQuery } },
+        { itemSpecifics: { path: ["brand"], string_contains: searchQuery } },
+        { variants: { some: { id: { contains: searchQuery, mode: "insensitive" } } } },
+        { variants: { some: { sku: { contains: searchQuery, mode: "insensitive" } } } },
+        { variants: { some: { itemSpecifics: { path: ["Brand"], string_contains: searchQuery } } } },
+        { variants: { some: { itemSpecifics: { path: ["brand"], string_contains: searchQuery } } } },
+      ],
+    });
+  }
+
   const buyItemId = getTextParam(params, "buyItemId");
   if (buyItemId) {
     whereClauses.push({

@@ -1,7 +1,7 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, type MouseEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import InlineEditForm from "@/components/InlineEditForm";
 import { calculateNetProfit } from "@/lib/variant-pricing";
@@ -365,6 +365,11 @@ export default function DraftsTable({
     useState<SerializedProductRow | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
   const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<{
+    product: SerializedProductRow;
+    x: number;
+    y: number;
+  } | null>(null);
   const router = useRouter();
 
   const isDraftsView = view === "drafts";
@@ -384,6 +389,34 @@ export default function DraftsTable({
       setExpandedProductId(autoExpandProductId);
     }
   }, [autoExpandProductId, products]);
+
+  useEffect(() => {
+    if (!contextMenu) {
+      return;
+    }
+
+    function closeContextMenu() {
+      setContextMenu(null);
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        closeContextMenu();
+      }
+    }
+
+    window.addEventListener("click", closeContextMenu);
+    window.addEventListener("resize", closeContextMenu);
+    window.addEventListener("scroll", closeContextMenu, true);
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.removeEventListener("click", closeContextMenu);
+      window.removeEventListener("resize", closeContextMenu);
+      window.removeEventListener("scroll", closeContextMenu, true);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [contextMenu]);
 
   function getStatusBadgeClasses(status: string) {
     if (status === "FAILED" && isDraftsView) {
@@ -407,6 +440,75 @@ export default function DraftsTable({
 
   function toggleExpand(productId: string) {
     setExpandedProductId((prev) => (prev === productId ? null : productId));
+  }
+
+  function getFocusedProductUrl(productId: string) {
+    return `/products?productId=${encodeURIComponent(productId)}`;
+  }
+
+  function shouldIgnoreContextMenu(target: EventTarget | null) {
+    return (
+      target instanceof HTMLElement &&
+      Boolean(target.closest("a,button,input,select,textarea,[role='button']"))
+    );
+  }
+
+  function handleRowContextMenu(
+    event: MouseEvent<HTMLTableRowElement>,
+    product: SerializedProductRow
+  ) {
+    if (!isProductsView || shouldIgnoreContextMenu(event.target)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const menuWidth = 224;
+    const menuHeight = 126;
+    const x = Math.min(event.clientX, window.innerWidth - menuWidth - 8);
+    const y = Math.min(event.clientY, window.innerHeight - menuHeight - 8);
+
+    setContextMenu({
+      product,
+      x: Math.max(8, x),
+      y: Math.max(8, y),
+    });
+  }
+
+  function openContextProductInNewTab() {
+    if (!contextMenu) {
+      return;
+    }
+
+    const opened = window.open(
+      getFocusedProductUrl(contextMenu.product.id),
+      "_blank",
+      "noopener,noreferrer"
+    );
+
+    if (opened) {
+      opened.opener = null;
+    }
+
+    setContextMenu(null);
+  }
+
+  async function copyContextProductLink() {
+    if (!contextMenu) {
+      return;
+    }
+
+    const url = `${window.location.origin}${getFocusedProductUrl(contextMenu.product.id)}`;
+
+    try {
+      await navigator.clipboard.writeText(url);
+      onToast("Product link copied.", "success");
+    } catch {
+      onToast("Could not copy product link.", "error");
+    } finally {
+      setContextMenu(null);
+    }
   }
 
   async function handleImport(productId: string) {
@@ -1213,6 +1315,9 @@ export default function DraftsTable({
                           : "bg-white hover:bg-gray-50"
                     }`}
                     onClick={() => toggleExpand(product.id)}
+                    onContextMenu={(event) =>
+                      handleRowContextMenu(event, product)
+                    }
                   >
                     {hasSelectionColumn && (
                       <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
@@ -1531,6 +1636,36 @@ export default function DraftsTable({
           </table>
         </div>
       </div>
+
+      {contextMenu && (
+        <div
+          className="fixed z-50 w-56 overflow-hidden rounded-md border border-gray-200 bg-white py-1 shadow-lg"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <div
+            className="truncate border-b border-gray-100 px-3 py-2 text-xs font-medium text-gray-500"
+            title={contextMenu.product.title}
+          >
+            {contextMenu.product.title}
+          </div>
+          <button
+            type="button"
+            onClick={openContextProductInNewTab}
+            className="block w-full px-3 py-2 text-left text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50"
+          >
+            Open in new tab
+          </button>
+          <button
+            type="button"
+            onClick={() => void copyContextProductLink()}
+            className="block w-full px-3 py-2 text-left text-sm font-medium text-gray-800 transition-colors hover:bg-gray-50"
+          >
+            Copy product link
+          </button>
+        </div>
+      )}
 
       {notingProduct && (
         <div

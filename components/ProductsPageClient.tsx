@@ -173,6 +173,8 @@ export default function ProductsPageClient({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const searchQuery = searchParams.get("q") ?? "";
+  const focusedProductId = searchParams.get("productId");
   const [isExporting, setIsExporting] = useState(false);
   const [isStartingPriceCheckJob, setIsStartingPriceCheckJob] = useState(false);
   const [isCancellingPriceCheckJob, setIsCancellingPriceCheckJob] =
@@ -181,6 +183,7 @@ export default function ProductsPageClient({
   const [priceCheckJob, setPriceCheckJob] = useState<PriceCheckJob | null>(null);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
+  const [searchDraft, setSearchDraft] = useState(searchQuery);
   const notifiedTerminalJobIds = useRef<Set<string>>(new Set());
   const { toast, showToast, hideToast } = useToast();
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
@@ -192,6 +195,8 @@ export default function ProductsPageClient({
       ? "listings needing price changes"
       : productFilter === "failed-on-hold"
         ? "failed / on hold listings"
+        : searchQuery
+          ? "search results"
         : importedFilter === "today"
           ? "listings added today"
           : "listings";
@@ -217,6 +222,10 @@ export default function ProductsPageClient({
     params.set("pageSize", String(parsed));
     router.replace(`${pathname}?${params.toString()}`);
   }, [pageSize, pathname, router, searchParams]);
+
+  useEffect(() => {
+    setSearchDraft(searchQuery);
+  }, [searchQuery]);
 
   const storePriceCheckJob = useCallback((job: PriceCheckJob | null) => {
     setPriceCheckJob(job);
@@ -482,6 +491,42 @@ export default function ProductsPageClient({
       window.clearInterval(interval);
     };
   }, [applyPriceCheckJob, fetchPriceCheckJob, priceCheckJob]);
+
+  const applySearchQuery = useCallback(
+    (value: string, mode: "push" | "replace" = "replace") => {
+      const trimmed = value.trim();
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("page", "1");
+
+      if (trimmed) {
+        params.set("q", trimmed);
+      } else {
+        params.delete("q");
+      }
+
+      const queryString = params.toString();
+      const nextUrl = queryString ? `${pathname}?${queryString}` : pathname;
+
+      if (mode === "push") {
+        router.push(nextUrl);
+      } else {
+        router.replace(nextUrl);
+      }
+    },
+    [pathname, router, searchParams]
+  );
+
+  useEffect(() => {
+    if (searchDraft === searchQuery) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      applySearchQuery(searchDraft);
+    }, 300);
+
+    return () => window.clearTimeout(timeout);
+  }, [applySearchQuery, searchDraft, searchQuery]);
 
   function navigateProductsPage(nextPage: number, nextPageSize = pageSize) {
     const boundedPage = Math.min(
@@ -898,6 +943,59 @@ export default function ProductsPageClient({
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
+          <form
+            role="search"
+            onSubmit={(event) => {
+              event.preventDefault();
+              applySearchQuery(searchDraft, "push");
+            }}
+            className="relative w-full sm:w-72 lg:w-80"
+          >
+            <svg
+              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              strokeWidth={1.8}
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="m21 21-4.35-4.35M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z"
+              />
+            </svg>
+            <input
+              type="search"
+              value={searchDraft}
+              onChange={(event) => setSearchDraft(event.target.value)}
+              placeholder="Search products, IDs, ASIN..."
+              aria-label="Search products"
+              className="h-10 w-full rounded-md border border-gray-300 bg-white py-2 pl-9 pr-9 text-sm text-gray-900 shadow-sm transition-colors placeholder:text-gray-400 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+            />
+            {searchDraft && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchDraft("");
+                  applySearchQuery("", "push");
+                }}
+                className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                aria-label="Clear product search"
+              >
+                <svg
+                  className="h-3.5 w-3.5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                  strokeWidth={2}
+                  aria-hidden="true"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                </svg>
+              </button>
+            )}
+          </form>
           <div className="relative">
             <button
               type="button"
@@ -1081,6 +1179,7 @@ export default function ProductsPageClient({
         products={products}
         onToast={showToast}
         view="products"
+        autoExpandProductId={focusedProductId}
         onSelectionChange={setSelectedProductIds}
         onPriceCheckSelected={startPriceCheckJob}
         isPriceCheckJobActive={isStartingPriceCheckJob || isPriceCheckJobActive}
