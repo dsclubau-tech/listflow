@@ -14,11 +14,43 @@ function parsePoolMax() {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
 }
 
+function getDatabaseConnectionString() {
+  const connectionString = process.env.DATABASE_URL;
+  if (!connectionString) {
+    throw new Error("DATABASE_URL is not configured");
+  }
+
+  return normalizeSupabasePoolerUrl(connectionString);
+}
+
+function normalizeSupabasePoolerUrl(connectionString: string) {
+  const shouldUseTransactionPooler =
+    process.env.LISTFLOW_SUPABASE_TRANSACTION_POOLER !== "false" &&
+    (process.env.VERCEL === "1" ||
+      process.env.LISTFLOW_SUPABASE_TRANSACTION_POOLER === "true");
+
+  if (!shouldUseTransactionPooler) return connectionString;
+
+  try {
+    const url = new URL(connectionString);
+    const isSupabasePooler = url.hostname.endsWith(".pooler.supabase.com");
+
+    if (isSupabasePooler && (!url.port || url.port === "5432")) {
+      url.port = "6543";
+      return url.toString();
+    }
+  } catch {
+    return connectionString;
+  }
+
+  return connectionString;
+}
+
 function createPrismaClient() {
   const adapter = new PrismaPg({
-    connectionString: process.env.DATABASE_URL!,
+    connectionString: getDatabaseConnectionString(),
     max: parsePoolMax(),
-    idleTimeoutMillis: 10_000,
+    idleTimeoutMillis: 1_000,
     connectionTimeoutMillis: 10_000,
     allowExitOnIdle: true,
   });
