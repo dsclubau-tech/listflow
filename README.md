@@ -100,6 +100,30 @@ npm.cmd run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+## Manual Worker PC Setup
+
+When ListFlow is hosted on Vercel, a trusted Windows PC can run the manual
+worker for long jobs such as price checks, eBay imports, research batches, and
+bulk eBay actions.
+
+One-time setup on each worker PC:
+
+1. Copy or clone the ListFlow folder to the PC.
+2. Add the real `.env` file to the ListFlow folder. Do not put secrets in the
+   setup script.
+3. Double-click `Setup ListFlow Worker.cmd`.
+4. Wait for setup to install dependencies, generate Prisma, and create desktop
+   shortcuts.
+
+Daily use:
+
+1. Open the Vercel ListFlow website in the browser.
+2. Double-click `Start ListFlow Worker` only when running long jobs.
+3. Close the worker window when finished.
+
+The setup writes details to `logs/setup-worker.log`. The worker writes runtime
+logs to `logs/worker.log`.
+
 ## Health Check
 
 Check database connectivity while the local app is running:
