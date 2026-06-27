@@ -54,6 +54,20 @@ function serializeWorkerStatus(
   };
 }
 
+export function getOfflineWorkerStatus(
+  message = WORKER_OFFLINE_MESSAGE
+): SerializedWorkerStatus {
+  return {
+    online: false,
+    workerId: null,
+    workerName: null,
+    lastSeenAt: null,
+    staleAfterSeconds: Math.round(WORKER_STALE_AFTER_MS / 1000),
+    message,
+    currentJobs: [],
+  };
+}
+
 export async function touchWorkerHeartbeat(input: WorkerHeartbeatInput) {
   const now = new Date();
 
@@ -87,24 +101,22 @@ export async function getWorkerStatusForStore(storeId: string) {
   return (
     workers.find((worker) => worker.online) ??
     workers[0] ??
-    serializeWorkerStatus(null)
+    getOfflineWorkerStatus()
   );
 }
 
 export async function getWorkerStatusesForStore(storeId: string) {
-  const [heartbeats, leases] = await Promise.all([
-    prisma.workerHeartbeat.findMany({
-      where: { storeId },
-      orderBy: { lastSeenAt: "desc" },
-      take: 10,
-      select: {
-        workerId: true,
-        workerName: true,
-        lastSeenAt: true,
-      },
-    }),
-    listActiveJobLeasesForStore(storeId),
-  ]);
+  const heartbeats = await prisma.workerHeartbeat.findMany({
+    where: { storeId },
+    orderBy: { lastSeenAt: "desc" },
+    take: 10,
+    select: {
+      workerId: true,
+      workerName: true,
+      lastSeenAt: true,
+    },
+  });
+  const leases = await listActiveJobLeasesForStore(storeId);
   const leasesByWorker = new Map<string, SerializedJobLease[]>();
 
   for (const lease of leases) {

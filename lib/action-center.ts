@@ -21,7 +21,7 @@ import { getCurrentEbayActionJobs } from "@/lib/ebay-action-jobs";
 import { getCurrentEbayResearchBatches } from "@/lib/ebay-research";
 import { serializePriceCheckJob } from "@/lib/price-check-jobs";
 import {
-  getWorkerStatusForStore,
+  getOfflineWorkerStatus,
   getWorkerStatusesForStore,
   type SerializedWorkerStatus,
 } from "@/lib/worker-heartbeat";
@@ -229,6 +229,24 @@ type LiveActionCenterData = Pick<ActionCenterData, "worker" | "workers" | "jobs"
   runningJobs: number;
 };
 
+function emptyLiveActionCenterData(message?: string): LiveActionCenterData {
+  const worker = getOfflineWorkerStatus(
+    message ?? "Live worker and job status is temporarily unavailable."
+  );
+
+  return {
+    worker,
+    workers: [],
+    jobs: {
+      priceChecks: [],
+      ebayImports: [],
+      ebayResearchBatches: [],
+      ebayActions: [],
+    },
+    runningJobs: 0,
+  };
+}
+
 async function getCachedActionCenterQueues(
   storeId: string,
 ): Promise<CachedActionCenterQueues> {
@@ -402,32 +420,24 @@ async function getCachedActionCenterQueues(
 async function getLiveActionCenterData(
   storeId: string,
 ): Promise<LiveActionCenterData> {
-  const [
-    priceCheckJobs,
-    ebayImportJobs,
-    ebayActionJobs,
-    ebayResearchBatches,
-    worker,
-    workers,
-  ] = await Promise.all([
-    prisma.priceCheckJob.findMany({
-      where: { storeId },
-      orderBy: { createdAt: "desc" },
-      take: RECENT_JOB_LIMIT,
-    }),
-    prisma.ebayImportJob.findMany({
-      where: { storeId },
-      orderBy: { createdAt: "desc" },
-      take: RECENT_JOB_LIMIT,
-      include: {
-        store: { select: { name: true } },
-      },
-    }),
-    getCurrentEbayActionJobs(storeId),
-    getCurrentEbayResearchBatches(storeId),
-    getWorkerStatusForStore(storeId),
-    getWorkerStatusesForStore(storeId),
-  ]);
+  const priceCheckJobs = await prisma.priceCheckJob.findMany({
+    where: { storeId },
+    orderBy: { createdAt: "desc" },
+    take: RECENT_JOB_LIMIT,
+  });
+  const ebayImportJobs = await prisma.ebayImportJob.findMany({
+    where: { storeId },
+    orderBy: { createdAt: "desc" },
+    take: RECENT_JOB_LIMIT,
+    include: {
+      store: { select: { name: true } },
+    },
+  });
+  const ebayActionJobs = await getCurrentEbayActionJobs(storeId);
+  const ebayResearchBatches = await getCurrentEbayResearchBatches(storeId);
+  const workers = await getWorkerStatusesForStore(storeId);
+  const worker =
+    workers.find((item) => item.online) ?? workers[0] ?? getOfflineWorkerStatus();
 
   const activePriceJobs = priceCheckJobs.filter((job) =>
     ACTIVE_PRICE_JOB_STATUSES.includes(job.status as (typeof ACTIVE_PRICE_JOB_STATUSES)[number])
@@ -467,10 +477,19 @@ async function getLiveActionCenterData(
 }
 
 export async function getActionCenterData(storeId: string): Promise<ActionCenterData> {
-  const [cached, live] = await Promise.all([
-    getCachedActionCenterQueues(storeId),
-    getLiveActionCenterData(storeId),
-  ]);
+  const cached = await getCachedActionCenterQueues(storeId);
+  let live: LiveActionCenterData;
+
+  try {
+    live = await getLiveActionCenterData(storeId);
+  } catch (error) {
+    const message =
+      error instanceof Error && error.message.includes("max clients")
+        ? "Live job status is temporarily unavailable because the database pool is busy."
+        : undefined;
+
+    live = emptyLiveActionCenterData(message);
+  }
 
   return {
     worker: live.worker,
