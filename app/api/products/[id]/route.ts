@@ -6,6 +6,7 @@ import { applyKeywordFilter } from "@/lib/keyword-filter";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
 import { resolveProductPolicySelection } from "@/lib/policy-defaults";
+import { invalidateProductCaches } from "@/lib/cache-tags";
 
 export async function PATCH(
   request: Request,
@@ -217,6 +218,8 @@ export async function PATCH(
       include: { store: true, createdBy: true },
     });
 
+    invalidateProductCaches(storeSession.storeId);
+
     log.info("api/products/PATCH", "Update successful", { id });
     return NextResponse.json({ ...updated, removedKeywords });
   } catch (error) {
@@ -254,6 +257,8 @@ export async function DELETE(
     });
     await prisma.variant.deleteMany({ where: { productId: id } });
     await prisma.product.delete({ where: { id } });
+
+    invalidateProductCaches(storeSession.storeId);
 
     log.info("api/products/DELETE", "Product deleted", { id });
     return NextResponse.json({ success: true });

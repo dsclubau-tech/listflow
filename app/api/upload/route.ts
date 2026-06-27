@@ -8,6 +8,7 @@ import { createRequestLogger } from "@/lib/logger";
 import { ProductStatus } from "@/app/generated/prisma/enums";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 import { policyIdsMatch, resolveProductPolicySelection } from "@/lib/policy-defaults";
+import { invalidateProductCaches } from "@/lib/cache-tags";
 
 function isTooManyItemSpecificsError(message: string | undefined) {
   return /too many item specifics|maximum.+item specifics/i.test(message ?? "");
@@ -181,6 +182,8 @@ export async function POST(request: Request) {
         },
       });
 
+      invalidateProductCaches(storeSession.storeId);
+
       return NextResponse.json({ success: true, itemId: result.itemId });
     }
 
@@ -205,6 +208,8 @@ export async function POST(request: Request) {
       },
     });
 
+    invalidateProductCaches(storeSession.storeId);
+
     return NextResponse.json(
       { success: false, error: result.errorMessage },
       { status: 422 },
@@ -225,6 +230,8 @@ export async function POST(request: Request) {
         errorMessage: message,
       },
     });
+
+    invalidateProductCaches(storeSession.storeId);
 
     const isValidationError =
       message.includes("Policy") || message.includes("Category");

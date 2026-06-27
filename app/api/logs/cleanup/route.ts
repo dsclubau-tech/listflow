@@ -1,8 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
-export const runtime = "nodejs";
-
 function assertCronSecret(request: Request) {
   const configuredSecret = process.env.CRON_SECRET;
 

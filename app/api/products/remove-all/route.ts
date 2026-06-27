@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { NextResponse } from "next/server";
+import { invalidateAllStoreCaches } from "@/lib/cache-tags";
 
 const ACTIVE_PRICE_CHECK_STATUSES = [
   PriceCheckJobStatus.QUEUED,
@@ -165,6 +166,8 @@ export async function POST(request: Request) {
       deletedUploadLogs: uploadLogs.count,
       deletedEbayImportStatsCache: ebayImportStatsCache.count,
     });
+
+    invalidateAllStoreCaches(storeSession.storeId);
 
     return NextResponse.json({
       success: true,

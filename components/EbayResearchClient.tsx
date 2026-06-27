@@ -144,6 +144,7 @@ function formatDate(value: string | null | undefined) {
   }
 
   return new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Sydney",
     day: "numeric",
     month: "short",
     hour: "numeric",

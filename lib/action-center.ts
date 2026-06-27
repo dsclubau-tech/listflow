@@ -8,6 +8,13 @@ import {
   ProductStatus,
 } from "@/app/generated/prisma/enums";
 import type { Prisma } from "@/app/generated/prisma/client";
+import { cacheLife, cacheTag } from "next/cache";
+import {
+  actionCenterCacheTag,
+  LISTFLOW_FRESH_CACHE_LIFE,
+  priceTrackerCacheTag,
+  productsCacheTag,
+} from "@/lib/cache-tags";
 import { prisma } from "@/lib/prisma";
 import { serializeEbayImportJob } from "@/lib/ebay-import-jobs";
 import { getCurrentEbayActionJobs } from "@/lib/ebay-action-jobs";
@@ -214,7 +221,26 @@ function serializeProduct(product: {
   };
 }
 
-export async function getActionCenterData(storeId: string): Promise<ActionCenterData> {
+type CachedActionCenterQueues = Pick<ActionCenterData, "queues"> & {
+  summary: Omit<ActionCenterData["summary"], "runningJobs">;
+};
+
+type LiveActionCenterData = Pick<ActionCenterData, "worker" | "workers" | "jobs"> & {
+  runningJobs: number;
+};
+
+async function getCachedActionCenterQueues(
+  storeId: string,
+): Promise<CachedActionCenterQueues> {
+  "use cache";
+
+  cacheLife(LISTFLOW_FRESH_CACHE_LIFE);
+  cacheTag(
+    actionCenterCacheTag(storeId),
+    productsCacheTag(storeId),
+    priceTrackerCacheTag(storeId),
+  );
+
   const pendingGroups = await prisma.priceHistory.groupBy({
     by: ["productId"],
     where: { appliedAt: null, product: { storeId } },
@@ -313,23 +339,6 @@ export async function getActionCenterData(storeId: string): Promise<ActionCenter
     },
   });
   const onHoldCount = await prisma.product.count({ where: onHoldWhere });
-  const priceCheckJobs = await prisma.priceCheckJob.findMany({
-    where: { storeId },
-    orderBy: { createdAt: "desc" },
-    take: RECENT_JOB_LIMIT,
-  });
-  const ebayImportJobs = await prisma.ebayImportJob.findMany({
-    where: { storeId },
-    orderBy: { createdAt: "desc" },
-    take: RECENT_JOB_LIMIT,
-    include: {
-      store: { select: { name: true } },
-    },
-  });
-  const ebayActionJobs = await getCurrentEbayActionJobs(storeId);
-  const ebayResearchBatches = await getCurrentEbayResearchBatches(storeId);
-  const worker = await getWorkerStatusForStore(storeId);
-  const workers = await getWorkerStatusesForStore(storeId);
 
   const visiblePendingByProduct = new Map<string, typeof visiblePendingHistory>();
 
@@ -364,6 +373,62 @@ export async function getActionCenterData(storeId: string): Promise<ActionCenter
     })
     .filter((item): item is PendingReviewActionItem => item !== null);
 
+  return {
+    summary: {
+      pendingReviews: pendingGroups.length,
+      failedChecks: failedChecksCount,
+      lowStock: lowStockCount,
+      onHold: onHoldCount,
+    },
+    queues: {
+      pendingReviews,
+      failedChecks: failedProducts.map((product) => ({
+        product: serializeProduct(product),
+        errorMessage: product.priceCheckError ?? "Price check failed.",
+        lastPriceCheck: iso(product.lastPriceCheck),
+      })),
+      lowStock: lowStockProducts.map((product) => ({
+        product: serializeProduct(product),
+        amazonStockLeft: product.amazonStockLeft,
+      })),
+      onHold: onHoldProducts.map((product) => ({
+        product: serializeProduct(product),
+        quantity: product.quantity,
+      })),
+    },
+  };
+}
+
+async function getLiveActionCenterData(
+  storeId: string,
+): Promise<LiveActionCenterData> {
+  const [
+    priceCheckJobs,
+    ebayImportJobs,
+    ebayActionJobs,
+    ebayResearchBatches,
+    worker,
+    workers,
+  ] = await Promise.all([
+    prisma.priceCheckJob.findMany({
+      where: { storeId },
+      orderBy: { createdAt: "desc" },
+      take: RECENT_JOB_LIMIT,
+    }),
+    prisma.ebayImportJob.findMany({
+      where: { storeId },
+      orderBy: { createdAt: "desc" },
+      take: RECENT_JOB_LIMIT,
+      include: {
+        store: { select: { name: true } },
+      },
+    }),
+    getCurrentEbayActionJobs(storeId),
+    getCurrentEbayResearchBatches(storeId),
+    getWorkerStatusForStore(storeId),
+    getWorkerStatusesForStore(storeId),
+  ]);
+
   const activePriceJobs = priceCheckJobs.filter((job) =>
     ACTIVE_PRICE_JOB_STATUSES.includes(job.status as (typeof ACTIVE_PRICE_JOB_STATUSES)[number])
   );
@@ -384,33 +449,6 @@ export async function getActionCenterData(storeId: string): Promise<ActionCenter
   return {
     worker,
     workers,
-    summary: {
-      pendingReviews: pendingGroups.length,
-      failedChecks: failedChecksCount,
-      lowStock: lowStockCount,
-      onHold: onHoldCount,
-      runningJobs:
-        activePriceJobs.length +
-        activeImportJobs.length +
-        activeResearchBatches.length +
-        activeEbayActionJobs.length,
-    },
-    queues: {
-      pendingReviews,
-      failedChecks: failedProducts.map((product) => ({
-        product: serializeProduct(product),
-        errorMessage: product.priceCheckError ?? "Price check failed.",
-        lastPriceCheck: iso(product.lastPriceCheck),
-      })),
-      lowStock: lowStockProducts.map((product) => ({
-        product: serializeProduct(product),
-        amazonStockLeft: product.amazonStockLeft,
-      })),
-      onHold: onHoldProducts.map((product) => ({
-        product: serializeProduct(product),
-        quantity: product.quantity,
-      })),
-    },
     jobs: {
       priceChecks: priceCheckJobs.map((job) => serializePriceCheckJob(job)),
       ebayImports: ebayImportJobs.map((job) => ({
@@ -420,5 +458,28 @@ export async function getActionCenterData(storeId: string): Promise<ActionCenter
       ebayResearchBatches,
       ebayActions: ebayActionJobs,
     },
+    runningJobs:
+      activePriceJobs.length +
+      activeImportJobs.length +
+      activeResearchBatches.length +
+      activeEbayActionJobs.length,
+  };
+}
+
+export async function getActionCenterData(storeId: string): Promise<ActionCenterData> {
+  const [cached, live] = await Promise.all([
+    getCachedActionCenterQueues(storeId),
+    getLiveActionCenterData(storeId),
+  ]);
+
+  return {
+    worker: live.worker,
+    workers: live.workers,
+    summary: {
+      ...cached.summary,
+      runningJobs: live.runningJobs,
+    },
+    queues: cached.queues,
+    jobs: live.jobs,
   };
 }

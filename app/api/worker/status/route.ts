@@ -7,8 +7,6 @@ import {
   getWorkerStatusesForStore,
 } from "@/lib/worker-heartbeat";
 
-export const runtime = "nodejs";
-
 export async function GET(request: Request) {
   const session = await auth();
   const storeSession = await getCurrentStoreSession();

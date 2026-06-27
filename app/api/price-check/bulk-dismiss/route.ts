@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession } from "@/lib/store-session";
+import { invalidatePriceCaches } from "@/lib/cache-tags";
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -79,6 +80,8 @@ export async function POST(request: Request) {
     dismissed: historyIds.length,
     affectedProducts: affectedProductIds.length,
   });
+
+  invalidatePriceCaches(storeSession.storeId);
 
   return NextResponse.json({
     dismissed: historyIds.length,

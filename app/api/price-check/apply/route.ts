@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { reviseProductPrice } from "@/lib/price-checker";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession } from "@/lib/store-session";
+import { invalidatePriceCaches } from "@/lib/cache-tags";
 
 const EBAY_MIN_PRICE = 1.0;
 
@@ -283,6 +284,8 @@ export async function POST(request: Request) {
       }
     );
 
+    invalidatePriceCaches(storeSession.storeId);
+
     return NextResponse.json(
       {
         error: `Local prices were applied, but eBay revise failed: ${errorMessage}`,
@@ -313,6 +316,8 @@ export async function POST(request: Request) {
     priceHistoryIds: historyIds,
     ebayItemId: product.ebayItemId,
   });
+
+  invalidatePriceCaches(storeSession.storeId);
 
   return NextResponse.json({
     success: true,

@@ -294,12 +294,19 @@ export async function withJobLeases<T>(
     return await run();
   } finally {
     clearInterval(renewal);
-    await releaseJobLeases(
-      input.storeId,
-      input.jobType,
-      input.jobId,
-      input.worker
-    );
+    try {
+      await releaseJobLeases(
+        input.storeId,
+        input.jobType,
+        input.jobId,
+        input.worker
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(
+        `[WORKER LEASE RELEASE ERROR] ${message}\n`
+      );
+    }
   }
 }
 

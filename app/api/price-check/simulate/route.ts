@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { runPriceCheck } from "@/lib/price-checker";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession } from "@/lib/store-session";
+import { invalidatePriceCaches } from "@/lib/cache-tags";
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
@@ -103,6 +104,8 @@ export async function POST(request: Request) {
       baselinePrice: simulatedPrice,
     });
 
+    invalidatePriceCaches(storeSession.storeId);
+
     return NextResponse.json({
       checked: 1,
       changed: 0,
@@ -130,6 +133,8 @@ export async function POST(request: Request) {
       simulatedPrice,
       result,
     });
+
+    invalidatePriceCaches(storeSession.storeId);
 
     return NextResponse.json(result);
   } catch (error) {

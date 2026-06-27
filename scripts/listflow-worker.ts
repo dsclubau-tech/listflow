@@ -27,7 +27,14 @@ moduleWithLoad._load = function loadWithServerOnlyShim(
   return originalLoad.call(this, request, parent, isMain);
 };
 
-const IDLE_SLEEP_MS = Number(process.env.LISTFLOW_WORKER_IDLE_SLEEP_MS ?? 10_000);
+const IDLE_SLEEP_MS = parsePositiveMs(
+  process.env.LISTFLOW_WORKER_IDLE_SLEEP_MS,
+  10_000
+);
+const ERROR_SLEEP_MS = parsePositiveMs(
+  process.env.LISTFLOW_WORKER_ERROR_SLEEP_MS,
+  Math.max(IDLE_SLEEP_MS, 30_000)
+);
 const workerName = process.env.LISTFLOW_WORKER_NAME || `${os.hostname()} manual worker`;
 const workerId =
   process.env.LISTFLOW_WORKER_ID ||
@@ -118,8 +125,17 @@ function releaseLocalWorkerGuard() {
 
 let modules: Awaited<ReturnType<typeof loadWorkerModules>>;
 
+function parsePositiveMs(raw: string | undefined, fallback: number) {
+  const value = Number.parseInt(raw ?? "", 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getErrorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error ?? "Unknown error");
 }
 
 function parseStoreFilter() {
@@ -223,46 +239,60 @@ async function main() {
 
   try {
     while (!stopping) {
-      const stores = await getActiveStores();
-      heartbeatStoreIds = stores.map((store) => store.id);
+      try {
+        const stores = await getActiveStores();
+        heartbeatStoreIds = stores.map((store) => store.id);
 
-      for (const store of stores) {
-        if (!loggedOnlineStoreIds.has(store.id)) {
-          loggedOnlineStoreIds.add(store.id);
-          modules.logger.info(
-            "worker/store-online",
-            "Worker available for store",
-            {
-              workerId,
-              workerName,
-              storeName: store.name,
-              storeLoginId: store.loginId,
-            },
-            { storeId: store.id },
-          );
+        for (const store of stores) {
+          if (!loggedOnlineStoreIds.has(store.id)) {
+            loggedOnlineStoreIds.add(store.id);
+            modules.logger.info(
+              "worker/store-online",
+              "Worker available for store",
+              {
+                workerId,
+                workerName,
+                storeName: store.name,
+                storeLoginId: store.loginId,
+              },
+              { storeId: store.id },
+            );
+          }
         }
-      }
 
-      if (stores.length === 0) {
-        console.log("No active stores found. Waiting...");
-        await sleep(IDLE_SLEEP_MS);
-        continue;
-      }
+        if (stores.length === 0) {
+          console.log("No active stores found. Waiting...");
+          await sleep(IDLE_SLEEP_MS);
+          continue;
+        }
 
-      await heartbeat();
+        await heartbeat();
 
-      let didWork = false;
+        let didWork = false;
 
-      for (const store of stores) {
+        for (const store of stores) {
+          if (stopping) {
+            break;
+          }
+
+          didWork = (await processStore(store)) || didWork;
+        }
+
+        if (!didWork && !stopping) {
+          await sleep(IDLE_SLEEP_MS);
+        }
+      } catch (error) {
         if (stopping) {
           break;
         }
 
-        didWork = (await processStore(store)) || didWork;
-      }
-
-      if (!didWork && !stopping) {
-        await sleep(IDLE_SLEEP_MS);
+        const message = getErrorMessage(error);
+        console.error(`Worker loop failed; retrying in ${ERROR_SLEEP_MS}ms:`, message);
+        modules.logger.warn("worker/loop", "Worker loop failed; retrying", {
+          error: message,
+          retryInMs: ERROR_SLEEP_MS,
+        });
+        await sleep(ERROR_SLEEP_MS);
       }
     }
   } finally {

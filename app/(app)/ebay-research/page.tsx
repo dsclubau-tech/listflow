@@ -7,8 +7,6 @@ import {
 } from "@/lib/ebay-research";
 import { getCurrentStoreSession } from "@/lib/store-session";
 
-export const runtime = "nodejs";
-
 export default async function EbayResearchPage() {
   const storeSession = await getCurrentStoreSession();
 

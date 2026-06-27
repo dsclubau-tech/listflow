@@ -92,7 +92,8 @@ function formatDateTime(value: string | null) {
     return "-";
   }
 
-  return date.toLocaleString(undefined, {
+  return date.toLocaleString("en-AU", {
+    timeZone: "Australia/Sydney",
     month: "short",
     day: "numeric",
     hour: "numeric",
@@ -105,26 +106,8 @@ function formatWorkerLastSeen(value: string | null) {
     return "Never seen";
   }
 
-  const date = new Date(value);
-
-  if (Number.isNaN(date.getTime())) {
-    return "Unknown";
-  }
-
-  const seconds = Math.max(0, Math.round((Date.now() - date.getTime()) / 1000));
-
-  if (seconds < 60) {
-    return `${seconds}s ago`;
-  }
-
-  const minutes = Math.round(seconds / 60);
-
-  if (minutes < 60) {
-    return `${minutes}m ago`;
-  }
-
-  const hours = Math.round(minutes / 60);
-  return `${hours}h ago`;
+  const formatted = formatDateTime(value);
+  return formatted === "-" ? "Unknown" : formatted;
 }
 
 function productHref(product: ActionCenterProductSummary) {

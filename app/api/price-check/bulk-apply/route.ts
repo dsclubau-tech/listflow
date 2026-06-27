@@ -5,6 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { reviseProductPrice } from "@/lib/price-checker";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession } from "@/lib/store-session";
+import { invalidatePriceCaches } from "@/lib/cache-tags";
 
 const EBAY_MIN_PRICE = 1.0;
 
@@ -305,6 +306,10 @@ export async function POST(request: Request) {
     failed,
     skipped,
   });
+
+  if (applied > 0 || failed > 0 || skipped > 0) {
+    invalidatePriceCaches(storeSession.storeId);
+  }
 
   return NextResponse.json({
     total: productIds.length,

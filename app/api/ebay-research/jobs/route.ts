@@ -7,8 +7,7 @@ import {
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
-
-export const runtime = "nodejs";
+import { invalidateJobCaches } from "@/lib/cache-tags";
 
 export async function GET(request: Request) {
   const session = await auth();
@@ -71,6 +70,8 @@ export async function POST(request: Request) {
       mode: job.mode,
       limit: job.limit,
     });
+
+    invalidateJobCaches(storeSession.storeId);
 
     return NextResponse.json({ job }, { status: 202 });
   } catch (error) {

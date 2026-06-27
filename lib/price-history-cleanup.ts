@@ -1,4 +1,5 @@
 import type { Prisma } from "@/app/generated/prisma/client";
+import { invalidatePriceCaches } from "@/lib/cache-tags";
 import { prisma } from "@/lib/prisma";
 
 export async function dismissObsoletePendingPriceChanges(
@@ -52,6 +53,10 @@ export async function dismissObsoletePendingPriceChanges(
       errorMessage: null,
     },
   });
+
+  if (storeId && result.count > 0) {
+    invalidatePriceCaches(storeId);
+  }
 
   return result.count;
 }

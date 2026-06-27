@@ -6,6 +6,7 @@ import { callEbayEndItem, getStoreNumber } from "@/lib/ebay";
 import { createRequestLogger } from "@/lib/logger";
 import { ProductStatus } from "@/app/generated/prisma/enums";
 import { getCurrentStoreSession } from "@/lib/store-session";
+import { invalidateProductCaches } from "@/lib/cache-tags";
 
 const ENDABLE_STATUSES: ProductStatus[] = [
   ProductStatus.IMPORTED,
@@ -83,6 +84,8 @@ export async function POST(
         prisma.priceHistory.deleteMany({ where: { productId: product.id } }),
         prisma.product.delete({ where: { id: product.id } }),
       ]);
+
+      invalidateProductCaches(storeSession.storeId);
 
       return NextResponse.json({ success: true, deleted: true });
     }

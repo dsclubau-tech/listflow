@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { normalizeVariantPayload, serializeVariant } from "@/lib/variants";
 import { NextResponse } from "next/server";
 import { getCurrentStoreSession } from "@/lib/store-session";
+import { invalidateProductCaches } from "@/lib/cache-tags";
 
 async function findVariant(productId: string, variantId: string, storeId: string) {
   return prisma.variant.findFirst({
@@ -46,6 +47,8 @@ export async function PATCH(
       data,
     });
 
+    invalidateProductCaches(storeSession.storeId);
+
     return NextResponse.json(serializeVariant(variant));
   } catch (error) {
     const message =
@@ -87,6 +90,8 @@ export async function DELETE(
   await prisma.variant.delete({
     where: { id: variantId },
   });
+
+  invalidateProductCaches(storeSession.storeId);
 
   return NextResponse.json({ success: true });
 }

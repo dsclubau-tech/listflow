@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist } from "next/font/google";
+import { Suspense } from "react";
 import AppErrorBoundary from "@/components/AppErrorBoundary";
 import ClientErrorMonitor from "@/components/ClientErrorMonitor";
 import "./globals.css";
@@ -23,7 +24,9 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className={`${geistSans.variable} antialiased`}>
         <ClientErrorMonitor />
-        <AppErrorBoundary>{children}</AppErrorBoundary>
+        <AppErrorBoundary>
+          <Suspense fallback={null}>{children}</Suspense>
+        </AppErrorBoundary>
       </body>
     </html>
   );

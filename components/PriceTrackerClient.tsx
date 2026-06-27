@@ -128,7 +128,8 @@ function formatDateTime(value: string | null) {
     return "Never";
   }
 
-  return date.toLocaleString(undefined, {
+  return date.toLocaleString("en-AU", {
+    timeZone: "Australia/Sydney",
     month: "short",
     day: "numeric",
     hour: "numeric",

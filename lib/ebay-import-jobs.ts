@@ -9,6 +9,7 @@ import {
 } from "@/lib/ebay-import";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
+import { invalidateJobCaches } from "@/lib/cache-tags";
 import {
   assertNoEbayLaneStartConflict,
   getEbayReadLeaseInput,
@@ -200,6 +201,7 @@ async function runEbayImportJobClaimed(jobId: string) {
       jobId: job.id,
       result,
     });
+    invalidateJobCaches(job.storeId);
   } catch (error) {
     const errorMessage = getErrorMessage(error);
 
@@ -215,6 +217,7 @@ async function runEbayImportJobClaimed(jobId: string) {
     logger.error("ebay-import/jobs", "eBay import job failed", error, {
       jobId: job.id,
     });
+    invalidateJobCaches(job.storeId);
   }
 }
 

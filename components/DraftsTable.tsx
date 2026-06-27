@@ -81,7 +81,8 @@ function formatDate(value: string | null | undefined) {
     return null;
   }
 
-  return date.toLocaleDateString(undefined, {
+  return date.toLocaleDateString("en-AU", {
+    timeZone: "Australia/Sydney",
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -99,7 +100,8 @@ function formatDateTime(value: string | null | undefined) {
     return null;
   }
 
-  return date.toLocaleString(undefined, {
+  return date.toLocaleString("en-AU", {
+    timeZone: "Australia/Sydney",
     month: "short",
     day: "numeric",
     hour: "numeric",

@@ -80,7 +80,7 @@ function getErrorMessage(error: unknown) {
 }
 
 function formatNumber(value: number) {
-  return new Intl.NumberFormat().format(value);
+  return new Intl.NumberFormat("en-AU").format(value);
 }
 
 function isActiveImportJob(job: ImportJob | null) {

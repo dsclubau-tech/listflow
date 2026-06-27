@@ -5,6 +5,7 @@ import { applyKeywordFilter } from "@/lib/keyword-filter";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
 import { resolveProductPolicySelection } from "@/lib/policy-defaults";
+import { invalidateDraftCaches } from "@/lib/cache-tags";
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -161,6 +162,8 @@ export async function POST(request: Request) {
       createdBy: true,
     },
   });
+
+  invalidateDraftCaches(storeSession.storeId);
 
   return NextResponse.json({ ...product, removedKeywords: filtered.removedKeywords }, { status: 201 });
 }

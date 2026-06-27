@@ -4,8 +4,6 @@ import { getEbayResearchJobForStore } from "@/lib/ebay-research";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession } from "@/lib/store-session";
 
-export const runtime = "nodejs";
-
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> }

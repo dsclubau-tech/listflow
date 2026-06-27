@@ -2,8 +2,6 @@ import { NextResponse } from "next/server";
 import { cleanupExpiredEbayResearchRecords } from "@/lib/ebay-research";
 import { createRequestLogger } from "@/lib/logger";
 
-export const runtime = "nodejs";
-
 export async function GET(request: Request) {
   const log = createRequestLogger(request);
   const secret = process.env.CRON_SECRET;

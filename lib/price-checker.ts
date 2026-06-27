@@ -6,10 +6,26 @@ import { buildReviseItemXML } from "@/lib/ebay-xml";
 import { callEbayReviseItem, getStoreNumber } from "@/lib/ebay";
 import { resolveDescriptionTemplate } from "@/lib/template-resolver";
 import { logger } from "@/lib/logger";
+import { invalidatePriceCaches } from "@/lib/cache-tags";
 
 const PRICE_TOLERANCE = 0.01;
-const PRODUCT_DELAY_MIN_MS = 3000;
-const PRODUCT_DELAY_MAX_MS = 7000;
+const MIN_SAFE_PRODUCT_DELAY_MS = 1000;
+const DEFAULT_PRODUCT_DELAY_MIN_MS = 3000;
+const DEFAULT_PRODUCT_DELAY_MAX_MS = 7000;
+const PRODUCT_DELAY_MIN_MS = Math.max(
+  MIN_SAFE_PRODUCT_DELAY_MS,
+  readDelayMs(
+    "LISTFLOW_PRICE_CHECK_PRODUCT_DELAY_MIN_MS",
+    DEFAULT_PRODUCT_DELAY_MIN_MS
+  )
+);
+const PRODUCT_DELAY_MAX_MS = Math.max(
+  PRODUCT_DELAY_MIN_MS,
+  readDelayMs(
+    "LISTFLOW_PRICE_CHECK_PRODUCT_DELAY_MAX_MS",
+    DEFAULT_PRODUCT_DELAY_MAX_MS
+  )
+);
 const SUPPLIER_NAME = "Amazon AU";
 
 /** Guard 1: reject price changes larger than this percentage in either direction. */
@@ -67,6 +83,16 @@ function hasMoneyChanged(previous: number, next: number) {
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function readDelayMs(envName: string, fallback: number) {
+  const raw = process.env[envName];
+  if (!raw) {
+    return fallback;
+  }
+
+  const value = Number.parseInt(raw, 10);
+  return Number.isFinite(value) ? value : fallback;
 }
 
 function getProductDelayMs() {
@@ -265,11 +291,20 @@ export async function runPriceCheck(
       return false;
     }
   };
-  const finishCancelled = () => ({
-    ...result,
-    reason: "Price check cancelled.",
-    cancelled: true,
-  });
+  const invalidateRunCaches = () => {
+    if (options.storeId) {
+      invalidatePriceCaches(options.storeId);
+    }
+  };
+  const finishCancelled = () => {
+    invalidateRunCaches();
+
+    return {
+      ...result,
+      reason: "Price check cancelled.",
+      cancelled: true,
+    };
+  };
 
   await reportProgress();
 
@@ -743,6 +778,8 @@ export async function runPriceCheck(
         await sleep(getProductDelayMs());
       }
   }
+
+  invalidateRunCaches();
 
   return result;
 }

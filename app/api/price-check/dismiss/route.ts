@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession } from "@/lib/store-session";
+import { invalidatePriceCaches } from "@/lib/cache-tags";
 
 interface ReviewRequestBody {
   priceHistoryId?: string;
@@ -127,6 +128,8 @@ export async function POST(request: Request) {
     productId: target.productId,
     priceHistoryIds: historyIds,
   });
+
+  invalidatePriceCaches(storeSession.storeId);
 
   return NextResponse.json({
     success: true,

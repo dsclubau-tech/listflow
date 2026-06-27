@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { createRequestLogger } from "@/lib/logger";
 import { cancelPriceCheckJob } from "@/lib/price-check-jobs";
 import { getCurrentStoreSession } from "@/lib/store-session";
+import { invalidateJobCaches } from "@/lib/cache-tags";
 
 export async function POST(
   request: Request,
@@ -33,6 +34,8 @@ export async function POST(
     jobId: job.id,
     status: job.status,
   });
+
+  invalidateJobCaches(storeSession.storeId);
 
   return NextResponse.json({ job });
 }

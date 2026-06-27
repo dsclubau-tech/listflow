@@ -3,6 +3,7 @@ import { dismissEbayImportJob } from "@/lib/ebay-import-jobs";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { NextResponse } from "next/server";
+import { invalidateJobCaches } from "@/lib/cache-tags";
 
 export async function POST(
   request: Request,
@@ -28,6 +29,8 @@ export async function POST(
       { status: 404 },
     );
   }
+
+  invalidateJobCaches(storeSession.storeId);
 
   return NextResponse.json({ job });
 }

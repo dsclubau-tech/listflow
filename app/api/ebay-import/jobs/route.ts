@@ -5,6 +5,7 @@ import { createRequestLogger } from "@/lib/logger";
 import { NextResponse } from "next/server";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
+import { invalidateJobCaches } from "@/lib/cache-tags";
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unknown error";
@@ -60,6 +61,8 @@ export async function POST(request: Request) {
       storeNumber: context.storeNumber,
       quantity,
     });
+
+    invalidateJobCaches(storeSession.storeId);
 
     return NextResponse.json(result);
   } catch (error) {

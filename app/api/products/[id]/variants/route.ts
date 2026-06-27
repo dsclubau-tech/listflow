@@ -7,6 +7,7 @@ import {
 } from "@/lib/variants";
 import { NextResponse } from "next/server";
 import { getCurrentStoreSession } from "@/lib/store-session";
+import { invalidateProductCaches } from "@/lib/cache-tags";
 
 export async function GET(
   _request: Request,
@@ -78,6 +79,8 @@ export async function POST(
         productId,
       },
     });
+
+    invalidateProductCaches(storeSession.storeId);
 
     return NextResponse.json(serializeVariant(variant), { status: 201 });
   } catch (error) {

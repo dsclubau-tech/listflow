@@ -7,6 +7,7 @@ import { resolveDescriptionTemplate } from "@/lib/template-resolver";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { policyIdsMatch, resolveProductPolicySelection } from "@/lib/policy-defaults";
+import { invalidateProductCaches } from "@/lib/cache-tags";
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -136,6 +137,7 @@ export async function POST(request: Request) {
         productId,
         ebayItemId: product.ebayItemId,
       });
+      invalidateProductCaches(storeSession.storeId);
       return NextResponse.json({ success: true });
     }
 
@@ -150,6 +152,7 @@ export async function POST(request: Request) {
       productId,
       ebayError: result.errorMessage,
     });
+    invalidateProductCaches(storeSession.storeId);
     return NextResponse.json(
       { success: false, error: result.errorMessage },
       { status: 422 },
@@ -167,6 +170,7 @@ export async function POST(request: Request) {
     log.error("revise/route", "Unhandled error in revise route", error, {
       productId,
     });
+    invalidateProductCaches(storeSession.storeId);
     const isValidationError =
       message.includes("Policy") ||
       message.includes("Category") ||

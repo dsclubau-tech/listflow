@@ -4,8 +4,7 @@ import { resumeEbayResearchBatch } from "@/lib/ebay-research";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
-
-export const runtime = "nodejs";
+import { invalidateJobCaches } from "@/lib/cache-tags";
 
 export async function POST(
   request: Request,
@@ -31,6 +30,8 @@ export async function POST(
     if (!batch) {
       return NextResponse.json({ error: "Batch not found" }, { status: 404 });
     }
+
+    invalidateJobCaches(storeSession.storeId);
 
     return NextResponse.json({ batch });
   } catch (error) {

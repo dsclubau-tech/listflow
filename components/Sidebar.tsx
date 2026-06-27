@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 
 interface SidebarProps {
@@ -11,6 +11,7 @@ interface SidebarProps {
 
 export default function Sidebar({ userName, userEmail }: SidebarProps) {
   const pathname = usePathname();
+  const router = useRouter();
 
   const links = [
     {
@@ -134,6 +135,9 @@ export default function Sidebar({ userName, userEmail }: SidebarProps) {
             <Link
               key={link.href}
               href={link.href}
+              prefetch
+              onFocus={() => router.prefetch(link.href)}
+              onMouseEnter={() => router.prefetch(link.href)}
               className={`flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors ${
                 isActive
                   ? "bg-gray-800 text-white"

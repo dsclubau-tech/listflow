@@ -5,6 +5,7 @@ import { createEbayActionJob } from "@/lib/ebay-action-jobs";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
+import { invalidateJobCaches } from "@/lib/cache-tags";
 
 function getErrorStatus(error: unknown) {
   return error instanceof Error &&
@@ -39,6 +40,8 @@ export async function POST(request: Request) {
       type: EbayActionJobType.RESUME,
       productIds: body.productIds ?? [],
     });
+
+    invalidateJobCaches(storeSession.storeId);
 
     return NextResponse.json(
       {

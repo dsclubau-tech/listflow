@@ -45,6 +45,7 @@ function sinceForRange(range: string) {
 
 function formatDate(value: string) {
   return new Intl.DateTimeFormat("en-AU", {
+    timeZone: "Australia/Sydney",
     month: "short",
     day: "numeric",
     hour: "2-digit",

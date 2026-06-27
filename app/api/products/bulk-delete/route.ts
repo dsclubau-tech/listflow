@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { createRequestLogger } from "@/lib/logger";
 import { NextResponse } from "next/server";
 import { getCurrentStoreSession } from "@/lib/store-session";
+import { invalidateProductCaches } from "@/lib/cache-tags";
 
 const DELETABLE_STATUSES = [ProductStatus.DRAFT, ProductStatus.FAILED];
 
@@ -83,6 +84,8 @@ export async function POST(request: Request) {
       requestedCount: productIds.length,
       deletedCount: deletedProducts.count,
     });
+
+    invalidateProductCaches(storeSession.storeId);
 
     return NextResponse.json({
       success: true,

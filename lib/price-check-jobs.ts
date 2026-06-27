@@ -7,6 +7,7 @@ import {
 } from "@/app/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
+import { invalidateJobCaches } from "@/lib/cache-tags";
 import {
   assertNoPriceCheckStartConflict,
   getPriceCheckLeaseInput,
@@ -67,6 +68,12 @@ type JobCheckpoint = {
   total: number;
   inferredFromLastCheck: boolean;
 };
+
+function invalidatePriceCheckJobCaches(job: { storeId: string | null }) {
+  if (job.storeId) {
+    invalidateJobCaches(job.storeId);
+  }
+}
 
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unexpected price check job error";
@@ -388,6 +395,8 @@ async function markPriceCheckJobCancelled(
     },
   });
 
+  invalidatePriceCheckJobCaches(job);
+
   return serializePriceCheckJob(job);
 }
 
@@ -407,7 +416,7 @@ async function runPriceCheckJobClaimed(jobId: string) {
   await persistCheckpoint(job, checkpoint);
 
   if (job.productIds.length === 0 || checkpoint.productIdsToCheck.length === 0) {
-    await prisma.priceCheckJob.update({
+    const completedJob = await prisma.priceCheckJob.update({
       where: { id: job.id },
       data: {
         status: PriceCheckJobStatus.COMPLETED,
@@ -417,9 +426,10 @@ async function runPriceCheckJobClaimed(jobId: string) {
         reason:
           job.productIds.length === 0
             ? job.reason ?? "No eligible tracked products found."
-            : "No remaining products to check.",
+          : "No remaining products to check.",
       },
     });
+    invalidatePriceCheckJobCaches(completedJob);
     return;
   }
 
@@ -474,7 +484,7 @@ async function runPriceCheckJobClaimed(jobId: string) {
       return;
     }
 
-    await prisma.priceCheckJob.update({
+    const completedJob = await prisma.priceCheckJob.update({
       where: { id: job.id },
       data: {
         status: PriceCheckJobStatus.COMPLETED,
@@ -488,6 +498,7 @@ async function runPriceCheckJobClaimed(jobId: string) {
         completedAt: new Date(),
       },
     });
+    invalidatePriceCheckJobCaches(completedJob);
 
     logger.info("price-check/jobs", "Price check job completed", {
       jobId: job.id,
@@ -506,7 +517,7 @@ async function runPriceCheckJobClaimed(jobId: string) {
       return;
     }
 
-    await prisma.priceCheckJob.update({
+    const failedJob = await prisma.priceCheckJob.update({
       where: { id: job.id },
       data: {
         status: PriceCheckJobStatus.FAILED,
@@ -514,6 +525,7 @@ async function runPriceCheckJobClaimed(jobId: string) {
         completedAt: new Date(),
       },
     });
+    invalidatePriceCheckJobCaches(failedJob);
 
     logger.error("price-check/jobs", "Price check job failed", error, { jobId: job.id });
   }

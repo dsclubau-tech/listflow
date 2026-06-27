@@ -4,6 +4,7 @@ import { createRequestLogger } from "@/lib/logger";
 import { resumePriceCheckJob } from "@/lib/price-check-jobs";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
+import { invalidateJobCaches } from "@/lib/cache-tags";
 
 export async function POST(
   request: Request,
@@ -41,6 +42,8 @@ export async function POST(
       reused: result.reused,
       resumed: result.resumed,
     });
+
+    invalidateJobCaches(storeSession.storeId);
 
     return NextResponse.json(result, {
       status: result.reused || !result.resumed ? 200 : 202,

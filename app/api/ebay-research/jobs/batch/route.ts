@@ -4,8 +4,7 @@ import { createEbayResearchBatch } from "@/lib/ebay-research";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
-
-export const runtime = "nodejs";
+import { invalidateJobCaches } from "@/lib/cache-tags";
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -43,6 +42,8 @@ export async function POST(request: Request) {
       batchId: batch.id,
       total: batch.total,
     });
+
+    invalidateJobCaches(storeSession.storeId);
 
     return NextResponse.json({ batch, jobs: batch.jobs }, { status: 202 });
   } catch (error) {

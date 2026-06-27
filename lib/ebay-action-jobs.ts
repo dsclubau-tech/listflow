@@ -17,6 +17,7 @@ import {
 } from "@/lib/job-coordination";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
+import { invalidateJobCaches, invalidateProductCaches } from "@/lib/cache-tags";
 
 const ACTIVE_ACTION_JOB_STATUSES: EbayActionJobStatus[] = [
   EbayActionJobStatus.QUEUED,
@@ -322,6 +323,9 @@ async function runEbayActionJobClaimed(jobId: string) {
           : null,
     },
   });
+
+  invalidateProductCaches(job.storeId);
+  invalidateJobCaches(job.storeId);
 }
 
 async function runEbayActionJob(jobId: string, worker?: WorkerContext) {

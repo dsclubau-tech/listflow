@@ -13,6 +13,7 @@ import {
   buildGetSellerListIdsXML,
 } from "@/lib/ebay-xml";
 import { logger } from "@/lib/logger";
+import { invalidateProductCaches } from "@/lib/cache-tags";
 import {
   getStorePolicyDefaults,
   policyIdsMatch,
@@ -723,6 +724,10 @@ export async function removeStaleListFlowEbayProducts(
     },
   });
 
+  if (result.count > 0) {
+    invalidateProductCaches(options.storeId);
+  }
+
   return {
     deleted: result.count,
     activeListings: listingIds.length,
@@ -783,6 +788,8 @@ export async function refreshProductDescriptionFromEbay(
     where: { id: product.id },
     data: { description },
   });
+
+  invalidateProductCaches(storeId);
 
   return description;
 }
@@ -986,6 +993,10 @@ export async function importEbayListings(
     storeNumber: options.storeNumber,
     ...result,
   });
+
+  if (result.created > 0) {
+    invalidateProductCaches(options.storeId);
+  }
 
   return result;
 }
