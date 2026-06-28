@@ -26,6 +26,7 @@ const DEFAULT_POSTCODE = "2217";
 const ACTIVE_SEARCH_CACHE_TTL_MS = 45 * 60 * 1000;
 const RESEARCH_BATCH_COOLDOWN_MS = 30 * 1000;
 const RESEARCH_RETENTION_MS = 2 * 60 * 60 * 1000;
+const RESEARCH_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_BATCH_QUERIES = 5;
 const TERMINAL_RESEARCH_JOB_STATUSES: EbayResearchJobStatus[] = [
   EbayResearchJobStatus.COMPLETED,
@@ -147,6 +148,7 @@ const globalForEbayResearchJobs = globalThis as typeof globalThis & {
     string,
     { expiresAt: number; results: EbayResearchResult[] }
   >;
+  listflowEbayResearchCleanupAt?: Map<string, number>;
 };
 
 function getRunningJobIds() {
@@ -163,6 +165,14 @@ function getActiveSearchCache() {
   }
 
   return globalForEbayResearchJobs.listflowEbayResearchActiveCache;
+}
+
+function getCleanupCache() {
+  if (!globalForEbayResearchJobs.listflowEbayResearchCleanupAt) {
+    globalForEbayResearchJobs.listflowEbayResearchCleanupAt = new Map();
+  }
+
+  return globalForEbayResearchJobs.listflowEbayResearchCleanupAt;
 }
 
 function getErrorMessage(error: unknown) {
@@ -1424,32 +1434,75 @@ export async function runEbayResearchQueueForStore(
   }
 }
 
-export async function cleanupExpiredEbayResearchRecords(storeId?: string) {
+export async function cleanupExpiredEbayResearchRecords(
+  storeId?: string,
+  options: { force?: boolean } = {}
+) {
   const now = new Date();
   const storeFilter = storeId ? { storeId } : {};
+  const cleanupKey = storeId ?? "__all__";
+  const cleanupCache = getCleanupCache();
 
-  return prisma.$transaction(async (tx) => {
-    const batches = await tx.ebayResearchBatch.deleteMany({
-      where: {
-        ...storeFilter,
-        expiresAt: { lte: now },
-        status: { in: TERMINAL_RESEARCH_BATCH_STATUSES },
-      },
+  if (!options.force) {
+    const lastCleanupAt = cleanupCache.get(cleanupKey) ?? 0;
+
+    if (Date.now() - lastCleanupAt < RESEARCH_CLEANUP_INTERVAL_MS) {
+      return {
+        deletedBatches: 0,
+        deletedJobs: 0,
+        skipped: true,
+      };
+    }
+  }
+
+  try {
+    const result = await prisma.$transaction(async (tx) => {
+      const batches = await tx.ebayResearchBatch.deleteMany({
+        where: {
+          ...storeFilter,
+          expiresAt: { lte: now },
+          status: { in: TERMINAL_RESEARCH_BATCH_STATUSES },
+        },
+      });
+      const standaloneJobs = await tx.ebayResearchJob.deleteMany({
+        where: {
+          ...storeFilter,
+          batchId: null,
+          expiresAt: { lte: now },
+          status: { in: TERMINAL_RESEARCH_JOB_STATUSES },
+        },
+      });
+
+      return {
+        deletedBatches: batches.count,
+        deletedJobs: standaloneJobs.count,
+        skipped: false,
+      };
     });
-    const standaloneJobs = await tx.ebayResearchJob.deleteMany({
-      where: {
-        ...storeFilter,
-        batchId: null,
-        expiresAt: { lte: now },
-        status: { in: TERMINAL_RESEARCH_JOB_STATUSES },
-      },
-    });
+
+    cleanupCache.set(cleanupKey, Date.now());
+    return result;
+  } catch (error) {
+    if (options.force) {
+      throw error;
+    }
+
+    cleanupCache.set(cleanupKey, Date.now());
+    logger.warn(
+      "ebay-research/cleanup",
+      "Skipped expired research cleanup during page read",
+      {
+        storeId,
+        errorMessage: getErrorMessage(error),
+      }
+    );
 
     return {
-      deletedBatches: batches.count,
-      deletedJobs: standaloneJobs.count,
+      deletedBatches: 0,
+      deletedJobs: 0,
+      skipped: true,
     };
-  });
+  }
 }
 
 export async function createEbayResearchJob(input: CreateEbayResearchJobInput) {

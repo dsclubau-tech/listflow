@@ -27,7 +27,9 @@ export async function GET(request: Request) {
   }
 
   try {
-    const result = await cleanupExpiredEbayResearchRecords();
+    const result = await cleanupExpiredEbayResearchRecords(undefined, {
+      force: true,
+    });
     log.info(
       "cron/ebay-research-cleanup/route",
       "Expired eBay research records removed",

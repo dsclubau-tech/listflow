@@ -22,9 +22,17 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const jobs = await getRecentEbayResearchJobs(storeSession.storeId);
+  try {
+    const jobs = await getRecentEbayResearchJobs(storeSession.storeId);
 
-  return NextResponse.json({ jobs });
+    return NextResponse.json({ jobs });
+  } catch (error) {
+    log.error("ebay-research/jobs/GET", "Failed to load research jobs", error);
+    return NextResponse.json(
+      { jobs: [], error: "Research history is temporarily unavailable." },
+      { status: 503 }
+    );
+  }
 }
 
 export async function POST(request: Request) {

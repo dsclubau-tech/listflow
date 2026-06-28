@@ -17,7 +17,19 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const batches = await getCurrentEbayResearchBatches(storeSession.storeId);
+  try {
+    const batches = await getCurrentEbayResearchBatches(storeSession.storeId);
 
-  return NextResponse.json({ batches });
+    return NextResponse.json({ batches });
+  } catch (error) {
+    log.error(
+      "ebay-research/batches/current/GET",
+      "Failed to load current research batches",
+      error
+    );
+    return NextResponse.json(
+      { batches: [], error: "Research batches are temporarily unavailable." },
+      { status: 503 }
+    );
+  }
 }

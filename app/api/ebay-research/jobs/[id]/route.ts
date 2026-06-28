@@ -23,11 +23,24 @@ export async function GET(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const job = await getEbayResearchJobForStore(id, storeSession.storeId);
+  try {
+    const job = await getEbayResearchJobForStore(id, storeSession.storeId);
 
-  if (!job) {
-    return NextResponse.json({ error: "Research job not found" }, { status: 404 });
+    if (!job) {
+      return NextResponse.json({ error: "Research job not found" }, { status: 404 });
+    }
+
+    return NextResponse.json({ job });
+  } catch (error) {
+    log.error(
+      "ebay-research/jobs/[id]/GET",
+      "Failed to load research job",
+      error,
+      { id }
+    );
+    return NextResponse.json(
+      { error: "Research job is temporarily unavailable." },
+      { status: 503 }
+    );
   }
-
-  return NextResponse.json({ job });
 }

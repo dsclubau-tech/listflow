@@ -103,6 +103,7 @@ type ResearchBatch = {
 interface EbayResearchClientProps {
   initialJobs: ResearchJob[];
   initialBatches: ResearchBatch[];
+  initialError?: string | null;
 }
 
 function isActiveJob(job: ResearchJob | null) {
@@ -446,6 +447,7 @@ function ResultsTable({
 export default function EbayResearchClient({
   initialJobs,
   initialBatches,
+  initialError = null,
 }: EbayResearchClientProps) {
   const [query, setQuery] = useState("");
   const [batchInput, setBatchInput] = useState("");
@@ -462,7 +464,7 @@ export default function EbayResearchClient({
   const [batchSubmitting, setBatchSubmitting] = useState(false);
   const [batchActionId, setBatchActionId] = useState<string | null>(null);
   const [loadingJobId, setLoadingJobId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError);
 
   const batchQueries = useMemo(() => normalizeBatchInput(batchInput), [batchInput]);
   const visibleBatches = batches.filter(isCurrentBatch);
