@@ -19,10 +19,18 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let body: { queries?: unknown; limit?: unknown };
+  let body: {
+    queries?: unknown;
+    limit?: unknown;
+    conditionFilter?: unknown;
+  };
 
   try {
-    body = (await request.json()) as { queries?: unknown; limit?: unknown };
+    body = (await request.json()) as {
+      queries?: unknown;
+      limit?: unknown;
+      conditionFilter?: unknown;
+    };
   } catch (error) {
     log.error("ebay-research/jobs/batch/POST", "Invalid JSON body", error);
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
@@ -36,11 +44,13 @@ export async function POST(request: Request) {
       storeId: storeSession.storeId,
       queries: body.queries,
       limit: body.limit,
+      conditionFilter: body.conditionFilter,
     });
 
     log.info("ebay-research/jobs/batch/POST", "Research batch accepted", {
       batchId: batch.id,
       total: batch.total,
+      conditionFilter: batch.jobs[0]?.conditionFilter,
     });
 
     invalidateJobCaches(storeSession.storeId);

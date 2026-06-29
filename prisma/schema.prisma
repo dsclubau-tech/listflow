@@ -114,6 +114,15 @@ enum EbayResearchMode {
   BOTH
 }
 
+enum EbayResearchConditionFilter {
+  ANY
+  NEW
+  USED
+  NEW_OTHER
+  REFURBISHED
+  PARTS_NOT_WORKING
+}
+
 enum EbayResearchBatchStatus {
   QUEUED
   RUNNING
@@ -343,6 +352,7 @@ model EbayResearchJob {
   batchId        String?
   status         EbayResearchJobStatus @default(QUEUED)
   mode           EbayResearchMode
+  conditionFilter EbayResearchConditionFilter @default(ANY)
   query          String
   limit          Int                   @default(50)
   activeCount    Int                   @default(0)

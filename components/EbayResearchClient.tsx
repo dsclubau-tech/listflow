@@ -19,8 +19,27 @@ type ResearchBatchStatus =
   | "PARTIAL"
   | "FAILED";
 type ResearchMode = "ACTIVE" | "SOLD" | "BOTH";
+type ResearchConditionFilter =
+  | "ANY"
+  | "NEW"
+  | "USED"
+  | "NEW_OTHER"
+  | "REFURBISHED"
+  | "PARTS_NOT_WORKING";
 type ResearchPhase = "QUICK" | "REFINING" | "COMPLETE";
 type ResultTab = "ACTIVE" | "SOLD";
+
+const CONDITION_FILTER_OPTIONS: Array<{
+  value: ResearchConditionFilter;
+  label: string;
+}> = [
+  { value: "ANY", label: "Any condition" },
+  { value: "NEW", label: "New" },
+  { value: "USED", label: "Used" },
+  { value: "NEW_OTHER", label: "New other / open box" },
+  { value: "REFURBISHED", label: "Refurbished" },
+  { value: "PARTS_NOT_WORKING", label: "For parts / not working" },
+];
 
 type ResearchSummary = {
   count: number;
@@ -63,6 +82,7 @@ type ResearchJob = {
   status: ResearchStatus;
   phase: ResearchPhase;
   mode: ResearchMode;
+  conditionFilter: ResearchConditionFilter;
   query: string;
   limit: number;
   activeCount: number;
@@ -246,6 +266,13 @@ function getJobModeLabel(job: ResearchJob) {
   }
 
   return "Advanced active + sold";
+}
+
+function getConditionFilterLabel(value: ResearchConditionFilter) {
+  return (
+    CONDITION_FILTER_OPTIONS.find((option) => option.value === value)?.label ??
+    "Any condition"
+  );
 }
 
 function SummaryStat({
@@ -452,6 +479,8 @@ export default function EbayResearchClient({
   const [query, setQuery] = useState("");
   const [batchInput, setBatchInput] = useState("");
   const [mode, setMode] = useState<ResearchMode>("BOTH");
+  const [conditionFilter, setConditionFilter] =
+    useState<ResearchConditionFilter>("ANY");
   const [limit, setLimit] = useState("25");
   const [advancedSoldComps, setAdvancedSoldComps] = useState(false);
   const [jobs, setJobs] = useState(initialJobs);
@@ -586,9 +615,12 @@ export default function EbayResearchClient({
     query?: string;
     mode?: ResearchMode;
     limit?: number;
+    conditionFilter?: ResearchConditionFilter;
   }) {
     const nextQuery = (overrides?.query ?? query).trim();
     const requestedMode = overrides?.mode ?? (advancedSoldComps ? mode : "ACTIVE");
+    const requestedConditionFilter =
+      overrides?.conditionFilter ?? conditionFilter;
 
     if (!nextQuery) {
       setError("Enter a product name to research.");
@@ -615,6 +647,7 @@ export default function EbayResearchClient({
           query: nextQuery,
           mode: requestedMode,
           limit: overrides?.limit ?? Number.parseInt(limit, 10),
+          conditionFilter: requestedConditionFilter,
         }),
       });
       const data = (await response.json().catch(() => ({}))) as {
@@ -634,6 +667,7 @@ export default function EbayResearchClient({
       setJobs((current) => mergeJob(current, data.job!));
       setActiveTab(data.job.mode === "SOLD" ? "SOLD" : "ACTIVE");
       setAdvancedSoldComps(usesSoldComps(data.job.mode));
+      setConditionFilter(data.job.conditionFilter);
     } catch (caughtError) {
       setError(getErrorMessage(caughtError));
     } finally {
@@ -662,6 +696,7 @@ export default function EbayResearchClient({
         body: JSON.stringify({
           queries: batchQueries,
           limit: Number.parseInt(limit, 10),
+          conditionFilter,
         }),
       });
       const data = (await response.json().catch(() => ({}))) as {
@@ -690,6 +725,7 @@ export default function EbayResearchClient({
       if (firstJob) {
         setSelectedJob(firstJob);
         setActiveTab("ACTIVE");
+        setConditionFilter(firstJob.conditionFilter);
       }
 
       setBatchInput("");
@@ -749,6 +785,7 @@ export default function EbayResearchClient({
         setJobs((current) => mergeJob(current, job));
         setActiveTab(job.mode === "SOLD" ? "SOLD" : "ACTIVE");
         setAdvancedSoldComps(usesSoldComps(job.mode));
+        setConditionFilter(job.conditionFilter);
       }
     } catch (caughtError) {
       setError(getErrorMessage(caughtError));
@@ -761,11 +798,13 @@ export default function EbayResearchClient({
     setQuery(job.query);
     setMode(job.mode);
     setLimit(String(Math.min(job.limit, 25)));
+    setConditionFilter(job.conditionFilter);
     setAdvancedSoldComps(usesSoldComps(job.mode));
     void startResearch({
       query: job.query,
       mode: job.mode,
       limit: Math.min(job.limit, 25),
+      conditionFilter: job.conditionFilter,
     });
   }
 
@@ -880,7 +919,7 @@ export default function EbayResearchClient({
           </button>
         </div>
         <form
-          className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_130px_auto] lg:items-end"
+          className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_190px_130px_auto] lg:items-end"
           onSubmit={(event) => {
             event.preventDefault();
             void startResearch();
@@ -898,6 +937,25 @@ export default function EbayResearchClient({
               placeholder="e.g. Sony WH-1000XM5 headphones"
               className="mt-2 w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
             />
+          </div>
+          <div>
+            <label htmlFor="research-condition" className="block text-sm font-medium text-gray-700">
+              Condition
+            </label>
+            <select
+              id="research-condition"
+              value={conditionFilter}
+              onChange={(event) =>
+                setConditionFilter(event.target.value as ResearchConditionFilter)
+              }
+              className="mt-2 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+            >
+              {CONDITION_FILTER_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </div>
           <div>
             <label htmlFor="research-limit" className="block text-sm font-medium text-gray-700">
@@ -1104,7 +1162,7 @@ export default function EbayResearchClient({
                         </div>
                         <div className="mt-1 text-xs text-gray-500">
                           {job.queuePosition ? `Queue #${job.queuePosition}` : "Safe Mode"} -{" "}
-                          {job.activeCount} results
+                          {job.activeCount} results - {getConditionFilterLabel(job.conditionFilter)}
                         </div>
                       </button>
                     ))}
@@ -1216,7 +1274,11 @@ export default function EbayResearchClient({
               <div>
                 <h2 className="font-semibold text-gray-900">{selectedJob.query}</h2>
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-sm text-gray-500">
-                  <span>{getJobModeLabel(selectedJob)}, limit {selectedJob.limit}</span>
+                  <span>
+                    {getJobModeLabel(selectedJob)},{" "}
+                    {getConditionFilterLabel(selectedJob.conditionFilter)}, limit{" "}
+                    {selectedJob.limit}
+                  </span>
                   {selectedJob.mode === "ACTIVE" && (
                     <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-medium text-green-700">
                       API-only
@@ -1298,7 +1360,7 @@ export default function EbayResearchClient({
                     <span className="truncate font-medium text-gray-900">{job.query}</span>
                   </div>
                   <div className="mt-1 text-sm text-gray-500">
-                    {getJobModeLabel(job)} - {job.activeCount} active - {job.soldCount} sold - {formatDate(job.createdAt)}
+                    {getJobModeLabel(job)} - {getConditionFilterLabel(job.conditionFilter)} - {job.activeCount} active - {job.soldCount} sold - {formatDate(job.createdAt)}
                   </div>
                 </button>
                 <button
