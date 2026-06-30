@@ -62,6 +62,9 @@ export function getBrowserLaunchUserMessage(error: unknown) {
     lower.includes("executable doesn't exist") ||
     lower.includes("playwright install") ||
     lower.includes("chromium_headless_shell") ||
+    (lower.includes("@sparticuz/chromium") &&
+      lower.includes("bin") &&
+      lower.includes("does not exist")) ||
     lower.includes("browserType.launch".toLowerCase())
   ) {
     return "Could not start the browser needed to import this Amazon product. Redeploy ListFlow with the browser runtime fix, then try again.";
