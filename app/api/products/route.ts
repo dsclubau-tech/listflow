@@ -127,43 +127,54 @@ export async function POST(request: Request) {
     );
   }
 
-  // Apply keyword blacklist filter
-  const filtered = await applyKeywordFilter(
-    title.trim(),
-    description.trim(),
-    storeSession.storeId
-  );
-  const createdById = await getInternalUserId();
+  try {
+    // Apply keyword blacklist filter
+    const filtered = await applyKeywordFilter(
+      title.trim(),
+      description.trim(),
+      storeSession.storeId
+    );
+    const createdById = await getInternalUserId();
 
-  // Create product
-  const product = await prisma.product.create({
-    data: {
-      title: filtered.title,
-      description: filtered.description,
-      price: normalizedPrice,
-      quantity: normalizedQuantity,
-      category: normalizedCategory,
-      categoryName: categoryName || null,
-      condition: condition || "New",
-      images,
-      itemSpecifics: sanitizeEbayItemSpecifics(itemSpecifics),
-      status: "DRAFT",
-      storeId: storeSession.storeId,
-      createdById,
-      asin: asin || null,
-      shippingPolicyId: policySelection.shippingPolicyId,
-      returnPolicyId: policySelection.returnPolicyId,
-      paymentPolicyId: policySelection.paymentPolicyId,
-      policyTemplateId: policySelection.policyTemplateId,
-      templateId: templateId || null,
-    },
-    include: {
-      store: true,
-      createdBy: true,
-    },
-  });
+    // Create product
+    const product = await prisma.product.create({
+      data: {
+        title: filtered.title,
+        description: filtered.description,
+        price: normalizedPrice,
+        quantity: normalizedQuantity,
+        category: normalizedCategory,
+        categoryName: categoryName || null,
+        condition: condition || "New",
+        images,
+        itemSpecifics: sanitizeEbayItemSpecifics(itemSpecifics),
+        status: "DRAFT",
+        storeId: storeSession.storeId,
+        createdById,
+        asin: asin || null,
+        shippingPolicyId: policySelection.shippingPolicyId,
+        returnPolicyId: policySelection.returnPolicyId,
+        paymentPolicyId: policySelection.paymentPolicyId,
+        policyTemplateId: policySelection.policyTemplateId,
+        templateId: templateId || null,
+      },
+      include: {
+        store: true,
+        createdBy: true,
+      },
+    });
 
-  invalidateDraftCaches(storeSession.storeId);
+    invalidateDraftCaches(storeSession.storeId);
 
-  return NextResponse.json({ ...product, removedKeywords: filtered.removedKeywords }, { status: 201 });
+    return NextResponse.json(
+      { ...product, removedKeywords: filtered.removedKeywords },
+      { status: 201 }
+    );
+  } catch (error) {
+    console.error("[api/products] Failed to create draft", error);
+    return NextResponse.json(
+      { error: "Failed to save imported product as a draft." },
+      { status: 500 }
+    );
+  }
 }

@@ -7,6 +7,36 @@ type DraftCreateResponse = {
   error?: string;
 };
 
+function getDraftCreateFallbackError(response: Response, bodyText: string) {
+  const trimmed = bodyText.trim();
+
+  if (response.status >= 500) {
+    return "Draft save failed on the server. Please try again after redeploying the latest ListFlow fix.";
+  }
+
+  if (trimmed) {
+    return trimmed.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").slice(0, 240);
+  }
+
+  return "Failed to save imported product as a draft.";
+}
+
+async function readDraftCreateResponse(response: Response) {
+  const bodyText = await response.text();
+
+  if (!bodyText.trim()) {
+    return {} as DraftCreateResponse;
+  }
+
+  try {
+    return JSON.parse(bodyText) as DraftCreateResponse;
+  } catch {
+    return {
+      error: getDraftCreateFallbackError(response, bodyText),
+    } satisfies DraftCreateResponse;
+  }
+}
+
 function normalizeTitle(data: ScrapedProduct) {
   if (!data.supplierDefaults?.capitalizeTitle) {
     return data.title;
@@ -62,7 +92,7 @@ export async function createDraftFromScrapedProduct(data: ScrapedProduct) {
     }),
   });
 
-  const body = (await response.json()) as DraftCreateResponse;
+  const body = await readDraftCreateResponse(response);
 
   if (!response.ok || !body.id) {
     throw new Error(body.error || "Failed to save imported product as a draft.");

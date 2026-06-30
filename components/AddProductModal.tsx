@@ -121,11 +121,14 @@ export default function AddProductModal({
         setError(data.error || "Scraping failed. Please try again.");
       }
     } catch (error) {
+      const message = error instanceof Error ? error.message : "";
       setError(
         error instanceof DOMException && error.name === "TimeoutError"
           ? "Amazon scraping timed out. Please try again, or use a direct /dp/ Amazon AU product URL."
-          : error instanceof Error
-          ? error.message
+          : /unexpected token|not valid json/i.test(message)
+          ? "The server returned an unexpected response while importing. Please try again after redeploying the latest ListFlow fix."
+          : message
+          ? message
           : "Request timed out or failed. Please try again."
       );
     } finally {
