@@ -1851,7 +1851,7 @@ export default function DraftsTable({
                             ? ""
                             : "s"
                         }`
-                      : "Check Selected Prices"
+                      : "Cannot Check Selected"
                   )}
                 </button>
                 {selectedPendingCount > 0 && (

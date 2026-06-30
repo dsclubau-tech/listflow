@@ -193,6 +193,8 @@ export default function ProductsPageClient({
     () => getSelectedPriceCheckSummary(products, selectedProductIds),
     [products, selectedProductIds]
   );
+  const selectedHasNoEligiblePriceChecks =
+    selectedProductIds.length > 0 && selectedPriceCheckSummary.eligibleCount === 0;
   const listingCountLabel =
     hasAdvancedFilters
       ? "filtered listings"
@@ -886,7 +888,9 @@ export default function ProductsPageClient({
   );
 
   const handleCheckPrices = () => {
-    void startPriceCheckJob(selectedProductIds);
+    void startPriceCheckJob(
+      selectedHasNoEligiblePriceChecks ? undefined : selectedProductIds
+    );
   };
   const isPriceCheckJobStopping =
     isCancellingPriceCheckJob || priceCheckJob?.status === "CANCELLING";
@@ -1112,7 +1116,9 @@ export default function ProductsPageClient({
             onClick={handleCheckPrices}
             disabled={isStartingPriceCheckJob || isPriceCheckJobActive}
             title={
-              selectedProductIds.length > 0
+              selectedHasNoEligiblePriceChecks
+                ? `${selectedPriceCheckSummary.message} This button will check all other trackable products.`
+                : selectedProductIds.length > 0
                 ? selectedPriceCheckSummary.message
                 : "Check prices for all tracked products"
             }
@@ -1138,6 +1144,8 @@ export default function ProductsPageClient({
                 ? "Stopping..."
               : isPriceCheckJobActive
                 ? `Checking ${priceCheckJob?.checked ?? 0}/${priceCheckJob?.total ?? 0}`
+              : selectedHasNoEligiblePriceChecks
+                ? "Check All Trackable"
               : selectedProductIds.length > 0
                 ? selectedPriceCheckSummary.eligibleCount > 0
                   ? `Check ${selectedPriceCheckSummary.eligibleCount} Selected`
