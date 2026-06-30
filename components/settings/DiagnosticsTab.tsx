@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import AsinLink from "@/components/AsinLink";
 import type { LogEntry } from "@/lib/logging";
 
 type LogsResponse = {
@@ -401,6 +402,15 @@ export default function DiagnosticsTab() {
                         {entry.productId && (
                           <div>Product {entry.productId.slice(0, 8)}</div>
                         )}
+                        {entry.asin && (
+                          <div>
+                            ASIN{" "}
+                            <AsinLink
+                              asin={entry.asin}
+                              className="font-mono text-xs text-orange-600 hover:text-orange-800 hover:underline"
+                            />
+                          </div>
+                        )}
                         {entry.ebayItemId && <div>eBay {entry.ebayItemId}</div>}
                       </td>
                       <td className="whitespace-nowrap px-3 py-3">
@@ -467,6 +477,13 @@ export default function DiagnosticsTab() {
                   <p>
                     <span className="font-medium text-gray-700">Product:</span>{" "}
                     {selectedEntry.productId ?? "-"}
+                  </p>
+                  <p>
+                    <span className="font-medium text-gray-700">ASIN:</span>{" "}
+                    <AsinLink
+                      asin={selectedEntry.asin}
+                      className="font-mono text-xs text-orange-600 hover:text-orange-800 hover:underline"
+                    />
                   </p>
                 </div>
                 <pre className="max-h-80 overflow-auto rounded-md bg-white p-3 text-xs text-gray-700">

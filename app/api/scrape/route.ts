@@ -6,6 +6,9 @@ import { createRequestLogger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { getStorePolicyDefaults } from "@/lib/policy-defaults";
+import { getBrowserLaunchUserMessage } from "@/lib/scraper-browser";
+
+export const maxDuration = 60;
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -101,6 +104,11 @@ export async function POST(request: Request) {
     });
   } catch (error) {
     log.error("scrape/route", "Scrape failed", error, { url });
+
+    const browserMessage = getBrowserLaunchUserMessage(error);
+    if (browserMessage) {
+      return NextResponse.json({ error: browserMessage }, { status: 503 });
+    }
 
     const message =
       error instanceof Error ? error.message : "Scraping failed unexpectedly";

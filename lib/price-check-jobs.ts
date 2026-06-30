@@ -8,6 +8,7 @@ import {
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
 import { invalidateJobCaches } from "@/lib/cache-tags";
+import { getSelectedPriceCheckSummary } from "@/lib/price-check-eligibility";
 import {
   assertNoPriceCheckStartConflict,
   getPriceCheckLeaseInput,
@@ -314,15 +315,47 @@ async function markJobProductCompleted(
   });
 }
 
-async function resolveEligibleProductIds(storeId: string, productIds: string[]) {
+async function resolvePriceCheckSelection(storeId: string, productIds: string[]) {
   const restrictToIds = productIds.length > 0;
   const requestedOrder = new Map(productIds.map((id, index) => [id, index]));
+
+  if (restrictToIds) {
+    const products = await prisma.product.findMany({
+      where: {
+        storeId,
+        id: { in: productIds },
+      },
+      select: {
+        id: true,
+        status: true,
+        asin: true,
+        _count: { select: { variants: true } },
+      },
+    });
+    const orderedProducts = products.sort(
+      (left, right) =>
+        (requestedOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
+        (requestedOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)
+    );
+    const selection = getSelectedPriceCheckSummary(
+      orderedProducts,
+      orderedProducts.map((product) => product.id)
+    );
+
+    return {
+      productIds: selection.eligibleIds,
+      emptyReason:
+        selection.selectedCount === 0
+          ? "Selected product no longer exists."
+          : selection.message,
+    };
+  }
+
   const products = await prisma.product.findMany({
     where: {
       storeId,
       status: ProductStatus.IMPORTED,
       asin: { not: null },
-      ...(restrictToIds ? { id: { in: productIds } } : {}),
     },
     select: {
       id: true,
@@ -332,17 +365,10 @@ async function resolveEligibleProductIds(storeId: string, productIds: string[]) 
   });
   const eligible = products.filter((product) => product._count.variants > 0);
 
-  if (!restrictToIds) {
-    return eligible.map((product) => product.id);
-  }
-
-  return eligible
-    .sort(
-      (left, right) =>
-        (requestedOrder.get(left.id) ?? Number.MAX_SAFE_INTEGER) -
-        (requestedOrder.get(right.id) ?? Number.MAX_SAFE_INTEGER)
-    )
-    .map((product) => product.id);
+  return {
+    productIds: eligible.map((product) => product.id),
+    emptyReason: "No eligible tracked products found.",
+  };
 }
 
 async function updateJobProgress(jobId: string, progress: PriceCheckResult & { total: number }) {
@@ -600,10 +626,11 @@ export async function createPriceCheckJob(input: CreateJobInput) {
   const scope = isSelectedScope
     ? PriceCheckJobScope.SELECTED
     : PriceCheckJobScope.ALL;
-  const eligibleProductIds = await resolveEligibleProductIds(
+  const selection = await resolvePriceCheckSelection(
     input.storeId,
     requestedProductIds
   );
+  const eligibleProductIds = selection.productIds;
   if (eligibleProductIds.length > 0) {
     await assertNoPriceCheckStartConflict({
       storeId: input.storeId,
@@ -614,9 +641,7 @@ export async function createPriceCheckJob(input: CreateJobInput) {
   const completedAt = eligibleProductIds.length === 0 ? new Date() : null;
   const reason =
     eligibleProductIds.length === 0
-      ? isSelectedScope
-        ? "No eligible tracked products found for the selected products."
-        : "No eligible tracked products found."
+      ? selection.emptyReason
       : null;
   const job = await prisma.priceCheckJob.create({
     data: {
@@ -673,10 +698,11 @@ export async function resumePriceCheckJob(
     };
   }
 
-  const eligibleProductIds = await resolveEligibleProductIds(
+  const selection = await resolvePriceCheckSelection(
     storeId,
     remainingProductIds
   );
+  const eligibleProductIds = selection.productIds;
 
   if (eligibleProductIds.length === 0) {
     return {

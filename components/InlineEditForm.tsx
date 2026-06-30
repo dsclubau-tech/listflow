@@ -4,12 +4,14 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import AsinLink from "@/components/AsinLink";
 import type { Product, Store, User } from "@/app/generated/prisma/client";
 import type { ScrapedProduct } from "@/components/AddProductModal";
 import ProductVariantsEditor from "@/components/ProductVariantsEditor";
 import RichTextEditor from "@/components/RichTextEditor";
 import { reportClientError } from "@/lib/client-logger";
 import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
+import { isValidAsin, normalizeAsin } from "@/lib/price-check-eligibility";
 
 // ----- Types -----
 
@@ -98,6 +100,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
   const [title, setTitle] = useState(product.title);
   const [category, setCategory] = useState(product.category);
   const [categoryName, setCategoryName] = useState((product as Record<string, unknown>).categoryName as string || "");
+  const [asin, setAsin] = useState(product.asin ?? "");
   const [tags, setTags] = useState("");
   const [shippingMethods, setShippingMethods] = useState("Cheapest with tracking");
 
@@ -154,6 +157,10 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
   const [isImporting, setIsImporting] = useState(false);
   const [isRegrabbing, setIsRegrabbing] = useState(false);
   const [saveMessage, setSaveMessage] = useState<SaveMessage | null>(null);
+
+  useEffect(() => {
+    setAsin(product.asin ?? "");
+  }, [product.asin]);
 
   // Parse brand / location from itemSpecifics on load
   useEffect(() => {
@@ -443,6 +450,18 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       return false;
     }
 
+    const normalizedAsin = normalizeAsin(asin);
+
+    if (normalizedAsin && !isValidAsin(normalizedAsin)) {
+      setSaveMessage({
+        variant: "error",
+        title: "Save failed",
+        text: "Amazon ASIN must be 10 letters or numbers.",
+      });
+      setIsSaving(false);
+      return false;
+    }
+
     // Country → eBay codes
     const countryCodeMap: Record<string, string> = {
       Australia: "AU",
@@ -486,6 +505,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       condition,
       category: category.trim(),
       categoryName: categoryName.trim() || null,
+      asin: normalizedAsin,
       images,
       itemSpecifics: sanitizeEbayItemSpecifics(specificsObj),
       shippingPolicyId: shippingPolicyId || null,
@@ -733,7 +753,14 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
   }
 
   async function handleRegrab() {
-    if (!product.asin) {
+    const currentAsin = normalizeAsin(asin);
+
+    if (!currentAsin || !isValidAsin(currentAsin)) {
+      setSaveMessage({
+        title: "Regrab blocked",
+        text: "Add a valid 10-character Amazon ASIN first.",
+        variant: "error",
+      });
       return;
     }
 
@@ -741,7 +768,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
     setSaveMessage(null);
 
     try {
-      const url = `https://www.amazon.com.au/dp/${product.asin}`;
+      const url = `https://www.amazon.com.au/dp/${currentAsin}`;
       const res = await fetch("/api/scrape", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -758,7 +785,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
           undefined,
           {
             productId: product.id,
-            asin: product.asin,
+            asin: currentAsin,
             status: res.status,
             error: "error" in data ? data.error : undefined,
           },
@@ -788,6 +815,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       setTitle(refreshedTitle);
       setDescription(scraped.description);
       setImages([...scraped.images]);
+      setAsin(scraped.asin || currentAsin);
       setHoveredImage(null);
       setBrand(scraped.brand);
       setItemSpecifics(
@@ -824,7 +852,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
         "inline-edit/regrab",
         "Regrab request failed",
         err,
-        { productId: product.id, asin: product.asin },
+        { productId: product.id, asin: currentAsin },
         { tags: ["regrab"] },
       );
       setSaveMessage({
@@ -861,6 +889,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
 
   const storeBadge = product.store.name;
   const thumbnail = images[0] || "";
+  const currentAsin = normalizeAsin(asin);
 
   return (
     <div className="bg-gray-50 border-t border-gray-200">
@@ -881,7 +910,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800 flex-shrink-0">
             {storeBadge}
           </span>
-          {product.asin && (
+          {currentAsin && (
             <span className="text-xs text-gray-400 flex-shrink-0">
               Supplier: Amazon AU
             </span>
@@ -890,7 +919,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
 
         {/* Right side — buttons */}
         <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
-          {product.asin && (
+          {currentAsin && (
             <button
               type="button"
               onClick={handleRegrab}
@@ -898,7 +927,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
               className="px-3 py-1.5 border border-blue-300 text-blue-700 text-sm font-medium rounded-md hover:bg-blue-50 disabled:opacity-40 transition-colors"
               title="Re-fetch product details from Amazon. This can take 10-30 seconds."
             >
-              {isRegrabbing ? "Regrabbing..." : "↻ Regrab"}
+              {isRegrabbing ? "Regrabbing..." : "Regrab"}
             </button>
           )}
           {inlineSuccessMessage && (
@@ -1129,6 +1158,35 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
               Not sure of the ID? Use the Re-suggest button or find it at{" "}
               <a href="https://www.ebay.com.au/sch/categories" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-600">ebay.com.au/sch/categories</a>
             </p>
+
+            {/* Amazon ASIN */}
+            <div className="col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Amazon ASIN</label>
+              <input
+                type="text"
+                value={asin}
+                onChange={(e) =>
+                  setAsin(
+                    e.target.value
+                      .toUpperCase()
+                      .replace(/[^A-Z0-9]/g, "")
+                      .slice(0, 10)
+                  )
+                }
+                maxLength={10}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md font-mono text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                placeholder="B0XXXXXXXX"
+              />
+              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+                <span>Required for Amazon price tracking.</span>
+                {currentAsin && isValidAsin(currentAsin) && (
+                  <AsinLink
+                    asin={currentAsin}
+                    className="font-mono text-orange-600 hover:text-orange-800 hover:underline"
+                  />
+                )}
+              </div>
+            </div>
 
             {/* Tags */}
             <div>
@@ -1382,7 +1440,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
                 price: product.price.toString(),
                 quantity: product.quantity,
                 images: product.images,
-                asin: product.asin,
+                asin: currentAsin,
               }}
             />
             <div className="hidden">
@@ -1414,7 +1472,11 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
                     </span>
                   </td>
                   <td className="px-3 py-2 text-gray-500 font-mono text-xs">
-                    {product.asin || "—"}
+                    <AsinLink
+                      asin={currentAsin}
+                      fallback="—"
+                      className="font-mono text-xs text-orange-600 hover:text-orange-800 hover:underline"
+                    />
                   </td>
                   <td className="px-3 py-2">
                     <div className="relative">

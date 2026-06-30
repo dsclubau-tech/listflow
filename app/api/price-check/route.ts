@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { runPriceCheck } from "@/lib/price-checker";
 import { createRequestLogger } from "@/lib/logger";
+import { getSelectedPriceCheckSummary } from "@/lib/price-check-eligibility";
 import { getCurrentStoreSession } from "@/lib/store-session";
 
 export async function POST(request: Request) {
@@ -154,16 +155,22 @@ export async function POST(request: Request) {
 
     const foundIds = new Set(products.map((product) => product.id));
     const missingIds = productIds.filter((id) => !foundIds.has(id));
-    const eligible = products.filter(
-      (product) =>
-        product.status === "IMPORTED" &&
-        Boolean(product.asin) &&
-        product._count.variants > 0
+    const orderedProducts = productIds
+      .map((id) => products.find((product) => product.id === id))
+      .filter((product): product is (typeof products)[number] => Boolean(product));
+    const selection = getSelectedPriceCheckSummary(
+      orderedProducts,
+      orderedProducts.map((product) => product.id)
     );
+    const eligible = selection.eligibleProducts;
     const eligibleIds = new Set(eligible.map((product) => product.id));
     const ineligibleIds = products
       .filter((product) => !eligibleIds.has(product.id))
       .map((product) => product.id);
+    const emptyReason =
+      orderedProducts.length === 0
+        ? "Selected product no longer exists."
+        : selection.message;
 
     if (eligible.length === 0) {
       return NextResponse.json({
@@ -172,7 +179,7 @@ export async function POST(request: Request) {
         pendingReview: 0,
         failed: 0,
         skipped: 0,
-        reason: "No eligible tracked products found for the selected products.",
+        reason: emptyReason,
         resolution: {
           matched: [],
           unmatched: [...missingIds, ...ineligibleIds],

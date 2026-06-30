@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import AsinLink from "@/components/AsinLink";
 import Toast from "@/components/Toast";
 import { useToast } from "@/hooks/useToast";
 
@@ -911,18 +912,10 @@ export default function PriceTrackerClient({
                       {product.title}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-amber-900">
-                      {product.asin ? (
-                        <a
-                          href={`https://www.amazon.com.au/dp/${product.asin}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="hover:text-orange-700 hover:underline"
-                        >
-                          {product.asin}
-                        </a>
-                      ) : (
-                        "-"
-                      )}
+                      <AsinLink
+                        asin={product.asin}
+                        className="font-mono text-xs text-amber-900 hover:text-orange-700 hover:underline"
+                      />
                     </td>
                     <td className="px-4 py-3 text-sm text-amber-900">
                       {product.ebayItemId ? (
@@ -1023,7 +1016,10 @@ export default function PriceTrackerClient({
                       {p.title}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-red-900">
-                      {p.asin}
+                      <AsinLink
+                        asin={p.asin}
+                        className="font-mono text-xs text-red-900 hover:text-orange-700 hover:underline"
+                      />
                     </td>
                     <td className="px-4 py-3 text-sm text-red-900">
                       {p.ebayItemId ? (
@@ -1153,7 +1149,11 @@ export default function PriceTrackerClient({
 
                     <div className="mt-4 text-xs text-gray-500">
                       <span className="font-medium text-gray-700">ASIN:</span>{" "}
-                      {selectedProduct?.asin ?? "Not available"}
+                      <AsinLink
+                        asin={selectedProduct?.asin}
+                        fallback="Not available"
+                        className="font-mono text-xs text-orange-600 hover:text-orange-800 hover:underline"
+                      />
                       <span className="mx-2 text-gray-300">|</span>
                       <span className="font-medium text-gray-700">eBay:</span>{" "}
                       {selectedProduct?.ebayItemId ?? "Not linked"}
@@ -1453,9 +1453,10 @@ export default function PriceTrackerClient({
                               <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-200 text-xs text-emerald-800">
                                 ✓
                               </span>
-                              <span className="font-mono text-xs">
-                                {m.asin}
-                              </span>
+                              <AsinLink
+                                asin={m.asin}
+                                className="font-mono text-xs text-emerald-900 hover:text-orange-700 hover:underline"
+                              />
                               <span className="truncate text-xs opacity-80">
                                 — {m.title}
                               </span>
@@ -1479,9 +1480,10 @@ export default function PriceTrackerClient({
                               <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-red-200 text-xs text-red-800">
                                 ✗
                               </span>
-                              <span className="font-mono text-xs">
-                                {asin}
-                              </span>
+                              <AsinLink
+                                asin={asin}
+                                className="font-mono text-xs text-red-900 hover:text-orange-700 hover:underline"
+                              />
                               <span className="text-xs opacity-70">
                                 — not imported or no variants
                               </span>
@@ -1702,10 +1704,8 @@ export default function PriceTrackerClient({
                       </div>
                       <div className="mt-1 flex items-center gap-2">
                         {item.product.asin && (
-                          <a
-                            href={`https://www.amazon.com.au/dp/${item.product.asin}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                          <AsinLink
+                            asin={item.product.asin}
                             className="inline-flex items-center gap-1 text-xs text-orange-600 transition-colors hover:text-orange-800"
                             title="View on Amazon"
                           >
@@ -1723,7 +1723,7 @@ export default function PriceTrackerClient({
                               />
                             </svg>
                             Amazon
-                          </a>
+                          </AsinLink>
                         )}
                         {item.product.ebayItemId && (
                           <a

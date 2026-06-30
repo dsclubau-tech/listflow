@@ -21,6 +21,7 @@ import {
 } from "@/lib/job-coordination";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
+import { launchScraperBrowser } from "@/lib/scraper-browser";
 
 const VALID_LIMITS = [10, 25] as const;
 const DEFAULT_POSTCODE = "2217";
@@ -927,8 +928,7 @@ async function scrapeSoldListings(
   conditionFilter: EbayResearchConditionFilter
 ): Promise<EbayResearchResult[]> {
   const candidateLimit = Math.min(200, Math.max(limit * 4, 100));
-  const { chromium } = await import("playwright");
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchScraperBrowser();
   const context = await browser.newContext({
     locale: "en-AU",
     viewport: { width: 1366, height: 900 },

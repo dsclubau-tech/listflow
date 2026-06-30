@@ -1,10 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import DraftsTable from "@/components/DraftsTable";
 import Toast from "@/components/Toast";
 import { useToast } from "@/hooks/useToast";
+import { getSelectedPriceCheckSummary } from "@/lib/price-check-eligibility";
 import {
   getProductAdvancedFilter,
   PRODUCT_ADVANCED_FILTERS,
@@ -188,6 +189,10 @@ export default function ProductsPageClient({
   const { toast, showToast, hideToast } = useToast();
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const isPriceCheckJobActive = isActivePriceCheckJob(priceCheckJob);
+  const selectedPriceCheckSummary = useMemo(
+    () => getSelectedPriceCheckSummary(products, selectedProductIds),
+    [products, selectedProductIds]
+  );
   const listingCountLabel =
     hasAdvancedFilters
       ? "filtered listings"
@@ -818,7 +823,24 @@ export default function ProductsPageClient({
       setIsStartingPriceCheckJob(true);
 
       try {
-        const selectedIds = productIds?.filter(Boolean) ?? [];
+        let selectedIds = productIds?.filter(Boolean) ?? [];
+        let skippedSelectedMessage: string | null = null;
+
+        if (selectedIds.length > 0) {
+          const selection = getSelectedPriceCheckSummary(products, selectedIds);
+
+          if (selection.eligibleCount === 0) {
+            showToast(selection.message, "error");
+            return;
+          }
+
+          selectedIds = selection.eligibleIds;
+
+          if (selection.ineligibleCount > 0) {
+            skippedSelectedMessage = selection.message;
+          }
+        }
+
         const response = await fetch("/api/price-check/jobs", {
           method: "POST",
           headers: {
@@ -844,7 +866,11 @@ export default function ProductsPageClient({
           showToast(
             data.reused
               ? "A price check is already running."
-              : `Price check started for ${data.job.total} product${data.job.total === 1 ? "" : "s"}.`,
+              : skippedSelectedMessage
+                ? `Price check started for ${data.job.total} product${
+                    data.job.total === 1 ? "" : "s"
+                  }. ${skippedSelectedMessage}`
+                : `Price check started for ${data.job.total} product${data.job.total === 1 ? "" : "s"}.`,
             "success"
           );
         }
@@ -856,7 +882,7 @@ export default function ProductsPageClient({
         setIsStartingPriceCheckJob(false);
       }
     },
-    [applyPriceCheckJob, isPriceCheckJobActive, showToast]
+    [applyPriceCheckJob, isPriceCheckJobActive, products, showToast]
   );
 
   const handleCheckPrices = () => {
@@ -1085,6 +1111,11 @@ export default function ProductsPageClient({
           <button
             onClick={handleCheckPrices}
             disabled={isStartingPriceCheckJob || isPriceCheckJobActive}
+            title={
+              selectedProductIds.length > 0
+                ? selectedPriceCheckSummary.message
+                : "Check prices for all tracked products"
+            }
             className="inline-flex items-center gap-2 rounded-md bg-gray-900 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <svg
@@ -1108,7 +1139,9 @@ export default function ProductsPageClient({
               : isPriceCheckJobActive
                 ? `Checking ${priceCheckJob?.checked ?? 0}/${priceCheckJob?.total ?? 0}`
               : selectedProductIds.length > 0
-                ? `Check ${selectedProductIds.length} Selected`
+                ? selectedPriceCheckSummary.eligibleCount > 0
+                  ? `Check ${selectedPriceCheckSummary.eligibleCount} Selected`
+                  : "Check Selected"
                 : "Check Prices Now"}
           </button>
           <button

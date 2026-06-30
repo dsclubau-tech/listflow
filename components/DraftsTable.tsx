@@ -3,7 +3,12 @@
 
 import { Fragment, type MouseEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import AsinLink from "@/components/AsinLink";
 import InlineEditForm from "@/components/InlineEditForm";
+import {
+  getPriceCheckEligibility,
+  getSelectedPriceCheckSummary,
+} from "@/lib/price-check-eligibility";
 import { calculateNetProfit } from "@/lib/variant-pricing";
 import type { SerializedProductRow } from "@/types/product-row";
 
@@ -140,16 +145,11 @@ function ItemIdCell({ product }: { product: SerializedProductRow }) {
       <div className="flex min-w-0 items-center gap-2">
         <PlatformIcon platform="amazon" />
         {asin ? (
-          <a
-            href={`https://www.amazon.com.au/dp/${asin}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(event) => event.stopPropagation()}
+          <AsinLink
+            asin={asin}
+            stopPropagation
             className="block truncate font-mono text-gray-700 hover:text-orange-600 hover:underline"
-            title={`Open Amazon ASIN ${asin}`}
-          >
-            {asin}
-          </a>
+          />
         ) : (
           <span className="text-gray-400">-</span>
         )}
@@ -331,11 +331,7 @@ function getPriceTrackingState(product: SerializedProductRow) {
 }
 
 function canCheckProductPrice(product: SerializedProductRow) {
-  return (
-    product.status === "IMPORTED" &&
-    Boolean(product.asin) &&
-    (product._count?.variants ?? 0) > 0
-  );
+  return getPriceCheckEligibility(product).eligible;
 }
 
 export default function DraftsTable({
@@ -719,6 +715,14 @@ export default function DraftsTable({
     ).length;
   }, [isProductsView, products, selectedIds]);
 
+  const selectedPriceCheckSummary = useMemo(
+    () =>
+      isProductsView
+        ? getSelectedPriceCheckSummary(products, selectedIds)
+        : null,
+    [isProductsView, products, selectedIds]
+  );
+
   async function handleBulkApplySelected() {
     const idsWithPending = products
       .filter(
@@ -838,13 +842,19 @@ export default function DraftsTable({
   }
 
   async function handleBulkPriceCheck() {
-    const idsToCheck = selectedIds.filter((id) => {
-      const p = products.find((prod) => prod.id === id);
-      return p && canCheckProductPrice(p);
-    });
+    const idsToCheck =
+      selectedPriceCheckSummary?.eligibleIds ??
+      selectedIds.filter((id) => {
+        const p = products.find((prod) => prod.id === id);
+        return p && canCheckProductPrice(p);
+      });
 
     if (idsToCheck.length === 0) {
-      onToast("Select at least one tracked product first.", "error");
+      onToast(
+        selectedPriceCheckSummary?.message ??
+          "Select at least one tracked product first.",
+        "error"
+      );
       return;
     }
 
@@ -852,7 +862,7 @@ export default function DraftsTable({
 
     try {
       if (onPriceCheckSelected) {
-        await onPriceCheckSelected(idsToCheck);
+        await onPriceCheckSelected(selectedIds);
         setSelectedIds([]);
         return;
       }
@@ -1591,17 +1601,15 @@ export default function DraftsTable({
                         )}
 
                         {product.asin && !isProductsView && (
-                          <a
-                            href={`https://www.amazon.com.au/dp/${product.asin}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
+                          <AsinLink
+                            asin={product.asin}
                             className="text-gray-400 hover:text-orange-500 transition-colors p-1 rounded"
                             title="Go to Amazon"
                           >
                             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
                               <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
                             </svg>
-                          </a>
+                          </AsinLink>
                         )}
 
                         {product.ebayItemId && !isProductsView && (
@@ -1721,9 +1729,21 @@ export default function DraftsTable({
 
       {selectedIds.length > 0 && (
         <div className="fixed bottom-0 left-64 right-0 bg-white border-t border-gray-200 shadow-lg p-4 z-30 flex items-center justify-between">
-          <span className="text-sm text-gray-500">
-            {selectedIds.length} product(s) selected
-          </span>
+          <div className="min-w-0">
+            <div className="text-sm text-gray-500">
+              {selectedIds.length} product(s) selected
+            </div>
+            {isProductsView &&
+              selectedPriceCheckSummary &&
+              selectedPriceCheckSummary.ineligibleCount > 0 && (
+                <div
+                  className="mt-1 max-w-2xl truncate text-xs text-amber-700"
+                  title={selectedPriceCheckSummary.message}
+                >
+                  {selectedPriceCheckSummary.message}
+                </div>
+              )}
+          </div>
           <div className="flex items-center gap-3">
             <button
               onClick={() => setSelectedIds([])}
@@ -1812,6 +1832,7 @@ export default function DraftsTable({
                 <button
                   onClick={handleBulkPriceCheck}
                   disabled={isBulkPriceChecking || isPriceCheckJobActive}
+                  title={selectedPriceCheckSummary?.message}
                   className="px-4 py-2 bg-gray-900 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
                 >
                   {isBulkPriceChecking || isPriceCheckJobActive ? (
@@ -1823,7 +1844,14 @@ export default function DraftsTable({
                       Checking...
                     </>
                   ) : (
-                    "Check Selected Prices"
+                    selectedPriceCheckSummary &&
+                    selectedPriceCheckSummary.eligibleCount > 0
+                      ? `Check ${selectedPriceCheckSummary.eligibleCount} Price${
+                          selectedPriceCheckSummary.eligibleCount === 1
+                            ? ""
+                            : "s"
+                        }`
+                      : "Check Selected Prices"
                   )}
                 </button>
                 {selectedPendingCount > 0 && (

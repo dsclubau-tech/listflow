@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import AsinLink from "@/components/AsinLink";
 import Toast from "@/components/Toast";
 import { useToast } from "@/hooks/useToast";
 import type {
@@ -222,14 +223,12 @@ function ProductLinks({ product }: { product: ActionCenterProductSummary }) {
   return (
     <div className="mt-1 flex flex-wrap items-center gap-2 text-xs">
       {product.asin && (
-        <a
-          href={`https://www.amazon.com.au/dp/${product.asin}`}
-          target="_blank"
-          rel="noopener noreferrer"
+        <AsinLink
+          asin={product.asin}
           className="text-orange-600 hover:text-orange-800"
         >
           Amazon
-        </a>
+        </AsinLink>
       )}
       {product.ebayItemId && (
         <a

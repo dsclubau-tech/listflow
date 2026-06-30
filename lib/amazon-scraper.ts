@@ -1,4 +1,5 @@
-import { chromium, type Browser } from "playwright";
+import type { Browser, Page } from "playwright-core";
+import { launchScraperBrowser } from "@/lib/scraper-browser";
 
 export interface ScrapedProduct {
   title: string;
@@ -193,7 +194,7 @@ function normalizeItemSpecificsForEbay(
  * failed. The scraper will still work without it.
  */
 async function setAmazonDeliveryPostcode(
-  page: import("playwright").Page,
+  page: Page,
   postcode: string
 ): Promise<boolean> {
   // Strategy 1: Call Amazon's AJAX address-change endpoint directly.
@@ -313,7 +314,7 @@ async function setAmazonDeliveryPostcode(
 }
 
 async function extractAmazonPriceFromPage(
-  page: import("playwright").Page
+  page: Page
 ): Promise<number | null> {
   const selectors = [
     "#priceblock_ourprice",
@@ -421,7 +422,7 @@ export async function scrapeAmazonPrice(
     throw new Error("A valid ASIN is required.");
   }
 
-  const ownedBrowser = browser ?? (await chromium.launch({ headless: true }));
+  const ownedBrowser = browser ?? (await launchScraperBrowser());
   const context = await ownedBrowser.newContext({
     userAgent: getRandomUserAgent(),
     viewport: { width: 1920, height: 1080 },
@@ -711,7 +712,7 @@ export async function scrapeAmazonProduct(
     throw new Error("Only Amazon AU (amazon.com.au) URLs are supported.");
   }
 
-  const browser = await chromium.launch({ headless: true });
+  const browser = await launchScraperBrowser();
 
   try {
     const context = await browser.newContext({

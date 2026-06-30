@@ -7,6 +7,7 @@ import { getCurrentStoreSession } from "@/lib/store-session";
 import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
 import { resolveProductPolicySelection } from "@/lib/policy-defaults";
 import { invalidateProductCaches } from "@/lib/cache-tags";
+import { isValidAsin, normalizeAsin } from "@/lib/price-check-eligibility";
 
 export async function PATCH(
   request: Request,
@@ -52,6 +53,7 @@ export async function PATCH(
     "quantity",
     "category",
     "categoryName",
+    "asin",
     "condition",
     "images",
     "itemSpecifics",
@@ -115,6 +117,26 @@ export async function PATCH(
       );
     }
     data.category = data.category.trim();
+  }
+
+  if (data.asin !== undefined) {
+    if (data.asin !== null && typeof data.asin !== "string") {
+      return NextResponse.json(
+        { error: "ASIN must be a string or null" },
+        { status: 400 },
+      );
+    }
+
+    const normalizedAsin = normalizeAsin(data.asin);
+
+    if (normalizedAsin && !isValidAsin(normalizedAsin)) {
+      return NextResponse.json(
+        { error: "ASIN must be 10 letters or numbers" },
+        { status: 400 },
+      );
+    }
+
+    data.asin = normalizedAsin;
   }
 
   if (data.images !== undefined) {
