@@ -33,6 +33,12 @@ function buildItemSpecifics(data: ScrapedProduct) {
 }
 
 export async function createDraftFromScrapedProduct(data: ScrapedProduct) {
+  if (data.price === null || data.price <= 0) {
+    throw new Error(
+      "Amazon product was found, but ListFlow could not read a valid price. No draft was created."
+    );
+  }
+
   const defaults = data.supplierDefaults;
   const response = await fetch("/api/products", {
     method: "POST",
@@ -40,7 +46,7 @@ export async function createDraftFromScrapedProduct(data: ScrapedProduct) {
     body: JSON.stringify({
       title: normalizeTitle(data),
       description: data.description,
-      price: data.price ?? 0,
+      price: data.price,
       quantity: defaults?.quantity ?? 1,
       condition: data.condition || "New",
       category: data.categoryId || "",

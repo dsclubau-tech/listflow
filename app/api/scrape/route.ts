@@ -55,6 +55,21 @@ export async function POST(request: Request) {
       supplierSettings?.scrapePostcode || undefined
     );
 
+    if (product.price === null || product.price <= 0) {
+      log.warn("scrape/route", "Scrape did not find a valid Amazon price", {
+        url,
+        asin: product.asin,
+        title: product.title,
+      });
+      return NextResponse.json(
+        {
+          error:
+            "Amazon product was found, but ListFlow could not read a valid price. Open the Amazon page, confirm the selected variation has a price, then try again.",
+        },
+        { status: 422 }
+      );
+    }
+
     log.info("scrape/route", "Scrape succeeded", {
       url,
       asin: product.asin,

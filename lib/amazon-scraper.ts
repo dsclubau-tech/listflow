@@ -831,16 +831,6 @@ export async function scrapeAmazonProduct(
         );
     });
 
-    const price = await extractAmazonPriceFromPage(page);
-
-    // Active variant
-    const variantName = await page
-      .$eval(
-        ".selection, .a-button-selected .a-button-text, #variation_size_name .selection, #variation_style_name .selection",
-        (el) => el.textContent?.trim() ?? null
-      )
-      .catch(() => null);
-
     // ASIN
     const asin = await page
       .$eval(
@@ -851,6 +841,28 @@ export async function scrapeAmazonProduct(
         const match = url.match(/\/dp\/([A-Z0-9]{10})/);
         return match ? match[1] : "";
       });
+
+    await page
+      .waitForSelector(
+        "#corePrice_feature_div, .a-price, #priceblock_ourprice, #apex_desktop, #buybox-see-all-buying-choices",
+        { timeout: 10000 }
+      )
+      .catch(() => {});
+
+    let price = await extractAmazonPriceFromPage(page);
+    const normalizedAsin = asin.trim().toUpperCase();
+
+    if (price === null && /^[A-Z0-9]{10}$/.test(normalizedAsin)) {
+      price = await extractAmazonBuyingOptionsPrice(page, normalizedAsin);
+    }
+
+    // Active variant
+    const variantName = await page
+      .$eval(
+        ".selection, .a-button-selected .a-button-text, #variation_size_name .selection, #variation_style_name .selection",
+        (el) => el.textContent?.trim() ?? null
+      )
+      .catch(() => null);
 
     // Brand
     const brand = await page
