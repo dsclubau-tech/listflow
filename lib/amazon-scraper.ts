@@ -319,6 +319,9 @@ async function extractAmazonPriceFromPage(
   const selectors = [
     "#priceblock_ourprice",
     ".a-price .a-offscreen",
+    "#aod-offer .a-price .a-offscreen",
+    "#aod-offer-list .a-price .a-offscreen",
+    "#aod-price-0 .a-offscreen",
     "#price_inside_buybox",
     'span.a-price[data-a-color="price"] .a-offscreen',
   ];
@@ -344,6 +347,8 @@ async function extractAmazonPriceFromPage(
       document.querySelector("#corePrice_feature_div"),
       document.querySelector("#apex_desktop"),
       document.querySelector("#buybox"),
+      document.querySelector("#aod-container"),
+      document.querySelector("#aod-offer-list"),
     ];
 
     const allText: string[] = [];
@@ -409,6 +414,56 @@ async function extractAmazonPriceFromPage(
   }
 
   return bestPrice;
+}
+
+async function extractAmazonBuyingOptionsPrice(
+  page: Page,
+  normalizedAsin: string
+): Promise<number | null> {
+  const directOfferPrice = await extractAmazonPriceFromPage(page);
+  if (directOfferPrice !== null) {
+    return directOfferPrice;
+  }
+
+  const buyingOptionsSelectors = [
+    "#buybox-see-all-buying-choices input",
+    "#buybox-see-all-buying-choices button",
+    "#buybox-see-all-buying-choices a",
+    "#buybox-see-all-buying-choices-announce",
+    "input[aria-labelledby*='buybox-see-all-buying']",
+    "button[aria-labelledby*='buybox-see-all-buying']",
+    "a[href*='/gp/offer-listing/']",
+  ];
+
+  for (const selector of buyingOptionsSelectors) {
+    const trigger = page.locator(selector).first();
+    const count = await trigger.count().catch(() => 0);
+
+    if (count === 0) {
+      continue;
+    }
+
+    await trigger.click({ timeout: 5000 }).catch(() => {});
+    await page
+      .waitForSelector("#aod-container, #aod-offer, #aod-offer-list", {
+        timeout: 8000,
+      })
+      .catch(() => {});
+
+    const offerPrice = await extractAmazonPriceFromPage(page);
+    if (offerPrice !== null) {
+      return offerPrice;
+    }
+  }
+
+  await page
+    .goto(`https://www.amazon.com.au/gp/offer-listing/${normalizedAsin}`, {
+      waitUntil: "load",
+      timeout: 30000,
+    })
+    .catch(() => null);
+
+  return extractAmazonPriceFromPage(page);
 }
 
 export async function scrapeAmazonPrice(
@@ -560,7 +615,11 @@ export async function scrapeAmazonPrice(
       })
       .catch(() => null);
 
-    const price = await extractAmazonPriceFromPage(page);
+    let price = await extractAmazonPriceFromPage(page);
+
+    if (price === null) {
+      price = await extractAmazonBuyingOptionsPrice(page, normalizedAsin);
+    }
 
     // Diagnostic: log page context when price extraction fails
     if (price === null) {

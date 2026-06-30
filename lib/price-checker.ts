@@ -350,13 +350,33 @@ export async function runPriceCheck(
 
     result.checked += 1;
 
+      const checkedAt = new Date();
+
       if (!product.asin || product.variants.length === 0) {
-        result.skipped += 1;
+        const priceCheckError = !product.asin
+          ? "Missing Amazon ASIN. Add an Amazon ASIN before checking this product's price."
+          : "No variants found. Add at least one variant before checking this product's price.";
+
+        result.failed += 1;
+
+        await prisma.product.update({
+          where: { id: product.id },
+          data: {
+            lastPriceCheck: checkedAt,
+            priceCheckError,
+          },
+        });
+
+        logger.warn("price-checker/run", "Price check cannot run for product", {
+          productId: product.id,
+          asin: product.asin,
+          errorMessage: priceCheckError,
+        });
+
         await reportProductComplete(product.id);
         continue;
       }
 
-      const checkedAt = new Date();
       const simulatedAmazonPrice = getSimulatedPrice(
         options.simulatedPrices,
         product.id

@@ -72,17 +72,19 @@ export function getPriceCheckEligibility(
 
   if (!normalizeAsin(product.asin)) {
     return {
-      eligible: false,
-      reason: "missing-asin",
-      message: "Selected product cannot be price checked because it has no Amazon ASIN.",
+      eligible: true,
+      reason: null,
+      message:
+        "Selected product has no Amazon ASIN, so the check will record a price-check error.",
     };
   }
 
   if (getPriceCheckVariantCount(product) <= 0) {
     return {
-      eligible: false,
-      reason: "missing-variants",
-      message: "Selected product cannot be price checked because it has no variants.",
+      eligible: true,
+      reason: null,
+      message:
+        "Selected product has no variants, so the check will record a price-check error.",
     };
   }
 

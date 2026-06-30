@@ -284,6 +284,15 @@ function getPriceTrackingState(product: SerializedProductRow) {
   const variantCount = product._count?.variants ?? 0;
   const lastHistory = product.priceHistory?.[0] ?? null;
 
+  if (product.priceCheckError) {
+    return {
+      label: "Check failed",
+      badgeClass: "bg-red-100 text-red-700",
+      priceHistoryId: null,
+      detail: product.priceCheckError,
+    };
+  }
+
   if (!product.asin || variantCount === 0) {
     return {
       label: "Not tracked",
@@ -301,15 +310,6 @@ function getPriceTrackingState(product: SerializedProductRow) {
       badgeClass: "bg-amber-100 text-amber-800",
       priceHistoryId: lastHistory.id,
       detail: getAmazonChangeDetail(product),
-    };
-  }
-
-  if (product.priceCheckError) {
-    return {
-      label: "Check failed",
-      badgeClass: "bg-red-100 text-red-700",
-      priceHistoryId: null,
-      detail: product.priceCheckError,
     };
   }
 
