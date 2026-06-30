@@ -35,6 +35,44 @@ export interface ScrapedProduct {
   };
 }
 
+type ScrapeResponseBody = Partial<ScrapedProduct> & {
+  error?: string;
+};
+
+function getFallbackScrapeError(response: Response, bodyText: string) {
+  const trimmed = bodyText.trim();
+
+  if (response.status === 504 || response.status === 408) {
+    return "Amazon scraping timed out. Please try again, or use a direct /dp/ Amazon AU product URL.";
+  }
+
+  if (response.status >= 500) {
+    return "Amazon scraping failed on the server. Please try again after redeploying the latest ListFlow fix.";
+  }
+
+  if (trimmed) {
+    return trimmed.slice(0, 240);
+  }
+
+  return "Scraping failed. Please try again.";
+}
+
+async function readScrapeResponse(response: Response) {
+  const bodyText = await response.text();
+
+  if (!bodyText.trim()) {
+    return {} as ScrapeResponseBody;
+  }
+
+  try {
+    return JSON.parse(bodyText) as ScrapeResponseBody;
+  } catch {
+    return {
+      error: getFallbackScrapeError(response, bodyText),
+    } satisfies ScrapeResponseBody;
+  }
+}
+
 export default function AddProductModal({
   isOpen,
   onClose,
@@ -69,9 +107,14 @@ export default function AddProductModal({
         signal: AbortSignal.timeout(90000), // 90s timeout for scraping
       });
 
-      const data = await res.json();
+      const data = await readScrapeResponse(res);
 
       if (res.ok) {
+        if (!data.title || !Array.isArray(data.images) || !data.asin) {
+          setError("Amazon scraping returned an incomplete product. Please try again.");
+          return;
+        }
+
         setUrl("");
         await onScraped(data as ScrapedProduct);
       } else {
@@ -79,7 +122,9 @@ export default function AddProductModal({
       }
     } catch (error) {
       setError(
-        error instanceof Error
+        error instanceof DOMException && error.name === "TimeoutError"
+          ? "Amazon scraping timed out. Please try again, or use a direct /dp/ Amazon AU product URL."
+          : error instanceof Error
           ? error.message
           : "Request timed out or failed. Please try again."
       );
