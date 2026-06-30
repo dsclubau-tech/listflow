@@ -104,7 +104,7 @@ export default function AddProductModal({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: url.trim() }),
-        signal: AbortSignal.timeout(90000), // 90s timeout for scraping
+        signal: AbortSignal.timeout(120000), // 120s timeout for slow Amazon pages
       });
 
       const data = await readScrapeResponse(res);
@@ -200,7 +200,7 @@ export default function AddProductModal({
                     d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
                   />
                 </svg>
-                Scraping Amazon and saving draft… this may take 20–30 seconds
+                Scraping Amazon and saving draft... this may take 20-45 seconds
               </div>
             ) : (
               <>

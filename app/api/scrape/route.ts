@@ -10,6 +10,25 @@ import { getBrowserLaunchUserMessage } from "@/lib/scraper-browser";
 
 export const maxDuration = 60;
 
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  message: string
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 export async function POST(request: Request) {
   const session = await auth();
   const storeSession = await getCurrentStoreSession();
@@ -81,7 +100,11 @@ export async function POST(request: Request) {
     let categoryName = "";
 
     try {
-      const suggestions = await getEbaySuggestedCategories(product.title, 1);
+      const suggestions = await withTimeout(
+        getEbaySuggestedCategories(product.title, 1),
+        5000,
+        "eBay category detection timed out"
+      );
       if (suggestions.length > 0) {
         categoryId = suggestions[0].categoryId;
         categoryName = suggestions[0].categoryName;

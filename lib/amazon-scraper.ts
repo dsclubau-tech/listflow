@@ -66,6 +66,35 @@ function parseAmazonPriceValue(value: string | null | undefined): number | null 
   return Math.round(parsed * 100) / 100;
 }
 
+function extractAmazonAsin(value: string): string | null {
+  const decoded = (() => {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  })();
+  const patterns = [
+    /\/(?:dp|gp\/product)\/([A-Z0-9]{10})(?:[/?#]|$)/i,
+    /[?&](?:asin|ASIN)=([A-Z0-9]{10})(?:[&#]|$)/,
+    /\/([A-Z0-9]{10})(?:[/?#]|$)/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = decoded.match(pattern);
+    if (match?.[1]) {
+      return match[1].toUpperCase();
+    }
+  }
+
+  return null;
+}
+
+function getCanonicalAmazonProductUrl(url: string): string {
+  const asin = extractAmazonAsin(url);
+  return asin ? `https://www.amazon.com.au/dp/${asin}` : url;
+}
+
 // ── Amazon → eBay item specifics mapping ──────────────────────────────
 
 /**
@@ -418,7 +447,8 @@ async function extractAmazonPriceFromPage(
 
 async function extractAmazonBuyingOptionsPrice(
   page: Page,
-  normalizedAsin: string
+  normalizedAsin: string,
+  options: { allowOfferListingPage?: boolean; offerListingTimeoutMs?: number } = {}
 ): Promise<number | null> {
   const directOfferPrice = await extractAmazonPriceFromPage(page);
   if (directOfferPrice !== null) {
@@ -456,10 +486,14 @@ async function extractAmazonBuyingOptionsPrice(
     }
   }
 
+  if (options.allowOfferListingPage === false) {
+    return null;
+  }
+
   await page
     .goto(`https://www.amazon.com.au/gp/offer-listing/${normalizedAsin}`, {
       waitUntil: "load",
-      timeout: 30000,
+      timeout: options.offerListingTimeoutMs ?? 30000,
     })
     .catch(() => null);
 
@@ -771,6 +805,7 @@ export async function scrapeAmazonProduct(
     throw new Error("Only Amazon AU (amazon.com.au) URLs are supported.");
   }
 
+  const canonicalUrl = getCanonicalAmazonProductUrl(url);
   const browser = await launchScraperBrowser();
 
   try {
@@ -780,16 +815,18 @@ export async function scrapeAmazonProduct(
     });
     const page = await context.newPage();
 
-    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "webdriver", {
+        get: () => false,
+      });
+    });
 
-    if (postcode) {
-      const success = await setAmazonDeliveryPostcode(page, postcode);
-      if (success) {
-        await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
-      }
-    }
+    await page.goto(canonicalUrl, {
+      waitUntil: "domcontentloaded",
+      timeout: 20000,
+    });
 
-    await page.waitForSelector("#productTitle", { timeout: 15000 });
+    await page.waitForSelector("#productTitle", { timeout: 12000 });
 
     // Title
     const title = await page.$eval(
@@ -838,22 +875,49 @@ export async function scrapeAmazonProduct(
         (el) => (el as HTMLInputElement).value
       )
       .catch(() => {
-        const match = url.match(/\/dp\/([A-Z0-9]{10})/);
-        return match ? match[1] : "";
+        return extractAmazonAsin(canonicalUrl) ?? "";
       });
+
+    const normalizedAsin = (asin || extractAmazonAsin(canonicalUrl) || "")
+      .trim()
+      .toUpperCase();
 
     await page
       .waitForSelector(
         "#corePrice_feature_div, .a-price, #priceblock_ourprice, #apex_desktop, #buybox-see-all-buying-choices",
-        { timeout: 10000 }
+        { timeout: 5000 }
       )
       .catch(() => {});
 
     let price = await extractAmazonPriceFromPage(page);
-    const normalizedAsin = asin.trim().toUpperCase();
 
     if (price === null && /^[A-Z0-9]{10}$/.test(normalizedAsin)) {
-      price = await extractAmazonBuyingOptionsPrice(page, normalizedAsin);
+      price = await extractAmazonBuyingOptionsPrice(page, normalizedAsin, {
+        allowOfferListingPage: false,
+      });
+    }
+
+    if (price === null && postcode) {
+      const success = await setAmazonDeliveryPostcode(page, postcode);
+      if (success) {
+        await page.goto(canonicalUrl, {
+          waitUntil: "domcontentloaded",
+          timeout: 20000,
+        });
+        await page
+          .waitForSelector(
+            "#corePrice_feature_div, .a-price, #priceblock_ourprice, #apex_desktop, #buybox-see-all-buying-choices",
+            { timeout: 5000 }
+          )
+          .catch(() => {});
+        price = await extractAmazonPriceFromPage(page);
+
+        if (price === null && /^[A-Z0-9]{10}$/.test(normalizedAsin)) {
+          price = await extractAmazonBuyingOptionsPrice(page, normalizedAsin, {
+            allowOfferListingPage: false,
+          });
+        }
+      }
     }
 
     // Active variant
@@ -1273,7 +1337,7 @@ export async function scrapeAmazonProduct(
       categoryName: "",
       itemSpecifics: normalizedSpecs,
       variantName,
-      asin,
+      asin: normalizedAsin || asin,
       brand,
     };
   } catch (err) {
