@@ -1,6 +1,7 @@
 export const DEFAULT_MPN = "Does not apply";
 export const DEFAULT_MODEL = "Does not apply";
 export const DEFAULT_BRAND = "Unbranded";
+export const DEFAULT_PRODUCT_IDENTIFIER = "Does not apply";
 
 const EBAY_ITEM_SPECIFIC_VALUE_MAX_LENGTH = 65;
 export const EBAY_LISTING_ITEM_SPECIFIC_MAX_COUNT = 30;
@@ -43,8 +44,22 @@ const LOW_VALUE_ITEM_SPECIFICS = new Set([
   "country of origin",
   "customer reviews",
   "date first available",
+  "ean",
+  "gtin",
   "is discontinued by manufacturer",
+  "isbn",
   "manufacturer",
+  "upc",
+]);
+
+const PRODUCT_IDENTIFIER_SPECIFICS = new Set(["upc", "ean", "isbn", "gtin"]);
+const PRODUCT_IDENTIFIER_UNAVAILABLE_VALUES = new Set([
+  "does not apply",
+  "n/a",
+  "na",
+  "none",
+  "not applicable",
+  "unknown",
 ]);
 
 const ITEM_SPECIFIC_PRIORITY = new Map(
@@ -81,6 +96,79 @@ function normalizeSpecificName(name: string) {
 
 function isLowValueSpecificName(name: string) {
   return LOW_VALUE_ITEM_SPECIFICS.has(normalizeSpecificName(name));
+}
+
+function isProductIdentifierSpecificName(name: string) {
+  return PRODUCT_IDENTIFIER_SPECIFICS.has(normalizeSpecificName(name));
+}
+
+function getNumericIdentifierCandidates(value: string) {
+  const splitCandidates = value
+    .split(/[^0-9]+/)
+    .map((candidate) => candidate.trim())
+    .filter(Boolean);
+  const compactWholeValue = value.replace(/\D/g, "");
+
+  return Array.from(
+    new Set([...splitCandidates, compactWholeValue].filter(Boolean)),
+  );
+}
+
+function getIsbnIdentifierCandidates(value: string) {
+  const splitCandidates = value
+    .split(/[^0-9Xx]+/)
+    .map((candidate) => candidate.trim().toUpperCase())
+    .filter(Boolean);
+  const compactWholeValue = value.replace(/[^0-9Xx]/g, "").toUpperCase();
+
+  return Array.from(
+    new Set([...splitCandidates, compactWholeValue].filter(Boolean)),
+  );
+}
+
+function isValidProductIdentifierCandidate(
+  normalizedName: string,
+  candidate: string,
+) {
+  if (normalizedName === "upc") {
+    return /^\d{12}$/.test(candidate);
+  }
+
+  if (normalizedName === "ean") {
+    return /^\d{8}$/.test(candidate) || /^\d{13}$/.test(candidate);
+  }
+
+  if (normalizedName === "isbn") {
+    return /^\d{9}[\dX]$/.test(candidate) || /^\d{13}$/.test(candidate);
+  }
+
+  return /^\d{8}$/.test(candidate) ||
+    /^\d{12}$/.test(candidate) ||
+    /^\d{13}$/.test(candidate) ||
+    /^\d{14}$/.test(candidate);
+}
+
+function normalizeProductIdentifierValue(name: string, value: string) {
+  const normalizedName = normalizeSpecificName(name);
+  if (!PRODUCT_IDENTIFIER_SPECIFICS.has(normalizedName)) {
+    return null;
+  }
+
+  const normalizedValue = value.trim().replace(/\s+/g, " ");
+  if (
+    PRODUCT_IDENTIFIER_UNAVAILABLE_VALUES.has(normalizedValue.toLowerCase())
+  ) {
+    return DEFAULT_PRODUCT_IDENTIFIER;
+  }
+
+  const candidates = normalizedName === "isbn"
+    ? getIsbnIdentifierCandidates(normalizedValue)
+    : getNumericIdentifierCandidates(normalizedValue);
+  const validCandidate = candidates.find((candidate) =>
+    isValidProductIdentifierCandidate(normalizedName, candidate)
+  );
+
+  return validCandidate ?? DEFAULT_PRODUCT_IDENTIFIER;
 }
 
 function truncateItemSpecificValue(value: string) {
@@ -166,12 +254,31 @@ export function sanitizeEbayItemSpecifics(value: unknown): ItemSpecificsRecord {
       continue;
     }
 
+    const productIdentifierValue = isProductIdentifierSpecificName(key)
+      ? normalizeProductIdentifierValue(key, value)
+      : null;
+
     sanitized[key] = key.startsWith("_")
       ? value
-      : truncateItemSpecificValue(value);
+      : productIdentifierValue ?? truncateItemSpecificValue(value);
   }
 
   return sanitized;
+}
+
+export function getEbayProductUpc(value: unknown): string {
+  const specifics = sanitizeEbayItemSpecifics(value);
+  const upc = getItemSpecificValue(specifics, ["UPC"]);
+
+  if (
+    upc &&
+    upc !== DEFAULT_PRODUCT_IDENTIFIER &&
+    isValidProductIdentifierCandidate("upc", upc)
+  ) {
+    return upc;
+  }
+
+  return DEFAULT_PRODUCT_IDENTIFIER;
 }
 
 export function getListingItemSpecifics(

@@ -1,5 +1,6 @@
 import type { Product, Store } from "@/app/generated/prisma/client";
 import {
+  getEbayProductUpc,
   getListingItemSpecifics,
   normalizeItemSpecifics,
   type ItemSpecificsRecord,
@@ -128,7 +129,7 @@ function buildItemSpecificsXml(
 }
 
 function buildProductListingDetailsXml(specifics: ProductSpecifics | null): string {
-  const upc = specifics?.UPC || specifics?.EAN || "Does not apply";
+  const upc = getEbayProductUpc(specifics);
 
   return `    <ProductListingDetails>\n      <UPC>${escapeXml(upc)}</UPC>\n    </ProductListingDetails>`;
 }

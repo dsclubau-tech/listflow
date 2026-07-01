@@ -129,6 +129,10 @@ function parseAmazonPriceValue(value: string | null | undefined): number | null 
   return Math.round(parsed * 100) / 100;
 }
 
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function decodeUrl(value: string) {
   try {
     return decodeURIComponent(value);
@@ -520,7 +524,8 @@ function extractImages($: CheerioAPI, html: string) {
 function extractPriceFromSelection(
   $: CheerioAPI,
   root: CheerioSelection,
-  selectors: string[]
+  selectors: string[],
+  options: { scanText?: boolean } = {}
 ) {
   for (const selector of selectors) {
     const prices: number[] = [];
@@ -536,7 +541,36 @@ function extractPriceFromSelection(
     }
   }
 
-  const containerText = normalizeText(root.text());
+  let wholeFractionPrice: number | null = null;
+  root.find(".a-price").each((_, element) => {
+    if (wholeFractionPrice !== null) {
+      return;
+    }
+
+    const whole = normalizeText($(element).find(".a-price-whole").first().text());
+    const fraction = normalizeText(
+      $(element).find(".a-price-fraction").first().text()
+    );
+    const price = parseAmazonPriceValue(
+      whole && fraction ? `${whole}.${fraction}` : ""
+    );
+
+    if (price !== null) {
+      wholeFractionPrice = price;
+    }
+  });
+
+  if (wholeFractionPrice !== null) {
+    return wholeFractionPrice;
+  }
+
+  if (options.scanText === false) {
+    return null;
+  }
+
+  const textRoot = root.clone();
+  textRoot.find("script, style, noscript, template").remove();
+  const containerText = normalizeText(textRoot.text());
   const pricePattern = /(?:A(?:U)?\$|US\$|\$)\s*([\d,]+\.\d{2})\b/g;
   let match: RegExpExecArray | null;
   while ((match = pricePattern.exec(containerText)) !== null) {
@@ -549,10 +583,41 @@ function extractPriceFromSelection(
   return null;
 }
 
-function extractProductPrice($: CheerioAPI) {
-  const direct = extractPriceFromSelection($, $.root(), PRODUCT_PRICE_SELECTORS);
+function extractSelectedTwisterPrice(html: string, asin: string) {
+  const selectedMatch = html.match(
+    /"dimensionValueState"\s*:\s*"SELECTED"[\s\S]{0,1800}?"priceWithoutCurrencySymbol"\s*:\s*"([\d,.]+)"/
+  );
+  const selectedPrice = parseAmazonPriceValue(selectedMatch?.[1]);
+
+  if (selectedPrice !== null) {
+    return selectedPrice;
+  }
+
+  if (!asin) {
+    return null;
+  }
+
+  const asinPattern = new RegExp(
+    `"defaultAsin"\\s*:\\s*"${escapeRegExp(
+      asin
+    )}"[\\s\\S]{0,1800}?"priceWithoutCurrencySymbol"\\s*:\\s*"([\\d,.]+)"`,
+    "i"
+  );
+  const asinMatch = html.match(asinPattern);
+  return parseAmazonPriceValue(asinMatch?.[1]);
+}
+
+function extractProductPrice($: CheerioAPI, html: string, asin: string) {
+  const direct = extractPriceFromSelection($, $.root(), PRODUCT_PRICE_SELECTORS, {
+    scanText: false,
+  });
   if (direct !== null) {
     return direct;
+  }
+
+  const selectedTwisterPrice = extractSelectedTwisterPrice(html, asin);
+  if (selectedTwisterPrice !== null) {
+    return selectedTwisterPrice;
   }
 
   const containers = [
@@ -908,7 +973,7 @@ function parseProductHtml(html: string, canonicalUrl: string) {
     title,
     description: renderDescription($, title),
     images,
-    price: extractProductPrice($),
+    price: extractProductPrice($, html, asin),
     condition: "New" as const,
     category: extractCategory($),
     categoryId: "",
