@@ -80,7 +80,6 @@ const PRODUCT_PRICE_SELECTORS = [
   "#priceblock_ourprice",
   "#priceblock_dealprice",
   "#price_inside_buybox",
-  'span.a-price[data-a-color="price"] .a-offscreen',
 ];
 
 export class AmazonDirectScrapeError extends Error {
@@ -642,7 +641,7 @@ function extractAodPrice(html: string) {
   const $ = load(html);
 
   let selectedPrice: number | null = null;
-  $("#aod-offer, .aod-offer").each((_, offer) => {
+  $("#aod-pinned-offer, #aod-sticky-pinned-offer, #aod-offer, .aod-offer").each((_, offer) => {
     if (selectedPrice !== null) {
       return;
     }
@@ -663,11 +662,22 @@ function extractAodPrice(html: string) {
     ]);
   });
 
-  return selectedPrice ?? extractPriceFromSelection($, $.root(), [
+  if (selectedPrice !== null) {
+    return selectedPrice;
+  }
+
+  const aodRoot = $(
+    "#aod-container, #all-offers-display, #aod-offer-list, #aod-offer, .aod-offer"
+  );
+  if (aodRoot.length === 0) {
+    return null;
+  }
+
+  return extractPriceFromSelection($, aodRoot, [
     "#aod-offer .a-price .a-offscreen",
     ".aod-price .a-offscreen",
     ".a-price .a-offscreen",
-  ]);
+  ], { scanText: false });
 }
 
 async function fetchAodPrice(
