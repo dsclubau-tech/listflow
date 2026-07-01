@@ -43,7 +43,7 @@ function getFallbackScrapeError(response: Response, bodyText: string) {
   const trimmed = bodyText.trim();
 
   if (response.status === 504 || response.status === 408) {
-    return "Amazon scraping timed out. Please try again, or use a direct /dp/ Amazon AU product URL.";
+    return "Amazon is taking too long to respond. No draft was created.";
   }
 
   if (response.status >= 500) {
@@ -104,7 +104,7 @@ export default function AddProductModal({
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ url: url.trim() }),
-        signal: AbortSignal.timeout(120000), // 120s timeout for slow Amazon pages
+        signal: AbortSignal.timeout(45000), // 45s timeout for direct Amazon import
       });
 
       const data = await readScrapeResponse(res);
@@ -124,7 +124,7 @@ export default function AddProductModal({
       const message = error instanceof Error ? error.message : "";
       setError(
         error instanceof DOMException && error.name === "TimeoutError"
-          ? "Amazon scraping timed out. Please try again, or use a direct /dp/ Amazon AU product URL."
+          ? "Amazon is taking too long to respond. No draft was created."
           : /unexpected token|not valid json/i.test(message)
           ? "The server returned an unexpected response while importing. Please try again after redeploying the latest ListFlow fix."
           : message
@@ -200,7 +200,7 @@ export default function AddProductModal({
                     d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
                   />
                 </svg>
-                Scraping Amazon and saving draft... this may take 20-45 seconds
+                Importing from Amazon... this should take under 30 seconds
               </div>
             ) : (
               <>

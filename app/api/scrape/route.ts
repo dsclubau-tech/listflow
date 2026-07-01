@@ -1,12 +1,15 @@
 import { auth } from "@/auth";
 import { NextResponse } from "next/server";
-import { scrapeAmazonProduct } from "@/lib/amazon-scraper";
+import {
+  AmazonDirectScrapeError,
+  scrapeAmazonProductDirect,
+  type AmazonScrapeStage,
+} from "@/lib/amazon-direct-scraper";
 import { getEbaySuggestedCategories } from "@/lib/ebay";
 import { createRequestLogger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { getStorePolicyDefaults } from "@/lib/policy-defaults";
-import { getBrowserLaunchUserMessage } from "@/lib/scraper-browser";
 
 export const maxDuration = 60;
 
@@ -69,10 +72,25 @@ export async function POST(request: Request) {
       where: { supplierName: "Amazon AU", storeId: storeSession.storeId },
     });
 
-    const product = await scrapeAmazonProduct(
-      url,
-      supplierSettings?.scrapePostcode || undefined
-    );
+    const logStage = (
+      stage: AmazonScrapeStage,
+      durationMs: number,
+      metadata: Record<string, unknown> = {}
+    ) => {
+      log.info("scrape/route", "Scrape stage completed", {
+        stage,
+        durationMs,
+        ...metadata,
+      });
+    };
+
+    const product = await scrapeAmazonProductDirect(url, {
+      onStage: logStage,
+      postcode:
+        supplierSettings?.scrapePostcode?.trim() ||
+        supplierSettings?.defaultZipcode?.trim() ||
+        "2217",
+    });
 
     if (product.price === null || product.price <= 0) {
       log.warn("scrape/route", "Scrape did not find a valid Amazon price", {
@@ -98,6 +116,7 @@ export async function POST(request: Request) {
 
     let categoryId = "";
     let categoryName = "";
+    const categoryStartedAt = Date.now();
 
     try {
       const suggestions = await withTimeout(
@@ -105,6 +124,9 @@ export async function POST(request: Request) {
         5000,
         "eBay category detection timed out"
       );
+      logStage("category_suggest", Date.now() - categoryStartedAt, {
+        totalSuggestions: suggestions.length,
+      });
       if (suggestions.length > 0) {
         categoryId = suggestions[0].categoryId;
         categoryName = suggestions[0].categoryName;
@@ -114,7 +136,11 @@ export async function POST(request: Request) {
           totalSuggestions: suggestions.length,
         });
       }
-    } catch {
+    } catch (error) {
+      logStage("category_suggest", Date.now() - categoryStartedAt, {
+        failed: true,
+        reason: error instanceof Error ? error.message : "unknown",
+      });
       log.error("scrape/route", "Category detection failed (non-blocking)", undefined, {
         title: product.title,
       });
@@ -134,6 +160,13 @@ export async function POST(request: Request) {
       capitalizeTitle: supplierSettings?.capitalizeTitle ?? false,
     };
 
+    logStage("draft_ready", 0, {
+      asin: product.asin,
+      title: product.title,
+      price: product.price,
+      imageCount: product.images.length,
+    });
+
     return NextResponse.json({
       ...product,
       categoryId,
@@ -143,9 +176,11 @@ export async function POST(request: Request) {
   } catch (error) {
     log.error("scrape/route", "Scrape failed", error, { url });
 
-    const browserMessage = getBrowserLaunchUserMessage(error);
-    if (browserMessage) {
-      return NextResponse.json({ error: browserMessage }, { status: 503 });
+    if (error instanceof AmazonDirectScrapeError) {
+      return NextResponse.json(
+        { error: error.message, code: error.code },
+        { status: error.status }
+      );
     }
 
     const message =
