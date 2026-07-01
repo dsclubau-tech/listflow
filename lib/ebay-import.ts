@@ -26,7 +26,16 @@ export interface EbayImportOptions {
   storeNumber: 1 | 2 | 3;
   userId: string;
   quantity: number;
+  selectedListingIds?: string[];
+  completedListingIds?: string[];
+  initialCreated?: number;
+  initialSkipped?: number;
+  initialFailed?: number;
+  initialErrors?: Array<{ itemId: string; title: string; error: string }>;
+  previousRemainingBeforeImport?: number;
+  onSelectionResolved?: (selection: ImportSelection) => void | Promise<void>;
   onProgress?: (progress: ImportProgress) => void | Promise<void>;
+  shouldStop?: () => ImportStopReason | null | Promise<ImportStopReason | null>;
 }
 
 export interface ImportProgress {
@@ -36,7 +45,18 @@ export interface ImportProgress {
   skipped: number;
   failed: number;
   currentItemId?: string;
+  completedListingIds?: string[];
 }
+
+export interface ImportSelection {
+  requested: number;
+  activeListings: number;
+  alreadyImported: number;
+  remainingBeforeImport: number;
+  selectedListingIds: string[];
+}
+
+export type ImportStopReason = "PAUSED" | "CANCELLED";
 
 export interface EbayImportStats {
   activeListings: number;
@@ -55,8 +75,12 @@ export interface EbayImportResult {
   created: number;
   skipped: number;
   failed: number;
+  processed: number;
   rateLimited: boolean;
   errors: Array<{ itemId: string; title: string; error: string }>;
+  selectedListingIds: string[];
+  completedListingIds: string[];
+  stopReason: ImportStopReason | null;
 }
 
 type EbayNode = Record<string, unknown>;
@@ -883,31 +907,58 @@ export async function importEbayListings(
   );
   const existingIds = await getExistingEbayItemIds(options.storeId, listingIds);
   const remainingIds = listingIds.filter((itemId) => !existingIds.has(itemId));
-  const requested = Math.min(
-    Math.max(0, Math.floor(options.quantity)),
-    remainingIds.length,
+  const suppliedSelectedIds = options.selectedListingIds?.filter(Boolean) ?? [];
+  const selectedIds =
+    suppliedSelectedIds.length > 0
+      ? suppliedSelectedIds.filter((itemId) => listingIds.includes(itemId))
+      : remainingIds.slice(
+          0,
+          Math.min(Math.max(0, Math.floor(options.quantity)), remainingIds.length),
+        );
+  const selectedIdSet = new Set(selectedIds);
+  const completedIds = new Set(
+    (options.completedListingIds ?? []).filter((itemId) =>
+      selectedIdSet.has(itemId),
+    ),
   );
-  const selectedIds = remainingIds.slice(0, requested);
+  const requested = selectedIds.length;
   const policyDefaults = await getStorePolicyDefaults(options.storeId);
+  const remainingBeforeImport =
+    options.previousRemainingBeforeImport && options.previousRemainingBeforeImport > 0
+      ? options.previousRemainingBeforeImport
+      : remainingIds.length;
   const result: EbayImportResult = {
     requested,
     activeListings: listingIds.length,
     alreadyImported: existingIds.size,
-    remainingBeforeImport: remainingIds.length,
-    remainingAfterImport: remainingIds.length,
-    created: 0,
-    skipped: 0,
-    failed: 0,
+    remainingBeforeImport,
+    remainingAfterImport: remainingBeforeImport,
+    created: options.initialCreated ?? 0,
+    skipped: options.initialSkipped ?? 0,
+    failed: options.initialFailed ?? 0,
+    processed: completedIds.size,
     rateLimited: false,
-    errors: [],
+    errors: options.initialErrors ?? [],
+    selectedListingIds: selectedIds,
+    completedListingIds: [...completedIds],
+    stopReason: null,
   };
 
+  await options.onSelectionResolved?.({
+    requested,
+    activeListings: result.activeListings,
+    alreadyImported: result.alreadyImported,
+    remainingBeforeImport: result.remainingBeforeImport,
+    selectedListingIds: selectedIds,
+  });
+
   await options.onProgress?.({
-    processed: 0,
+    processed: completedIds.size,
     total: selectedIds.length,
     created: result.created,
     skipped: result.skipped,
     failed: result.failed,
+    completedListingIds: [...completedIds],
   });
 
   let itemsById = new Map<string, EbayNode>();
@@ -929,7 +980,18 @@ export async function importEbayListings(
     );
   }
 
-  for (const [index, itemId] of selectedIds.entries()) {
+  for (const itemId of selectedIds) {
+    if (completedIds.has(itemId)) {
+      continue;
+    }
+
+    const stopReason = await options.shouldStop?.();
+
+    if (stopReason) {
+      result.stopReason = stopReason;
+      break;
+    }
+
     let title = "(loading)";
 
     try {
@@ -969,16 +1031,28 @@ export async function importEbayListings(
       }
     }
 
+    completedIds.add(itemId);
+    result.processed = completedIds.size;
+    result.completedListingIds = [...completedIds];
+
     await options.onProgress?.({
-      processed: index + 1,
+      processed: result.processed,
       total: selectedIds.length,
       created: result.created,
       skipped: result.skipped,
       failed: result.failed,
       currentItemId: itemId,
+      completedListingIds: result.completedListingIds,
     });
 
     if (result.rateLimited) {
+      break;
+    }
+
+    const postItemStopReason = await options.shouldStop?.();
+
+    if (postItemStopReason) {
+      result.stopReason = postItemStopReason;
       break;
     }
   }

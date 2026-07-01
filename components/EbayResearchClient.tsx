@@ -1,5 +1,6 @@
 "use client";
 
+import ActionProgressBar from "@/components/ActionProgressBar";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 type ResearchStatus =
@@ -131,6 +132,45 @@ function isActiveJob(job: ResearchJob | null) {
     job?.status === "QUEUED" ||
     job?.status === "RUNNING" ||
     job?.status === "PAUSING"
+  );
+}
+
+function getResearchJobProgress(job: ResearchJob | null) {
+  if (!job) {
+    return 0;
+  }
+
+  if (job.status === "COMPLETED" || job.status === "PARTIAL") {
+    return 100;
+  }
+
+  if (job.status === "FAILED") {
+    return 100;
+  }
+
+  if (job.status === "QUEUED") {
+    return 5;
+  }
+
+  if (job.phase === "REFINING") {
+    return 75;
+  }
+
+  if (job.phase === "QUICK") {
+    return 35;
+  }
+
+  return 90;
+}
+
+function getResearchBatchProgress(batch: ResearchBatch) {
+  if (batch.total <= 0) {
+    return 0;
+  }
+
+  return Math.min(
+    100,
+    Math.round(((batch.completed + batch.failed) / batch.total) * 100),
   );
 }
 
@@ -481,7 +521,7 @@ export default function EbayResearchClient({
   const [mode, setMode] = useState<ResearchMode>("BOTH");
   const [conditionFilter, setConditionFilter] =
     useState<ResearchConditionFilter>("ANY");
-  const [limit, setLimit] = useState("25");
+  const [limit, setLimit] = useState("30");
   const [advancedSoldComps, setAdvancedSoldComps] = useState(false);
   const [jobs, setJobs] = useState(initialJobs);
   const [batches, setBatches] = useState(initialBatches);
@@ -797,13 +837,13 @@ export default function EbayResearchClient({
   function rerunJob(job: ResearchJob) {
     setQuery(job.query);
     setMode(job.mode);
-    setLimit(String(Math.min(job.limit, 25)));
+    setLimit(String(job.limit === 25 ? 30 : Math.min(job.limit, 30)));
     setConditionFilter(job.conditionFilter);
     setAdvancedSoldComps(usesSoldComps(job.mode));
     void startResearch({
       query: job.query,
       mode: job.mode,
-      limit: Math.min(job.limit, 25),
+      limit: job.limit === 25 ? 30 : Math.min(job.limit, 30),
       conditionFilter: job.conditionFilter,
     });
   }
@@ -968,7 +1008,7 @@ export default function EbayResearchClient({
               className="mt-2 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
             >
               <option value="10">10</option>
-              <option value="25">25</option>
+              <option value="30">30</option>
             </select>
           </div>
           <button
@@ -1109,6 +1149,18 @@ export default function EbayResearchClient({
                         {batch.cooldownUntil
                           ? ` - next search after ${formatDate(batch.cooldownUntil)}`
                           : ""}
+                      </div>
+                      <div className="mt-2 max-w-sm">
+                        <ActionProgressBar
+                          label="Batch progress"
+                          percent={getResearchBatchProgress(batch)}
+                          tone={
+                            batch.status === "PAUSED" || batch.status === "PAUSING"
+                              ? "amber"
+                              : "blue"
+                          }
+                          compact
+                        />
                       </div>
                     </div>
                     <div className="flex flex-wrap items-center gap-2">
@@ -1287,9 +1339,17 @@ export default function EbayResearchClient({
                 </div>
               </div>
               {selectedActive && (
-                <div className="flex items-center gap-2 text-sm text-blue-700">
-                  <span className="h-2 w-2 animate-pulse rounded-full bg-blue-600" />
-                  {selectedJob.phase === "REFINING" ? "Refining results" : "Search running"}
+                <div className="min-w-[220px]">
+                  <ActionProgressBar
+                    label={
+                      selectedJob.phase === "REFINING"
+                        ? "Refining results"
+                        : "Search running"
+                    }
+                    percent={getResearchJobProgress(selectedJob)}
+                    tone="blue"
+                    compact
+                  />
                 </div>
               )}
             </div>

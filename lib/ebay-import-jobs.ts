@@ -6,6 +6,8 @@ import {
   importEbayListings,
   type EbayImportResult,
   type ImportProgress,
+  type ImportSelection,
+  type ImportStopReason,
 } from "@/lib/ebay-import";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
@@ -18,7 +20,14 @@ import {
   type WorkerContext,
 } from "@/lib/job-coordination";
 
-const ACTIVE_IMPORT_JOB_STATUSES: EbayImportJobStatus[] = [
+const BLOCKING_IMPORT_JOB_STATUSES: EbayImportJobStatus[] = [
+  EbayImportJobStatus.QUEUED,
+  EbayImportJobStatus.RUNNING,
+  EbayImportJobStatus.PAUSING,
+  EbayImportJobStatus.PAUSED,
+  EbayImportJobStatus.CANCELLING,
+];
+const RUNNABLE_IMPORT_JOB_STATUSES: EbayImportJobStatus[] = [
   EbayImportJobStatus.QUEUED,
   EbayImportJobStatus.RUNNING,
 ];
@@ -40,6 +49,8 @@ type EbayImportJobRecord = {
   created: number;
   skipped: number;
   failed: number;
+  selectedListingIds: string[];
+  completedListingIds: string[];
   rateLimited: boolean;
   errors: Prisma.JsonValue;
   errorMessage: string | null;
@@ -47,6 +58,8 @@ type EbayImportJobRecord = {
   updatedAt: Date;
   startedAt: Date | null;
   completedAt: Date | null;
+  pausedAt: Date | null;
+  cancelledAt: Date | null;
   dismissedAt: Date | null;
 };
 
@@ -84,6 +97,33 @@ function normalizeErrors(errors: Prisma.JsonValue) {
     );
 }
 
+function getProgressPercent(job: Pick<EbayImportJobRecord, "processed" | "total" | "requested" | "quantity">) {
+  const total = job.total || job.requested || job.quantity;
+
+  if (total <= 0) {
+    return 0;
+  }
+
+  return Math.min(100, Math.round((job.processed / total) * 100));
+}
+
+function canPauseImportJob(status: EbayImportJobStatus) {
+  return status === EbayImportJobStatus.QUEUED || status === EbayImportJobStatus.RUNNING;
+}
+
+function canResumeImportJob(status: EbayImportJobStatus) {
+  return status === EbayImportJobStatus.PAUSED;
+}
+
+function canCancelImportJob(status: EbayImportJobStatus) {
+  return (
+    status === EbayImportJobStatus.QUEUED ||
+    status === EbayImportJobStatus.RUNNING ||
+    status === EbayImportJobStatus.PAUSING ||
+    status === EbayImportJobStatus.PAUSED
+  );
+}
+
 export function serializeEbayImportJob(job: EbayImportJobRecord) {
   return {
     id: job.id,
@@ -100,6 +140,12 @@ export function serializeEbayImportJob(job: EbayImportJobRecord) {
     created: job.created,
     skipped: job.skipped,
     failed: job.failed,
+    selectedListingIds: job.selectedListingIds,
+    completedListingIds: job.completedListingIds,
+    progressPercent: getProgressPercent(job),
+    canPause: canPauseImportJob(job.status),
+    canResume: canResumeImportJob(job.status),
+    canCancel: canCancelImportJob(job.status),
     rateLimited: job.rateLimited,
     errors: normalizeErrors(job.errors),
     errorMessage: job.errorMessage,
@@ -107,6 +153,8 @@ export function serializeEbayImportJob(job: EbayImportJobRecord) {
     updatedAt: job.updatedAt.toISOString(),
     startedAt: job.startedAt?.toISOString() ?? null,
     completedAt: job.completedAt?.toISOString() ?? null,
+    pausedAt: job.pausedAt?.toISOString() ?? null,
+    cancelledAt: job.cancelledAt?.toISOString() ?? null,
     dismissedAt: job.dismissedAt?.toISOString() ?? null,
   };
 }
@@ -115,7 +163,7 @@ async function findActiveEbayImportJob(storeId: string) {
   return prisma.ebayImportJob.findFirst({
     where: {
       storeId,
-      status: { in: [...ACTIVE_IMPORT_JOB_STATUSES] },
+      status: { in: [...BLOCKING_IMPORT_JOB_STATUSES] },
       dismissedAt: null,
     },
     orderBy: { createdAt: "desc" },
@@ -126,10 +174,24 @@ async function findNextRunnableEbayImportJob(storeId: string) {
   return prisma.ebayImportJob.findFirst({
     where: {
       storeId,
-      status: { in: [...ACTIVE_IMPORT_JOB_STATUSES] },
+      status: { in: [...RUNNABLE_IMPORT_JOB_STATUSES] },
       dismissedAt: null,
     },
     orderBy: { createdAt: "asc" },
+  });
+}
+
+async function updateJobSelection(jobId: string, selection: ImportSelection) {
+  await prisma.ebayImportJob.update({
+    where: { id: jobId },
+    data: {
+      requested: selection.requested,
+      activeListings: selection.activeListings,
+      alreadyImported: selection.alreadyImported,
+      remainingBeforeImport: selection.remainingBeforeImport,
+      total: selection.selectedListingIds.length,
+      selectedListingIds: selection.selectedListingIds,
+    },
   });
 }
 
@@ -142,32 +204,63 @@ async function updateJobProgress(jobId: string, progress: ImportProgress) {
       created: progress.created,
       skipped: progress.skipped,
       failed: progress.failed,
+      ...(progress.completedListingIds
+        ? { completedListingIds: progress.completedListingIds }
+        : {}),
     },
   });
 }
 
-function buildCompleteUpdate(result: EbayImportResult) {
+function buildResultUpdate(result: EbayImportResult) {
   return {
     requested: result.requested,
     activeListings: result.activeListings,
     alreadyImported: result.alreadyImported,
     remainingBeforeImport: result.remainingBeforeImport,
     remainingAfterImport: result.remainingAfterImport,
-    processed: result.requested,
+    processed: result.processed,
     total: result.requested,
     created: result.created,
     skipped: result.skipped,
     failed: result.failed,
+    selectedListingIds: result.selectedListingIds,
+    completedListingIds: result.completedListingIds,
     rateLimited: result.rateLimited,
     errors: result.errors,
-    completedAt: new Date(),
   };
+}
+
+async function getImportStopReason(jobId: string): Promise<ImportStopReason | null> {
+  const job = await prisma.ebayImportJob.findUnique({
+    where: { id: jobId },
+    select: { status: true },
+  });
+
+  if (!job) {
+    return "CANCELLED";
+  }
+
+  if (
+    job.status === EbayImportJobStatus.PAUSING ||
+    job.status === EbayImportJobStatus.PAUSED
+  ) {
+    return "PAUSED";
+  }
+
+  if (
+    job.status === EbayImportJobStatus.CANCELLING ||
+    job.status === EbayImportJobStatus.CANCELLED
+  ) {
+    return "CANCELLED";
+  }
+
+  return null;
 }
 
 async function runEbayImportJobClaimed(jobId: string) {
   const job = await prisma.ebayImportJob.findUnique({ where: { id: jobId } });
 
-  if (!job || !ACTIVE_IMPORT_JOB_STATUSES.includes(job.status)) {
+  if (!job || !RUNNABLE_IMPORT_JOB_STATUSES.includes(job.status)) {
     return;
   }
 
@@ -176,6 +269,7 @@ async function runEbayImportJobClaimed(jobId: string) {
     data: {
       status: EbayImportJobStatus.RUNNING,
       startedAt: job.startedAt ?? new Date(),
+      pausedAt: null,
       errorMessage: null,
     },
   });
@@ -186,19 +280,41 @@ async function runEbayImportJobClaimed(jobId: string) {
       storeNumber: job.storeNumber as 1 | 2 | 3,
       userId: job.userId,
       quantity: job.quantity,
+      selectedListingIds: job.selectedListingIds,
+      completedListingIds: job.completedListingIds,
+      initialCreated: job.created,
+      initialSkipped: job.skipped,
+      initialFailed: job.failed,
+      initialErrors: normalizeErrors(job.errors),
+      previousRemainingBeforeImport: job.remainingBeforeImport,
+      onSelectionResolved: (selection) => updateJobSelection(job.id, selection),
       onProgress: (progress) => updateJobProgress(job.id, progress),
+      shouldStop: () => getImportStopReason(job.id),
     });
+
+    const now = new Date();
+    const resultUpdate = buildResultUpdate(result);
+    const nextStatus =
+      result.stopReason === "PAUSED"
+        ? EbayImportJobStatus.PAUSED
+        : result.stopReason === "CANCELLED"
+          ? EbayImportJobStatus.CANCELLED
+          : EbayImportJobStatus.COMPLETED;
 
     await prisma.ebayImportJob.update({
       where: { id: job.id },
       data: {
-        status: EbayImportJobStatus.COMPLETED,
-        ...buildCompleteUpdate(result),
+        status: nextStatus,
+        ...resultUpdate,
+        pausedAt: result.stopReason === "PAUSED" ? now : null,
+        cancelledAt: result.stopReason === "CANCELLED" ? now : null,
+        completedAt: result.stopReason === "PAUSED" ? null : now,
       },
     });
 
-    logger.info("ebay-import/jobs", "eBay import job completed", {
+    logger.info("ebay-import/jobs", "eBay import job finished", {
       jobId: job.id,
+      status: nextStatus,
       result,
     });
     invalidateJobCaches(job.storeId);
@@ -229,7 +345,7 @@ export async function runEbayImportJob(jobId: string, worker?: WorkerContext) {
 
   const job = await prisma.ebayImportJob.findUnique({ where: { id: jobId } });
 
-  if (!job || !ACTIVE_IMPORT_JOB_STATUSES.includes(job.status)) {
+  if (!job || !RUNNABLE_IMPORT_JOB_STATUSES.includes(job.status)) {
     return;
   }
 
@@ -311,6 +427,7 @@ export async function dismissEbayImportJob(jobId: string, storeId: string) {
   const terminalStatuses = [
     EbayImportJobStatus.COMPLETED,
     EbayImportJobStatus.FAILED,
+    EbayImportJobStatus.CANCELLED,
   ];
   const job = await prisma.ebayImportJob.findFirst({
     where: {
@@ -327,6 +444,98 @@ export async function dismissEbayImportJob(jobId: string, storeId: string) {
   const updated = await prisma.ebayImportJob.update({
     where: { id: job.id },
     data: { dismissedAt: job.dismissedAt ?? new Date() },
+  });
+
+  return serializeEbayImportJob(updated);
+}
+
+export async function pauseEbayImportJob(jobId: string, storeId: string) {
+  const job = await prisma.ebayImportJob.findFirst({
+    where: { id: jobId, storeId, dismissedAt: null },
+  });
+
+  if (!job) {
+    return null;
+  }
+
+  if (job.status === EbayImportJobStatus.PAUSED || job.status === EbayImportJobStatus.PAUSING) {
+    return serializeEbayImportJob(job);
+  }
+
+  if (!canPauseImportJob(job.status)) {
+    return null;
+  }
+
+  const updated = await prisma.ebayImportJob.update({
+    where: { id: job.id },
+    data:
+      job.status === EbayImportJobStatus.QUEUED
+        ? { status: EbayImportJobStatus.PAUSED, pausedAt: new Date() }
+        : { status: EbayImportJobStatus.PAUSING },
+  });
+
+  return serializeEbayImportJob(updated);
+}
+
+export async function resumeEbayImportJob(jobId: string, storeId: string) {
+  const job = await prisma.ebayImportJob.findFirst({
+    where: { id: jobId, storeId, dismissedAt: null },
+  });
+
+  if (!job) {
+    return null;
+  }
+
+  if (job.status === EbayImportJobStatus.QUEUED || job.status === EbayImportJobStatus.RUNNING) {
+    return serializeEbayImportJob(job);
+  }
+
+  if (!canResumeImportJob(job.status)) {
+    return null;
+  }
+
+  const updated = await prisma.ebayImportJob.update({
+    where: { id: job.id },
+    data: {
+      status: EbayImportJobStatus.QUEUED,
+      pausedAt: null,
+      completedAt: null,
+      errorMessage: null,
+    },
+  });
+
+  return serializeEbayImportJob(updated);
+}
+
+export async function cancelEbayImportJob(jobId: string, storeId: string) {
+  const job = await prisma.ebayImportJob.findFirst({
+    where: { id: jobId, storeId, dismissedAt: null },
+  });
+
+  if (!job) {
+    return null;
+  }
+
+  if (job.status === EbayImportJobStatus.CANCELLED || job.status === EbayImportJobStatus.CANCELLING) {
+    return serializeEbayImportJob(job);
+  }
+
+  if (!canCancelImportJob(job.status)) {
+    return null;
+  }
+
+  const now = new Date();
+  const updated = await prisma.ebayImportJob.update({
+    where: { id: job.id },
+    data:
+      job.status === EbayImportJobStatus.QUEUED ||
+      job.status === EbayImportJobStatus.PAUSED
+        ? {
+            status: EbayImportJobStatus.CANCELLED,
+            cancelledAt: now,
+            completedAt: now,
+          }
+        : { status: EbayImportJobStatus.CANCELLING },
   });
 
   return serializeEbayImportJob(updated);

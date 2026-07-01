@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import ActionProgressBar from "@/components/ActionProgressBar";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 interface EbayImportClientProps {
@@ -42,7 +43,15 @@ interface ImportResult {
 
 type ModalState = "confirm" | "importing" | "complete";
 
-type ImportJobStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
+type ImportJobStatus =
+  | "QUEUED"
+  | "RUNNING"
+  | "PAUSING"
+  | "PAUSED"
+  | "CANCELLING"
+  | "CANCELLED"
+  | "COMPLETED"
+  | "FAILED";
 
 interface ImportJob {
   id: string;
@@ -59,6 +68,10 @@ interface ImportJob {
   created: number;
   skipped: number;
   failed: number;
+  progressPercent: number;
+  canPause: boolean;
+  canResume: boolean;
+  canCancel: boolean;
   rateLimited: boolean;
   errors: Array<{ itemId: string; title: string; error: string }>;
   errorMessage: string | null;
@@ -66,6 +79,8 @@ interface ImportJob {
   updatedAt: string;
   startedAt: string | null;
   completedAt: string | null;
+  pausedAt: string | null;
+  cancelledAt: string | null;
 }
 
 interface StoredImportJob {
@@ -84,7 +99,13 @@ function formatNumber(value: number) {
 }
 
 function isActiveImportJob(job: ImportJob | null) {
-  return job?.status === "QUEUED" || job?.status === "RUNNING";
+  return (
+    job?.status === "QUEUED" ||
+    job?.status === "RUNNING" ||
+    job?.status === "PAUSING" ||
+    job?.status === "PAUSED" ||
+    job?.status === "CANCELLING"
+  );
 }
 
 function readStoredImportJob(): StoredImportJob | null {
@@ -137,7 +158,11 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
   const [pendingQuantity, setPendingQuantity] = useState(100);
   const [importing, setImporting] = useState(false);
   const [activeJob, setActiveJob] = useState<ImportJob | null>(null);
+  const [lastJobStatus, setLastJobStatus] = useState<ImportJobStatus | null>(null);
   const [progress, setProgress] = useState<ImportProgress | null>(null);
+  const [jobActionLoading, setJobActionLoading] = useState<
+    "pause" | "resume" | "cancel" | null
+  >(null);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showErrors, setShowErrors] = useState(false);
@@ -149,12 +174,14 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
   const parsedQuantity = Number.parseInt(quantity, 10);
   const quantityValue =
     Number.isFinite(parsedQuantity) && parsedQuantity >= 0 ? parsedQuantity : 0;
-  const progressPercent = progress
-    ? Math.min(
-        100,
-        Math.round((progress.processed / Math.max(progress.total, 1)) * 100),
-      )
-    : 0;
+  const progressPercent =
+    activeJob?.progressPercent ??
+    (progress
+      ? Math.min(
+          100,
+          Math.round((progress.processed / Math.max(progress.total, 1)) * 100),
+        )
+      : 0);
   const importDisabled =
     importing ||
     activeImportRunning ||
@@ -332,6 +359,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
 
   const applyImportJob = useCallback(
     (job: ImportJob) => {
+      setLastJobStatus(job.status);
       setActiveJob(job);
       setPendingQuantity(job.quantity);
 
@@ -405,6 +433,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
     }
 
     setImporting(true);
+    setLastJobStatus("QUEUED");
     setModalState("importing");
     setProgress({
       processed: 0,
@@ -442,6 +471,43 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
       setProgress(null);
       setModalState("complete");
       setImporting(false);
+    }
+  }
+
+  async function updateImportJob(action: "pause" | "resume" | "cancel") {
+    if (!activeJobId || jobActionLoading) {
+      return;
+    }
+
+    if (
+      action === "cancel" &&
+      !window.confirm("Cancel this eBay import after the current listing?")
+    ) {
+      return;
+    }
+
+    setJobActionLoading(action);
+    setError(null);
+
+    try {
+      const response = await fetch(
+        `/api/ebay-import/jobs/${encodeURIComponent(activeJobId)}/${action}`,
+        { method: "POST" },
+      );
+      const data = (await response.json().catch(() => ({}))) as {
+        job?: ImportJob;
+        error?: string;
+      };
+
+      if (!response.ok || !data.job) {
+        throw new Error(data.error || `Failed to ${action} import job`);
+      }
+
+      applyImportJob(data.job);
+    } catch (caughtError) {
+      setError(getErrorMessage(caughtError));
+    } finally {
+      setJobActionLoading(null);
     }
   }
 
@@ -537,10 +603,12 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
     setProgress(null);
     setResult(null);
     setError(null);
+    setLastJobStatus(null);
   }
 
   function resetForNextBatch() {
     setActiveJob(null);
+    setLastJobStatus(null);
     setModalState(null);
     setProgress(null);
     setResult(null);
@@ -704,20 +772,32 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
             {modalState === "importing" && (
               <div className="p-6" aria-live="polite">
                 <h2 className="text-lg font-semibold text-gray-900">
-                  {activeJobStatus === "QUEUED" ? "Preparing Import" : "Importing Listings"}
+                  {activeJobStatus === "QUEUED"
+                    ? "Preparing Import"
+                    : activeJobStatus === "PAUSED"
+                      ? "Import Paused"
+                      : activeJobStatus === "PAUSING"
+                        ? "Pausing Import"
+                        : activeJobStatus === "CANCELLING"
+                          ? "Cancelling Import"
+                          : "Importing Listings"}
                 </h2>
-                <div className="mt-5 flex items-center justify-between gap-4">
-                  <p className="text-sm font-medium text-gray-900">
-                    {activeJobStatus === "QUEUED" && (progress?.processed ?? 0) === 0
-                      ? "Waiting to start..."
-                      : `Importing ${progress?.processed ?? 0} of ${progress?.total ?? pendingQuantity}...`}
-                  </p>
-                  <span className="text-sm text-gray-500">{progressPercent}%</span>
-                </div>
-                <div className="mt-3 h-2 overflow-hidden rounded-full bg-gray-100">
-                  <div
-                    className="h-full rounded-full bg-orange-500 transition-all duration-300"
-                    style={{ width: `${progressPercent}%` }}
+                <div className="mt-5">
+                  <ActionProgressBar
+                    label={
+                      activeJobStatus === "QUEUED" && (progress?.processed ?? 0) === 0
+                        ? "Waiting to start"
+                        : `${progress?.processed ?? 0} of ${progress?.total ?? pendingQuantity} processed`
+                    }
+                    percent={progressPercent}
+                    detail={`${progress?.created ?? 0} imported, ${progress?.skipped ?? 0} skipped, ${progress?.failed ?? 0} failed`}
+                    tone={
+                      activeJobStatus === "PAUSED" || activeJobStatus === "PAUSING"
+                        ? "amber"
+                        : activeJobStatus === "CANCELLING"
+                          ? "red"
+                          : "orange"
+                    }
                   />
                 </div>
                 {progress?.currentItemId && (
@@ -730,6 +810,38 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
                   <span>Skipped: {progress?.skipped ?? 0}</span>
                   <span>Failed: {progress?.failed ?? 0}</span>
                 </div>
+                <div className="mt-6 flex flex-wrap justify-end gap-3">
+                  {activeJob?.canPause && (
+                    <button
+                      type="button"
+                      onClick={() => void updateImportJob("pause")}
+                      disabled={jobActionLoading !== null}
+                      className="rounded-md border border-amber-300 bg-white px-4 py-2 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {jobActionLoading === "pause" ? "Pausing..." : "Pause"}
+                    </button>
+                  )}
+                  {activeJob?.canResume && (
+                    <button
+                      type="button"
+                      onClick={() => void updateImportJob("resume")}
+                      disabled={jobActionLoading !== null}
+                      className="rounded-md border border-blue-300 bg-white px-4 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {jobActionLoading === "resume" ? "Resuming..." : "Resume"}
+                    </button>
+                  )}
+                  {activeJob?.canCancel && (
+                    <button
+                      type="button"
+                      onClick={() => void updateImportJob("cancel")}
+                      disabled={jobActionLoading !== null}
+                      className="rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {jobActionLoading === "cancel" ? "Cancelling..." : "Cancel Import"}
+                    </button>
+                  )}
+                </div>
               </div>
             )}
 
@@ -737,7 +849,13 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
               <div className="p-6">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <h2 className="text-lg font-semibold text-gray-900">
-                    {error ? "Import Failed" : result?.rateLimited ? "Import Paused" : "Import Complete"}
+                    {error
+                      ? "Import Failed"
+                      : lastJobStatus === "CANCELLED"
+                        ? "Import Cancelled"
+                        : result?.rateLimited
+                          ? "Import Paused"
+                          : "Import Complete"}
                   </h2>
                   <button
                     type="button"

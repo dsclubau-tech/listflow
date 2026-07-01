@@ -23,10 +23,11 @@ import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { launchScraperBrowser } from "@/lib/scraper-browser";
 
-const VALID_LIMITS = [10, 25] as const;
+const VALID_LIMITS = [10, 30] as const;
+const DEFAULT_RESEARCH_LIMIT = 30;
 const DEFAULT_POSTCODE = "2217";
 const ACTIVE_SEARCH_CACHE_TTL_MS = 45 * 60 * 1000;
-const ACTIVE_SEARCH_CACHE_VERSION = "v2";
+const ACTIVE_SEARCH_CACHE_VERSION = "v3";
 const RESEARCH_BATCH_COOLDOWN_MS = 30 * 1000;
 const RESEARCH_RETENTION_MS = 2 * 60 * 60 * 1000;
 const RESEARCH_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
@@ -173,7 +174,9 @@ const ACCESSORY_ONLY_SIGNALS = [
   "joystick cap",
   "parts only",
   "pouch",
+  "protector",
   "protective",
+  "protective cover",
   "repair",
   "replacement shell",
   "screen protector",
@@ -182,6 +185,7 @@ const ACCESSORY_ONLY_SIGNALS = [
   "skin",
   "sleeve",
   "spares",
+  "stand case",
   "thumbstick cap",
 ];
 
@@ -364,11 +368,11 @@ function normalizeLimit(value: unknown) {
       ? value
       : typeof value === "string"
         ? Number.parseInt(value, 10)
-        : 25;
-  const finite = Number.isFinite(parsed) ? parsed : 25;
+        : DEFAULT_RESEARCH_LIMIT;
+  const finite = Number.isFinite(parsed) ? parsed : DEFAULT_RESEARCH_LIMIT;
 
   if (finite <= 10) return 10;
-  return 25;
+  return 30;
 }
 
 function parsePrice(value: unknown) {
@@ -685,13 +689,21 @@ function dedupeAndSortResults(
         .filter((result) => !isAccessoryOnlyMismatch(result.title, plan))
         .filter((result) => {
         const score = result.matchScore ?? 0;
-        return score >= (plan.strongTokens.length > 0 ? 24 : 14);
+        return score >= (plan.strongTokens.length > 0 ? 55 : 35);
       })
     : deduped;
   const pool = filtered;
 
   return pool
     .sort((left, right) => {
+      if (plan) {
+        const scoreDifference = (right.matchScore ?? 0) - (left.matchScore ?? 0);
+
+        if (Math.abs(scoreDifference) > 4) {
+          return scoreDifference;
+        }
+      }
+
       const locationDifference = getLocationRank(left) - getLocationRank(right);
 
       if (locationDifference !== 0) {
@@ -1431,7 +1443,7 @@ async function runEbayResearchJobClaimed(jobId: string) {
     job.mode === EbayResearchMode.SOLD || job.mode === EbayResearchMode.BOTH;
   const conditionFilter = job.conditionFilter;
   const searchPlan = buildSearchPlan(job.query);
-  const quickLimit = Math.min(job.limit, 25);
+  const quickLimit = Math.min(job.limit, 30);
   const quickQueries = buildQueryList(searchPlan, false);
   const deepQueries = buildQueryList(searchPlan, true);
   let activeResults: EbayResearchResult[] = [];

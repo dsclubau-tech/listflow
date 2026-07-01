@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import ActionProgressBar from "@/components/ActionProgressBar";
 import AsinLink from "@/components/AsinLink";
 import Toast from "@/components/Toast";
+import { useTimedActionProgress } from "@/hooks/useTimedActionProgress";
 import { useToast } from "@/hooks/useToast";
 import type {
   ActionCenterData,
@@ -22,7 +24,13 @@ import type {
 type ToastVariant = "success" | "error";
 
 const ACTIVE_PRICE_JOB_STATUSES = new Set(["QUEUED", "RUNNING", "CANCELLING"]);
-const ACTIVE_IMPORT_JOB_STATUSES = new Set(["QUEUED", "RUNNING"]);
+const ACTIVE_IMPORT_JOB_STATUSES = new Set([
+  "QUEUED",
+  "RUNNING",
+  "PAUSING",
+  "PAUSED",
+  "CANCELLING",
+]);
 const ACTIVE_ACTION_JOB_STATUSES = new Set(["QUEUED", "RUNNING"]);
 const CURRENT_RESEARCH_BATCH_STATUSES = new Set([
   "QUEUED",
@@ -165,7 +173,11 @@ function isTerminalPriceJob(job: ActionCenterPriceCheckJob) {
 }
 
 function isTerminalImportJob(job: ActionCenterEbayImportJob) {
-  return job.status === "COMPLETED" || job.status === "FAILED";
+  return (
+    job.status === "COMPLETED" ||
+    job.status === "FAILED" ||
+    job.status === "CANCELLED"
+  );
 }
 
 function getCurrentJobCount(data: ActionCenterData) {
@@ -372,6 +384,10 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
   const router = useRouter();
   const { toast, showToast, hideToast } = useToast();
   const [runningAction, setRunningAction] = useState<string | null>(null);
+  const runningActionProgress = useTimedActionProgress(Boolean(runningAction), {
+    initialPercent: 12,
+    maxWaitingPercent: 90,
+  });
   const [activeFilter, setActiveFilter] = useState<ActionCenterFilter>(() =>
     getDefaultFilter(data)
   );
@@ -655,6 +671,39 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
     });
   }
 
+  function pauseImportJob(job: ActionCenterEbayImportJob) {
+    void runAction(`pause-import-job:${job.id}`, async () => {
+      await postJson<{ job?: ActionCenterEbayImportJob }>(
+        `/api/ebay-import/jobs/${job.id}/pause`
+      );
+      return job.status === "RUNNING"
+        ? "eBay import will pause after the current listing."
+        : "eBay import paused.";
+    });
+  }
+
+  function resumeImportJob(job: ActionCenterEbayImportJob) {
+    void runAction(`resume-import-job:${job.id}`, async () => {
+      await postJson<{ job?: ActionCenterEbayImportJob }>(
+        `/api/ebay-import/jobs/${job.id}/resume`
+      );
+      return "eBay import resumed.";
+    });
+  }
+
+  function cancelImportJob(job: ActionCenterEbayImportJob) {
+    if (!window.confirm("Cancel this eBay import after the current listing?")) {
+      return;
+    }
+
+    void runAction(`cancel-import-job:${job.id}`, async () => {
+      await postJson<{ job?: ActionCenterEbayImportJob }>(
+        `/api/ebay-import/jobs/${job.id}/cancel`
+      );
+      return "eBay import cancellation requested.";
+    });
+  }
+
   function pauseResearchBatch(batch: ActionCenterEbayResearchBatch) {
     void runAction(`pause-research-batch:${batch.id}`, async () => {
       await postJson(`/api/ebay-research/batches/${batch.id}/pause`);
@@ -789,6 +838,17 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
           );
         })}
       </div>
+
+      {runningAction && (
+        <div className="mb-6 rounded-md border border-blue-200 bg-blue-50 px-4 py-3">
+          <ActionProgressBar
+            label="Running action"
+            percent={runningActionProgress}
+            detail="ListFlow is sending the request and waiting for the result."
+            tone="blue"
+          />
+        </div>
+      )}
 
       <div className="space-y-6">
         {activeFilter === "pendingReviews" && (
@@ -1119,6 +1179,18 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                             {job.failed} failed
                             {isResumablePriceJob(job) ? `, ${job.remaining} remaining` : ""}
                           </div>
+                          <div className="mt-2 max-w-sm">
+                            <ActionProgressBar
+                              label="Price check progress"
+                              percent={
+                                job.total > 0
+                                  ? Math.min(100, Math.round((job.checked / job.total) * 100))
+                                  : 0
+                              }
+                              tone={job.status === "CANCELLING" ? "amber" : "blue"}
+                              compact
+                            />
+                          </div>
                         </div>
                         <div className="flex items-center gap-2">
                           {isActivePriceJob(job) && (
@@ -1178,13 +1250,65 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                             {job.processed}/{job.total || job.quantity} processed,{" "}
                             {job.created} imported, {job.failed} failed
                           </div>
+                          <div className="mt-2 max-w-sm">
+                            <ActionProgressBar
+                              label="Import progress"
+                              percent={job.progressPercent}
+                              tone={
+                                job.status === "PAUSED" || job.status === "PAUSING"
+                                  ? "amber"
+                                  : job.status === "CANCELLING"
+                                    ? "red"
+                                    : "orange"
+                              }
+                              compact
+                            />
+                          </div>
                         </div>
-                        <Link
-                          href="/ebay-import"
-                          className="text-xs font-medium text-gray-600 hover:text-gray-900"
-                        >
-                          eBay Import
-                        </Link>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {job.canPause && (
+                            <ActionButton
+                              onClick={() => pauseImportJob(job)}
+                              disabled={runningAction === `pause-import-job:${job.id}`}
+                              tone="danger"
+                            >
+                              {runningAction === `pause-import-job:${job.id}`
+                                ? "Pausing..."
+                                : "Pause"}
+                            </ActionButton>
+                          )}
+                          {job.canResume && (
+                            <ActionButton
+                              onClick={() => resumeImportJob(job)}
+                              disabled={
+                                workerOffline ||
+                                runningAction === `resume-import-job:${job.id}`
+                              }
+                              tone="primary"
+                            >
+                              {runningAction === `resume-import-job:${job.id}`
+                                ? "Resuming..."
+                                : "Resume"}
+                            </ActionButton>
+                          )}
+                          {job.canCancel && (
+                            <ActionButton
+                              onClick={() => cancelImportJob(job)}
+                              disabled={runningAction === `cancel-import-job:${job.id}`}
+                              tone="danger"
+                            >
+                              {runningAction === `cancel-import-job:${job.id}`
+                                ? "Cancelling..."
+                                : "Cancel"}
+                            </ActionButton>
+                          )}
+                          <Link
+                            href="/ebay-import"
+                            className="text-xs font-medium text-gray-600 hover:text-gray-900"
+                          >
+                            eBay Import
+                          </Link>
+                        </div>
                       </div>
                     ))}
                     {currentActionJobs.map((job) => (
@@ -1206,6 +1330,18 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                           <div className="mt-1 text-xs text-gray-500">
                             {job.processed}/{job.total} processed, {job.succeeded} succeeded,{" "}
                             {job.failed} failed
+                          </div>
+                          <div className="mt-2 max-w-sm">
+                            <ActionProgressBar
+                              label="Action progress"
+                              percent={
+                                job.total > 0
+                                  ? Math.min(100, Math.round((job.processed / job.total) * 100))
+                                  : 0
+                              }
+                              tone="blue"
+                              compact
+                            />
                           </div>
                         </div>
                         <Link
@@ -1238,6 +1374,27 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                             {batch.cooldownUntil
                               ? `, next after ${formatDateTime(batch.cooldownUntil)}`
                               : ""}
+                          </div>
+                          <div className="mt-2 max-w-sm">
+                            <ActionProgressBar
+                              label="Research batch progress"
+                              percent={
+                                batch.total > 0
+                                  ? Math.min(
+                                      100,
+                                      Math.round(
+                                        ((batch.completed + batch.failed) / batch.total) * 100,
+                                      ),
+                                    )
+                                  : 0
+                              }
+                              tone={
+                                batch.status === "PAUSED" || batch.status === "PAUSING"
+                                  ? "amber"
+                                  : "blue"
+                              }
+                              compact
+                            />
                           </div>
                         </div>
                         <div className="flex items-center gap-2">

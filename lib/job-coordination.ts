@@ -33,6 +33,9 @@ const ACTIVE_PRICE_CHECK_STATUSES: PriceCheckJobStatus[] = [
 const ACTIVE_IMPORT_STATUSES: EbayImportJobStatus[] = [
   EbayImportJobStatus.QUEUED,
   EbayImportJobStatus.RUNNING,
+  EbayImportJobStatus.PAUSING,
+  EbayImportJobStatus.PAUSED,
+  EbayImportJobStatus.CANCELLING,
 ];
 const ACTIVE_RESEARCH_BATCH_STATUSES: EbayResearchBatchStatus[] = [
   EbayResearchBatchStatus.QUEUED,

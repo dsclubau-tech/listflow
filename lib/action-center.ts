@@ -36,6 +36,9 @@ const ACTIVE_PRICE_JOB_STATUSES = [
 const ACTIVE_IMPORT_JOB_STATUSES = [
   EbayImportJobStatus.QUEUED,
   EbayImportJobStatus.RUNNING,
+  EbayImportJobStatus.PAUSING,
+  EbayImportJobStatus.PAUSED,
+  EbayImportJobStatus.CANCELLING,
 ] as const;
 const ACTIVE_RESEARCH_BATCH_STATUSES = [
   EbayResearchBatchStatus.QUEUED,
@@ -128,12 +131,18 @@ export interface ActionCenterEbayImportJob {
   created: number;
   skipped: number;
   failed: number;
+  progressPercent: number;
+  canPause: boolean;
+  canResume: boolean;
+  canCancel: boolean;
   rateLimited: boolean;
   errorMessage: string | null;
   createdAt: string;
   updatedAt: string;
   startedAt: string | null;
   completedAt: string | null;
+  pausedAt: string | null;
+  cancelledAt: string | null;
   dismissedAt: string | null;
 }
 

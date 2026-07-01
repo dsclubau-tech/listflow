@@ -1,5 +1,7 @@
 "use client";
 
+import ActionProgressBar from "@/components/ActionProgressBar";
+import { useTimedActionProgress } from "@/hooks/useTimedActionProgress";
 import { useState } from "react";
 
 interface AddProductModalProps {
@@ -81,6 +83,11 @@ export default function AddProductModal({
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const importProgress = useTimedActionProgress(isLoading, {
+    initialPercent: 12,
+    maxWaitingPercent: 90,
+    stepPercent: 8,
+  });
 
   if (!isOpen) return null;
 
@@ -180,27 +187,13 @@ export default function AddProductModal({
 
           <div className="flex items-center gap-3 mt-6">
             {isLoading ? (
-              <div className="flex items-center gap-2 px-4 py-2 text-sm text-gray-600">
-                <svg
-                  className="w-4 h-4 animate-spin"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                >
-                  <circle
-                    className="opacity-25"
-                    cx="12"
-                    cy="12"
-                    r="10"
-                    stroke="currentColor"
-                    strokeWidth="4"
-                  />
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
-                  />
-                </svg>
-                Importing from Amazon... this should take under 30 seconds
+              <div className="w-full px-1 py-2">
+                <ActionProgressBar
+                  label="Importing from Amazon"
+                  percent={importProgress}
+                  detail="Fetching the selected product and reading the buy-box price."
+                  tone="orange"
+                />
               </div>
             ) : (
               <>

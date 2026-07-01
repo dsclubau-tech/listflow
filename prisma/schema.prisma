@@ -94,6 +94,10 @@ enum PriceCheckJobScope {
 enum EbayImportJobStatus {
   QUEUED
   RUNNING
+  PAUSING
+  PAUSED
+  CANCELLING
+  CANCELLED
   COMPLETED
   FAILED
 }
@@ -327,6 +331,8 @@ model EbayImportJob {
   created               Int                 @default(0)
   skipped               Int                 @default(0)
   failed                Int                 @default(0)
+  selectedListingIds    String[]            @default([])
+  completedListingIds   String[]            @default([])
   rateLimited           Boolean             @default(false)
   errors                Json                @default("[]")
   errorMessage          String?             @db.Text
@@ -334,6 +340,8 @@ model EbayImportJob {
   updatedAt             DateTime            @updatedAt
   startedAt             DateTime?
   completedAt           DateTime?
+  pausedAt              DateTime?
+  cancelledAt           DateTime?
   dismissedAt           DateTime?
 
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
