@@ -6,7 +6,11 @@ import {
   ProductStatus,
 } from "@/app/generated/prisma/enums";
 import type { Prisma } from "@/app/generated/prisma/client";
-import { buildEndItemXML, buildReviseQuantityXML } from "@/lib/ebay-xml";
+import {
+  buildEndItemXML,
+  buildReviseItemXML,
+  buildReviseQuantityXML,
+} from "@/lib/ebay-xml";
 import { callEbayEndItem, callEbayReviseItem, getStoreNumber } from "@/lib/ebay";
 import {
   assertNoEbayLaneStartConflict,
@@ -16,8 +20,10 @@ import {
   type WorkerContext,
 } from "@/lib/job-coordination";
 import { logger } from "@/lib/logger";
+import { policyIdsMatch, resolveProductPolicySelection } from "@/lib/policy-defaults";
 import { prisma } from "@/lib/prisma";
 import { invalidateJobCaches, invalidateProductCaches } from "@/lib/cache-tags";
+import { resolveDescriptionTemplate } from "@/lib/template-resolver";
 
 const ACTIVE_ACTION_JOB_STATUSES: EbayActionJobStatus[] = [
   EbayActionJobStatus.QUEUED,
@@ -93,6 +99,7 @@ function normalizeErrors(errors: Prisma.JsonValue): ProductFailure[] {
 function actionLabel(type: EbayActionJobType) {
   if (type === EbayActionJobType.HOLD) return "Put listings on hold";
   if (type === EbayActionJobType.RESUME) return "Resume listings";
+  if (type === EbayActionJobType.BULK_EDIT_REVISE) return "Bulk edit listings";
   return "End listings";
 }
 
@@ -149,6 +156,12 @@ async function markProgress(
 async function processProduct(job: EbayActionJobRecord, productId: string) {
   const product = await prisma.product.findFirst({
     where: { id: productId, storeId: job.storeId },
+    include: {
+      store: true,
+      variants: {
+        orderBy: { createdAt: "asc" },
+      },
+    },
   });
 
   if (!product) {
@@ -228,6 +241,102 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       where: { id: product.id },
       data: { status: ProductStatus.IMPORTED },
     });
+    return { ok: true, failure: null };
+  }
+
+  if (job.type === EbayActionJobType.BULK_EDIT_REVISE) {
+    if (
+      (product.status !== ProductStatus.IMPORTED &&
+        product.status !== ProductStatus.ON_HOLD) ||
+      !product.ebayItemId
+    ) {
+      return {
+        ok: false,
+        failure: {
+          productId,
+          title: product.title,
+          error: "Product is not imported/on hold or lacks an eBay Item ID",
+        },
+      };
+    }
+
+    const policySelection = await resolveProductPolicySelection(
+      product.storeId,
+      {
+        shippingPolicyId: product.shippingPolicyId,
+        returnPolicyId: product.returnPolicyId,
+        paymentPolicyId: product.paymentPolicyId,
+      },
+      product.policyTemplateId
+    );
+    const productWithPolicies = {
+      ...product,
+      shippingPolicyId: policySelection.shippingPolicyId,
+      returnPolicyId: policySelection.returnPolicyId,
+      paymentPolicyId: policySelection.paymentPolicyId,
+      policyTemplateId: policySelection.policyTemplateId,
+    };
+
+    if (!policyIdsMatch(product, productWithPolicies)) {
+      await prisma.product.update({
+        where: { id: product.id },
+        data: {
+          shippingPolicyId: policySelection.shippingPolicyId,
+          returnPolicyId: policySelection.returnPolicyId,
+          paymentPolicyId: policySelection.paymentPolicyId,
+          policyTemplateId: policySelection.policyTemplateId,
+        },
+      });
+    }
+
+    const finalDescription = await resolveDescriptionTemplate(productWithPolicies);
+    const primarySellPrice =
+      product.variants.length > 0 ? Number(product.variants[0].sellPrice) : null;
+    const overrideStartPrice =
+      primarySellPrice !== null && Number.isFinite(primarySellPrice) && primarySellPrice > 0
+        ? primarySellPrice
+        : undefined;
+    const quantityOverride =
+      product.status === ProductStatus.ON_HOLD ? 0 : undefined;
+    const storeNumber = await getStoreNumber(product.storeId);
+    const result = await callEbayReviseItem(
+      buildReviseItemXML(
+        {
+          ...productWithPolicies,
+          description: finalDescription,
+        },
+        overrideStartPrice,
+        { quantityOverride }
+      ),
+      storeNumber
+    );
+
+    if (!result.success) {
+      await prisma.product.update({
+        where: { id: product.id },
+        data: { errorMessage: result.errorMessage || "Bulk edit revise failed" },
+      });
+
+      return {
+        ok: false,
+        failure: {
+          productId,
+          title: product.title,
+          error: result.errorMessage || "Unknown eBay API error",
+        },
+      };
+    }
+
+    await prisma.product.update({
+      where: { id: product.id },
+      data: {
+        status: product.status,
+        errorMessage: null,
+        priceCheckError: null,
+        ...(overrideStartPrice !== undefined ? { price: overrideStartPrice } : {}),
+      },
+    });
+
     return { ok: true, failure: null };
   }
 

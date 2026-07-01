@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import ActionProgressBar from "@/components/ActionProgressBar";
+import BulkEditModal from "@/components/BulkEditModal";
 import DraftsTable from "@/components/DraftsTable";
 import Toast from "@/components/Toast";
 import { useToast } from "@/hooks/useToast";
@@ -184,6 +185,7 @@ export default function ProductsPageClient({
   const [isResumingPriceCheckJob, setIsResumingPriceCheckJob] = useState(false);
   const [priceCheckJob, setPriceCheckJob] = useState<PriceCheckJob | null>(null);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
   const [searchDraft, setSearchDraft] = useState(searchQuery);
   const notifiedTerminalJobIds = useRef<Set<string>>(new Set());
@@ -1220,6 +1222,18 @@ export default function ProductsPageClient({
         onSelectionChange={setSelectedProductIds}
         onPriceCheckSelected={startPriceCheckJob}
         isPriceCheckJobActive={isStartingPriceCheckJob || isPriceCheckJobActive}
+        onBulkEditSelected={(ids) => {
+          setSelectedProductIds(ids);
+          setIsBulkEditOpen(true);
+        }}
+      />
+
+      <BulkEditModal
+        open={isBulkEditOpen}
+        products={products}
+        selectedProductIds={selectedProductIds}
+        onClose={() => setIsBulkEditOpen(false)}
+        onToast={showToast}
       />
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-gray-600">

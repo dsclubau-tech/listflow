@@ -148,6 +148,7 @@ enum EbayActionJobType {
   HOLD
   RESUME
   END
+  BULK_EDIT_REVISE
 }
 
 model Product {

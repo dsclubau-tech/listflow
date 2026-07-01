@@ -20,6 +20,7 @@ interface DraftsTableProps {
   onSelectionChange?: (selectedIds: string[]) => void;
   onPriceCheckSelected?: (productIds: string[]) => Promise<void>;
   isPriceCheckJobActive?: boolean;
+  onBulkEditSelected?: (productIds: string[]) => void;
 }
 
 const storeBadgeColors: Record<string, string> = {
@@ -342,6 +343,7 @@ export default function DraftsTable({
   onSelectionChange,
   onPriceCheckSelected,
   isPriceCheckJobActive = false,
+  onBulkEditSelected,
 }: DraftsTableProps) {
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -1791,6 +1793,34 @@ export default function DraftsTable({
             )}
             {isProductsView && (
               <>
+                {onBulkEditSelected && (
+                  <button
+                    onClick={() => onBulkEditSelected(selectedIds)}
+                    disabled={selectedIds.length === 0}
+                    className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 transition-colors disabled:opacity-60 flex items-center gap-2"
+                  >
+                    <svg
+                      className="h-4 w-4"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                      strokeWidth={1.8}
+                      aria-hidden="true"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Z"
+                      />
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        d="M19.5 7.125 16.875 4.5"
+                      />
+                    </svg>
+                    Bulk Edit
+                  </button>
+                )}
                 {selectedImportedCount > 0 && (
                   <button
                     onClick={handleBulkHoldSelected}

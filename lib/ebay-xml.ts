@@ -14,6 +14,10 @@ type AddItemOptions = {
   itemSpecificMaxCount?: number;
 };
 
+type ReviseItemOptions = {
+  quantityOverride?: number;
+};
+
 /**
  * Escapes XML special characters in text content.
  */
@@ -64,7 +68,15 @@ function getValidatedPrice(product: Product, overrideStartPrice?: string | numbe
   return numericPrice.toFixed(2);
 }
 
-function getValidatedQuantity(product: Product): string {
+function getValidatedQuantity(product: Product, overrideQuantity?: number): string {
+  if (overrideQuantity !== undefined) {
+    if (!Number.isInteger(overrideQuantity) || overrideQuantity < 0) {
+      throw new Error("Quantity override must be a whole number of at least 0.");
+    }
+
+    return overrideQuantity.toString();
+  }
+
   if (!Number.isInteger(product.quantity) || product.quantity < 1) {
     throw new Error("Quantity must be at least 1 before sending the listing to eBay.");
   }
@@ -96,6 +108,17 @@ function getLocationMetadata(specifics: ProductSpecifics | null) {
     location: specifics?.["_Location"] || "Australia",
     postalCode: specifics?.["_PostalCode"] || "3000",
   };
+}
+
+function getDispatchTimeMax(specifics: ProductSpecifics | null) {
+  const rawValue = specifics?.["_DispatchTimeMax"];
+  const parsed = rawValue ? Number.parseInt(rawValue, 10) : 3;
+
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 30) {
+    return "3";
+  }
+
+  return String(parsed);
 }
 
 function buildPictureDetailsXml(images: string[]): string {
@@ -154,6 +177,7 @@ export function buildAddItemXML(
 ): string {
   const specifics = getProductSpecifics(product);
   const { country, currency, site, location, postalCode } = getLocationMetadata(specifics);
+  const dispatchTimeMax = getDispatchTimeMax(specifics);
   const categoryId = getValidatedCategoryId(product);
   const startPrice = getValidatedPrice(product, overrideStartPrice);
   const quantity = getValidatedQuantity(product);
@@ -181,7 +205,7 @@ export function buildAddItemXML(
     <CategoryMappingAllowed>true</CategoryMappingAllowed>
     <Country>${escapeXml(country)}</Country>
     <Currency>${escapeXml(currency)}</Currency>
-    <DispatchTimeMax>3</DispatchTimeMax>
+    <DispatchTimeMax>${dispatchTimeMax}</DispatchTimeMax>
     <ListingDuration>GTC</ListingDuration>
     <ListingType>FixedPriceItem</ListingType>
     <PrivateListing>${options.privateListing ? "true" : "false"}</PrivateListing>
@@ -343,6 +367,7 @@ ${outputSelectors}
 export function buildReviseItemXML(
   product: ProductWithStore,
   overrideStartPrice?: string | number,
+  options: ReviseItemOptions = {},
 ): string {
   if (!product.ebayItemId) {
     throw new Error("Product has not been uploaded to eBay yet.");
@@ -350,7 +375,8 @@ export function buildReviseItemXML(
 
   const specifics = getProductSpecifics(product);
   const { location, postalCode } = getLocationMetadata(specifics);
-  const quantity = getValidatedQuantity(product);
+  const dispatchTimeMax = getDispatchTimeMax(specifics);
+  const quantity = getValidatedQuantity(product, options.quantityOverride);
   const sellerProfilesXml = buildSellerProfilesXml(product);
 
   // Use the override price (from the primary variant's sellPrice) when available,
@@ -375,6 +401,7 @@ export function buildReviseItemXML(
     <Title>${escapeXml(product.title.slice(0, 80))}</Title>
     <Description><![CDATA[${product.description}]]></Description>
     <StartPrice>${startPrice}</StartPrice>
+    <DispatchTimeMax>${dispatchTimeMax}</DispatchTimeMax>
     <Quantity>${quantity}</Quantity>
 ${sellerProfilesXml}
     <Location>${escapeXml(location)}</Location>

@@ -206,6 +206,7 @@ function actionJobLabel(type: string) {
   if (type === "HOLD") return "Put listings on hold";
   if (type === "RESUME") return "Resume listings";
   if (type === "END") return "End listings";
+  if (type === "BULK_EDIT_REVISE") return "Bulk edit listings";
   return "eBay listing action";
 }
 
