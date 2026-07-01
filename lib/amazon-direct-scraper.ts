@@ -1,13 +1,14 @@
 import "server-only";
 
 import { load, type CheerioAPI } from "cheerio";
+import { extractLocalizedBuyboxPrice } from "@/lib/amazon-buybox-price";
 import type { ScrapedProduct } from "@/lib/amazon-scraper";
 
 export type AmazonScrapeStage =
   | "page_fetch"
   | "html_parse"
   | "postcode_set"
-  | "aod_fetch"
+  | "price_extract"
   | "category_suggest"
   | "draft_ready";
 
@@ -25,9 +26,7 @@ type ScrapeDirectOptions = {
 type CheerioSelection = ReturnType<CheerioAPI>;
 
 const PRODUCT_FETCH_TIMEOUT_MS = 12_000;
-const AOD_FETCH_TIMEOUT_MS = 5_000;
 const POSTCODE_SET_TIMEOUT_MS = 5_000;
-const SCRAPER_MIN_PRICE = 1;
 
 const AMAZON_FIELDS_TO_REMOVE = new Set([
   "asin",
@@ -68,20 +67,6 @@ const AMAZON_TO_EBAY_FIELD_MAP: Record<string, string> = {
   "special features": "Features",
 };
 
-const PRODUCT_PRICE_SELECTORS = [
-  "#corePrice_feature_div .a-price .a-offscreen",
-  "#corePriceDisplay_desktop_feature_div .a-price .a-offscreen",
-  "#apex_desktop .a-price .a-offscreen",
-  "#centerCol #priceblock_ourprice",
-  "#centerCol #priceblock_dealprice",
-  "#centerCol #price_inside_buybox",
-  "#buybox .a-price .a-offscreen",
-  "#desktop_buybox .a-price .a-offscreen",
-  "#priceblock_ourprice",
-  "#priceblock_dealprice",
-  "#price_inside_buybox",
-];
-
 export class AmazonDirectScrapeError extends Error {
   readonly status: number;
   readonly code: string;
@@ -108,28 +93,6 @@ function escapeHtml(value: string) {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
-}
-
-function parseAmazonPriceValue(value: string | null | undefined): number | null {
-  if (!value) {
-    return null;
-  }
-
-  const normalized = value.replace(/[^\d.,]/g, "").trim();
-  if (!normalized) {
-    return null;
-  }
-
-  const parsed = Number.parseFloat(normalized.replace(/,/g, ""));
-  if (!Number.isFinite(parsed) || parsed < SCRAPER_MIN_PRICE) {
-    return null;
-  }
-
-  return Math.round(parsed * 100) / 100;
-}
-
-function escapeRegExp(value: string) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function decodeUrl(value: string) {
@@ -520,200 +483,6 @@ function extractImages($: CheerioAPI, html: string) {
   return images;
 }
 
-function extractPriceFromSelection(
-  $: CheerioAPI,
-  root: CheerioSelection,
-  selectors: string[],
-  options: { scanText?: boolean } = {}
-) {
-  for (const selector of selectors) {
-    const prices: number[] = [];
-    root.find(selector).each((_, element) => {
-      const price = parseAmazonPriceValue($(element).text());
-      if (price !== null) {
-        prices.push(price);
-      }
-    });
-
-    if (prices.length > 0) {
-      return prices[0];
-    }
-  }
-
-  let wholeFractionPrice: number | null = null;
-  root.find(".a-price").each((_, element) => {
-    if (wholeFractionPrice !== null) {
-      return;
-    }
-
-    const whole = normalizeText($(element).find(".a-price-whole").first().text());
-    const fraction = normalizeText(
-      $(element).find(".a-price-fraction").first().text()
-    );
-    const price = parseAmazonPriceValue(
-      whole && fraction ? `${whole}.${fraction}` : ""
-    );
-
-    if (price !== null) {
-      wholeFractionPrice = price;
-    }
-  });
-
-  if (wholeFractionPrice !== null) {
-    return wholeFractionPrice;
-  }
-
-  if (options.scanText === false) {
-    return null;
-  }
-
-  const textRoot = root.clone();
-  textRoot.find("script, style, noscript, template").remove();
-  const containerText = normalizeText(textRoot.text());
-  const pricePattern = /(?:A(?:U)?\$|US\$|\$)\s*([\d,]+\.\d{2})\b/g;
-  let match: RegExpExecArray | null;
-  while ((match = pricePattern.exec(containerText)) !== null) {
-    const price = parseAmazonPriceValue(match[1]);
-    if (price !== null) {
-      return price;
-    }
-  }
-
-  return null;
-}
-
-function extractSelectedTwisterPrice(html: string, asin: string) {
-  const selectedMatch = html.match(
-    /"dimensionValueState"\s*:\s*"SELECTED"[\s\S]{0,1800}?"priceWithoutCurrencySymbol"\s*:\s*"([\d,.]+)"/
-  );
-  const selectedPrice = parseAmazonPriceValue(selectedMatch?.[1]);
-
-  if (selectedPrice !== null) {
-    return selectedPrice;
-  }
-
-  if (!asin) {
-    return null;
-  }
-
-  const asinPattern = new RegExp(
-    `"defaultAsin"\\s*:\\s*"${escapeRegExp(
-      asin
-    )}"[\\s\\S]{0,1800}?"priceWithoutCurrencySymbol"\\s*:\\s*"([\\d,.]+)"`,
-    "i"
-  );
-  const asinMatch = html.match(asinPattern);
-  return parseAmazonPriceValue(asinMatch?.[1]);
-}
-
-function extractProductPrice($: CheerioAPI, html: string, asin: string) {
-  const direct = extractPriceFromSelection($, $.root(), PRODUCT_PRICE_SELECTORS, {
-    scanText: false,
-  });
-  if (direct !== null) {
-    return direct;
-  }
-
-  const selectedTwisterPrice = extractSelectedTwisterPrice(html, asin);
-  if (selectedTwisterPrice !== null) {
-    return selectedTwisterPrice;
-  }
-
-  const containers = [
-    "#corePrice_feature_div",
-    "#corePriceDisplay_desktop_feature_div",
-    "#apex_desktop",
-    "#buybox",
-    "#desktop_buybox",
-  ];
-
-  for (const selector of containers) {
-    const price = extractPriceFromSelection($, $(selector), [".a-price .a-offscreen"]);
-    if (price !== null) {
-      return price;
-    }
-  }
-
-  return null;
-}
-
-function extractAodPrice(html: string) {
-  const $ = load(html);
-
-  let selectedPrice: number | null = null;
-  $("#aod-pinned-offer, #aod-sticky-pinned-offer, #aod-offer, .aod-offer").each((_, offer) => {
-    if (selectedPrice !== null) {
-      return;
-    }
-
-    const text = normalizeText($(offer).text()).toLowerCase();
-    const clearlyNotNew =
-      /used|renewed|refurbished|acceptable|collectible|for parts/.test(text) &&
-      !/\bnew\b/.test(text);
-
-    if (clearlyNotNew) {
-      return;
-    }
-
-    selectedPrice = extractPriceFromSelection($, $(offer), [
-      ".a-price .a-offscreen",
-      ".aod-price .a-offscreen",
-      ".a-price",
-    ]);
-  });
-
-  if (selectedPrice !== null) {
-    return selectedPrice;
-  }
-
-  const aodRoot = $(
-    "#aod-container, #all-offers-display, #aod-offer-list, #aod-offer, .aod-offer"
-  );
-  if (aodRoot.length === 0) {
-    return null;
-  }
-
-  return extractPriceFromSelection($, aodRoot, [
-    "#aod-offer .a-price .a-offscreen",
-    ".aod-price .a-offscreen",
-    ".a-price .a-offscreen",
-  ], { scanText: false });
-}
-
-async function fetchAodPrice(
-  asin: string,
-  referer: string,
-  cookieJar?: CookieJar
-) {
-  const urls = [
-    `https://www.amazon.com.au/gp/product/ajax/ref=dp_aod_NEW_mbc?asin=${encodeURIComponent(
-      asin
-    )}&pc=dp&experienceId=aodAjaxMain`,
-    `https://www.amazon.com.au/gp/aod/ajax?asin=${encodeURIComponent(
-      asin
-    )}&pc=dp&experienceId=aodAjaxMain`,
-  ];
-
-  for (const url of urls) {
-    try {
-      const html = await fetchAmazonHtml(
-        url,
-        AOD_FETCH_TIMEOUT_MS,
-        referer,
-        cookieJar
-      );
-      const price = extractAodPrice(html);
-      if (price !== null) {
-        return price;
-      }
-    } catch {
-      // Try the next Amazon AOD endpoint, then let the caller handle no price.
-    }
-  }
-
-  return null;
-}
-
 function extractAsin($: CheerioAPI, canonicalUrl: string, html: string) {
   const selectors = [
     'input[name="ASIN"]',
@@ -948,7 +717,7 @@ function renderDescription($: CheerioAPI, title: string) {
   return `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#333;max-width:800px;margin:0 auto;">${rendered}</div>`;
 }
 
-function parseProductHtml(html: string, canonicalUrl: string) {
+function parseProductHtml(html: string, canonicalUrl: string): ScrapedProduct {
   if (detectAmazonBlock(html)) {
     throw new AmazonDirectScrapeError(
       "Amazon blocked the product page request. No draft was created.",
@@ -983,7 +752,7 @@ function parseProductHtml(html: string, canonicalUrl: string) {
     title,
     description: renderDescription($, title),
     images,
-    price: extractProductPrice($, html, asin),
+    price: null,
     condition: "New" as const,
     category: extractCategory($),
     categoryId: "",
@@ -1002,6 +771,11 @@ function logStage(
   metadata?: Record<string, unknown>
 ) {
   options.onStage?.(stage, Date.now() - startedAt, metadata);
+}
+
+function getScrapePostcode(postcode: string | undefined) {
+  const normalized = postcode?.replace(/\D/g, "").slice(0, 4) ?? "";
+  return normalized.length === 4 ? normalized : "2217";
 }
 
 export async function scrapeAmazonProductDirect(
@@ -1037,81 +811,93 @@ export async function scrapeAmazonProductDirect(
     asin: product.asin,
     title: product.title,
     imageCount: product.images.length,
-    priceFound: product.price !== null,
+    priceFound: false,
+    priceSkipped: true,
+    reason: "price_requires_localized_buybox",
   });
 
-  const postcode = options.postcode?.replace(/\D/g, "").slice(0, 4) ?? "";
-  if (product.price === null && postcode.length === 4) {
-    const postcodeStartedAt = Date.now();
-    const postcodeApplied = await setAmazonDeliveryPostcodeDirect(
-      canonicalUrl,
-      postcode,
-      cookieJar
+  const postcode = getScrapePostcode(options.postcode);
+  const postcodeStartedAt = Date.now();
+  const postcodeApplied = await setAmazonDeliveryPostcodeDirect(
+    canonicalUrl,
+    postcode,
+    cookieJar
+  );
+  logStage(options, "postcode_set", postcodeStartedAt, {
+    postcode,
+    applied: postcodeApplied,
+  });
+
+  if (!postcodeApplied) {
+    throw new AmazonDirectScrapeError(
+      "Could not set the Amazon AU delivery postcode. No draft was created.",
+      422,
+      "AMAZON_POSTCODE_FAILED"
     );
-    logStage(options, "postcode_set", postcodeStartedAt, {
-      postcode,
-      applied: postcodeApplied,
-    });
-
-    if (postcodeApplied) {
-      const refetchStartedAt = Date.now();
-      const localizedHtml = await fetchAmazonHtml(
-        canonicalUrl,
-        PRODUCT_FETCH_TIMEOUT_MS,
-        canonicalUrl,
-        cookieJar
-      );
-      logStage(options, "page_fetch", refetchStartedAt, {
-        canonicalUrl,
-        bytes: localizedHtml.length,
-        localized: true,
-      });
-
-      const localizedParseStartedAt = Date.now();
-      const localizedProduct = parseProductHtml(localizedHtml, canonicalUrl);
-      logStage(options, "html_parse", localizedParseStartedAt, {
-        asin: localizedProduct.asin,
-        title: localizedProduct.title,
-        imageCount: localizedProduct.images.length,
-        priceFound: localizedProduct.price !== null,
-        localized: true,
-      });
-
-      product.price = localizedProduct.price;
-      product.title = localizedProduct.title || product.title;
-      product.description = localizedProduct.description || product.description;
-      product.images = localizedProduct.images.length > 0 ? localizedProduct.images : product.images;
-      product.category = localizedProduct.category || product.category;
-      product.itemSpecifics =
-        Object.keys(localizedProduct.itemSpecifics).length > 0
-          ? localizedProduct.itemSpecifics
-          : product.itemSpecifics;
-      product.variantName = localizedProduct.variantName ?? product.variantName;
-      product.asin = localizedProduct.asin || product.asin;
-      product.brand = localizedProduct.brand || product.brand;
-    }
-  } else if (product.price === null) {
-    options.onStage?.("postcode_set", 0, {
-      skipped: true,
-      reason: "missing_valid_postcode",
-    });
   }
 
-  if (product.price === null && /^[A-Z0-9]{10}$/.test(product.asin)) {
-    const aodStartedAt = Date.now();
-    const aodPrice = await fetchAodPrice(product.asin, canonicalUrl, cookieJar);
-    logStage(options, "aod_fetch", aodStartedAt, {
-      asin: product.asin,
-      priceFound: aodPrice !== null,
-    });
-    product.price = aodPrice;
-  } else {
-    options.onStage?.("aod_fetch", 0, {
-      asin: product.asin,
-      skipped: true,
-      reason: product.price !== null ? "price_found_on_product_page" : "missing_asin",
-    });
+  const refetchStartedAt = Date.now();
+  const localizedHtml = await fetchAmazonHtml(
+    canonicalUrl,
+    PRODUCT_FETCH_TIMEOUT_MS,
+    canonicalUrl,
+    cookieJar
+  );
+  logStage(options, "page_fetch", refetchStartedAt, {
+    canonicalUrl,
+    bytes: localizedHtml.length,
+    localized: true,
+  });
+
+  const localizedParseStartedAt = Date.now();
+  const localizedProduct = parseProductHtml(localizedHtml, canonicalUrl);
+  logStage(options, "html_parse", localizedParseStartedAt, {
+    asin: localizedProduct.asin,
+    title: localizedProduct.title,
+    imageCount: localizedProduct.images.length,
+    priceFound: false,
+    priceSkipped: true,
+    reason: "price_extracted_by_localized_buybox_only",
+    localized: true,
+  });
+
+  product.title = localizedProduct.title || product.title;
+  product.description = localizedProduct.description || product.description;
+  product.images =
+    localizedProduct.images.length > 0 ? localizedProduct.images : product.images;
+  product.category = localizedProduct.category || product.category;
+  product.itemSpecifics =
+    Object.keys(localizedProduct.itemSpecifics).length > 0
+      ? localizedProduct.itemSpecifics
+      : product.itemSpecifics;
+  product.variantName = localizedProduct.variantName ?? product.variantName;
+  product.asin = localizedProduct.asin || product.asin;
+  product.brand = localizedProduct.brand || product.brand;
+
+  const priceStartedAt = Date.now();
+  const buyboxPrice = extractLocalizedBuyboxPrice(
+    load(localizedHtml),
+    product.asin
+  );
+  logStage(options, "price_extract", priceStartedAt, {
+    asin: product.asin,
+    localized: true,
+    price: buyboxPrice?.price ?? null,
+    priceFound: buyboxPrice !== null,
+    priceSource: buyboxPrice?.priceSource ?? "localized_buybox",
+    selector: buyboxPrice?.selector ?? null,
+    containerSelector: buyboxPrice?.containerSelector ?? null,
+  });
+
+  if (!buyboxPrice) {
+    throw new AmazonDirectScrapeError(
+      "Amazon product was found, but ListFlow could not read the selected variant buybox price. No draft was created.",
+      422,
+      "AMAZON_BUYBOX_PRICE_MISSING"
+    );
   }
+
+  product.price = buyboxPrice.price;
 
   if (product.images.length === 0) {
     throw new AmazonDirectScrapeError(
