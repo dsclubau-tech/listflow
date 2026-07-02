@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  inferTypeItemSpecific,
   inferVolumeItemSpecific,
   parseMissingItemSpecificNames,
 } from "@/lib/item-specifics";
@@ -18,6 +19,30 @@ test("inferVolumeItemSpecific reads ounce-only volume", () => {
 
 test("inferVolumeItemSpecific returns null when no volume is present", () => {
   assert.equal(inferVolumeItemSpecific("Insulated stainless steel bottle"), null);
+});
+
+test("inferTypeItemSpecific reads telephoto lens type from existing specifics", () => {
+  assert.equal(
+    inferTypeItemSpecific({
+      title: "EF/EF-S 420-800mm F8.3 Telephoto Zoom Lens",
+      itemSpecifics: {
+        Lens: "Telephoto",
+        "Lens type": "Telephoto",
+      },
+      allowedValues: ["Macro", "Telephoto", "Wide Angle"],
+    }),
+    "Telephoto"
+  );
+});
+
+test("inferTypeItemSpecific does not guess when allowed values do not match", () => {
+  assert.equal(
+    inferTypeItemSpecific({
+      title: "EF/EF-S 420-800mm F8.3 Telephoto Zoom Lens",
+      allowedValues: ["Tripod", "Filter"],
+    }),
+    null
+  );
 });
 
 test("parseMissingItemSpecificNames extracts missing eBay specifics", () => {

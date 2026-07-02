@@ -185,6 +185,136 @@ export function inferVolumeItemSpecific(...texts: Array<string | null | undefine
   return null;
 }
 
+function normalizeSpecificValue(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function matchAllowedSpecificValue(
+  candidate: string | null | undefined,
+  allowedValues?: string[]
+) {
+  const normalizedCandidate = normalizeSpecificValue(candidate ?? "");
+  if (!normalizedCandidate) {
+    return null;
+  }
+
+  if (!allowedValues || allowedValues.length === 0) {
+    return candidate?.trim() || null;
+  }
+
+  for (const value of allowedValues) {
+    if (normalizeSpecificValue(value) === normalizedCandidate) {
+      return value;
+    }
+  }
+
+  for (const value of allowedValues) {
+    const normalizedAllowed = normalizeSpecificValue(value);
+    if (
+      normalizedAllowed.length >= 3 &&
+      (normalizedCandidate.includes(normalizedAllowed) ||
+        normalizedAllowed.includes(normalizedCandidate))
+    ) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+export function inferTypeItemSpecific(input: {
+  title?: string | null;
+  categoryName?: string | null;
+  itemSpecifics?: unknown;
+  allowedValues?: string[];
+}) {
+  const specifics = normalizeItemSpecifics(input.itemSpecifics);
+  const directCandidates = [
+    readItemSpecificValue(specifics, ["Type", "Product Type", "Item Type"]),
+    readItemSpecificValue(specifics, ["Lens Type", "Lens"]),
+    readItemSpecificValue(specifics, ["Style"]),
+  ];
+
+  for (const candidate of directCandidates) {
+    const matched = matchAllowedSpecificValue(candidate, input.allowedValues);
+    if (matched) {
+      return matched;
+    }
+  }
+
+  const text = [
+    input.title,
+    input.categoryName,
+    ...Object.entries(specifics).map(([key, value]) => `${key}: ${value}`),
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const patternCandidates: Array<{ value: string; patterns: RegExp[] }> = [
+    {
+      value: "Telephoto",
+      patterns: [/\btelephoto\b/i],
+    },
+    {
+      value: "Wide Angle",
+      patterns: [/\bwide[-\s]?angle\b/i],
+    },
+    {
+      value: "Macro",
+      patterns: [/\bmacro\b/i],
+    },
+    {
+      value: "Fisheye",
+      patterns: [/\bfish[-\s]?eye\b/i],
+    },
+    {
+      value: "Zoom Lens",
+      patterns: [/\bzoom\s+lens\b/i],
+    },
+    {
+      value: "Prime Lens",
+      patterns: [/\bprime\s+lens\b/i, /\bfixed\s+focal\b/i],
+    },
+    {
+      value: "Camera Lens",
+      patterns: [/\bcamera\s+lens\b/i, /\blens\b/i],
+    },
+    {
+      value: "Water Bottle",
+      patterns: [/\bwater\s+bottle\b/i],
+    },
+    {
+      value: "Phone Case",
+      patterns: [/\bphone\s+case\b/i, /\b(?:iphone|galaxy|samsung)\b.*\bcase\b/i],
+    },
+    {
+      value: "Hair Clippers",
+      patterns: [/\bhair\s+clippers?\b/i],
+    },
+    {
+      value: "Tile Cutter",
+      patterns: [/\btile\s+cutter\b/i],
+    },
+    {
+      value: "Controller",
+      patterns: [/\bcontroller\b/i],
+    },
+  ];
+
+  for (const candidate of patternCandidates) {
+    if (!candidate.patterns.some((pattern) => pattern.test(text))) {
+      continue;
+    }
+
+    const matched = matchAllowedSpecificValue(candidate.value, input.allowedValues);
+    if (matched) {
+      return matched;
+    }
+  }
+
+  return null;
+}
+
 function normalizeSpecificName(name: string) {
   return name.trim().replace(/\s+/g, " ").toLowerCase();
 }

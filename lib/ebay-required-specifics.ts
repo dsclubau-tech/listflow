@@ -2,6 +2,7 @@ import type { Product } from "@/app/generated/prisma/client";
 import type { EbayCategoryAspect } from "@/lib/ebay";
 import { getEbayCategoryAspects } from "@/lib/ebay";
 import {
+  inferTypeItemSpecific,
   inferVolumeItemSpecific,
   normalizeItemSpecifics,
   parseMissingItemSpecificNames,
@@ -65,8 +66,9 @@ function getRequiredAspects(aspects: EbayCategoryAspect[]) {
 function inferRequiredSpecific(
   product: Product,
   specifics: ItemSpecificsRecord,
-  aspectName: string
+  aspect: EbayCategoryAspect
 ) {
+  const aspectName = aspect.name;
   const normalized = normalizeName(aspectName);
   const allSpecificText = Object.entries(specifics)
     .filter(([key]) => !key.startsWith("_"))
@@ -82,6 +84,15 @@ function inferRequiredSpecific(
 
   if (normalized === "volume" || normalized === "capacity") {
     return inferVolumeItemSpecific(...sourceText);
+  }
+
+  if (normalized === "type") {
+    return inferTypeItemSpecific({
+      title: product.title,
+      categoryName: product.categoryName,
+      itemSpecifics: specifics,
+      allowedValues: aspect.values,
+    });
   }
 
   return null;
@@ -116,7 +127,7 @@ export async function validateRequiredItemSpecifics(input: {
       specifics,
       addedItemSpecifics,
       aspect.name,
-      inferRequiredSpecific(input.product, specifics, aspect.name)
+      inferRequiredSpecific(input.product, specifics, aspect)
     );
   }
 
@@ -139,4 +150,3 @@ export function buildMissingItemSpecificsResponse(message: string | null | undef
     requiredItemSpecifics: missingItemSpecifics.map((name) => ({ name })),
   };
 }
-

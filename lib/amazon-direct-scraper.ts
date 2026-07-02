@@ -2,7 +2,10 @@ import "server-only";
 
 import { load, type CheerioAPI } from "cheerio";
 import { extractLocalizedBuyboxPrice } from "@/lib/amazon-buybox-price";
-import { inferVolumeItemSpecific } from "@/lib/item-specifics";
+import {
+  inferTypeItemSpecific,
+  inferVolumeItemSpecific,
+} from "@/lib/item-specifics";
 import type { ScrapedProduct } from "@/lib/amazon-scraper";
 
 export type AmazonScrapeStage =
@@ -619,6 +622,17 @@ function withInferredItemSpecifics(
 
     if (inferredVolume) {
       next.Volume = inferredVolume;
+    }
+  }
+
+  if (!next.Type) {
+    const inferredType = inferTypeItemSpecific({
+      title,
+      itemSpecifics: next,
+    });
+
+    if (inferredType) {
+      next.Type = inferredType;
     }
   }
 

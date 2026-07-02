@@ -11,6 +11,7 @@ import ProductVariantsEditor from "@/components/ProductVariantsEditor";
 import RichTextEditor from "@/components/RichTextEditor";
 import { reportClientError } from "@/lib/client-logger";
 import {
+  inferTypeItemSpecific,
   parseMissingItemSpecificNames,
   sanitizeEbayItemSpecifics,
 } from "@/lib/item-specifics";
@@ -487,6 +488,59 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
         }),
     [itemSpecifics, requiredSpecificByName]
   );
+
+  useEffect(() => {
+    const requiredType = requiredSpecificByName.get("type");
+    const hasTypeRow = itemSpecifics.some(
+      (specific) => specific.key.trim().toLowerCase() === "type"
+    );
+    const hasBlankTypeRow = itemSpecifics.some(
+      (specific) =>
+        specific.key.trim().toLowerCase() === "type" && !specific.value.trim()
+    );
+
+    if (!hasBlankTypeRow && (!requiredType || hasTypeRow)) {
+      return;
+    }
+
+    const specificsObj = Object.fromEntries(
+      itemSpecifics
+        .filter((specific) => specific.key.trim() && specific.value.trim())
+        .map((specific) => [specific.key.trim(), specific.value.trim()])
+    );
+    const inferredType = inferTypeItemSpecific({
+      title,
+      categoryName,
+      itemSpecifics: specificsObj,
+      allowedValues: requiredType?.values,
+    });
+
+    if (!inferredType) {
+      return;
+    }
+
+    setItemSpecifics((current) => {
+      let changed = false;
+      const next = current.map((specific) => {
+        if (
+          specific.key.trim().toLowerCase() !== "type" ||
+          specific.value.trim()
+        ) {
+          return specific;
+        }
+
+        changed = true;
+        return { ...specific, value: inferredType };
+      });
+
+      if (!hasTypeRow && requiredType) {
+        changed = true;
+        return [{ key: requiredType.name, value: inferredType }, ...next];
+      }
+
+      return changed ? next : current;
+    });
+  }, [categoryName, itemSpecifics, requiredSpecificByName, title]);
 
   useEffect(() => {
     if (
