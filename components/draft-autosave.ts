@@ -49,7 +49,10 @@ function normalizeTitle(data: ScrapedProduct) {
 }
 
 function buildItemSpecifics(data: ScrapedProduct) {
-  const specifics: Record<string, string> = { ...data.itemSpecifics };
+  const specifics: Record<string, string> = {
+    ...(data.supplierDefaults?.defaultItemSpecifics ?? {}),
+    ...data.itemSpecifics,
+  };
 
   if (data.brand?.trim() && !specifics.Brand) {
     specifics.Brand = data.brand.trim();

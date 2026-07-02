@@ -846,3 +846,89 @@ export async function getEbaySuggestedCategories(
     return [];
   }
 }
+
+export type EbayCategoryAspect = {
+  name: string;
+  required: boolean;
+  values: string[];
+  inputType: string | null;
+};
+
+/**
+ * Fetches eBay AU category aspect metadata for a leaf category.
+ * category_tree_id 15 = eBay Australia.
+ */
+export async function getEbayCategoryAspects(
+  categoryId: string,
+  storeNumber: 1 | 2 | 3
+): Promise<EbayCategoryAspect[]> {
+  const normalizedCategoryId = categoryId.trim();
+  if (!/^\d+$/.test(normalizedCategoryId)) {
+    return [];
+  }
+
+  try {
+    const accessToken = await getOAuthAccessToken(storeNumber);
+    const url =
+      `${EBAY_API_BASE_URL}/commerce/taxonomy/v1/category_tree/15` +
+      `/get_item_aspects_for_category?category_id=${encodeURIComponent(normalizedCategoryId)}`;
+
+    const storeId = await waitForStoreEbayLimit(storeNumber, "BROWSE");
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+    });
+    const responseText = await response.text();
+
+    if (response.status === 429) {
+      await recordStoreEbayBackoff(storeId, "BROWSE", `HTTP ${response.status}`);
+    }
+
+    if (!response.ok) {
+      logger.warn("ebay/getEbayCategoryAspects", "Taxonomy aspects request failed", {
+        storeNumber,
+        categoryId: normalizedCategoryId,
+        httpStatus: response.status,
+        responseBody: responseText.slice(0, 500),
+      });
+      return [];
+    }
+
+    const data = JSON.parse(responseText) as {
+      aspects?: Array<{
+        localizedAspectName?: string;
+        aspectConstraint?: {
+          aspectRequired?: boolean;
+          aspectMode?: string;
+          aspectDataType?: string;
+        };
+        aspectValues?: Array<{ localizedValue?: string }>;
+      }>;
+    };
+
+    return (data.aspects ?? [])
+      .map((aspect) => ({
+        name: String(aspect.localizedAspectName ?? "").trim(),
+        required: aspect.aspectConstraint?.aspectRequired === true,
+        values: (aspect.aspectValues ?? [])
+          .map((value) => String(value.localizedValue ?? "").trim())
+          .filter(Boolean),
+        inputType:
+          aspect.aspectConstraint?.aspectMode ??
+          aspect.aspectConstraint?.aspectDataType ??
+          null,
+      }))
+      .filter((aspect) => aspect.name);
+  } catch (error) {
+    logger.warn("ebay/getEbayCategoryAspects", "Failed to fetch category aspects", {
+      storeNumber,
+      categoryId: normalizedCategoryId,
+      errorMessage: error instanceof Error ? error.message : "Unknown error",
+    });
+    return [];
+  }
+}

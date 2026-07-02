@@ -153,7 +153,10 @@ export default function DraftEditForm({
       setImages([...scrapedData.images]);
       setHoveredImage(null);
       setItemSpecifics(
-        Object.entries(scrapedData.itemSpecifics).map(([key, value]) => ({
+        Object.entries({
+          ...(defaults?.defaultItemSpecifics ?? {}),
+          ...scrapedData.itemSpecifics,
+        }).map(([key, value]) => ({
           key,
           value,
         }))

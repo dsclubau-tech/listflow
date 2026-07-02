@@ -10,6 +10,7 @@ import { createRequestLogger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { getStorePolicyDefaults } from "@/lib/policy-defaults";
+import { normalizeItemSpecifics } from "@/lib/item-specifics";
 
 export const maxDuration = 60;
 
@@ -158,6 +159,9 @@ export async function POST(request: Request) {
       returnPolicyId: policyDefaults.returnPolicyId,
       policyTemplateId: policyDefaults.policyTemplateId,
       capitalizeTitle: supplierSettings?.capitalizeTitle ?? false,
+      defaultItemSpecifics: normalizeItemSpecifics(
+        supplierSettings?.defaultItemSpecifics
+      ),
     };
 
     logStage("draft_ready", 0, {

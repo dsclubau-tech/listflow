@@ -9,6 +9,10 @@ import { ProductStatus } from "@/app/generated/prisma/enums";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 import { policyIdsMatch, resolveProductPolicySelection } from "@/lib/policy-defaults";
 import { invalidateProductCaches } from "@/lib/cache-tags";
+import {
+  buildMissingItemSpecificsResponse,
+  validateRequiredItemSpecifics,
+} from "@/lib/ebay-required-specifics";
 
 function isTooManyItemSpecificsError(message: string | undefined) {
   return /too many item specifics|maximum.+item specifics/i.test(message ?? "");
@@ -103,7 +107,6 @@ export async function POST(request: Request) {
     }
 
     const finalDescription = await resolveDescriptionTemplate(productWithPolicies);
-    const productWithResolvedDesc = { ...productWithPolicies, description: finalDescription };
     const supplierSettings = await prisma.supplierSettings.findUnique({
       where: {
         storeId_supplierName: {
@@ -113,8 +116,58 @@ export async function POST(request: Request) {
       },
       select: {
         privateListing: true,
+        defaultItemSpecifics: true,
       },
     });
+    const requiredSpecifics = await validateRequiredItemSpecifics({
+      product: productWithPolicies,
+      storeNumber,
+      supplierDefaultItemSpecifics: supplierSettings?.defaultItemSpecifics,
+    });
+
+    if (Object.keys(requiredSpecifics.addedItemSpecifics).length > 0) {
+      await prisma.product.update({
+        where: { id: product.id },
+        data: { itemSpecifics: requiredSpecifics.itemSpecifics },
+      });
+    }
+
+    if (requiredSpecifics.missingItemSpecifics.length > 0) {
+      const errorMessage = `Add ${requiredSpecifics.missingItemSpecifics.join(", ")} before importing.`;
+
+      await prisma.product.update({
+        where: { id: productId },
+        data: { status: "FAILED", errorMessage },
+      });
+
+      await prisma.uploadLog.create({
+        data: {
+          productId,
+          storeId: product.storeId,
+          userId,
+          status: "FAILED",
+          errorMessage,
+        },
+      });
+
+      invalidateProductCaches(storeSession.storeId);
+
+      return NextResponse.json(
+        {
+          success: false,
+          error: errorMessage,
+          missingItemSpecifics: requiredSpecifics.missingItemSpecifics,
+          requiredItemSpecifics: requiredSpecifics.requiredItemSpecifics,
+        },
+        { status: 422 },
+      );
+    }
+
+    const productWithResolvedDesc = {
+      ...productWithPolicies,
+      itemSpecifics: requiredSpecifics.itemSpecifics,
+      description: finalDescription,
+    };
     const variants = await prisma.variant.findMany({
       where: { productId: product.id },
       orderBy: { createdAt: "asc" },
@@ -187,15 +240,23 @@ export async function POST(request: Request) {
       return NextResponse.json({ success: true, itemId: result.itemId });
     }
 
+    const missingSpecificsResponse = buildMissingItemSpecificsResponse(
+      result.errorMessage
+    );
+    const cleanErrorMessage =
+      missingSpecificsResponse.missingItemSpecifics.length > 0
+        ? `Add ${missingSpecificsResponse.missingItemSpecifics.join(", ")} before importing.`
+        : result.errorMessage;
+
     log.error("upload/route", "eBay AddItem failed", undefined, {
       productId,
       storeNumber,
-      ebayError: result.errorMessage,
+      ebayError: cleanErrorMessage,
     });
 
     await prisma.product.update({
       where: { id: productId },
-      data: { status: "FAILED", errorMessage: result.errorMessage },
+      data: { status: "FAILED", errorMessage: cleanErrorMessage },
     });
 
     await prisma.uploadLog.create({
@@ -204,14 +265,18 @@ export async function POST(request: Request) {
         storeId: product.storeId,
         userId,
         status: "FAILED",
-        errorMessage: result.errorMessage,
+        errorMessage: cleanErrorMessage,
       },
     });
 
     invalidateProductCaches(storeSession.storeId);
 
     return NextResponse.json(
-      { success: false, error: result.errorMessage },
+      {
+        success: false,
+        error: cleanErrorMessage,
+        ...missingSpecificsResponse,
+      },
       { status: 422 },
     );
   } catch (error) {

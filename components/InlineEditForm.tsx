@@ -10,7 +10,10 @@ import type { ScrapedProduct } from "@/components/AddProductModal";
 import ProductVariantsEditor from "@/components/ProductVariantsEditor";
 import RichTextEditor from "@/components/RichTextEditor";
 import { reportClientError } from "@/lib/client-logger";
-import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
+import {
+  parseMissingItemSpecificNames,
+  sanitizeEbayItemSpecifics,
+} from "@/lib/item-specifics";
 import { isValidAsin, normalizeAsin } from "@/lib/price-check-eligibility";
 
 // ----- Types -----
@@ -48,6 +51,12 @@ interface SaveMessage {
   title?: string;
   variant: "success" | "error";
 }
+
+type RequiredItemSpecific = {
+  name: string;
+  values?: string[];
+  inputType?: string | null;
+};
 
 // ----- VERO keywords -----
 
@@ -135,6 +144,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
 
   // Item Specifics
   const [itemSpecifics, setItemSpecifics] = useState<{ key: string; value: string }[]>([]);
+  const [requiredItemSpecifics, setRequiredItemSpecifics] = useState<RequiredItemSpecific[]>([]);
 
   // Fetch templates on mount
   useEffect(() => {
@@ -179,6 +189,74 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       if (specs["_PostalCode"]) setDefaultZipcode(specs["_PostalCode"]);
     }
   }, [product.itemSpecifics]);
+
+  const missingSpecificsFromError = useMemo(
+    () => parseMissingItemSpecificNames(product.errorMessage),
+    [product.errorMessage]
+  );
+
+  useEffect(() => {
+    if (!/^\d+$/.test(category.trim())) {
+      setRequiredItemSpecifics([]);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadRequiredSpecifics() {
+      try {
+        const response = await fetch(
+          `/api/ebay/category-aspects?categoryId=${encodeURIComponent(category.trim())}`,
+          { cache: "no-store" }
+        );
+        const data = (await response.json().catch(() => ({}))) as {
+          requiredItemSpecifics?: RequiredItemSpecific[];
+        };
+
+        if (!cancelled && response.ok) {
+          setRequiredItemSpecifics(data.requiredItemSpecifics ?? []);
+        }
+      } catch {
+        if (!cancelled) {
+          setRequiredItemSpecifics([]);
+        }
+      }
+    }
+
+    void loadRequiredSpecifics();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [category]);
+
+  useEffect(() => {
+    const names = Array.from(
+      new Set([
+        ...missingSpecificsFromError,
+        ...requiredItemSpecifics.map((specific) => specific.name),
+      ])
+    ).filter(Boolean);
+
+    if (names.length === 0) {
+      return;
+    }
+
+    setItemSpecifics((current) => {
+      const existing = new Set(
+        current.map((specific) => specific.key.trim().toLowerCase())
+      );
+      const additions = names
+        .filter((name) => !existing.has(name.trim().toLowerCase()))
+        .map((name) => ({ key: name, value: "" }));
+
+      return additions.length > 0 ? [...additions, ...current] : current;
+    });
+
+    if (missingSpecificsFromError.length > 0) {
+      setActiveTab(4);
+    }
+  }, [missingSpecificsFromError, requiredItemSpecifics]);
 
   // Fetch policies
   const fetchPolicies = useCallback(async () => {
@@ -379,6 +457,35 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
           : [bannerMessage.text]
         : [],
     [bannerMessage]
+  );
+  const requiredSpecificByName = useMemo(() => {
+    const map = new Map<string, RequiredItemSpecific>();
+    for (const specific of requiredItemSpecifics) {
+      map.set(specific.name.trim().toLowerCase(), specific);
+    }
+    for (const name of missingSpecificsFromError) {
+      const key = name.trim().toLowerCase();
+      if (!map.has(key)) {
+        map.set(key, { name });
+      }
+    }
+    return map;
+  }, [missingSpecificsFromError, requiredItemSpecifics]);
+  const visibleItemSpecifics = useMemo(
+    () =>
+      itemSpecifics
+        .map((specific, index) => ({
+          specific,
+          index,
+          required: requiredSpecificByName.has(specific.key.trim().toLowerCase()),
+        }))
+        .sort((left, right) => {
+          if (left.required !== right.required) {
+            return left.required ? -1 : 1;
+          }
+          return left.index - right.index;
+        }),
+    [itemSpecifics, requiredSpecificByName]
   );
 
   useEffect(() => {
@@ -632,7 +739,40 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
         setSaveMessage({ text: "Imported", variant: "success" });
         router.refresh();
       } else {
-        const data = await res.json();
+        const data = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          missingItemSpecifics?: string[];
+          requiredItemSpecifics?: RequiredItemSpecific[];
+        };
+        const missingNames = data.missingItemSpecifics ?? [];
+
+        if (data.requiredItemSpecifics && data.requiredItemSpecifics.length > 0) {
+          setRequiredItemSpecifics((current) => {
+            const merged = new Map<string, RequiredItemSpecific>();
+            for (const specific of current) {
+              merged.set(specific.name.trim().toLowerCase(), specific);
+            }
+            for (const specific of data.requiredItemSpecifics ?? []) {
+              merged.set(specific.name.trim().toLowerCase(), specific);
+            }
+            return Array.from(merged.values());
+          });
+        }
+
+        if (missingNames.length > 0) {
+          setItemSpecifics((current) => {
+            const existing = new Set(
+              current.map((specific) => specific.key.trim().toLowerCase())
+            );
+            const additions = missingNames
+              .filter((name) => !existing.has(name.trim().toLowerCase()))
+              .map((name) => ({ key: name, value: "" }));
+
+            return additions.length > 0 ? [...additions, ...current] : current;
+          });
+          setActiveTab(4);
+        }
+
         void reportClientError(
           "inline-edit/import",
           "Product import failed",
@@ -819,7 +959,10 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       setHoveredImage(null);
       setBrand(scraped.brand);
       setItemSpecifics(
-        Object.entries(scraped.itemSpecifics).map(([key, value]) => ({
+        Object.entries({
+          ...(scraped.supplierDefaults?.defaultItemSpecifics ?? {}),
+          ...scraped.itemSpecifics,
+        }).map(([key, value]) => ({
           key,
           value: String(value),
         }))
@@ -1580,38 +1723,74 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
             </div>
 
             <div className="divide-y divide-gray-100">
-              {itemSpecifics.map((spec, index) => (
-                <div
-                  key={index}
-                  className={`flex items-center gap-3 px-3 py-2 ${
-                    index % 2 === 0 ? "bg-white" : "bg-gray-50"
-                  }`}
-                >
-                  <input
-                    type="text"
-                    value={spec.key}
-                    onChange={(e) => updateSpecific(index, "key", e.target.value)}
-                    className="flex-1 px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                    placeholder="Name"
-                  />
-                  <input
-                    type="text"
-                    value={spec.value}
-                    onChange={(e) => updateSpecific(index, "value", e.target.value)}
-                    className="flex-1 px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                    placeholder="Value"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeSpecific(index)}
-                    className="w-10 flex items-center justify-center text-red-400 hover:text-red-600 transition-colors"
+              {visibleItemSpecifics.map(({ specific: spec, index, required }, visibleIndex) => {
+                const requiredSpecific = requiredSpecificByName.get(
+                  spec.key.trim().toLowerCase()
+                );
+                const allowedValues = requiredSpecific?.values ?? [];
+                const hasCustomValue =
+                  spec.value.trim() &&
+                  allowedValues.length > 0 &&
+                  !allowedValues.some(
+                    (value) => value.toLowerCase() === spec.value.trim().toLowerCase()
+                  );
+
+                return (
+                  <div
+                    key={`${index}-${spec.key}`}
+                    className={`flex items-center gap-3 px-3 py-2 ${
+                      visibleIndex % 2 === 0 ? "bg-white" : "bg-gray-50"
+                    } ${required && !spec.value.trim() ? "border-l-2 border-l-red-400" : ""}`}
                   >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
-                </div>
-              ))}
+                    <div className="flex flex-1 items-center gap-2">
+                      <input
+                        type="text"
+                        value={spec.key}
+                        onChange={(e) => updateSpecific(index, "key", e.target.value)}
+                        className="min-w-0 flex-1 px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        placeholder="Name"
+                      />
+                      {required && (
+                        <span className="whitespace-nowrap rounded-full bg-red-50 px-2 py-0.5 text-[11px] font-semibold text-red-600">
+                          Required
+                        </span>
+                      )}
+                    </div>
+                    {allowedValues.length > 0 ? (
+                      <select
+                        value={spec.value}
+                        onChange={(e) => updateSpecific(index, "value", e.target.value)}
+                        className="flex-1 px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      >
+                        <option value="">Select {requiredSpecific?.name ?? "value"}</option>
+                        {hasCustomValue && <option value={spec.value}>{spec.value}</option>}
+                        {allowedValues.map((value) => (
+                          <option key={value} value={value}>
+                            {value}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        type="text"
+                        value={spec.value}
+                        onChange={(e) => updateSpecific(index, "value", e.target.value)}
+                        className="flex-1 px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        placeholder="Value"
+                      />
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removeSpecific(index)}
+                      className="w-10 flex items-center justify-center text-red-400 hover:text-red-600 transition-colors"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                      </svg>
+                    </button>
+                  </div>
+                );
+              })}
             </div>
 
             <button

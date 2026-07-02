@@ -2,6 +2,7 @@ import "server-only";
 
 import { load, type CheerioAPI } from "cheerio";
 import { extractLocalizedBuyboxPrice } from "@/lib/amazon-buybox-price";
+import { inferVolumeItemSpecific } from "@/lib/item-specifics";
 import type { ScrapedProduct } from "@/lib/amazon-scraper";
 
 export type AmazonScrapeStage =
@@ -63,6 +64,9 @@ const AMAZON_TO_EBAY_FIELD_MAP: Record<string, string> = {
   wattage: "Wattage",
   "connectivity technology": "Connectivity",
   "number of items": "Number of Items",
+  capacity: "Volume",
+  "item volume": "Volume",
+  volume: "Volume",
   "special feature": "Features",
   "special features": "Features",
 };
@@ -597,6 +601,30 @@ function extractItemSpecifics($: CheerioAPI) {
   return normalizeItemSpecificsForEbay(specs);
 }
 
+function withInferredItemSpecifics(
+  itemSpecifics: Record<string, string>,
+  title: string,
+  description: string
+) {
+  const next = { ...itemSpecifics };
+
+  if (!next.Volume) {
+    const inferredVolume = inferVolumeItemSpecific(
+      title,
+      description,
+      Object.entries(next)
+        .map(([key, value]) => `${key}: ${value}`)
+        .join(" ")
+    );
+
+    if (inferredVolume) {
+      next.Volume = inferredVolume;
+    }
+  }
+
+  return next;
+}
+
 type DescriptionBlock =
   | { type: "heading"; text: string }
   | { type: "paragraph"; text: string }
@@ -745,12 +773,17 @@ function parseProductHtml(html: string, canonicalUrl: string): ScrapedProduct {
 
   const asin = extractAsin($, canonicalUrl, html);
   const images = extractImages($, html);
-  const itemSpecifics = extractItemSpecifics($);
+  const description = renderDescription($, title);
+  const itemSpecifics = withInferredItemSpecifics(
+    extractItemSpecifics($),
+    title,
+    description
+  );
   const brand = extractBrand($, itemSpecifics);
 
   return {
     title,
-    description: renderDescription($, title),
+    description,
     images,
     price: null,
     condition: "New" as const,

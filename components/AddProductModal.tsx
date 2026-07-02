@@ -34,6 +34,7 @@ export interface ScrapedProduct {
     returnPolicyId: string | null;
     policyTemplateId: string | null;
     capitalizeTitle: boolean;
+    defaultItemSpecifics: Record<string, string>;
   };
 }
 

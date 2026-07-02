@@ -19,6 +19,8 @@ const HIGH_PRIORITY_ITEM_SPECIFICS = [
   "Item Width",
   "Item Height",
   "Item Weight",
+  "Volume",
+  "Capacity",
   "Features",
   "Compatible Brand",
   "Compatible Model",
@@ -85,6 +87,99 @@ function getItemSpecificValue(specifics: ItemSpecificsRecord, names: string[]) {
     if (normalizedNames.has(key.trim().toLowerCase())) {
       return value;
     }
+  }
+
+  return null;
+}
+
+export function hasItemSpecificValue(value: unknown, name: string) {
+  return hasItemSpecific(normalizeItemSpecifics(value), name);
+}
+
+export function readItemSpecificValue(value: unknown, names: string[]) {
+  return getItemSpecificValue(normalizeItemSpecifics(value), names);
+}
+
+function normalizeMissingSpecificName(value: string) {
+  return value
+    .replace(/^the item specific\s+/i, "")
+    .replace(/\s+is missing\.?$/i, "")
+    .replace(/^add\s+/i, "")
+    .replace(/\s+to this listing.*$/i, "")
+    .replace(/[.:]+$/g, "")
+    .trim();
+}
+
+export function parseMissingItemSpecificNames(message: string | null | undefined) {
+  if (!message) {
+    return [] as string[];
+  }
+
+  const names: string[] = [];
+  const patterns = [
+    /item specific\s+["']?([^"';.]+?)["']?\s+is missing/gi,
+    /add\s+["']?([^"';.]+?)["']?\s+to this listing/gi,
+  ];
+
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(message)) !== null) {
+      const name = normalizeMissingSpecificName(match[1] ?? "");
+      if (name) {
+        names.push(name);
+      }
+    }
+  }
+
+  for (const part of message.split(";")) {
+    const name = normalizeMissingSpecificName(part);
+    if (
+      name &&
+      name.length <= 40 &&
+      /^[A-Za-z][A-Za-z0-9 /&().-]*$/.test(name) &&
+      !/\s/.test(name.trim()) &&
+      /missing|add|;\s*$/i.test(message)
+    ) {
+      names.push(name);
+    }
+  }
+
+  const seen = new Set<string>();
+  return names.filter((name) => {
+    const normalized = normalizeSpecificName(name);
+    if (!normalized || seen.has(normalized)) {
+      return false;
+    }
+    seen.add(normalized);
+    return true;
+  });
+}
+
+function formatNumber(value: string) {
+  const parsed = Number.parseFloat(value);
+  if (!Number.isFinite(parsed)) {
+    return value;
+  }
+
+  return Number.isInteger(parsed) ? String(parsed) : String(parsed).replace(/0+$/g, "").replace(/\.$/, "");
+}
+
+export function inferVolumeItemSpecific(...texts: Array<string | null | undefined>) {
+  const text = texts.filter(Boolean).join(" ");
+
+  const metricMatch = text.match(/\b(\d+(?:\.\d+)?)\s*(ml|millilit(?:er|re)s?)\b/i);
+  if (metricMatch) {
+    return `${formatNumber(metricMatch[1])} ml`;
+  }
+
+  const litreMatch = text.match(/\b(\d+(?:\.\d+)?)\s*(l|lit(?:er|re)s?)\b/i);
+  if (litreMatch) {
+    return `${formatNumber(litreMatch[1])} L`;
+  }
+
+  const ounceMatch = text.match(/\b(\d+(?:\.\d+)?)\s*(?:fl\s*)?(oz|ounces?)\b/i);
+  if (ounceMatch) {
+    return `${formatNumber(ounceMatch[1])} oz`;
   }
 
   return null;

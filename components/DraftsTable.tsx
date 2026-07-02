@@ -520,12 +520,18 @@ export default function DraftsTable({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ productId }),
       });
-      const data = await res.json();
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        missingItemSpecifics?: string[];
+      };
 
       if (res.ok) {
         onToast("Product imported to eBay successfully!", "success");
         router.refresh();
       } else {
+        if (data.missingItemSpecifics && data.missingItemSpecifics.length > 0) {
+          setExpandedProductId(productId);
+        }
         onToast(data.error || "Upload failed. Please try again.", "error");
         router.refresh();
       }
@@ -1120,6 +1126,7 @@ export default function DraftsTable({
     let succeeded = 0;
     let failed = 0;
     let skippedAmazon = 0;
+    const failureMessages: string[] = [];
 
     for (let i = 0; i < selected.length; i += 1) {
       const product = selected[i];
@@ -1142,10 +1149,21 @@ export default function DraftsTable({
         if (res.ok) {
           succeeded += 1;
         } else {
+          const data = (await res.json().catch(() => ({}))) as {
+            error?: string;
+            missingItemSpecifics?: string[];
+          };
           failed += 1;
+          failureMessages.push(
+            `${product.title}: ${data.error || "Import failed."}`
+          );
+          if (data.missingItemSpecifics && data.missingItemSpecifics.length > 0) {
+            setExpandedProductId(product.id);
+          }
         }
       } catch {
         failed += 1;
+        failureMessages.push(`${product.title}: Network error.`);
       }
 
       setBulkProgress(i + 1);
@@ -1156,7 +1174,9 @@ export default function DraftsTable({
     setBulkImporting(false);
 
     onToast(
-      `Import complete - ${succeeded} succeeded, ${failed} failed`,
+      failureMessages.length > 0
+        ? `Import complete - ${succeeded} succeeded, ${failed} failed. ${failureMessages[0]}`
+        : `Import complete - ${succeeded} succeeded, ${failed} failed`,
       succeeded > 0 ? "success" : "error"
     );
 
