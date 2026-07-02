@@ -186,7 +186,11 @@ export function inferVolumeItemSpecific(...texts: Array<string | null | undefine
 }
 
 function normalizeSpecificValue(value: string) {
-  return value.trim().replace(/\s+/g, " ").toLowerCase();
+  return value
+    .trim()
+    .replace(/[-_/]+/g, " ")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
 }
 
 function matchAllowedSpecificValue(
@@ -250,53 +254,83 @@ export function inferTypeItemSpecific(input: {
     .filter(Boolean)
     .join(" ");
 
-  const patternCandidates: Array<{ value: string; patterns: RegExp[] }> = [
+  const patternCandidates: Array<{ values: string[]; patterns: RegExp[] }> = [
     {
-      value: "Telephoto",
+      values: ["Telephoto"],
       patterns: [/\btelephoto\b/i],
     },
     {
-      value: "Wide Angle",
+      values: ["Wide Angle"],
       patterns: [/\bwide[-\s]?angle\b/i],
     },
     {
-      value: "Macro",
+      values: ["Macro"],
       patterns: [/\bmacro\b/i],
     },
     {
-      value: "Fisheye",
+      values: ["Fisheye"],
       patterns: [/\bfish[-\s]?eye\b/i],
     },
     {
-      value: "Zoom Lens",
+      values: ["Zoom Lens"],
       patterns: [/\bzoom\s+lens\b/i],
     },
     {
-      value: "Prime Lens",
+      values: ["Prime Lens"],
       patterns: [/\bprime\s+lens\b/i, /\bfixed\s+focal\b/i],
     },
     {
-      value: "Camera Lens",
+      values: ["Camera Lens"],
       patterns: [/\bcamera\s+lens\b/i, /\blens\b/i],
     },
     {
-      value: "Water Bottle",
+      values: ["Charging Station", "Desktop Charger", "USB Charger", "Wall Charger", "Mains Charger", "Power Adapter", "Charger"],
+      patterns: [
+        /\bcharging\s+station\b/i,
+        /\b(?:multi|[2-9]|1[0-9])[-\s]?port\b/i,
+        /\bdesktop\b.*\bcharger\b/i,
+        /\bcharger\b.*\bdesktop\b/i,
+      ],
+    },
+    {
+      values: ["USB-C Charger", "USB C Charger", "USB Wall Charger", "USB Charger", "Wall Charger", "Mains Charger", "Power Adapter", "Charger"],
+      patterns: [
+        /\busb[-\s]?c\b.*\bcharg(?:er|ing)\b/i,
+        /\bcharg(?:er|ing)\b.*\busb[-\s]?c\b/i,
+        /\bgan\b.*\bcharg(?:er|ing)\b/i,
+        /\bcharg(?:er|ing)\b.*\bgan\b/i,
+      ],
+    },
+    {
+      values: ["Wireless Charger", "Charging Pad", "Charging Mat", "Charger"],
+      patterns: [/\bwireless\b.*\bcharg(?:er|ing)\b/i, /\bcharg(?:er|ing)\b.*\bwireless\b/i],
+    },
+    {
+      values: ["Car Charger", "Vehicle Charger", "Charger"],
+      patterns: [/\bcar\b.*\bcharg(?:er|ing)\b/i, /\bvehicle\b.*\bcharg(?:er|ing)\b/i],
+    },
+    {
+      values: ["Wall Charger", "Mains Charger", "Power Adapter", "USB Charger", "Charger"],
+      patterns: [/\bwall\b.*\bcharg(?:er|ing)\b/i, /\bcharg(?:er|ing)\b/i, /\bpower\s+adapter\b/i],
+    },
+    {
+      values: ["Water Bottle"],
       patterns: [/\bwater\s+bottle\b/i],
     },
     {
-      value: "Phone Case",
+      values: ["Phone Case"],
       patterns: [/\bphone\s+case\b/i, /\b(?:iphone|galaxy|samsung)\b.*\bcase\b/i],
     },
     {
-      value: "Hair Clippers",
+      values: ["Hair Clippers"],
       patterns: [/\bhair\s+clippers?\b/i],
     },
     {
-      value: "Tile Cutter",
+      values: ["Tile Cutter"],
       patterns: [/\btile\s+cutter\b/i],
     },
     {
-      value: "Controller",
+      values: ["Controller"],
       patterns: [/\bcontroller\b/i],
     },
   ];
@@ -306,9 +340,11 @@ export function inferTypeItemSpecific(input: {
       continue;
     }
 
-    const matched = matchAllowedSpecificValue(candidate.value, input.allowedValues);
-    if (matched) {
-      return matched;
+    for (const value of candidate.values) {
+      const matched = matchAllowedSpecificValue(value, input.allowedValues);
+      if (matched) {
+        return matched;
+      }
     }
   }
 

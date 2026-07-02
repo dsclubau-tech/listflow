@@ -35,6 +35,26 @@ test("inferTypeItemSpecific reads telephoto lens type from existing specifics", 
   );
 });
 
+test("inferTypeItemSpecific reads USB-C charger type from title", () => {
+  assert.equal(
+    inferTypeItemSpecific({
+      title: "Prime USB C Charger, 200W 6-Port GaN Charging Station",
+      allowedValues: ["Car Charger", "Wall Charger", "Charging Cable"],
+    }),
+    "Wall Charger"
+  );
+});
+
+test("inferTypeItemSpecific prefers charging station when eBay allows it", () => {
+  assert.equal(
+    inferTypeItemSpecific({
+      title: "Prime USB C Charger, 200W 6-Port GaN Charging Station",
+      allowedValues: ["Wall Charger", "Charging Station", "Power Bank"],
+    }),
+    "Charging Station"
+  );
+});
+
 test("inferTypeItemSpecific does not guess when allowed values do not match", () => {
   assert.equal(
     inferTypeItemSpecific({
