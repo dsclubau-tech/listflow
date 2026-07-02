@@ -26,12 +26,13 @@ import { launchScraperBrowser } from "@/lib/scraper-browser";
 const VALID_LIMITS = [10, 30] as const;
 const DEFAULT_RESEARCH_LIMIT = 30;
 const DEFAULT_POSTCODE = "2217";
-const ACTIVE_SEARCH_CACHE_TTL_MS = 45 * 60 * 1000;
-const ACTIVE_SEARCH_CACHE_VERSION = "v3";
-const RESEARCH_BATCH_COOLDOWN_MS = 30 * 1000;
-const RESEARCH_RETENTION_MS = 2 * 60 * 60 * 1000;
+const ACTIVE_SEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const ACTIVE_SEARCH_CACHE_VERSION = "v4";
+const RESEARCH_BATCH_GROUP_SIZE = 5;
+const RESEARCH_BATCH_GROUP_COOLDOWN_MS = 2 * 60 * 1000;
+const RESEARCH_RETENTION_MS = 24 * 60 * 60 * 1000;
 const RESEARCH_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
-const MAX_BATCH_QUERIES = 5;
+const MAX_BATCH_QUERIES = 50;
 const TERMINAL_RESEARCH_JOB_STATUSES: EbayResearchJobStatus[] = [
   EbayResearchJobStatus.COMPLETED,
   EbayResearchJobStatus.PARTIAL,
@@ -286,7 +287,8 @@ function asJsonSummary(value: Prisma.JsonValue): EbayResearchSummary {
 }
 
 function normalizeQuery(value: unknown) {
-  const query = typeof value === "string" ? value.trim() : "";
+  const query =
+    typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
 
   if (!query) {
     throw new Error("Search query is required.");
@@ -1361,6 +1363,106 @@ async function hasQueuedJobsInBatch(batchId: string) {
   return count > 0;
 }
 
+async function refreshResearchBatchAndMaybeScheduleCooldown(batchId: string) {
+  const refreshedBatch = await refreshResearchBatch(batchId);
+
+  if (
+    !refreshedBatch ||
+    (refreshedBatch.status !== EbayResearchBatchStatus.QUEUED &&
+      refreshedBatch.status !== EbayResearchBatchStatus.RUNNING) ||
+    !(await hasQueuedJobsInBatch(refreshedBatch.id))
+  ) {
+    return;
+  }
+
+  const processedCount = refreshedBatch.completed + refreshedBatch.failed;
+
+  if (
+    processedCount > 0 &&
+    processedCount % RESEARCH_BATCH_GROUP_SIZE === 0
+  ) {
+    await prisma.ebayResearchBatch.update({
+      where: { id: refreshedBatch.id },
+      data: {
+        cooldownUntil: new Date(
+          Date.now() + RESEARCH_BATCH_GROUP_COOLDOWN_MS
+        ),
+      },
+    });
+  }
+}
+
+async function completeResearchJobFromReusableCache(job: EbayResearchJobRecord) {
+  if (job.mode !== EbayResearchMode.ACTIVE) {
+    return false;
+  }
+
+  const now = new Date();
+  const reusableJob = await prisma.ebayResearchJob.findFirst({
+    where: {
+      id: { not: job.id },
+      storeId: job.storeId,
+      query: { equals: job.query, mode: "insensitive" },
+      mode: job.mode,
+      conditionFilter: job.conditionFilter,
+      limit: job.limit,
+      status: {
+        in: [EbayResearchJobStatus.COMPLETED, EbayResearchJobStatus.PARTIAL],
+      },
+      completedAt: {
+        gte: new Date(now.getTime() - RESEARCH_RETENTION_MS),
+      },
+      expiresAt: {
+        gt: now,
+      },
+    },
+    orderBy: { completedAt: "desc" },
+  });
+
+  if (!reusableJob) {
+    return false;
+  }
+
+  if (job.batchId) {
+    await prisma.ebayResearchBatch.update({
+      where: { id: job.batchId },
+      data: {
+        status: EbayResearchBatchStatus.RUNNING,
+        startedAt: job.batch?.startedAt ?? now,
+        pausedAt: null,
+        expiresAt: null,
+      },
+    });
+  }
+
+  await prisma.ebayResearchJob.update({
+    where: { id: job.id },
+    data: {
+      status: reusableJob.status,
+      startedAt: job.startedAt ?? now,
+      activeCount: reusableJob.activeCount,
+      soldCount: reusableJob.soldCount,
+      activeSummary: reusableJob.activeSummary as Prisma.InputJsonValue,
+      soldSummary: reusableJob.soldSummary as Prisma.InputJsonValue,
+      activeResults: reusableJob.activeResults as Prisma.InputJsonValue,
+      soldResults: reusableJob.soldResults as Prisma.InputJsonValue,
+      warningMessage: reusableJob.warningMessage,
+      errorMessage: reusableJob.errorMessage,
+      completedAt: now,
+      expiresAt: getResearchExpiresAt(now),
+    },
+  });
+
+  logger.info("ebay-research/jobs", "Reused cached eBay research result", {
+    jobId: job.id,
+    sourceJobId: reusableJob.id,
+    query: job.query,
+    conditionFilter: job.conditionFilter,
+  });
+
+  return true;
+}
+
 export function serializeEbayResearchJob(
   job: EbayResearchJobRecord,
   options: { includeResults?: boolean } = {}
@@ -1411,6 +1513,13 @@ async function runEbayResearchJobClaimed(jobId: string) {
     job.batch?.status === EbayResearchBatchStatus.PAUSED ||
     job.batch?.status === EbayResearchBatchStatus.PAUSING
   ) {
+    return;
+  }
+
+  if (await completeResearchJobFromReusableCache(job)) {
+    if (job.batchId) {
+      await refreshResearchBatchAndMaybeScheduleCooldown(job.batchId);
+    }
     return;
   }
 
@@ -1550,21 +1659,7 @@ async function runEbayResearchJobClaimed(jobId: string) {
   });
 
   if (job.batchId) {
-    const refreshedBatch = await refreshResearchBatch(job.batchId);
-
-    if (
-      refreshedBatch &&
-      (refreshedBatch.status === EbayResearchBatchStatus.QUEUED ||
-        refreshedBatch.status === EbayResearchBatchStatus.RUNNING) &&
-      (await hasQueuedJobsInBatch(refreshedBatch.id))
-    ) {
-      await prisma.ebayResearchBatch.update({
-        where: { id: refreshedBatch.id },
-        data: {
-          cooldownUntil: new Date(Date.now() + RESEARCH_BATCH_COOLDOWN_MS),
-        },
-      });
-    }
+    await refreshResearchBatchAndMaybeScheduleCooldown(job.batchId);
   }
 }
 

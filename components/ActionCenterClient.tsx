@@ -1526,7 +1526,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                       Batch Safe eBay research
                     </div>
                     <div className="mt-1 text-xs text-gray-500">
-                      Queue up to 5 product names with 30 seconds between API searches.
+                      Queue up to 50 product names. Runs 5 API searches, waits 2 minutes, then continues.
                     </div>
                   </div>
                   <Link

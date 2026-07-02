@@ -42,6 +42,10 @@ const CONDITION_FILTER_OPTIONS: Array<{
   { value: "PARTS_NOT_WORKING", label: "For parts / not working" },
 ];
 
+const MAX_BATCH_QUERIES = 50;
+const BATCH_GROUP_SIZE = 5;
+const BATCH_GROUP_COOLDOWN_MINUTES = 2;
+
 type ResearchSummary = {
   count: number;
   lowestPrice: string | null;
@@ -315,6 +319,29 @@ function getConditionFilterLabel(value: ResearchConditionFilter) {
   );
 }
 
+function getBatchConditionLabel(batch: ResearchBatch) {
+  const firstCondition = batch.jobs[0]?.conditionFilter ?? "ANY";
+  const allSameCondition = batch.jobs.every(
+    (job) => job.conditionFilter === firstCondition
+  );
+
+  return allSameCondition
+    ? getConditionFilterLabel(firstCondition)
+    : "Mixed conditions";
+}
+
+function getBatchCooldownEstimate(queryCount: number) {
+  if (queryCount <= BATCH_GROUP_SIZE) {
+    return null;
+  }
+
+  const cooldownCount = Math.ceil(queryCount / BATCH_GROUP_SIZE) - 1;
+  const cooldownMinutes = cooldownCount * BATCH_GROUP_COOLDOWN_MINUTES;
+  const minuteLabel = cooldownMinutes === 1 ? "minute" : "minutes";
+
+  return `Estimated pacing: about ${cooldownMinutes} ${minuteLabel} of cooldown plus search time.`;
+}
+
 function SummaryStat({
   label,
   value,
@@ -521,6 +548,8 @@ export default function EbayResearchClient({
   const [mode, setMode] = useState<ResearchMode>("BOTH");
   const [conditionFilter, setConditionFilter] =
     useState<ResearchConditionFilter>("ANY");
+  const [batchConditionFilter, setBatchConditionFilter] =
+    useState<ResearchConditionFilter>("ANY");
   const [limit, setLimit] = useState("30");
   const [advancedSoldComps, setAdvancedSoldComps] = useState(false);
   const [jobs, setJobs] = useState(initialJobs);
@@ -536,6 +565,7 @@ export default function EbayResearchClient({
   const [error, setError] = useState<string | null>(initialError);
 
   const batchQueries = useMemo(() => normalizeBatchInput(batchInput), [batchInput]);
+  const batchCooldownEstimate = getBatchCooldownEstimate(batchQueries.length);
   const visibleBatches = batches.filter(isCurrentBatch);
   const activeBatchExists = batches.some(isActiveBatch);
   const activeResults = selectedJob?.activeResults ?? [];
@@ -721,8 +751,10 @@ export default function EbayResearchClient({
       return;
     }
 
-    if (batchQueries.length > 5) {
-      setError("Batch Safe Search supports up to 5 product names.");
+    if (batchQueries.length > MAX_BATCH_QUERIES) {
+      setError(
+        `Batch Safe Search supports up to ${MAX_BATCH_QUERIES} product names.`
+      );
       return;
     }
 
@@ -736,7 +768,7 @@ export default function EbayResearchClient({
         body: JSON.stringify({
           queries: batchQueries,
           limit: Number.parseInt(limit, 10),
-          conditionFilter,
+          conditionFilter: batchConditionFilter,
         }),
       });
       const data = (await response.json().catch(() => ({}))) as {
@@ -765,7 +797,7 @@ export default function EbayResearchClient({
       if (firstJob) {
         setSelectedJob(firstJob);
         setActiveTab("ACTIVE");
-        setConditionFilter(firstJob.conditionFilter);
+        setBatchConditionFilter(firstJob.conditionFilter);
       }
 
       setBatchInput("");
@@ -1036,10 +1068,12 @@ export default function EbayResearchClient({
                 </label>
                 <span
                   className={`text-xs ${
-                    batchQueries.length > 5 ? "text-red-600" : "text-gray-500"
+                    batchQueries.length > MAX_BATCH_QUERIES
+                      ? "text-red-600"
+                      : "text-gray-500"
                   }`}
                 >
-                  {batchQueries.length}/5 names
+                  {batchQueries.length}/{MAX_BATCH_QUERIES} names
                 </span>
               </div>
               <textarea
@@ -1051,21 +1085,53 @@ export default function EbayResearchClient({
                 className="mt-2 w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
               />
               <p className="mt-2 text-xs text-gray-500">
-                Runs one API-only search at a time with a 30-second cooldown between products.
+                Runs 5 API-only searches, waits 2 minutes, then continues.
+                Results are kept for 24 hours.
               </p>
+              {batchCooldownEstimate && (
+                <p className="mt-1 text-xs text-amber-700">
+                  {batchCooldownEstimate}
+                </p>
+              )}
             </div>
-            <button
-              type="button"
-              onClick={() => void startBatchResearch()}
-              disabled={
-                batchSubmitting ||
-                batchQueries.length === 0 ||
-                batchQueries.length > 5
-              }
-              className="inline-flex h-10 items-center justify-center rounded-md bg-gray-900 px-4 text-sm font-medium text-white transition-colors hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {batchSubmitting ? "Queueing..." : "Start Batch Safe Search"}
-            </button>
+            <div className="space-y-3">
+              <div>
+                <label
+                  htmlFor="research-batch-condition"
+                  className="block text-sm font-medium text-gray-700"
+                >
+                  Condition
+                </label>
+                <select
+                  id="research-batch-condition"
+                  value={batchConditionFilter}
+                  onChange={(event) =>
+                    setBatchConditionFilter(
+                      event.target.value as ResearchConditionFilter
+                    )
+                  }
+                  className="mt-2 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+                >
+                  {CONDITION_FILTER_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button
+                type="button"
+                onClick={() => void startBatchResearch()}
+                disabled={
+                  batchSubmitting ||
+                  batchQueries.length === 0 ||
+                  batchQueries.length > MAX_BATCH_QUERIES
+                }
+                className="inline-flex h-10 w-full items-center justify-center rounded-md bg-gray-900 px-4 text-sm font-medium text-white transition-colors hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {batchSubmitting ? "Queueing..." : "Start Batch Safe Search"}
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1145,7 +1211,8 @@ export default function EbayResearchClient({
                       </div>
                       <div className="mt-1 text-xs text-gray-500">
                         {batch.completed}/{batch.total} complete, {batch.failed} failed,{" "}
-                        {batch.running} running, {batch.queued} queued, {batch.paused} paused
+                        {batch.running} running, {batch.queued} queued, {batch.paused} paused,{" "}
+                        {getBatchConditionLabel(batch)}
                         {batch.cooldownUntil
                           ? ` - next search after ${formatDate(batch.cooldownUntil)}`
                           : ""}

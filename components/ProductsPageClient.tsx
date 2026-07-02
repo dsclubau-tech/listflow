@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type FormEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import ActionProgressBar from "@/components/ActionProgressBar";
 import BulkEditModal from "@/components/BulkEditModal";
@@ -188,6 +195,7 @@ export default function ProductsPageClient({
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
   const [searchDraft, setSearchDraft] = useState(searchQuery);
+  const [pageJumpDraft, setPageJumpDraft] = useState(String(page));
   const notifiedTerminalJobIds = useRef<Set<string>>(new Set());
   const { toast, showToast, hideToast } = useToast();
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
@@ -236,6 +244,10 @@ export default function ProductsPageClient({
   useEffect(() => {
     setSearchDraft(searchQuery);
   }, [searchQuery]);
+
+  useEffect(() => {
+    setPageJumpDraft(String(page));
+  }, [page]);
 
   const storePriceCheckJob = useCallback((job: PriceCheckJob | null) => {
     setPriceCheckJob(job);
@@ -558,6 +570,19 @@ export default function ProductsPageClient({
 
     window.localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(parsed));
     navigateProductsPage(1, parsed);
+  }
+
+  function handlePageJumpSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const nextPage = Number.parseInt(pageJumpDraft, 10);
+
+    if (!Number.isFinite(nextPage)) {
+      setPageJumpDraft(String(page));
+      return;
+    }
+
+    navigateProductsPage(nextPage);
   }
 
   function handleProductFilterChange(nextFilter: ProductFilter) {
@@ -1252,6 +1277,31 @@ export default function ProductsPageClient({
           <span className="px-2 text-gray-500">
             Page {page} of {totalPages}
           </span>
+          <form
+            onSubmit={handlePageJumpSubmit}
+            className="flex items-center gap-2"
+          >
+            <label htmlFor="products-page-jump" className="text-gray-500">
+              Go to
+            </label>
+            <input
+              id="products-page-jump"
+              type="number"
+              min={1}
+              max={totalPages}
+              value={pageJumpDraft}
+              onChange={(event) => setPageJumpDraft(event.target.value)}
+              className="h-9 w-20 rounded-md border border-gray-300 px-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+              aria-label="Go to products page"
+            />
+            <button
+              type="submit"
+              disabled={totalPages <= 1}
+              className="rounded-md border border-gray-300 px-3 py-1.5 font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Go
+            </button>
+          </form>
           <button
             type="button"
             onClick={() => navigateProductsPage(page + 1)}
