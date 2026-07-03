@@ -4,6 +4,7 @@
 import { Fragment, type MouseEvent, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import AsinLink from "@/components/AsinLink";
+import { hasMissingItemSpecifics } from "@/components/draft-upload-response";
 import InlineEditForm from "@/components/InlineEditForm";
 import {
   getPriceCheckEligibility,
@@ -529,7 +530,7 @@ export default function DraftsTable({
         onToast("Product imported to eBay successfully!", "success");
         router.refresh();
       } else {
-        if (data.missingItemSpecifics && data.missingItemSpecifics.length > 0) {
+        if (hasMissingItemSpecifics(data)) {
           setExpandedProductId(productId);
         }
         onToast(data.error || "Upload failed. Please try again.", "error");
@@ -1157,7 +1158,7 @@ export default function DraftsTable({
           failureMessages.push(
             `${product.title}: ${data.error || "Import failed."}`
           );
-          if (data.missingItemSpecifics && data.missingItemSpecifics.length > 0) {
+          if (hasMissingItemSpecifics(data)) {
             setExpandedProductId(product.id);
           }
         }

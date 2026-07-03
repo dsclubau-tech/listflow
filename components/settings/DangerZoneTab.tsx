@@ -14,6 +14,8 @@ interface RemovalSnapshot {
     priceCheck: number;
     ebayImport: number;
   };
+  activeJobsVerified?: boolean;
+  activeJobsWarning?: string | null;
   isBlocked: boolean;
 }
 
@@ -202,7 +204,13 @@ export default function DangerZoneTab() {
                 </div>
               </div>
 
-              {snapshot.isBlocked && (
+              {snapshot.activeJobsWarning && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  {snapshot.activeJobsWarning}
+                </div>
+              )}
+
+              {snapshot.isBlocked && !snapshot.activeJobsWarning && (
                 <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
                   Stop or wait for active jobs before removing listings.
                   Active price-check jobs: {snapshot.activeJobs.priceCheck}. Active eBay import jobs: {snapshot.activeJobs.ebayImport}.

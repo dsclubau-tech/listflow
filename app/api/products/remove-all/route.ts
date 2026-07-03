@@ -26,6 +26,8 @@ const ACTIVE_EBAY_IMPORT_STATUSES = [
 
 type ProductCounts = Record<ProductStatus, number>;
 
+type RemovalSnapshotLogger = ReturnType<typeof createRequestLogger>;
+
 function emptyProductCounts(): ProductCounts {
   return {
     [ProductStatus.DRAFT]: 0,
@@ -35,30 +37,66 @@ function emptyProductCounts(): ProductCounts {
   };
 }
 
-async function getRemovalSnapshot(storeId: string) {
-  const [statusGroups, total, activePriceCheckJobs, activeEbayImportJobs] =
-    await Promise.all([
-      prisma.product.groupBy({
-        by: ["status"],
-        where: { storeId },
-        _count: { _all: true },
-      }),
-      prisma.product.count({ where: { storeId } }),
-      prisma.priceCheckJob.count({
-        where: {
-          storeId,
-          status: { in: ACTIVE_PRICE_CHECK_STATUSES },
-          dismissedAt: null,
-        },
-      }),
-      prisma.ebayImportJob.count({
-        where: {
-          storeId,
-          status: { in: ACTIVE_EBAY_IMPORT_STATUSES },
-          dismissedAt: null,
-        },
-      }),
-    ]);
+async function countActiveJobsSafely(
+  label: "price check" | "eBay import",
+  count: () => Promise<number>,
+  log: RemovalSnapshotLogger,
+) {
+  try {
+    return {
+      count: await count(),
+      verified: true,
+    };
+  } catch (error) {
+    log.error("products/remove-all/snapshot", `Failed to count active ${label} jobs`, error);
+    return {
+      count: 0,
+      verified: false,
+    };
+  }
+}
+
+async function getRemovalSnapshot(storeId: string, log: RemovalSnapshotLogger) {
+  const [statusGroups, total] = await Promise.all([
+    prisma.product.groupBy({
+      by: ["status"],
+      where: { storeId },
+      _count: { _all: true },
+    }),
+    prisma.product.count({ where: { storeId } }),
+  ]);
+
+  const [activePriceCheckJobs, activeEbayImportJobs] = await Promise.all([
+    countActiveJobsSafely(
+      "price check",
+      () =>
+        prisma.priceCheckJob.count({
+          where: {
+            storeId,
+            status: { in: ACTIVE_PRICE_CHECK_STATUSES },
+            dismissedAt: null,
+          },
+        }),
+      log,
+    ),
+    countActiveJobsSafely(
+      "eBay import",
+      () =>
+        prisma.ebayImportJob.count({
+          where: {
+            storeId,
+            status: { in: ACTIVE_EBAY_IMPORT_STATUSES },
+            dismissedAt: null,
+          },
+        }),
+      log,
+    ),
+  ]);
+
+  const activeJobsVerified =
+    activePriceCheckJobs.verified && activeEbayImportJobs.verified;
+  const activeJobCount =
+    activePriceCheckJobs.count + activeEbayImportJobs.count;
 
   const counts = emptyProductCounts();
   for (const group of statusGroups) {
@@ -69,10 +107,14 @@ async function getRemovalSnapshot(storeId: string) {
     total,
     counts,
     activeJobs: {
-      priceCheck: activePriceCheckJobs,
-      ebayImport: activeEbayImportJobs,
+      priceCheck: activePriceCheckJobs.count,
+      ebayImport: activeEbayImportJobs.count,
     },
-    isBlocked: activePriceCheckJobs > 0 || activeEbayImportJobs > 0,
+    activeJobsVerified,
+    activeJobsWarning: activeJobsVerified
+      ? null
+      : "ListFlow could not verify active background jobs, so removal is disabled for safety.",
+    isBlocked: !activeJobsVerified || activeJobCount > 0,
   };
 }
 
@@ -89,14 +131,22 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const snapshot = await getRemovalSnapshot(storeSession.storeId);
+  try {
+    const snapshot = await getRemovalSnapshot(storeSession.storeId, log);
 
-  return NextResponse.json({
-    storeName: storeSession.storeName,
-    storeLoginId: storeSession.storeLoginId,
-    confirmationPhrase: `REMOVE ${storeSession.storeLoginId}`,
-    ...snapshot,
-  });
+    return NextResponse.json({
+      storeName: storeSession.storeName,
+      storeLoginId: storeSession.storeLoginId,
+      confirmationPhrase: `REMOVE ${storeSession.storeLoginId}`,
+      ...snapshot,
+    });
+  } catch (error) {
+    log.error("products/remove-all/GET", "Removal snapshot failed", error);
+    return NextResponse.json(
+      { error: "Failed to load removal summary" },
+      { status: 500 },
+    );
+  }
 }
 
 export async function POST(request: Request) {
@@ -129,12 +179,24 @@ export async function POST(request: Request) {
     );
   }
 
-  const snapshot = await getRemovalSnapshot(storeSession.storeId);
+  let snapshot;
+  try {
+    snapshot = await getRemovalSnapshot(storeSession.storeId, log);
+  } catch (error) {
+    log.error("products/remove-all/POST", "Removal snapshot failed", error);
+    return NextResponse.json(
+      { error: "Failed to load removal summary" },
+      { status: 500 },
+    );
+  }
+
   if (snapshot.isBlocked) {
     return NextResponse.json(
       {
         error:
-          "Cannot remove listings while a price check or eBay import job is active",
+          snapshot.activeJobsVerified
+            ? "Cannot remove listings while a price check or eBay import job is active"
+            : "Cannot remove listings because ListFlow could not verify active background jobs",
         ...snapshot,
       },
       { status: 409 },

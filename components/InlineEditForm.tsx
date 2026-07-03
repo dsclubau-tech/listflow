@@ -7,6 +7,13 @@ import Link from "next/link";
 import AsinLink from "@/components/AsinLink";
 import type { Product, Store, User } from "@/app/generated/prisma/client";
 import type { ScrapedProduct } from "@/components/AddProductModal";
+import {
+  addMissingItemSpecificRows,
+  DRAFT_ITEM_SPECIFICS_TAB_INDEX,
+  hasMissingItemSpecifics,
+  mergeRequiredItemSpecifics,
+  type RequiredItemSpecific,
+} from "@/components/draft-upload-response";
 import ProductVariantsEditor from "@/components/ProductVariantsEditor";
 import RichTextEditor from "@/components/RichTextEditor";
 import { reportClientError } from "@/lib/client-logger";
@@ -53,12 +60,6 @@ interface SaveMessage {
   variant: "success" | "error";
 }
 
-type RequiredItemSpecific = {
-  name: string;
-  values?: string[];
-  inputType?: string | null;
-};
-
 // ----- VERO keywords -----
 
 const VERO_KEYWORDS = [
@@ -90,6 +91,41 @@ function splitErrorMessage(message: string): string[] {
     .filter(Boolean);
 
   return parts.length > 0 ? parts : [message.trim()];
+}
+
+function buildRegrabAmazonUrl(asin: string) {
+  return `https://www.amazon.com.au/dp/${asin.trim().toUpperCase()}`;
+}
+
+function normalizeScrapedTitle(data: ScrapedProduct) {
+  if (!data.supplierDefaults?.capitalizeTitle) {
+    return data.title;
+  }
+
+  return data.title
+    .split(" ")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(" ");
+}
+
+function buildRegrabDraftUpdate(scraped: ScrapedProduct, fallbackAsin: string) {
+  return {
+    title: normalizeScrapedTitle(scraped),
+    description: scraped.description,
+    images: [...scraped.images],
+    asin: scraped.asin || fallbackAsin,
+    brand: scraped.brand,
+    itemSpecifics: Object.entries({
+      ...(scraped.supplierDefaults?.defaultItemSpecifics ?? {}),
+      ...scraped.itemSpecifics,
+    }).map(([key, value]) => ({
+      key,
+      value: String(value),
+    })),
+    categoryId: scraped.categoryId,
+    categoryName: scraped.categoryName || scraped.category,
+    supplierDefaults: scraped.supplierDefaults,
+  };
 }
 
 // ----- Tabs -----
@@ -243,19 +279,10 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       return;
     }
 
-    setItemSpecifics((current) => {
-      const existing = new Set(
-        current.map((specific) => specific.key.trim().toLowerCase())
-      );
-      const additions = names
-        .filter((name) => !existing.has(name.trim().toLowerCase()))
-        .map((name) => ({ key: name, value: "" }));
-
-      return additions.length > 0 ? [...additions, ...current] : current;
-    });
+    setItemSpecifics((current) => addMissingItemSpecificRows(current, names));
 
     if (missingSpecificsFromError.length > 0) {
-      setActiveTab(4);
+      setActiveTab(DRAFT_ITEM_SPECIFICS_TAB_INDEX);
     }
   }, [missingSpecificsFromError, requiredItemSpecifics]);
 
@@ -801,30 +828,16 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
         const missingNames = data.missingItemSpecifics ?? [];
 
         if (data.requiredItemSpecifics && data.requiredItemSpecifics.length > 0) {
-          setRequiredItemSpecifics((current) => {
-            const merged = new Map<string, RequiredItemSpecific>();
-            for (const specific of current) {
-              merged.set(specific.name.trim().toLowerCase(), specific);
-            }
-            for (const specific of data.requiredItemSpecifics ?? []) {
-              merged.set(specific.name.trim().toLowerCase(), specific);
-            }
-            return Array.from(merged.values());
-          });
+          setRequiredItemSpecifics((current) =>
+            mergeRequiredItemSpecifics(current, data.requiredItemSpecifics)
+          );
         }
 
-        if (missingNames.length > 0) {
-          setItemSpecifics((current) => {
-            const existing = new Set(
-              current.map((specific) => specific.key.trim().toLowerCase())
-            );
-            const additions = missingNames
-              .filter((name) => !existing.has(name.trim().toLowerCase()))
-              .map((name) => ({ key: name, value: "" }));
-
-            return additions.length > 0 ? [...additions, ...current] : current;
-          });
-          setActiveTab(4);
+        if (hasMissingItemSpecifics(data)) {
+          setItemSpecifics((current) =>
+            addMissingItemSpecificRows(current, missingNames)
+          );
+          setActiveTab(DRAFT_ITEM_SPECIFICS_TAB_INDEX);
         }
 
         void reportClientError(
@@ -962,7 +975,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
     setSaveMessage(null);
 
     try {
-      const url = `https://www.amazon.com.au/dp/${currentAsin}`;
+      const url = buildRegrabAmazonUrl(currentAsin);
       const res = await fetch("/api/scrape", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -997,45 +1010,30 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       }
 
       const scraped = data as ScrapedProduct;
-      let refreshedTitle = scraped.title;
+      const update = buildRegrabDraftUpdate(scraped, currentAsin);
 
-      if (scraped.supplierDefaults?.capitalizeTitle) {
-        refreshedTitle = refreshedTitle
-          .split(" ")
-          .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-          .join(" ");
-      }
-
-      setTitle(refreshedTitle);
-      setDescription(scraped.description);
-      setImages([...scraped.images]);
-      setAsin(scraped.asin || currentAsin);
+      setTitle(update.title);
+      setDescription(update.description);
+      setImages(update.images);
+      setAsin(update.asin);
       setHoveredImage(null);
-      setBrand(scraped.brand);
-      setItemSpecifics(
-        Object.entries({
-          ...(scraped.supplierDefaults?.defaultItemSpecifics ?? {}),
-          ...scraped.itemSpecifics,
-        }).map(([key, value]) => ({
-          key,
-          value: String(value),
-        }))
-      );
+      setBrand(update.brand);
+      setItemSpecifics(update.itemSpecifics);
 
-      if (scraped.categoryId) {
-        setCategory(scraped.categoryId);
+      if (update.categoryId) {
+        setCategory(update.categoryId);
       }
 
-      if (scraped.categoryName || scraped.category) {
-        setCategoryName(scraped.categoryName || scraped.category);
+      if (update.categoryName) {
+        setCategoryName(update.categoryName);
       }
 
-      if (scraped.supplierDefaults) {
-        setShippingPolicyId((current) => current || scraped.supplierDefaults?.shippingPolicyId || "");
-        setReturnPolicyId((current) => current || scraped.supplierDefaults?.returnPolicyId || "");
-        setPaymentPolicyId((current) => current || scraped.supplierDefaults?.paymentPolicyId || "");
+      if (update.supplierDefaults) {
+        setShippingPolicyId((current) => current || update.supplierDefaults?.shippingPolicyId || "");
+        setReturnPolicyId((current) => current || update.supplierDefaults?.returnPolicyId || "");
+        setPaymentPolicyId((current) => current || update.supplierDefaults?.paymentPolicyId || "");
         setSelectedPolicyTemplateId(
-          (current) => current || scraped.supplierDefaults?.policyTemplateId || "",
+          (current) => current || update.supplierDefaults?.policyTemplateId || "",
         );
       }
 

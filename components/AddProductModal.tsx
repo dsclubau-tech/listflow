@@ -1,6 +1,7 @@
 "use client";
 
 import ActionProgressBar from "@/components/ActionProgressBar";
+import { getAddProductUrlValidationError } from "@/components/add-product-validation";
 import { useTimedActionProgress } from "@/hooks/useTimedActionProgress";
 import { useState } from "react";
 
@@ -95,13 +96,9 @@ export default function AddProductModal({
   async function handleImport() {
     setError("");
 
-    if (!url.trim()) {
-      setError("Please enter a URL");
-      return;
-    }
-
-    if (!url.startsWith("https://www.amazon.com.au")) {
-      setError("Only Amazon AU (amazon.com.au) URLs are supported");
+    const validationError = getAddProductUrlValidationError(url);
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
