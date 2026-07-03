@@ -16,6 +16,14 @@ type AddItemOptions = {
 
 type ReviseItemOptions = {
   quantityOverride?: number;
+  includeTitle?: boolean;
+  includeDescription?: boolean;
+  includeStartPrice?: boolean;
+  includeDispatchTimeMax?: boolean;
+  includeQuantity?: boolean;
+  includeSellerProfiles?: boolean;
+  includeLocation?: boolean;
+  includeItemSpecifics?: boolean;
 };
 
 /**
@@ -376,19 +384,32 @@ export function buildReviseItemXML(
   const specifics = getProductSpecifics(product);
   const { location, postalCode } = getLocationMetadata(specifics);
   const dispatchTimeMax = getDispatchTimeMax(specifics);
-  const quantity = getValidatedQuantity(product, options.quantityOverride);
-  const sellerProfilesXml = buildSellerProfilesXml(product);
+  const includeTitle = options.includeTitle ?? true;
+  const includeDescription = options.includeDescription ?? true;
+  const includeStartPrice = options.includeStartPrice ?? true;
+  const includeDispatchTimeMax = options.includeDispatchTimeMax ?? true;
+  const includeQuantity = options.includeQuantity ?? true;
+  const includeSellerProfiles = options.includeSellerProfiles ?? true;
+  const includeLocation = options.includeLocation ?? true;
+  const includeItemSpecifics = options.includeItemSpecifics ?? false;
+  const quantity = includeQuantity
+    ? getValidatedQuantity(product, options.quantityOverride)
+    : null;
+  const sellerProfilesXml = includeSellerProfiles ? buildSellerProfilesXml(product) : "";
+  const itemSpecificsXml = includeItemSpecifics
+    ? buildItemSpecificsXml(product, specifics)
+    : "";
 
   // Use the override price (from the primary variant's sellPrice) when available,
   // otherwise fall back to product.price for backwards compatibility.
-  let startPrice: string;
-  if (overrideStartPrice !== undefined) {
+  let startPrice: string | null = null;
+  if (includeStartPrice && overrideStartPrice !== undefined) {
     const numeric = Number(overrideStartPrice);
     if (!Number.isFinite(numeric) || numeric <= 0) {
       throw new Error("Override start price must be greater than 0.");
     }
     startPrice = numeric.toFixed(2);
-  } else {
+  } else if (includeStartPrice) {
     startPrice = getValidatedPrice(product);
   }
 
@@ -398,14 +419,15 @@ export function buildReviseItemXML(
   <WarningLevel>High</WarningLevel>
   <Item>
     <ItemID>${escapeXml(product.ebayItemId)}</ItemID>
-    <Title>${escapeXml(product.title.slice(0, 80))}</Title>
-    <Description><![CDATA[${product.description}]]></Description>
-    <StartPrice>${startPrice}</StartPrice>
-    <DispatchTimeMax>${dispatchTimeMax}</DispatchTimeMax>
-    <Quantity>${quantity}</Quantity>
+${includeTitle ? `    <Title>${escapeXml(product.title.slice(0, 80))}</Title>` : ""}
+${includeDescription ? `    <Description><![CDATA[${product.description}]]></Description>` : ""}
+${startPrice ? `    <StartPrice>${startPrice}</StartPrice>` : ""}
+${includeDispatchTimeMax ? `    <DispatchTimeMax>${dispatchTimeMax}</DispatchTimeMax>` : ""}
+${quantity !== null ? `    <Quantity>${quantity}</Quantity>` : ""}
 ${sellerProfilesXml}
-    <Location>${escapeXml(location)}</Location>
-    <PostalCode>${escapeXml(postalCode)}</PostalCode>
+${includeLocation ? `    <Location>${escapeXml(location)}</Location>
+    <PostalCode>${escapeXml(postalCode)}</PostalCode>` : ""}
+${itemSpecificsXml}
   </Item>
 </ReviseItemRequest>`;
 }
@@ -420,4 +442,44 @@ export function buildReviseQuantityXML(ebayItemId: string, quantity: number): st
     <Quantity>${quantity}</Quantity>
   </Item>
 </ReviseItemRequest>`;
+}
+
+export function buildReviseInventoryStatusXML(
+  ebayItemId: string,
+  input: { startPrice?: string | number; quantity?: number },
+): string {
+  const numericStartPrice =
+    input.startPrice === undefined ? null : Number(input.startPrice);
+  if (
+    numericStartPrice !== null &&
+    (!Number.isFinite(numericStartPrice) || numericStartPrice <= 0)
+  ) {
+    throw new Error("Inventory revise price must be greater than 0.");
+  }
+
+  const startPrice = numericStartPrice === null ? null : numericStartPrice.toFixed(2);
+
+  if (
+    input.quantity !== undefined &&
+    (!Number.isInteger(input.quantity) || input.quantity < 1)
+  ) {
+    throw new Error("Inventory revise quantity must be a whole number of at least 1.");
+  }
+
+  const quantity = input.quantity === undefined ? null : input.quantity.toString();
+
+  if (startPrice === null && quantity === null) {
+    throw new Error("Inventory revise requires a price or quantity.");
+  }
+
+  return `<?xml version="1.0" encoding="utf-8"?>
+<ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">
+  <ErrorLanguage>en_US</ErrorLanguage>
+  <WarningLevel>High</WarningLevel>
+  <InventoryStatus>
+    <ItemID>${escapeXml(ebayItemId)}</ItemID>
+${startPrice ? `    <StartPrice>${startPrice}</StartPrice>` : ""}
+${quantity !== null ? `    <Quantity>${quantity}</Quantity>` : ""}
+  </InventoryStatus>
+</ReviseInventoryStatusRequest>`;
 }

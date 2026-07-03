@@ -617,6 +617,7 @@ export async function applyBulkProductEdits(input: ApplyBulkProductEditsInput) {
     productIds: updatedProductIds,
     updatedProducts: updatedProductIds.length,
     updatedVariants: updatedVariantCount,
+    operationFields: Array.from(new Set(operations.map((operation) => operation.field))),
     skipped,
   };
 }

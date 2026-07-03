@@ -151,6 +151,18 @@ enum EbayActionJobType {
   BULK_EDIT_REVISE
 }
 
+enum PromotedAdStatus {
+  UNKNOWN
+  PROMOTED
+  NOT_PROMOTED
+}
+
+enum PromotedAdRateStrategy {
+  UNKNOWN
+  FIXED
+  DYNAMIC
+}
+
 model Product {
   id            String        @id @default(cuid())
   title         String
@@ -168,6 +180,12 @@ model Product {
   asin          String?
   amazonPrice   Decimal?      @db.Decimal(10, 2)
   amazonStockLeft Int?
+  promotedAdPercent Float      @default(0)
+  promotedAdStatus PromotedAdStatus @default(UNKNOWN)
+  promotedAdCampaignId String?
+  promotedAdCampaignName String?
+  promotedAdRateStrategy PromotedAdRateStrategy @default(UNKNOWN)
+  promotedAdSyncedAt DateTime?
   lastPriceCheck DateTime?
   priceCheckError String?     @db.Text
   internalNote    String?     @db.Text
@@ -190,6 +208,8 @@ model Product {
   @@index([storeId, status])
   @@index([storeId, asin])
   @@index([storeId, ebayItemId])
+  @@index([storeId, promotedAdStatus])
+  @@index([storeId, promotedAdPercent])
   @@index([storeId, createdAt])
   @@index([storeId, updatedAt])
   @@index([createdById])
@@ -205,6 +225,7 @@ model Variant {
   feesFixed        Float         @default(0)
   profitPercent    Float         @default(0)
   profitFixed      Float         @default(0)
+  promotedAdPercent Float         @default(0)
   sellPrice        Decimal       @db.Decimal(10, 2)
   quantity         Int           @default(1)
   status           VariantStatus @default(IN_STOCK)
@@ -430,6 +451,7 @@ model EbayActionJob {
   succeeded           Int                 @default(0)
   failed              Int                 @default(0)
   errors              Json                @default("[]")
+  metadata            Json                @default("{}")
   errorMessage        String?             @db.Text
   createdAt           DateTime            @default(now())
   updatedAt           DateTime            @updatedAt

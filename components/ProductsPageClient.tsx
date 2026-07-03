@@ -2,6 +2,7 @@
 
 import {
   type FormEvent,
+  type KeyboardEvent,
   useCallback,
   useEffect,
   useMemo,
@@ -46,6 +47,19 @@ type PriceCheckJobStatus =
   | "FAILED";
 type PriceCheckJobScope = "SELECTED" | "ALL";
 type ProductFilter = "all" | "needs-changing-price" | "failed-on-hold";
+type EbayAdsSyncProgress = {
+  type?: "progress" | "done" | "error";
+  phase: string;
+  total: number;
+  processed: number;
+  promoted: number;
+  notPromoted: number;
+  fixedRate: number;
+  dynamic: number;
+  percent: number;
+  syncedAt?: string;
+  error?: string;
+};
 
 const PRODUCT_FILTER_OPTIONS: Array<{ value: ProductFilter; label: string }> = [
   { value: "all", label: "All" },
@@ -58,6 +72,7 @@ const RANGE_FILTER_IDS = new Set<ProductAdvancedFilterId>([
   "profit",
   "quantity",
   "fees",
+  "promotedAdPercent",
 ]);
 const STATIC_SELECT_OPTIONS: Partial<
   Record<ProductAdvancedFilterId, Array<{ value: string; label: string }>>
@@ -84,13 +99,158 @@ const STATIC_SELECT_OPTIONS: Partial<
     { value: "not-configured", label: "Not configured" },
   ],
   veroViolation: [{ value: "potential", label: "Potential issue" }],
+  adFeeStatus: [
+    { value: "promoted", label: "Promoted" },
+    { value: "not-promoted", label: "Not promoted" },
+    { value: "not-synced", label: "Not synced" },
+  ],
 };
+
+const INITIAL_EBAY_ADS_SYNC_PROGRESS: EbayAdsSyncProgress = {
+  type: "progress",
+  phase: "Starting eBay ad sync",
+  total: 0,
+  processed: 0,
+  promoted: 0,
+  notPromoted: 0,
+  fixedRate: 0,
+  dynamic: 0,
+  percent: 0,
+};
+
+function getEbayAdsSyncDetail(progress: EbayAdsSyncProgress) {
+  if (progress.error) {
+    return progress.error;
+  }
+
+  if (progress.total <= 0) {
+    return progress.phase;
+  }
+
+  return [
+    `${progress.processed}/${progress.total} listings viewed`,
+    `${progress.promoted} promoted on eBay`,
+    `${progress.notPromoted} not promoted`,
+    `${progress.fixedRate} fixed-rate`,
+    `${progress.dynamic} dynamic`,
+  ].join(", ");
+}
 
 function getRangeParamKeys(filterId: ProductAdvancedFilterId) {
   return {
     min: `${filterId}Min`,
     max: `${filterId}Max`,
   };
+}
+
+type AdvancedFilterDraft = Partial<Record<string, string>>;
+
+function hasDraftKey(draft: AdvancedFilterDraft, key: string) {
+  return Object.prototype.hasOwnProperty.call(draft, key);
+}
+
+function getAdvancedFilterDraftFromQueryString(queryString: string) {
+  const params = new URLSearchParams(queryString);
+  const draft: AdvancedFilterDraft = {};
+
+  PRODUCT_ADVANCED_FILTERS.forEach((filter) => {
+    if (RANGE_FILTER_IDS.has(filter.id)) {
+      const keys = getRangeParamKeys(filter.id);
+
+      if (params.has(keys.min)) {
+        draft[keys.min] = params.get(keys.min) ?? "";
+      }
+
+      if (params.has(keys.max)) {
+        draft[keys.max] = params.get(keys.max) ?? "";
+      }
+
+      return;
+    }
+
+    if (params.has(filter.id)) {
+      draft[filter.id] = params.get(filter.id) ?? "";
+    }
+  });
+
+  return draft;
+}
+
+function isAdvancedFilterInDraft(
+  draft: AdvancedFilterDraft,
+  filterId: ProductAdvancedFilterId
+) {
+  if (RANGE_FILTER_IDS.has(filterId)) {
+    const keys = getRangeParamKeys(filterId);
+    return hasDraftKey(draft, keys.min) || hasDraftKey(draft, keys.max);
+  }
+
+  return hasDraftKey(draft, filterId);
+}
+
+function getAdvancedFilterDraftSignature(draft: AdvancedFilterDraft) {
+  return PRODUCT_ADVANCED_FILTERS.flatMap((filter) => {
+    if (RANGE_FILTER_IDS.has(filter.id)) {
+      const keys = getRangeParamKeys(filter.id);
+      return [keys.min, keys.max]
+        .filter((key) => hasDraftKey(draft, key))
+        .map((key) => `${key}=${draft[key] ?? ""}`);
+    }
+
+    return hasDraftKey(draft, filter.id)
+      ? [`${filter.id}=${draft[filter.id] ?? ""}`]
+      : [];
+  }).join("&");
+}
+
+function removeAdvancedFilterFromDraft(
+  draft: AdvancedFilterDraft,
+  filterId: ProductAdvancedFilterId
+) {
+  const next = { ...draft };
+
+  if (RANGE_FILTER_IDS.has(filterId)) {
+    const keys = getRangeParamKeys(filterId);
+    delete next[keys.min];
+    delete next[keys.max];
+    return next;
+  }
+
+  delete next[filterId];
+  return next;
+}
+
+function applyAdvancedFilterDraftToParams(
+  params: URLSearchParams,
+  draft: AdvancedFilterDraft
+) {
+  PRODUCT_ADVANCED_FILTERS.forEach((filter) => {
+    if (RANGE_FILTER_IDS.has(filter.id)) {
+      const keys = getRangeParamKeys(filter.id);
+      const minValue = draft[keys.min]?.trim() ?? "";
+      const maxValue = draft[keys.max]?.trim() ?? "";
+
+      params.delete(keys.min);
+      params.delete(keys.max);
+
+      if (minValue) {
+        params.set(keys.min, minValue);
+      }
+
+      if (maxValue) {
+        params.set(keys.max, maxValue);
+      }
+
+      return;
+    }
+
+    const value = draft[filter.id]?.trim() ?? "";
+    params.delete(filter.id);
+
+    if (value) {
+      params.set(filter.id, value);
+    }
+  });
 }
 
 interface PriceCheckJob {
@@ -183,9 +343,17 @@ export default function ProductsPageClient({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const searchParamsString = searchParams.toString();
   const searchQuery = searchParams.get("q") ?? "";
   const focusedProductId = searchParams.get("productId");
+  const appliedAdvancedFilterDraft = useMemo(
+    () => getAdvancedFilterDraftFromQueryString(searchParamsString),
+    [searchParamsString]
+  );
   const [isExporting, setIsExporting] = useState(false);
+  const [isSyncingEbayAds, setIsSyncingEbayAds] = useState(false);
+  const [ebayAdsSyncProgress, setEbayAdsSyncProgress] =
+    useState<EbayAdsSyncProgress | null>(null);
   const [isStartingPriceCheckJob, setIsStartingPriceCheckJob] = useState(false);
   const [isCancellingPriceCheckJob, setIsCancellingPriceCheckJob] =
     useState(false);
@@ -195,6 +363,9 @@ export default function ProductsPageClient({
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
   const [searchDraft, setSearchDraft] = useState(searchQuery);
+  const [advancedFilterDraft, setAdvancedFilterDraft] = useState<AdvancedFilterDraft>(
+    appliedAdvancedFilterDraft
+  );
   const [pageJumpDraft, setPageJumpDraft] = useState(String(page));
   const notifiedTerminalJobIds = useRef<Set<string>>(new Set());
   const { toast, showToast, hideToast } = useToast();
@@ -244,6 +415,10 @@ export default function ProductsPageClient({
   useEffect(() => {
     setSearchDraft(searchQuery);
   }, [searchQuery]);
+
+  useEffect(() => {
+    setAdvancedFilterDraft(appliedAdvancedFilterDraft);
+  }, [appliedAdvancedFilterDraft]);
 
   useEffect(() => {
     setPageJumpDraft(String(page));
@@ -514,9 +689,17 @@ export default function ProductsPageClient({
     };
   }, [applyPriceCheckJob, fetchPriceCheckJob, priceCheckJob]);
 
-  const applySearchQuery = useCallback(
-    (value: string, mode: "push" | "replace" = "replace") => {
-      const trimmed = value.trim();
+  const applyProductSearchAndFilters = useCallback(
+    (
+      mode: "push" | "replace" = "push",
+      options?: {
+        search?: string;
+        advancedDraft?: AdvancedFilterDraft;
+        productFilterOverride?: ProductFilter;
+      }
+    ) => {
+      const trimmed = (options?.search ?? searchDraft).trim();
+      const filtersToApply = options?.advancedDraft ?? advancedFilterDraft;
       const params = new URLSearchParams(searchParams.toString());
       params.set("page", "1");
 
@@ -524,6 +707,16 @@ export default function ProductsPageClient({
         params.set("q", trimmed);
       } else {
         params.delete("q");
+      }
+
+      applyAdvancedFilterDraftToParams(params, filtersToApply);
+
+      if (options?.productFilterOverride) {
+        if (options.productFilterOverride === "all") {
+          params.delete("filter");
+        } else {
+          params.set("filter", options.productFilterOverride);
+        }
       }
 
       const queryString = params.toString();
@@ -535,20 +728,8 @@ export default function ProductsPageClient({
         router.replace(nextUrl);
       }
     },
-    [pathname, router, searchParams]
+    [advancedFilterDraft, pathname, router, searchDraft, searchParams]
   );
-
-  useEffect(() => {
-    if (searchDraft === searchQuery) {
-      return;
-    }
-
-    const timeout = window.setTimeout(() => {
-      applySearchQuery(searchDraft);
-    }, 300);
-
-    return () => window.clearTimeout(timeout);
-  }, [applySearchQuery, searchDraft, searchQuery]);
 
   function navigateProductsPage(nextPage: number, nextPageSize = pageSize) {
     const boundedPage = Math.min(
@@ -610,28 +791,7 @@ export default function ProductsPageClient({
   }
 
   function isAdvancedFilterActive(filterId: ProductAdvancedFilterId) {
-    if (RANGE_FILTER_IDS.has(filterId)) {
-      const keys = getRangeParamKeys(filterId);
-      return searchParams.has(keys.min) || searchParams.has(keys.max);
-    }
-
-    return searchParams.has(filterId);
-  }
-
-  function updateFilterParams(
-    update: (params: URLSearchParams) => void,
-    mode: "push" | "replace" = "replace"
-  ) {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("page", "1");
-    update(params);
-    const nextUrl = `${pathname}?${params.toString()}`;
-
-    if (mode === "push") {
-      router.push(nextUrl);
-    } else {
-      router.replace(nextUrl);
-    }
+    return isAdvancedFilterInDraft(advancedFilterDraft, filterId);
   }
 
   function handleAddAdvancedFilter(filterId: ProductAdvancedFilterId) {
@@ -641,52 +801,61 @@ export default function ProductsPageClient({
       return;
     }
 
-    updateFilterParams((params) => {
+    setAdvancedFilterDraft((current) => {
+      if (isAdvancedFilterInDraft(current, filterId)) {
+        return current;
+      }
+
+      const next = { ...current };
+
       if (RANGE_FILTER_IDS.has(filterId)) {
         const keys = getRangeParamKeys(filterId);
-        params.set(keys.min, "");
-        params.set(keys.max, "");
-        return;
+        next[keys.min] = "";
+        next[keys.max] = "";
+        return next;
       }
 
       if (filter.control === "select") {
         const firstOption = getSelectOptions(filterId)[0]?.value ?? "";
-        params.set(filterId, firstOption);
-        return;
+        next[filterId] = firstOption;
+        return next;
       }
 
-      params.set(filterId, "");
-    }, "push");
+      next[filterId] = "";
+      return next;
+    });
     setIsFilterMenuOpen(false);
   }
 
   function handleRemoveAdvancedFilter(filterId: ProductAdvancedFilterId) {
-    updateFilterParams((params) => {
-      if (RANGE_FILTER_IDS.has(filterId)) {
-        const keys = getRangeParamKeys(filterId);
-        params.delete(keys.min);
-        params.delete(keys.max);
-        return;
-      }
-
-      params.delete(filterId);
-    }, "push");
+    setAdvancedFilterDraft((current) =>
+      removeAdvancedFilterFromDraft(current, filterId)
+    );
   }
 
   function handleClearFilters() {
-    updateFilterParams((params) => {
-      params.delete("filter");
-      PRODUCT_ADVANCED_FILTERS.forEach((filter) => {
-        if (RANGE_FILTER_IDS.has(filter.id)) {
-          const keys = getRangeParamKeys(filter.id);
-          params.delete(keys.min);
-          params.delete(keys.max);
-          return;
-        }
+    const emptyDraft: AdvancedFilterDraft = {};
+    setAdvancedFilterDraft(emptyDraft);
+    applyProductSearchAndFilters("push", {
+      advancedDraft: emptyDraft,
+      productFilterOverride: "all",
+    });
+  }
 
-        params.delete(filter.id);
-      });
-    }, "push");
+  function handleAdvancedFilterKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") {
+      return;
+    }
+
+    event.preventDefault();
+    applyProductSearchAndFilters("push");
+  }
+
+  function updateAdvancedFilterDraftValue(key: string, value: string) {
+    setAdvancedFilterDraft((current) => ({
+      ...current,
+      [key]: value,
+    }));
   }
 
   function renderAdvancedFilterControl(filterId: ProductAdvancedFilterId) {
@@ -702,26 +871,24 @@ export default function ProductsPageClient({
       return (
         <div className="flex items-center gap-2">
           <input
-            type="number"
+            type="text"
             inputMode="decimal"
-            value={searchParams.get(keys.min) ?? ""}
+            value={advancedFilterDraft[keys.min] ?? ""}
             onChange={(event) =>
-              updateFilterParams((params) => {
-                params.set(keys.min, event.target.value);
-              })
+              updateAdvancedFilterDraftValue(keys.min, event.target.value)
             }
+            onKeyDown={handleAdvancedFilterKeyDown}
             placeholder="Min"
             className="h-8 w-20 rounded border border-gray-300 px-2 text-xs text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
           />
           <input
-            type="number"
+            type="text"
             inputMode="decimal"
-            value={searchParams.get(keys.max) ?? ""}
+            value={advancedFilterDraft[keys.max] ?? ""}
             onChange={(event) =>
-              updateFilterParams((params) => {
-                params.set(keys.max, event.target.value);
-              })
+              updateAdvancedFilterDraftValue(keys.max, event.target.value)
             }
+            onKeyDown={handleAdvancedFilterKeyDown}
             placeholder="Max"
             className="h-8 w-20 rounded border border-gray-300 px-2 text-xs text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
           />
@@ -734,11 +901,9 @@ export default function ProductsPageClient({
 
       return (
         <select
-          value={searchParams.get(filterId) ?? ""}
+          value={advancedFilterDraft[filterId] ?? ""}
           onChange={(event) =>
-            updateFilterParams((params) => {
-              params.set(filterId, event.target.value);
-            })
+            updateAdvancedFilterDraftValue(filterId, event.target.value)
           }
           className="h-8 rounded border border-gray-300 bg-white px-2 text-xs text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
         >
@@ -755,12 +920,11 @@ export default function ProductsPageClient({
     return (
       <input
         type="text"
-        value={searchParams.get(filterId) ?? ""}
+        value={advancedFilterDraft[filterId] ?? ""}
         onChange={(event) =>
-          updateFilterParams((params) => {
-            params.set(filterId, event.target.value);
-          })
+          updateAdvancedFilterDraftValue(filterId, event.target.value)
         }
+        onKeyDown={handleAdvancedFilterKeyDown}
         placeholder={filter.label}
         className="h-8 w-44 rounded border border-gray-300 px-2 text-xs text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
       />
@@ -770,6 +934,10 @@ export default function ProductsPageClient({
   const activeAdvancedFilters = PRODUCT_ADVANCED_FILTERS.filter((filter) =>
     isAdvancedFilterActive(filter.id)
   );
+  const hasPendingProductQueryChanges =
+    searchDraft.trim() !== searchQuery ||
+    getAdvancedFilterDraftSignature(advancedFilterDraft) !==
+      getAdvancedFilterDraftSignature(appliedAdvancedFilterDraft);
   const canClearFilters =
     productFilter !== "all" || activeAdvancedFilters.length > 0;
 
@@ -840,6 +1008,105 @@ export default function ProductsPageClient({
       showToast(message, "error");
     } finally {
       setIsExporting(false);
+    }
+  };
+
+  const handleSyncEbayAds = async () => {
+    setIsSyncingEbayAds(true);
+    setEbayAdsSyncProgress(INITIAL_EBAY_ADS_SYNC_PROGRESS);
+
+    try {
+      const response = await fetch("/api/ebay/promoted-listings/sync", {
+        method: "POST",
+        cache: "no-store",
+      });
+
+      if (!response.ok) {
+        const data = (await response.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(data.error || "Failed to sync eBay ads.");
+      }
+
+      let finalProgress: EbayAdsSyncProgress | null = null;
+      const contentType = response.headers.get("content-type") ?? "";
+
+      if (response.body && contentType.includes("application/x-ndjson")) {
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) {
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split("\n");
+          buffer = lines.pop() ?? "";
+
+          for (const line of lines) {
+            const trimmedLine = line.trim();
+            if (!trimmedLine) {
+              continue;
+            }
+
+            const progress = JSON.parse(trimmedLine) as EbayAdsSyncProgress;
+            finalProgress = progress;
+            setEbayAdsSyncProgress(progress);
+
+            if (progress.type === "error") {
+              throw new Error(progress.error || "Failed to sync eBay ads.");
+            }
+          }
+        }
+
+        const trailingLine = buffer.trim();
+        if (trailingLine) {
+          const progress = JSON.parse(trailingLine) as EbayAdsSyncProgress;
+          finalProgress = progress;
+          setEbayAdsSyncProgress(progress);
+
+          if (progress.type === "error") {
+            throw new Error(progress.error || "Failed to sync eBay ads.");
+          }
+        }
+      } else {
+        const data = (await response.json().catch(() => ({}))) as Partial<
+          EbayAdsSyncProgress
+        >;
+
+        finalProgress = {
+          ...INITIAL_EBAY_ADS_SYNC_PROGRESS,
+          ...data,
+          type: "done",
+          phase: "eBay ad sync complete",
+          percent: 100,
+        };
+        setEbayAdsSyncProgress(finalProgress);
+      }
+
+      router.refresh();
+      showToast(
+        `Synced eBay ads for ${finalProgress?.total ?? 0} listing${finalProgress?.total === 1 ? "" : "s"}. ${finalProgress?.promoted ?? 0} promoted, ${finalProgress?.notPromoted ?? 0} not promoted.`,
+        "success",
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Failed to sync eBay ads.";
+      setEbayAdsSyncProgress((current) => ({
+        ...(current ?? INITIAL_EBAY_ADS_SYNC_PROGRESS),
+        type: "error",
+        phase: "eBay ad sync failed",
+        error: message,
+      }));
+      showToast(
+        message,
+        "error",
+      );
+    } finally {
+      setIsSyncingEbayAds(false);
     }
   };
 
@@ -1000,54 +1267,62 @@ export default function ProductsPageClient({
             role="search"
             onSubmit={(event) => {
               event.preventDefault();
-              applySearchQuery(searchDraft, "push");
+              applyProductSearchAndFilters("push");
             }}
-            className="relative w-full sm:w-72 lg:w-80"
+            className="flex w-full items-center gap-2 sm:w-auto"
           >
-            <svg
-              className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-              strokeWidth={1.8}
-              aria-hidden="true"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                d="m21 21-4.35-4.35M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z"
-              />
-            </svg>
-            <input
-              type="search"
-              value={searchDraft}
-              onChange={(event) => setSearchDraft(event.target.value)}
-              placeholder="Search products, IDs, ASIN..."
-              aria-label="Search products"
-              className="h-10 w-full rounded-md border border-gray-300 bg-white py-2 pl-9 pr-9 text-sm text-gray-900 shadow-sm transition-colors placeholder:text-gray-400 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
-            />
-            {searchDraft && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSearchDraft("");
-                  applySearchQuery("", "push");
-                }}
-                className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
-                aria-label="Clear product search"
+            <div className="relative w-full sm:w-72 lg:w-80">
+              <svg
+                className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                strokeWidth={1.8}
+                aria-hidden="true"
               >
-                <svg
-                  className="h-3.5 w-3.5"
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                  strokeWidth={2}
-                  aria-hidden="true"
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="m21 21-4.35-4.35M10.5 18a7.5 7.5 0 1 1 0-15 7.5 7.5 0 0 1 0 15Z"
+                />
+              </svg>
+              <input
+                type="search"
+                value={searchDraft}
+                onChange={(event) => setSearchDraft(event.target.value)}
+                placeholder="Search products, IDs, ASIN..."
+                aria-label="Search products"
+                className="h-10 w-full rounded-md border border-gray-300 bg-white py-2 pl-9 pr-9 text-sm text-gray-900 shadow-sm transition-colors placeholder:text-gray-400 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+              />
+              {searchDraft && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSearchDraft("");
+                    applyProductSearchAndFilters("push", { search: "" });
+                  }}
+                  className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                  aria-label="Clear product search"
                 >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-                </svg>
-              </button>
-            )}
+                  <svg
+                    className="h-3.5 w-3.5"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                    strokeWidth={2}
+                    aria-hidden="true"
+                  >
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
+            </div>
+            <button
+              type="submit"
+              className="inline-flex h-10 items-center rounded-md bg-gray-900 px-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-gray-700"
+            >
+              Search
+            </button>
           </form>
           <div className="relative">
             <button
@@ -1136,6 +1411,29 @@ export default function ProductsPageClient({
           </label>
 
           <button
+            type="button"
+            onClick={handleSyncEbayAds}
+            disabled={isSyncingEbayAds}
+            className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <svg
+              className="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+              strokeWidth={1.8}
+              aria-hidden="true"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M4 4v5h.582m14.356-2A8 8 0 006.582 9m0 0H9m11 11v-5h-.581m0 0A8.003 8.003 0 017.64 15m11.778 0H15"
+              />
+            </svg>
+            {isSyncingEbayAds ? "Syncing Ads..." : "Sync eBay Ads"}
+          </button>
+
+          <button
             onClick={handleCheckPrices}
             disabled={isStartingPriceCheckJob || isPriceCheckJobActive}
             title={
@@ -1199,6 +1497,31 @@ export default function ProductsPageClient({
         </div>
       </div>
 
+      {ebayAdsSyncProgress && (
+        <div
+          className={`mb-4 rounded-md border p-3 ${
+            ebayAdsSyncProgress.type === "error"
+              ? "border-red-200 bg-red-50"
+              : ebayAdsSyncProgress.type === "done"
+                ? "border-emerald-200 bg-emerald-50"
+                : "border-blue-100 bg-blue-50"
+          }`}
+        >
+          <ActionProgressBar
+            label={ebayAdsSyncProgress.phase}
+            percent={ebayAdsSyncProgress.percent}
+            tone={
+              ebayAdsSyncProgress.type === "error"
+                ? "red"
+                : ebayAdsSyncProgress.type === "done"
+                  ? "green"
+                  : "blue"
+            }
+            detail={getEbayAdsSyncDetail(ebayAdsSyncProgress)}
+          />
+        </div>
+      )}
+
       {canClearFilters && (
         <div className="mb-4 flex flex-wrap items-center gap-2">
           {activeAdvancedFilters.map((filter) => (
@@ -1229,6 +1552,17 @@ export default function ProductsPageClient({
               </button>
             </div>
           ))}
+          <button
+            type="button"
+            onClick={() => applyProductSearchAndFilters("push")}
+            className={`rounded-md px-3 py-2 text-sm font-semibold transition-colors ${
+              hasPendingProductQueryChanges
+                ? "bg-gray-900 text-white hover:bg-gray-700"
+                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+            }`}
+          >
+            Search
+          </button>
           <button
             type="button"
             onClick={handleClearFilters}

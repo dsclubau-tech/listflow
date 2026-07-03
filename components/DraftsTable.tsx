@@ -77,6 +77,14 @@ function formatChangePercent(value: number) {
   return `${value > 0 ? "+" : ""}${value.toFixed(2)}%`;
 }
 
+function formatPercent(value: number | null | undefined) {
+  if (value === null || value === undefined || !Number.isFinite(value)) {
+    return "";
+  }
+
+  return Number.isInteger(value) ? String(value) : value.toFixed(2);
+}
+
 function formatDate(value: string | null | undefined) {
   if (!value) {
     return null;
@@ -329,6 +337,53 @@ function getPriceTrackingState(product: SerializedProductRow) {
     badgeClass: "bg-gray-100 text-gray-600",
     priceHistoryId: null,
     detail: "Tracked product has not been checked yet.",
+  };
+}
+
+function getPromotedAdState(product: SerializedProductRow) {
+  const status = String(product.promotedAdStatus ?? "UNKNOWN");
+  const strategy = String(product.promotedAdRateStrategy ?? "UNKNOWN");
+  const syncedAt = formatDateTime(product.promotedAdSyncedAt);
+  const campaignName = product.promotedAdCampaignName?.trim() ?? "";
+  const detailParts = [
+    campaignName ? `Campaign: ${campaignName}` : null,
+    syncedAt ? `Synced ${syncedAt}` : null,
+  ].filter(Boolean);
+  const detail =
+    detailParts.length > 0
+      ? detailParts.join(" | ")
+      : "Run Sync eBay Ads to refresh promoted listing data.";
+
+  if (status === "PROMOTED") {
+    if (strategy === "DYNAMIC") {
+      return {
+        label: "Promoted dynamic",
+        badgeClass: "bg-emerald-100 text-emerald-700",
+        detail,
+      };
+    }
+
+    const adRate = formatPercent(product.promotedAdPercent);
+
+    return {
+      label: adRate ? `Promoted ${adRate}%` : "Promoted",
+      badgeClass: "bg-emerald-100 text-emerald-700",
+      detail,
+    };
+  }
+
+  if (status === "NOT_PROMOTED") {
+    return {
+      label: "Not promoted",
+      badgeClass: "bg-gray-100 text-gray-600",
+      detail,
+    };
+  }
+
+  return {
+    label: "Not synced",
+    badgeClass: "bg-amber-100 text-amber-700",
+    detail,
   };
 }
 
@@ -1338,6 +1393,9 @@ export default function DraftsTable({
               const trackingState = isProductsView
                 ? getPriceTrackingState(product)
                 : null;
+              const promotedAdState = isProductsView
+                ? getPromotedAdState(product)
+                : null;
 
               return (
                 <Fragment key={product.id}>
@@ -1461,9 +1519,15 @@ export default function DraftsTable({
                       </span>
                     </td>
 
-                    {isProductsView && trackingState && (
+                    {isProductsView && trackingState && promotedAdState && (
                       <td className="px-3 py-3">
                         <div className="max-w-[13rem]">
+                          <span
+                            className={`mb-1.5 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${promotedAdState.badgeClass}`}
+                            title={promotedAdState.detail}
+                          >
+                            {promotedAdState.label}
+                          </span>
                           <span
                             className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${trackingState.badgeClass}`}
                           >

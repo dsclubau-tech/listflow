@@ -10,6 +10,7 @@ const HIGH_PRIORITY_ITEM_SPECIFICS = [
   "Brand",
   "Type",
   "MPN",
+  "Manufacturer Part Number",
   "Model",
   "Colour",
   "Color",
@@ -70,6 +71,16 @@ const ITEM_SPECIFIC_PRIORITY = new Map(
     index,
   ]),
 );
+
+const NOISY_ITEM_SPECIFIC_VALUE_PATTERNS = [
+  /\bfunction\s*\(/i,
+  /\bvar\s+[_$a-z][\w$]*\s*=/i,
+  /\bwindow\./i,
+  /\bP\.namespace\b/i,
+  /\bDetailPageProductOverview\b/i,
+  /\bue\.(?:count|tag|log)\b/i,
+  /<\/?(?:script|style)\b/i,
+];
 
 export type ItemSpecificsRecord = Record<string, string>;
 
@@ -355,6 +366,29 @@ function normalizeSpecificName(name: string) {
   return name.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
+export function isUsefulItemSpecificCandidate(name: string, value: string) {
+  const key = name.trim();
+  const normalizedValue = value.trim().replace(/\s+/g, " ");
+
+  if (!key || !normalizedValue) {
+    return false;
+  }
+
+  if (key.length > 80 || normalizedValue.length > 1000) {
+    return false;
+  }
+
+  if (
+    NOISY_ITEM_SPECIFIC_VALUE_PATTERNS.some((pattern) =>
+      pattern.test(normalizedValue)
+    )
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 function isLowValueSpecificName(name: string) {
   return LOW_VALUE_ITEM_SPECIFICS.has(normalizeSpecificName(name));
 }
@@ -512,6 +546,10 @@ export function sanitizeEbayItemSpecifics(value: unknown): ItemSpecificsRecord {
     const value = rawValue.trim().replace(/\s+/g, " ");
 
     if (!key || !value) {
+      continue;
+    }
+
+    if (!key.startsWith("_") && !isUsefulItemSpecificCandidate(key, value)) {
       continue;
     }
 

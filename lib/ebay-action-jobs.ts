@@ -8,10 +8,16 @@ import {
 import type { Prisma } from "@/app/generated/prisma/client";
 import {
   buildEndItemXML,
+  buildReviseInventoryStatusXML,
   buildReviseItemXML,
   buildReviseQuantityXML,
 } from "@/lib/ebay-xml";
-import { callEbayEndItem, callEbayReviseItem, getStoreNumber } from "@/lib/ebay";
+import {
+  callEbayEndItem,
+  callEbayReviseInventoryStatus,
+  callEbayReviseItem,
+  getStoreNumber,
+} from "@/lib/ebay";
 import {
   assertNoEbayLaneStartConflict,
   getEbayWriteLeaseInput,
@@ -48,6 +54,7 @@ type EbayActionJobRecord = {
   succeeded: number;
   failed: number;
   errors: Prisma.JsonValue;
+  metadata: Prisma.JsonValue;
   errorMessage: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -61,7 +68,20 @@ type CreateEbayActionJobInput = {
   storeId: string;
   type: EbayActionJobType;
   productIds: unknown[];
+  metadata?: Prisma.InputJsonValue;
 };
+
+const BULK_EDIT_PRICE_FIELDS = new Set([
+  "feesPercent",
+  "feesFixed",
+  "profitFixed",
+  "profitPercent",
+  "roundCents",
+]);
+const BULK_EDIT_INVENTORY_FIELDS = new Set([
+  ...BULK_EDIT_PRICE_FIELDS,
+  "quantity",
+]);
 
 function normalizeProductIds(productIds: unknown[]) {
   if (!Array.isArray(productIds)) {
@@ -94,6 +114,41 @@ function normalizeErrors(errors: Prisma.JsonValue): ProductFailure[] {
         })
         .filter((entry): entry is ProductFailure => Boolean(entry?.productId || entry?.error))
     : [];
+}
+
+function getBulkEditFields(job: EbayActionJobRecord) {
+  const metadata = job.metadata;
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return new Set<string>();
+  }
+
+  const fields = (metadata as Record<string, unknown>).fields;
+  if (!Array.isArray(fields)) {
+    return new Set<string>();
+  }
+
+  return new Set(
+    fields
+      .map((field) => (typeof field === "string" ? field : ""))
+      .filter(Boolean)
+  );
+}
+
+function hasAnyField(fields: Set<string>, candidates: Set<string> | string[]) {
+  for (const field of candidates) {
+    if (fields.has(field)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function hasOnlyInventoryFields(fields: Set<string>) {
+  return (
+    fields.size > 0 &&
+    Array.from(fields).every((field) => BULK_EDIT_INVENTORY_FIELDS.has(field))
+  );
 }
 
 function actionLabel(type: EbayActionJobType) {
@@ -289,27 +344,76 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       });
     }
 
-    const finalDescription = await resolveDescriptionTemplate(productWithPolicies);
+    const bulkEditFields = getBulkEditFields(job);
+    const priceChanged =
+      bulkEditFields.size === 0 || hasAnyField(bulkEditFields, BULK_EDIT_PRICE_FIELDS);
+    const quantityChanged = bulkEditFields.has("quantity");
+    const descriptionChanged =
+      bulkEditFields.has("title") || bulkEditFields.has("templateId");
+    const policyChanged = hasAnyField(bulkEditFields, [
+      "shippingPolicyId",
+      "returnPolicyId",
+      "paymentPolicyId",
+      "policyTemplateId",
+    ]);
     const primarySellPrice =
       product.variants.length > 0 ? Number(product.variants[0].sellPrice) : null;
     const overrideStartPrice =
       primarySellPrice !== null && Number.isFinite(primarySellPrice) && primarySellPrice > 0
         ? primarySellPrice
         : undefined;
-    const quantityOverride =
-      product.status === ProductStatus.ON_HOLD ? 0 : undefined;
     const storeNumber = await getStoreNumber(product.storeId);
-    const result = await callEbayReviseItem(
-      buildReviseItemXML(
-        {
-          ...productWithPolicies,
-          description: finalDescription,
-        },
-        overrideStartPrice,
-        { quantityOverride }
-      ),
-      storeNumber
-    );
+    let result: { success: boolean; errorMessage?: string };
+
+    if (bulkEditFields.size === 0 || hasOnlyInventoryFields(bulkEditFields)) {
+      const inventoryQuantity =
+        quantityChanged && product.status !== ProductStatus.ON_HOLD
+          ? Math.max(1, product.quantity)
+          : undefined;
+      const inventoryPrice =
+        priceChanged ? overrideStartPrice ?? Number(product.price) : undefined;
+
+      result =
+        inventoryPrice === undefined && inventoryQuantity === undefined
+          ? { success: true }
+          : await callEbayReviseInventoryStatus(
+              buildReviseInventoryStatusXML(product.ebayItemId, {
+                startPrice: inventoryPrice,
+                quantity: inventoryQuantity,
+              }),
+              storeNumber
+            );
+    } else {
+      const includeQuantity =
+        quantityChanged &&
+        product.status !== ProductStatus.ON_HOLD &&
+        product.quantity >= 1;
+      const finalDescription = descriptionChanged
+        ? await resolveDescriptionTemplate(productWithPolicies)
+        : productWithPolicies.description;
+
+      result = await callEbayReviseItem(
+        buildReviseItemXML(
+          {
+            ...productWithPolicies,
+            description: finalDescription,
+          },
+          priceChanged ? overrideStartPrice : undefined,
+          {
+            includeTitle: bulkEditFields.has("title"),
+            includeDescription: descriptionChanged,
+            includeStartPrice: priceChanged,
+            includeDispatchTimeMax: bulkEditFields.has("dispatchTimeMax"),
+            includeQuantity,
+            quantityOverride: includeQuantity ? Math.max(1, product.quantity) : undefined,
+            includeSellerProfiles: policyChanged,
+            includeLocation: bulkEditFields.has("location"),
+            includeItemSpecifics: bulkEditFields.has("brand"),
+          }
+        ),
+        storeNumber
+      );
+    }
 
     if (!result.success) {
       await prisma.product.update({
@@ -479,6 +583,7 @@ export async function createEbayActionJob(input: CreateEbayActionJobInput) {
           : EbayActionJobStatus.COMPLETED,
       productIds,
       total: productIds.length,
+      metadata: input.metadata ?? {},
       completedAt: productIds.length > 0 ? null : new Date(),
     },
   });

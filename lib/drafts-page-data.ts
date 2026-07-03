@@ -34,6 +34,7 @@ export async function getCachedDraftsPageData(storeId: string) {
     price: product.price.toString(),
     amazonPrice: product.amazonPrice?.toString() ?? null,
     lastPriceCheck: product.lastPriceCheck?.toISOString() ?? null,
+    promotedAdSyncedAt: product.promotedAdSyncedAt?.toISOString() ?? null,
     createdAt: product.createdAt.toISOString(),
     updatedAt: product.updatedAt.toISOString(),
     store: {

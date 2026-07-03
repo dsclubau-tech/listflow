@@ -13,6 +13,8 @@ export const PRODUCT_ADVANCED_FILTERS = [
   { id: "productId", label: "Product ID", control: "text", enabled: true },
   { id: "profit", label: "Profit", control: "range", enabled: true },
   { id: "quantity", label: "Quantity", control: "range", enabled: true },
+  { id: "promotedAdPercent", label: "eBay Promoted Ad Rate", control: "range", enabled: true },
+  { id: "adFeeStatus", label: "Promoted on eBay", control: "select", enabled: true },
   { id: "inventoryStatus", label: "Inventory Status", control: "select", enabled: true },
   { id: "collections", label: "Collections", control: "select", enabled: false },
   { id: "cityLocation", label: "City Location", control: "select", enabled: false },

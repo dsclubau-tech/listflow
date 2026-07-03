@@ -40,6 +40,7 @@ export async function POST(request: Request) {
     policyTemplateId,
     templateId,
     allowIncompleteDraft,
+    promotedAdPercent,
   } = body;
   const isIncompleteDraftAllowed = allowIncompleteDraft === true;
   const normalizedPrice =
@@ -49,6 +50,12 @@ export async function POST(request: Request) {
       ? 1
       : Number(quantity);
   const normalizedCategory = typeof category === "string" ? category.trim() : "";
+  const normalizedPromotedAdPercent =
+    promotedAdPercent === undefined ||
+    promotedAdPercent === null ||
+    promotedAdPercent === ""
+      ? 0
+      : Number(promotedAdPercent);
 
   // Validate required fields
   if (!title?.trim()) {
@@ -73,6 +80,16 @@ export async function POST(request: Request) {
   if (!Number.isInteger(normalizedQuantity) || normalizedQuantity < 1) {
     return NextResponse.json(
       { error: "Quantity must be at least 1" },
+      { status: 400 }
+    );
+  }
+  if (
+    !Number.isFinite(normalizedPromotedAdPercent) ||
+    normalizedPromotedAdPercent < 0 ||
+    normalizedPromotedAdPercent > 100
+  ) {
+    return NextResponse.json(
+      { error: "Local promoted ad reference must be between 0 and 100" },
       { status: 400 }
     );
   }
@@ -152,6 +169,8 @@ export async function POST(request: Request) {
         storeId: storeSession.storeId,
         createdById,
         asin: asin || null,
+        amazonPrice: asin ? normalizedPrice : null,
+        promotedAdPercent: normalizedPromotedAdPercent,
         shippingPolicyId: policySelection.shippingPolicyId,
         returnPolicyId: policySelection.returnPolicyId,
         paymentPolicyId: policySelection.paymentPolicyId,

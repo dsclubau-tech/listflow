@@ -1,6 +1,10 @@
 import "server-only";
 
-import { ProductStatus } from "@/app/generated/prisma/enums";
+import {
+  ProductStatus,
+  PromotedAdRateStrategy,
+  PromotedAdStatus,
+} from "@/app/generated/prisma/enums";
 import type { Prisma } from "@/app/generated/prisma/client";
 import { cacheLife, cacheTag } from "next/cache";
 import {
@@ -50,6 +54,9 @@ export interface NormalizedProductsQuery {
   quantityMax: number | null;
   feesMin: number | null;
   feesMax: number | null;
+  promotedAdPercentMin: number | null;
+  promotedAdPercentMax: number | null;
+  adFeeStatus: string;
   inventoryStatus: string;
   stockMonitoring: string;
   priceMonitoring: string;
@@ -120,7 +127,8 @@ function hasActiveAdvancedFilters(params: ProductsSearchParams) {
       filterId === "buyPrice" ||
       filterId === "profit" ||
       filterId === "quantity" ||
-      filterId === "fees"
+      filterId === "fees" ||
+      filterId === "promotedAdPercent"
     ) {
       return (
         params[`${filterId}Min`] !== undefined ||
@@ -174,6 +182,13 @@ export function normalizeProductsQuery(
     quantityMax: getNumberParam(params, "quantityMax"),
     feesMin: getNumberParam(params, "feesMin"),
     feesMax: getNumberParam(params, "feesMax"),
+    promotedAdPercentMin: getNumberParam(params, "promotedAdPercentMin"),
+    promotedAdPercentMax: getNumberParam(params, "promotedAdPercentMax"),
+    adFeeStatus: getSelectParam(params, "adFeeStatus", [
+      "promoted",
+      "not-promoted",
+      "not-synced",
+    ]),
     inventoryStatus: getSelectParam(params, "inventoryStatus", [
       "imported",
       "on-hold",
@@ -451,6 +466,31 @@ function buildProductsWhere(
     });
   }
 
+  const promotedAdPercentRange = getRangeFilter(
+    query.promotedAdPercentMin,
+    query.promotedAdPercentMax,
+  );
+  if (promotedAdPercentRange) {
+    whereClauses.push({
+      promotedAdStatus: PromotedAdStatus.PROMOTED,
+      promotedAdRateStrategy: PromotedAdRateStrategy.FIXED,
+      promotedAdPercent: promotedAdPercentRange,
+    });
+  }
+
+  if (query.adFeeStatus === "promoted") {
+    whereClauses.push({ promotedAdStatus: PromotedAdStatus.PROMOTED });
+  } else if (query.adFeeStatus === "not-promoted") {
+    whereClauses.push({ promotedAdStatus: PromotedAdStatus.NOT_PROMOTED });
+  } else if (query.adFeeStatus === "not-synced") {
+    whereClauses.push({
+      OR: [
+        { promotedAdStatus: PromotedAdStatus.UNKNOWN },
+        { promotedAdSyncedAt: null },
+      ],
+    });
+  }
+
   return { AND: whereClauses };
 }
 
@@ -497,6 +537,7 @@ export async function getCachedProductsPageData(
           feesFixed: true,
           profitPercent: true,
           profitFixed: true,
+          promotedAdPercent: true,
           sellPrice: true,
         },
       },
@@ -527,6 +568,7 @@ export async function getCachedProductsPageData(
       price: product.price.toString(),
       amazonPrice: product.amazonPrice?.toString() ?? null,
       lastPriceCheck: product.lastPriceCheck?.toISOString() ?? null,
+      promotedAdSyncedAt: product.promotedAdSyncedAt?.toISOString() ?? null,
       createdAt: product.createdAt.toISOString(),
       updatedAt: product.updatedAt.toISOString(),
       uploadedAt: uploadLogs[0]?.createdAt.toISOString() ?? null,

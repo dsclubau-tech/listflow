@@ -112,6 +112,7 @@ function buildRegrabDraftUpdate(scraped: ScrapedProduct, fallbackAsin: string) {
   return {
     title: normalizeScrapedTitle(scraped),
     description: scraped.description,
+    price: scraped.price,
     images: [...scraped.images],
     asin: scraped.asin || fallbackAsin,
     brand: scraped.brand,
@@ -167,6 +168,10 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
   const [condition, setCondition] = useState(product.condition);
   const [price, setPrice] = useState(product.price.toString());
   const [quantity, setQuantity] = useState(product.quantity.toString());
+  const [promotedAdPercent, setPromotedAdPercent] = useState(
+    String(product.promotedAdPercent ?? 0)
+  );
+  const [amazonPriceUpdatePending, setAmazonPriceUpdatePending] = useState(false);
 
   // Description
   const [description, setDescription] = useState(product.description);
@@ -208,6 +213,16 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
   useEffect(() => {
     setAsin(product.asin ?? "");
   }, [product.asin]);
+
+  useEffect(() => {
+    if (!amazonPriceUpdatePending) {
+      setPrice(product.price.toString());
+    }
+  }, [amazonPriceUpdatePending, product.price]);
+
+  useEffect(() => {
+    setPromotedAdPercent(String(product.promotedAdPercent ?? 0));
+  }, [product.promotedAdPercent]);
 
   // Parse brand / location from itemSpecifics on load
   useEffect(() => {
@@ -685,10 +700,9 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
     specificsObj["_Location"] = countryLocation;
     specificsObj["_PostalCode"] = defaultZipcode.trim() || "3000";
 
-    const body = {
+    const body: Record<string, unknown> = {
       title: title.trim().slice(0, 80),
       description,
-      price: parseFloat(price) || 0,
       quantity: parseInt(quantity) || 1,
       condition,
       category: category.trim(),
@@ -701,7 +715,13 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       paymentPolicyId: paymentPolicyId || null,
       policyTemplateId: selectedPolicyTemplateId || null,
       templateId: selectedTemplateId || null,
+      promotedAdPercent: Math.min(100, Math.max(0, Number(promotedAdPercent) || 0)),
     };
+
+    if (amazonPriceUpdatePending) {
+      body.price = parseFloat(price) || 0;
+      body.amazonPriceUpdateSource = "regrab";
+    }
 
     try {
       const res = await fetch(`/api/products/${product.id}`, {
@@ -729,6 +749,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
             variant: "success",
           });
         }
+        setAmazonPriceUpdatePending(false);
         router.refresh();
         return true;
       } else {
@@ -1016,6 +1037,10 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       setDescription(update.description);
       setImages(update.images);
       setAsin(update.asin);
+      if (update.price !== null && update.price > 0) {
+        setPrice(update.price.toFixed(2));
+        setAmazonPriceUpdatePending(true);
+      }
       setHoveredImage(null);
       setBrand(update.brand);
       setItemSpecifics(update.itemSpecifics);
@@ -1255,10 +1280,10 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       </div>
 
       {/* ===== Tab Content ===== */}
-      <div className="p-6">
+      <div className="p-6 pb-10">
         {/* ===== Tab 1 — Product ===== */}
         {activeTab === 0 && (
-          <div className="grid grid-cols-2 gap-4 max-h-[600px] overflow-y-auto">
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {/* Title — full width */}
             <div className="col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-1">Title</label>
@@ -1360,14 +1385,8 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
               <input
                 type="text"
                 value={asin}
-                onChange={(e) =>
-                  setAsin(
-                    e.target.value
-                      .toUpperCase()
-                      .replace(/[^A-Z0-9]/g, "")
-                      .slice(0, 10)
-                  )
-                }
+                onChange={(e) => setAsin(e.target.value)}
+                onBlur={() => setAsin(normalizeAsin(asin) ?? "")}
                 maxLength={10}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md font-mono text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
                 placeholder="B0XXXXXXXX"
@@ -1550,21 +1569,22 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
               </select>
             </div>
 
-            {/* Price */}
+            {/* Amazon Buy Price */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Price (AUD)</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Amazon Buy Price (AUD)</label>
               <div className="relative">
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">$</span>
                 <input
-                  type="number"
-                  step="0.01"
-                  min="0"
+                  type="text"
                   value={price}
-                  onChange={(e) => setPrice(e.target.value)}
-                  className="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  readOnly
+                  className="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-md bg-gray-50 text-sm text-gray-700 focus:outline-none"
                   placeholder="0.00"
                 />
               </div>
+              <p className="mt-1 text-xs text-gray-500">
+                Updated by Add Product, Regrab, or price check.
+              </p>
             </div>
 
             {/* Quantity */}
@@ -1577,6 +1597,26 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
                 onChange={(e) => setQuantity(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
               />
+            </div>
+
+            {/* Local promoted ad reference */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Local Promoted Ad Reference %</label>
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                value={promotedAdPercent}
+                onChange={(e) => setPromotedAdPercent(e.target.value)}
+                disabled={isListed}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:bg-gray-50 disabled:text-gray-500"
+              />
+              <p className="mt-1 text-xs text-gray-500">
+                {isListed
+                  ? "Live eBay ad rates are updated with Sync eBay Ads on Products."
+                  : "Reference only. Products filters use Sync eBay Ads for live campaign rates."}
+              </p>
             </div>
             </div>
         )}
@@ -1632,7 +1672,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
               product={{
                 id: product.id,
                 title: product.title,
-                price: product.price.toString(),
+                price,
                 quantity: product.quantity,
                 images: product.images,
                 asin: currentAsin,

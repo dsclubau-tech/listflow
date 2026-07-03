@@ -1,5 +1,6 @@
 import type { Browser, Page } from "playwright-core";
 import { launchScraperBrowser } from "@/lib/scraper-browser";
+import { isUsefulItemSpecificCandidate } from "@/lib/item-specifics";
 
 export interface ScrapedProduct {
   title: string;
@@ -107,7 +108,6 @@ const AMAZON_FIELDS_TO_REMOVE = new Set([
   "best sellers rank",
   "customer reviews",
   "manufacturer",          // Brand is already extracted separately
-  "item model number",
   "is discontinued by manufacturer",
   "batteries",
   "batteries required",
@@ -140,6 +140,9 @@ const AMAZON_TO_EBAY_FIELD_MAP: Record<string, string> = {
   "wattage":                "Wattage",
   "connectivity technology":"Connectivity",
   "number of items":        "Number of Items",
+  "item model number":      "Model Number",
+  "manufacturer part number": "Manufacturer Part Number",
+  "part number":            "Manufacturer Part Number",
   "special feature":        "Features",
   "special features":       "Features",
 };
@@ -183,6 +186,7 @@ function normalizeItemSpecificsForEbay(
 
     // Skip Amazon-internal fields
     if (AMAZON_FIELDS_TO_REMOVE.has(lowerKey)) continue;
+    if (!isUsefulItemSpecificCandidate(rawKey, value)) continue;
 
     const mappedKey = AMAZON_TO_EBAY_FIELD_MAP[lowerKey];
 

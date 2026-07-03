@@ -42,6 +42,7 @@ interface VariantFormState {
   feesFixed: string;
   profitPercent: string;
   profitFixed: string;
+  promotedAdPercent: string;
   sellPrice: string;
   quantity: string;
   status: VariantPayload["status"];
@@ -125,6 +126,7 @@ function buildFormState(props: {
       feesFixed: String(variant.feesFixed),
       profitPercent: String(variant.profitPercent),
       profitFixed: String(variant.profitFixed),
+      promotedAdPercent: String(variant.promotedAdPercent ?? 0),
       sellPrice: variant.sellPrice,
       quantity: String(variant.quantity),
       status: variant.status,
@@ -148,6 +150,7 @@ function buildFormState(props: {
     feesFixed: String(pricingDefaults?.feesFixed ?? 0),
     profitPercent: String(pricingDefaults?.profitPercent ?? 0),
     profitFixed: String(pricingDefaults?.profitFixed ?? 0),
+    promotedAdPercent: "0",
     sellPrice: toMoneyString(defaultBuyPrice),
     quantity: String(defaultQuantity),
     status: defaultQuantity > 0 ? "IN_STOCK" : "OUT_OF_STOCK",
@@ -408,6 +411,7 @@ export default function EditVariantModal({
       feesFixed: toNumber(form.feesFixed),
       profitPercent: toNumber(form.profitPercent),
       profitFixed: toNumber(form.profitFixed),
+      promotedAdPercent: Math.min(100, Math.max(0, toNumber(form.promotedAdPercent))),
       sellPrice: toNumber(form.sellPrice),
       quantity: Math.max(0, Math.floor(toNumber(form.quantity))),
       status: form.status,
@@ -598,6 +602,29 @@ export default function EditVariantModal({
                     onChange={(event) => updatePricingField("profitFixed", event.target.value)}
                     className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-gray-700">
+                    Local Promoted Ad Reference %
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="0.01"
+                    value={form.promotedAdPercent}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        promotedAdPercent: event.target.value,
+                      }))
+                    }
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                  <p className="mt-1 text-xs text-gray-500">
+                    Reference only. Live eBay ad rates are synced on Products.
+                  </p>
                 </div>
 
                 <label className="flex items-center gap-3 rounded-lg border border-gray-200 px-4 py-3">

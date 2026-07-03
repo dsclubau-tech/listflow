@@ -12,6 +12,7 @@ export interface VariantRecord {
   feesFixed: number;
   profitPercent: number;
   profitFixed: number;
+  promotedAdPercent: number;
   sellPrice: string;
   quantity: number;
   status: VariantStatusValue;
@@ -34,6 +35,7 @@ export interface VariantPayload {
   feesFixed: number;
   profitPercent: number;
   profitFixed: number;
+  promotedAdPercent: number;
   sellPrice: number;
   quantity: number;
   status: VariantStatusValue;

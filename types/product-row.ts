@@ -31,16 +31,23 @@ export interface SerializedProductVariantSummary {
   feesFixed?: number;
   profitPercent?: number;
   profitFixed?: number;
+  promotedAdPercent?: number;
   sellPrice: string;
 }
 
 export type SerializedProductRow = Omit<
   Product,
-  "price" | "amazonPrice" | "lastPriceCheck" | "createdAt" | "updatedAt"
+  | "price"
+  | "amazonPrice"
+  | "lastPriceCheck"
+  | "promotedAdSyncedAt"
+  | "createdAt"
+  | "updatedAt"
 > & {
   price: string;
   amazonPrice?: string | null;
   lastPriceCheck?: string | null;
+  promotedAdSyncedAt?: string | null;
   internalNote?: string | null;
   uploadedAt?: string | null;
   createdAt: string;

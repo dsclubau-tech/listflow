@@ -63,6 +63,7 @@ export async function PATCH(
     "policyTemplateId",
     "templateId",
     "internalNote",
+    "promotedAdPercent",
   ];
 
   const data: Record<string, unknown> = {};
@@ -98,7 +99,33 @@ export async function PATCH(
     if (!Number.isFinite(numericPrice) || numericPrice <= 0) {
       return NextResponse.json({ error: "Price must be greater than 0" }, { status: 400 });
     }
-    data.price = numericPrice;
+
+    const isAmazonBackedProduct = Boolean(product.asin);
+    const isAmazonPriceUpdate = body.amazonPriceUpdateSource === "regrab";
+    const existingPrice = Number(product.price);
+
+    if (
+      isAmazonBackedProduct &&
+      !isAmazonPriceUpdate &&
+      Math.abs(numericPrice - existingPrice) > 0.009
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Amazon buy price is supplier-controlled. Use Regrab or a price check to update it.",
+        },
+        { status: 400 },
+      );
+    }
+
+    if (isAmazonBackedProduct && !isAmazonPriceUpdate) {
+      delete data.price;
+    } else {
+      data.price = numericPrice;
+      if (isAmazonBackedProduct) {
+        data.amazonPrice = numericPrice;
+      }
+    }
   }
 
   if (data.quantity !== undefined) {
@@ -107,6 +134,26 @@ export async function PATCH(
       return NextResponse.json({ error: "Quantity must be at least 1" }, { status: 400 });
     }
     data.quantity = numericQuantity;
+  }
+
+  if (data.promotedAdPercent !== undefined) {
+    const numericPromotedAdPercent = Number(data.promotedAdPercent);
+    if (
+      !Number.isFinite(numericPromotedAdPercent) ||
+      numericPromotedAdPercent < 0 ||
+      numericPromotedAdPercent > 100
+    ) {
+      return NextResponse.json(
+        { error: "Local promoted ad reference must be between 0 and 100" },
+        { status: 400 },
+      );
+    }
+
+    if (product.status === "DRAFT" || product.status === "FAILED") {
+      data.promotedAdPercent = numericPromotedAdPercent;
+    } else {
+      delete data.promotedAdPercent;
+    }
   }
 
   if (data.category !== undefined) {
@@ -216,6 +263,10 @@ export async function PATCH(
       typeof data.internalNote === "string"
         ? data.internalNote.trim() || null
         : null;
+  }
+
+  if (Object.keys(data).length === 0) {
+    return NextResponse.json({ success: true });
   }
 
   try {

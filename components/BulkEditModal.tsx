@@ -671,9 +671,23 @@ export default function BulkEditModal({
   const activeJob = isActiveJob(job);
   const terminalJob = isTerminalJob(job);
 
+  function closeModal() {
+    if (activeJob) {
+      onToast("Bulk edit is still running in the background.", "success");
+    }
+
+    onClose();
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-8">
-      <div className="max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-lg bg-white shadow-xl">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-8"
+      onClick={closeModal}
+    >
+      <div
+        className="max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-lg bg-white shadow-xl"
+        onClick={(event) => event.stopPropagation()}
+      >
         <div className="flex items-start justify-between gap-4 border-b border-gray-200 px-6 py-5">
           <div>
             <h2 className="text-xl font-semibold text-gray-900">
@@ -685,9 +699,8 @@ export default function BulkEditModal({
           </div>
           <button
             type="button"
-            onClick={onClose}
-            disabled={activeJob}
-            className="inline-flex h-8 w-8 items-center justify-center rounded text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={closeModal}
+            className="inline-flex h-8 w-8 items-center justify-center rounded text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
             aria-label="Close bulk edit"
           >
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
@@ -841,11 +854,10 @@ export default function BulkEditModal({
         <div className="flex items-center justify-end gap-3 border-t border-gray-200 px-6 py-4">
           <button
             type="button"
-            onClick={onClose}
-            disabled={activeJob}
-            className="rounded-md border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+            onClick={closeModal}
+            className="rounded-md border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50"
           >
-            {terminalJob ? "Close" : "Cancel"}
+            {activeJob || terminalJob ? "Close" : "Cancel"}
           </button>
           <button
             type="button"

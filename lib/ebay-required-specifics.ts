@@ -2,6 +2,7 @@ import type { Product } from "@/app/generated/prisma/client";
 import type { EbayCategoryAspect } from "@/lib/ebay";
 import { getEbayCategoryAspects } from "@/lib/ebay";
 import {
+  DEFAULT_MPN,
   inferTypeItemSpecific,
   inferVolumeItemSpecific,
   normalizeItemSpecifics,
@@ -63,6 +64,41 @@ function getRequiredAspects(aspects: EbayCategoryAspect[]) {
   return aspects.filter((aspect) => aspect.required);
 }
 
+function isUnavailablePartNumber(value: string | null | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  return !normalized || normalized === DEFAULT_MPN.toLowerCase();
+}
+
+function readPreferredPartNumber(
+  specifics: ItemSpecificsRecord,
+  aspectName: string
+) {
+  const candidates = [
+    aspectName,
+    "Manufacturer Part Number",
+    "Part Number",
+    "Model Number",
+    "Model name",
+    "Model Name",
+    "Item model number",
+    "Model",
+  ];
+
+  for (const candidate of candidates) {
+    const value = readItemSpecificValue(specifics, [candidate]);
+    if (!isUnavailablePartNumber(value)) {
+      return value;
+    }
+  }
+
+  const mpn = readItemSpecificValue(specifics, ["MPN"]);
+  if (!isUnavailablePartNumber(mpn)) {
+    return mpn;
+  }
+
+  return DEFAULT_MPN;
+}
+
 function inferRequiredSpecific(
   product: Product,
   specifics: ItemSpecificsRecord,
@@ -84,6 +120,10 @@ function inferRequiredSpecific(
 
   if (normalized === "volume" || normalized === "capacity") {
     return inferVolumeItemSpecific(...sourceText);
+  }
+
+  if (normalized === "mpn" || normalized === "manufacturer part number") {
+    return readPreferredPartNumber(specifics, aspectName);
   }
 
   if (normalized === "type") {

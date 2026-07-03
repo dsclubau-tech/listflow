@@ -5,6 +5,7 @@ import { extractLocalizedBuyboxPrice } from "@/lib/amazon-buybox-price";
 import {
   inferTypeItemSpecific,
   inferVolumeItemSpecific,
+  isUsefulItemSpecificCandidate,
 } from "@/lib/item-specifics";
 import type { ScrapedProduct } from "@/lib/amazon-scraper";
 
@@ -38,7 +39,6 @@ const AMAZON_FIELDS_TO_REMOVE = new Set([
   "best sellers rank",
   "customer reviews",
   "manufacturer",
-  "item model number",
   "is discontinued by manufacturer",
   "batteries",
   "batteries required",
@@ -67,9 +67,12 @@ const AMAZON_TO_EBAY_FIELD_MAP: Record<string, string> = {
   wattage: "Wattage",
   "connectivity technology": "Connectivity",
   "number of items": "Number of Items",
+  "item model number": "Model Number",
   capacity: "Volume",
   "item volume": "Volume",
   volume: "Volume",
+  "manufacturer part number": "Manufacturer Part Number",
+  "part number": "Manufacturer Part Number",
   "special feature": "Features",
   "special features": "Features",
 };
@@ -369,6 +372,10 @@ function normalizeItemSpecificsForEbay(specs: Record<string, string>) {
   for (const [rawKey, value] of Object.entries(specs)) {
     const lowerKey = rawKey.toLowerCase().trim();
     if (AMAZON_FIELDS_TO_REMOVE.has(lowerKey)) {
+      continue;
+    }
+
+    if (!isUsefulItemSpecificCandidate(rawKey, value)) {
       continue;
     }
 

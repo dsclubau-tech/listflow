@@ -73,6 +73,10 @@ export async function POST(request: Request) {
       storeId: storeSession.storeId,
       type: EbayActionJobType.BULK_EDIT_REVISE,
       productIds: editResult.productIds,
+      metadata: {
+        kind: "bulk-edit",
+        fields: editResult.operationFields,
+      },
     });
 
     invalidateProductCaches(storeSession.storeId);

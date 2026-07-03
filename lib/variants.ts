@@ -79,6 +79,7 @@ export function serializeVariant(variant: VariantSource): VariantRecord {
     feesFixed: variant.feesFixed,
     profitPercent: variant.profitPercent,
     profitFixed: variant.profitFixed,
+    promotedAdPercent: variant.promotedAdPercent,
     sellPrice: variant.sellPrice.toString(),
     quantity: variant.quantity,
     status: variant.status,
@@ -124,6 +125,10 @@ export function normalizeVariantPayload(body: unknown): VariantPayload {
     feesFixed: Math.max(0, toNumber(source.feesFixed, 0)),
     profitPercent: Math.max(0, toNumber(source.profitPercent, 0)),
     profitFixed: toNumber(source.profitFixed, 0),
+    promotedAdPercent: Math.min(
+      100,
+      Math.max(0, toNumber(source.promotedAdPercent, 0))
+    ),
     sellPrice,
     quantity,
     status: status as VariantPayload["status"],
@@ -150,6 +155,7 @@ function buildDefaultVariantData(product: DefaultVariantSource) {
     feesFixed: 0,
     profitPercent: 0,
     profitFixed: 0,
+    promotedAdPercent: 0,
     sellPrice: product.price,
     quantity: product.quantity,
     status: status as VariantPayload["status"],
