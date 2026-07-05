@@ -77,7 +77,10 @@ const NOISY_ITEM_SPECIFIC_VALUE_PATTERNS = [
   /\bvar\s+[_$a-z][\w$]*\s*=/i,
   /\bwindow\./i,
   /\bP\.namespace\b/i,
+  /\bP\._namespace\b/i,
   /\bDetailPageProductOverview\b/i,
+  /\bDetailPageProductOverviewTemplates\b/i,
+  /\bguardFatal\b/i,
   /\bue\.(?:count|tag|log)\b/i,
   /<\/?(?:script|style)\b/i,
 ];
@@ -325,6 +328,27 @@ export function inferTypeItemSpecific(input: {
       patterns: [/\bwall\b.*\bcharg(?:er|ing)\b/i, /\bcharg(?:er|ing)\b/i, /\bpower\s+adapter\b/i],
     },
     {
+      values: ["Foot Massager", "Foot Massage Machine", "Massager", "Massage Machine"],
+      patterns: [
+        /\bfoot\b.*\bmassag(?:er|ing|e)\b/i,
+        /\bfeet\b.*\bmassag(?:er|ing|e)\b/i,
+        /\bmassag(?:er|ing|e)\b.*\bfoot\b/i,
+        /\bdeep\s+knead/i,
+      ],
+    },
+    {
+      values: ["Massage Machine", "Massager"],
+      patterns: [/\bmassag(?:er|ing|e)\b/i],
+    },
+    {
+      values: ["Stick Vacuum Cleaner", "Vacuum Cleaner", "Vacuum", "Cleaner"],
+      patterns: [/\bstick\b.*\bvacuum\b/i, /\bvacuum\b/i],
+    },
+    {
+      values: ["Steam Mop", "Mop", "Floor Cleaner", "Cleaner"],
+      patterns: [/\bsteam[-\s]?mop\b/i, /\bmop\b/i],
+    },
+    {
       values: ["Water Bottle"],
       patterns: [/\bwater\s+bottle\b/i],
     },
@@ -375,6 +399,10 @@ export function isUsefulItemSpecificCandidate(name: string, value: string) {
   }
 
   if (key.length > 80 || normalizedValue.length > 1000) {
+    return false;
+  }
+
+  if ((normalizedValue.match(/>/g)?.length ?? 0) >= 2) {
     return false;
   }
 

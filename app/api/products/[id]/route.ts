@@ -8,6 +8,7 @@ import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
 import { resolveProductPolicySelection } from "@/lib/policy-defaults";
 import { invalidateProductCaches } from "@/lib/cache-tags";
 import { isValidAsin, normalizeAsin } from "@/lib/price-check-eligibility";
+import { ProductStatus } from "@/app/generated/prisma/enums";
 
 export async function PATCH(
   request: Request,
@@ -130,10 +131,17 @@ export async function PATCH(
 
   if (data.quantity !== undefined) {
     const numericQuantity = Number(data.quantity);
-    if (!Number.isInteger(numericQuantity) || numericQuantity < 1) {
-      return NextResponse.json({ error: "Quantity must be at least 1" }, { status: 400 });
+    if (!Number.isInteger(numericQuantity) || numericQuantity < 0) {
+      return NextResponse.json({ error: "Quantity must be 0 or greater" }, { status: 400 });
     }
     data.quantity = numericQuantity;
+    if (
+      numericQuantity === 0 &&
+      (product.status === ProductStatus.IMPORTED ||
+        product.status === ProductStatus.ON_HOLD)
+    ) {
+      data.status = ProductStatus.ON_HOLD;
+    }
   }
 
   if (data.promotedAdPercent !== undefined) {

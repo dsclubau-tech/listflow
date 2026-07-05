@@ -1011,13 +1011,28 @@ export default function ProductsPageClient({
     }
   };
 
-  const handleSyncEbayAds = async () => {
+  const handleSyncEbayAds = async (productIds?: string[]) => {
+    const scopedProductIds = productIds?.filter(Boolean) ?? [];
+    const isSelectedSync = scopedProductIds.length > 0;
+
     setIsSyncingEbayAds(true);
-    setEbayAdsSyncProgress(INITIAL_EBAY_ADS_SYNC_PROGRESS);
+    setEbayAdsSyncProgress({
+      ...INITIAL_EBAY_ADS_SYNC_PROGRESS,
+      phase: isSelectedSync
+        ? "Starting selected eBay ad sync"
+        : INITIAL_EBAY_ADS_SYNC_PROGRESS.phase,
+      total: isSelectedSync ? scopedProductIds.length : 0,
+    });
 
     try {
       const response = await fetch("/api/ebay/promoted-listings/sync", {
         method: "POST",
+        headers: isSelectedSync
+          ? { "Content-Type": "application/json" }
+          : undefined,
+        body: isSelectedSync
+          ? JSON.stringify({ productIds: scopedProductIds })
+          : undefined,
         cache: "no-store",
       });
 
@@ -1089,7 +1104,11 @@ export default function ProductsPageClient({
 
       router.refresh();
       showToast(
-        `Synced eBay ads for ${finalProgress?.total ?? 0} listing${finalProgress?.total === 1 ? "" : "s"}. ${finalProgress?.promoted ?? 0} promoted, ${finalProgress?.notPromoted ?? 0} not promoted.`,
+        `Synced eBay ads for ${finalProgress?.total ?? 0} ${
+          isSelectedSync ? "selected " : ""
+        }listing${finalProgress?.total === 1 ? "" : "s"}. ${
+          finalProgress?.promoted ?? 0
+        } promoted, ${finalProgress?.notPromoted ?? 0} not promoted.`,
         "success",
       );
     } catch (error) {
@@ -1412,7 +1431,7 @@ export default function ProductsPageClient({
 
           <button
             type="button"
-            onClick={handleSyncEbayAds}
+            onClick={() => void handleSyncEbayAds()}
             disabled={isSyncingEbayAds}
             className="inline-flex items-center gap-2 rounded-md border border-blue-200 bg-white px-3 py-2 text-sm font-medium text-blue-700 transition-colors hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -1581,6 +1600,8 @@ export default function ProductsPageClient({
         onSelectionChange={setSelectedProductIds}
         onPriceCheckSelected={startPriceCheckJob}
         isPriceCheckJobActive={isStartingPriceCheckJob || isPriceCheckJobActive}
+        onSyncSelectedEbayAds={handleSyncEbayAds}
+        isEbayAdsSyncing={isSyncingEbayAds}
         onBulkEditSelected={(ids) => {
           setSelectedProductIds(ids);
           setIsBulkEditOpen(true);

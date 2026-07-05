@@ -13,6 +13,7 @@ import {
   buildMissingItemSpecificsResponse,
   validateRequiredItemSpecifics,
 } from "@/lib/ebay-required-specifics";
+import { getEbayCustomLabel } from "@/lib/sku";
 
 function isTooManyItemSpecificsError(message: string | undefined) {
   return /too many item specifics|maximum.+item specifics/i.test(message ?? "");
@@ -116,6 +117,7 @@ export async function POST(request: Request) {
       },
       select: {
         privateListing: true,
+        automaticSkuFilling: true,
         defaultItemSpecifics: true,
       },
     });
@@ -175,12 +177,18 @@ export async function POST(request: Request) {
     const primarySellPrice = variants.length > 0
       ? Number(variants[0].sellPrice)
       : null;
+    const customLabel = getEbayCustomLabel({
+      variantSku: variants[0]?.sku,
+      asin: product.asin,
+      automaticSkuFilling: supplierSettings?.automaticSkuFilling ?? true,
+    });
     const overrideStartPrice =
       primarySellPrice !== null && Number.isFinite(primarySellPrice) && primarySellPrice > 0
         ? primarySellPrice
         : undefined;
     const addItemOptions = {
       privateListing: supplierSettings?.privateListing ?? false,
+      customLabel,
     };
     let xml = buildAddItemXML(productWithResolvedDesc, overrideStartPrice, addItemOptions);
 
@@ -190,6 +198,7 @@ export async function POST(request: Request) {
       productTitle: product.title,
       startPrice: overrideStartPrice ?? Number(product.price),
       privateListing: supplierSettings?.privateListing ?? false,
+      customLabel,
     });
 
     let result = await callEbayAddItem(xml, storeNumber);

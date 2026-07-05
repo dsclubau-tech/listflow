@@ -4,6 +4,7 @@ import { normalizeVariantPayload, serializeVariant } from "@/lib/variants";
 import { NextResponse } from "next/server";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { invalidateProductCaches } from "@/lib/cache-tags";
+import { ProductStatus, VariantStatus } from "@/app/generated/prisma/enums";
 
 async function findVariant(productId: string, variantId: string, storeId: string) {
   return prisma.variant.findFirst({
@@ -42,9 +43,38 @@ export async function PATCH(
 
   try {
     const data = normalizeVariantPayload(body);
-    const variant = await prisma.variant.update({
-      where: { id: variantId },
-      data,
+
+    if (data.quantity === 0) {
+      data.status = VariantStatus.OUT_OF_STOCK;
+    }
+
+    const variant = await prisma.$transaction(async (tx) => {
+      const updatedVariant = await tx.variant.update({
+        where: { id: variantId },
+        data,
+      });
+
+      if (data.quantity === 0) {
+        const parent = await tx.product.findFirst({
+          where: { id: productId, storeId: storeSession.storeId },
+          select: { status: true },
+        });
+
+        if (parent) {
+          await tx.product.update({
+            where: { id: productId },
+            data: {
+              quantity: 0,
+              ...(parent.status === ProductStatus.IMPORTED ||
+              parent.status === ProductStatus.ON_HOLD
+                ? { status: ProductStatus.ON_HOLD }
+                : {}),
+            },
+          });
+        }
+      }
+
+      return updatedVariant;
     });
 
     invalidateProductCaches(storeSession.storeId);

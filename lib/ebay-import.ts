@@ -97,6 +97,14 @@ interface SellerListDetailPage {
   hasMoreItems: boolean;
 }
 
+export interface EbayListingInventorySnapshot {
+  itemId: string;
+  title: string;
+  quantityAvailable: number;
+  quantitySold: number;
+  quantityTotal: number | null;
+}
+
 interface NameValuePair {
   name: string;
   values: string[];
@@ -331,6 +339,21 @@ function getAvailableQuantity(source: unknown) {
   }
 
   return Math.max(0, quantity - quantitySold);
+}
+
+function getQuantitySold(source: unknown) {
+  return toInteger(getPath(source, "SellingStatus", "QuantitySold")) ?? 0;
+}
+
+function getTotalQuantity(source: unknown) {
+  const quantity = toInteger(getPath(source, "Quantity"));
+  if (quantity !== null) {
+    return Math.max(0, quantity);
+  }
+
+  const available = getAvailableQuantity(source);
+  const sold = getQuantitySold(source);
+  return available + sold;
 }
 
 function getCondition(item: EbayNode) {
@@ -598,6 +621,42 @@ async function fetchSellerListDetailPage(
     .filter(isImportableListing);
 
   return { items, ...pagination };
+}
+
+export async function fetchActiveEbayListingInventory(
+  storeNumber: 1 | 2 | 3,
+): Promise<EbayListingInventorySnapshot[]> {
+  const listings = new Map<string, EbayListingInventorySnapshot>();
+  let page = 1;
+  let totalPages = 1;
+
+  do {
+    const response = await fetchSellerListDetailPage(storeNumber, page);
+    totalPages = response.totalPages;
+
+    for (const item of response.items) {
+      const itemId = getString(item, "ItemID");
+      if (!itemId || listings.has(itemId)) {
+        continue;
+      }
+
+      listings.set(itemId, {
+        itemId,
+        title: getString(item, "Title") || "(no title)",
+        quantityAvailable: getAvailableQuantity(item),
+        quantitySold: getQuantitySold(item),
+        quantityTotal: getTotalQuantity(item),
+      });
+    }
+
+    if (page < totalPages) {
+      await delay(250);
+    }
+
+    page += 1;
+  } while (page <= totalPages);
+
+  return Array.from(listings.values());
 }
 
 function isImportableListing(item: EbayNode) {

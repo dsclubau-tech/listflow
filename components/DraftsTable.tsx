@@ -10,7 +10,7 @@ import {
   getPriceCheckEligibility,
   getSelectedPriceCheckSummary,
 } from "@/lib/price-check-eligibility";
-import { calculateNetProfit } from "@/lib/variant-pricing";
+import { getProductDisplayProfits } from "@/lib/product-profit";
 import type { SerializedProductRow } from "@/types/product-row";
 
 interface DraftsTableProps {
@@ -21,6 +21,8 @@ interface DraftsTableProps {
   onSelectionChange?: (selectedIds: string[]) => void;
   onPriceCheckSelected?: (productIds: string[]) => Promise<void>;
   isPriceCheckJobActive?: boolean;
+  onSyncSelectedEbayAds?: (productIds: string[]) => Promise<void>;
+  isEbayAdsSyncing?: boolean;
   onBulkEditSelected?: (productIds: string[]) => void;
 }
 
@@ -158,7 +160,7 @@ function ItemIdCell({ product }: { product: SerializedProductRow }) {
           <AsinLink
             asin={asin}
             stopPropagation
-            className="block truncate font-mono text-gray-700 hover:text-orange-600 hover:underline"
+            className="block min-w-0 flex-1 truncate font-mono text-gray-700 hover:text-orange-600 hover:underline"
           />
         ) : (
           <span className="text-gray-400">-</span>
@@ -172,7 +174,7 @@ function ItemIdCell({ product }: { product: SerializedProductRow }) {
             target="_blank"
             rel="noopener noreferrer"
             onClick={(event) => event.stopPropagation()}
-            className="block truncate font-mono text-gray-700 hover:text-blue-600 hover:underline"
+            className="block min-w-0 flex-1 truncate font-mono text-gray-700 hover:text-blue-600 hover:underline"
             title={`Open eBay item ${ebayItemId}`}
           >
             {ebayItemId}
@@ -197,8 +199,8 @@ function PriceCell({ product }: { product: SerializedProductRow }) {
   const fallbackSellPrice = parseMoney(product.price);
 
   return (
-    <div className="space-y-1 text-xs font-medium leading-5">
-      <div className="whitespace-nowrap">
+    <div className="min-w-0 space-y-1 text-xs font-medium leading-5">
+      <div className="max-w-full whitespace-normal break-words">
         <span className="text-gray-500">BUY</span>{" "}
         <span className="font-semibold text-gray-900">
           {formatMoneyRange(
@@ -210,7 +212,7 @@ function PriceCell({ product }: { product: SerializedProductRow }) {
           )}
         </span>
       </div>
-      <div className="whitespace-nowrap">
+      <div className="max-w-full whitespace-normal break-words">
         <span className="text-gray-500">SELL</span>{" "}
         <span className="font-semibold text-gray-900">
           {formatMoneyRange(
@@ -227,41 +229,14 @@ function PriceCell({ product }: { product: SerializedProductRow }) {
 }
 
 function ProfitCell({ product }: { product: SerializedProductRow }) {
-  const profits = (product.variants ?? [])
-    .map((variant) => {
-      const buyPrice = parseMoney(variant.buyPrice);
-      const sellPrice = parseMoney(variant.sellPrice);
-
-      if (buyPrice === null || sellPrice === null) {
-        return null;
-      }
-
-      return calculateNetProfit({
-        buyPrice,
-        sellPrice,
-        feesPercent: variant.feesPercent ?? 0,
-        feesFixed: variant.feesFixed ?? 0,
-      });
-    })
-    .filter((value): value is number => value !== null);
+  const profits = getProductDisplayProfits(product);
 
   if (profits.length === 0) {
-    const buyPrice = parseMoney(product.amazonPrice);
-    const sellPrice = parseMoney(product.price);
-
-    if (buyPrice === null || sellPrice === null) {
-      return <span className="text-sm text-gray-400">-</span>;
-    }
-
-    return (
-      <span className="whitespace-nowrap text-sm font-medium text-gray-700">
-        {formatMoney(sellPrice - buyPrice)}
-      </span>
-    );
+    return <span className="text-sm text-gray-400">-</span>;
   }
 
   return (
-    <span className="whitespace-nowrap text-sm font-medium text-gray-700">
+    <span className="block max-w-full whitespace-normal break-words text-sm font-medium leading-5 text-gray-700">
       {formatMoneyRange(profits)}
     </span>
   );
@@ -399,6 +374,8 @@ export default function DraftsTable({
   onSelectionChange,
   onPriceCheckSelected,
   isPriceCheckJobActive = false,
+  onSyncSelectedEbayAds,
+  isEbayAdsSyncing = false,
   onBulkEditSelected,
 }: DraftsTableProps) {
   const [loadingId, setLoadingId] = useState<string | null>(null);
@@ -1326,24 +1303,24 @@ export default function DraftsTable({
         </p>
       )}
 
-      <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-        <div className="overflow-x-auto">
-          <table className={isProductsView ? "w-full min-w-[1240px] table-fixed" : "w-full"}>
+      <div className="max-w-full overflow-hidden rounded-lg border border-gray-200 bg-white">
+        <div className="relative max-w-full overflow-x-auto">
+          <table className={isProductsView ? "w-full min-w-[1480px] table-fixed" : "w-full"}>
           {isProductsView && (
             <colgroup>
               <col className="w-[34px]" />
               <col className="w-7" />
               <col className="w-[58px]" />
-              <col className="w-[250px]" />
-              <col className="w-24" />
-              <col className="w-[72px]" />
-              <col className="w-[108px]" />
-              <col className="w-[72px]" />
-              <col className="w-[84px]" />
-              <col className="w-[88px]" />
-              <col className="w-[214px]" />
-              <col className="w-11" />
-              <col className="w-[102px]" />
+              <col className="w-[280px]" />
+              <col className="w-[150px]" />
+              <col className="w-[124px]" />
+              <col className="w-[132px]" />
+              <col className="w-[86px]" />
+              <col className="w-[92px]" />
+              <col className="w-[94px]" />
+              <col className="w-[230px]" />
+              <col className="w-12" />
+              <col className="w-[128px]" />
             </colgroup>
           )}
           <thead>
@@ -1380,7 +1357,15 @@ export default function DraftsTable({
                   <th className="px-2 py-3 text-left">Note</th>
                 </>
               )}
-              <th className="px-3 py-3 text-left">Actions</th>
+              <th
+                className={
+                  isProductsView
+                    ? "sticky right-0 z-20 border-l border-gray-200 bg-gray-50 px-3 py-3 text-left shadow-[-10px_0_14px_-16px_rgba(15,23,42,0.7)]"
+                    : "px-3 py-3 text-left"
+                }
+              >
+                Actions
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -1396,17 +1381,21 @@ export default function DraftsTable({
               const promotedAdState = isProductsView
                 ? getPromotedAdState(product)
                 : null;
+              const rowToneClass = isExpanded
+                ? "bg-orange-50"
+                : isFailedDraft
+                  ? "bg-red-50 hover:bg-red-100"
+                  : "bg-white hover:bg-gray-50";
+              const stickyActionToneClass = isExpanded
+                ? "bg-orange-50"
+                : isFailedDraft
+                  ? "bg-red-50 group-hover:bg-red-100"
+                  : "bg-white group-hover:bg-gray-50";
 
               return (
                 <Fragment key={product.id}>
                   <tr
-                    className={`border-b transition-colors cursor-pointer ${
-                      isExpanded
-                        ? "bg-orange-50"
-                        : isFailedDraft
-                          ? "bg-red-50 hover:bg-red-100"
-                          : "bg-white hover:bg-gray-50"
-                    }`}
+                    className={`group border-b transition-colors cursor-pointer ${rowToneClass}`}
                     onClick={() => toggleExpand(product.id)}
                     onContextMenu={(event) =>
                       handleRowContextMenu(event, product)
@@ -1620,7 +1609,14 @@ export default function DraftsTable({
                       </td>
                     )}
 
-                    <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                    <td
+                      className={
+                        isProductsView
+                          ? `sticky right-0 z-10 border-l border-gray-100 px-3 py-3 shadow-[-10px_0_14px_-16px_rgba(15,23,42,0.7)] ${stickyActionToneClass}`
+                          : "px-3 py-3"
+                      }
+                      onClick={(e) => e.stopPropagation()}
+                    >
                       <div className="flex items-center gap-2">
                         {loadingId === product.id ? (
                           <button
@@ -1831,7 +1827,7 @@ export default function DraftsTable({
                 </div>
               )}
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center justify-end gap-3">
             <button
               onClick={() => setSelectedIds([])}
               className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 transition-colors"
@@ -1878,6 +1874,41 @@ export default function DraftsTable({
             )}
             {isProductsView && (
               <>
+                {onSyncSelectedEbayAds && (
+                  <button
+                    onClick={() => void onSyncSelectedEbayAds(selectedIds)}
+                    disabled={isEbayAdsSyncing || selectedIds.length === 0}
+                    className="px-4 py-2 border border-blue-200 text-blue-700 text-sm font-medium rounded-md hover:bg-blue-50 transition-colors disabled:opacity-60 flex items-center gap-2"
+                  >
+                    {isEbayAdsSyncing ? (
+                      <>
+                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        Syncing Ads...
+                      </>
+                    ) : (
+                      <>
+                        <svg
+                          className="h-4 w-4"
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                          strokeWidth={1.8}
+                          aria-hidden="true"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            d="M4 4v5h.582m14.356-2A8 8 0 006.582 9m0 0H9m11 11v-5h-.581m0 0A8.003 8.003 0 017.64 15m11.778 0H15"
+                          />
+                        </svg>
+                        Sync {selectedIds.length} Ad{selectedIds.length === 1 ? "" : "s"}
+                      </>
+                    )}
+                  </button>
+                )}
                 {onBulkEditSelected && (
                   <button
                     onClick={() => onBulkEditSelected(selectedIds)}

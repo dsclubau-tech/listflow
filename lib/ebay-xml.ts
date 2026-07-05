@@ -12,6 +12,7 @@ type ProductSpecifics = ItemSpecificsRecord;
 type AddItemOptions = {
   privateListing?: boolean;
   itemSpecificMaxCount?: number;
+  customLabel?: string | null;
 };
 
 type ReviseItemOptions = {
@@ -171,6 +172,12 @@ function buildSellerProfilesXml(product: Product): string {
   return `    <SellerProfiles>\n      <SellerShippingProfile>\n        <ShippingProfileID>${shippingPolicyId}</ShippingProfileID>\n      </SellerShippingProfile>\n      <SellerReturnProfile>\n        <ReturnProfileID>${returnPolicyId}</ReturnProfileID>\n      </SellerReturnProfile>\n      <SellerPaymentProfile>\n        <PaymentProfileID>${paymentPolicyId}</PaymentProfileID>\n      </SellerPaymentProfile>\n    </SellerProfiles>`;
 }
 
+function buildSkuXml(customLabel: string | null | undefined): string {
+  const sku = customLabel?.trim();
+
+  return sku ? `    <SKU>${escapeXml(sku.slice(0, 50))}</SKU>` : "";
+}
+
 /**
  * Builds a valid eBay AddItem XML request body for the Trading API.
  * Throws if required business policy, pricing, quantity, or category data is missing.
@@ -198,6 +205,7 @@ export function buildAddItemXML(
   );
   const productListingDetailsXml = buildProductListingDetailsXml(specifics);
   const sellerProfilesXml = buildSellerProfilesXml(product);
+  const skuXml = buildSkuXml(options.customLabel);
 
   return `<?xml version="1.0" encoding="utf-8"?>
 <AddItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
@@ -217,6 +225,7 @@ export function buildAddItemXML(
     <ListingDuration>GTC</ListingDuration>
     <ListingType>FixedPriceItem</ListingType>
     <PrivateListing>${options.privateListing ? "true" : "false"}</PrivateListing>
+${skuXml}
     <Quantity>${quantity}</Quantity>
     <ConditionID>${conditionId}</ConditionID>
 ${productListingDetailsXml}
@@ -461,9 +470,9 @@ export function buildReviseInventoryStatusXML(
 
   if (
     input.quantity !== undefined &&
-    (!Number.isInteger(input.quantity) || input.quantity < 1)
+    (!Number.isInteger(input.quantity) || input.quantity < 0)
   ) {
-    throw new Error("Inventory revise quantity must be a whole number of at least 1.");
+    throw new Error("Inventory revise quantity must be a whole number of 0 or greater.");
   }
 
   const quantity = input.quantity === undefined ? null : input.quantity.toString();

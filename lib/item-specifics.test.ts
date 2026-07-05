@@ -55,6 +55,26 @@ test("inferTypeItemSpecific prefers charging station when eBay allows it", () =>
   );
 });
 
+test("inferTypeItemSpecific reads foot massager type from title", () => {
+  assert.equal(
+    inferTypeItemSpecific({
+      title: "Foot Massager Machine with Heat, Deep Kneading for Feet",
+      allowedValues: ["Foot Massager", "Massage Chair", "Other"],
+    }),
+    "Foot Massager"
+  );
+});
+
+test("inferTypeItemSpecific falls back to allowed massager type", () => {
+  assert.equal(
+    inferTypeItemSpecific({
+      title: "Foot Massager Machine with Heat, Deep Kneading for Feet",
+      allowedValues: ["Massager", "Massage Chair", "Other"],
+    }),
+    "Massager"
+  );
+});
+
 test("inferTypeItemSpecific does not guess when allowed values do not match", () => {
   assert.equal(
     inferTypeItemSpecific({

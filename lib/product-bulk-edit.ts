@@ -239,8 +239,8 @@ export function normalizeBulkEditOperations(
         return { field: "roundCents", value: source.value === true };
       case "quantity": {
         const quantity = readNumber(source.value, "Quantity");
-        if (!Number.isInteger(quantity) || quantity < 1) {
-          throw new Error("Quantity must be a whole number of at least 1.");
+        if (!Number.isInteger(quantity) || quantity < 0) {
+          throw new Error("Quantity must be a whole number of 0 or greater.");
         }
         return { field: "quantity", value: quantity };
       }
@@ -534,6 +534,9 @@ export async function applyBulkProductEdits(input: ApplyBulkProductEditsInput) {
           productData.templateId = operation.value;
         } else if (operation.field === "quantity") {
           productData.quantity = operation.value;
+          if (operation.value === 0) {
+            productData.status = ProductStatus.ON_HOLD;
+          }
         }
       }
 

@@ -1,12 +1,15 @@
 import { Prisma, type Product, type Variant } from "@/app/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
+import { getAutomaticSku } from "@/lib/sku";
 import type { VariantPayload, VariantRecord } from "@/types/variant";
 import { variantStatuses } from "@/types/variant";
 
 type DefaultVariantSource = Pick<
   Product,
   "id" | "price" | "quantity" | "images" | "asin"
->;
+> & {
+  automaticSkuFilling?: boolean | null;
+};
 
 type VariantSource = Variant & {
   itemSpecifics: unknown;
@@ -147,7 +150,10 @@ function buildDefaultVariantData(product: DefaultVariantSource) {
   const status = product.quantity > 0 ? "IN_STOCK" : "OUT_OF_STOCK";
 
   return {
-    sku: product.asin || null,
+    sku: getAutomaticSku({
+      asin: product.asin,
+      automaticSkuFilling: product.automaticSkuFilling,
+    }),
     title: "Default",
     images: [...product.images],
     buyPrice: product.price,
@@ -202,6 +208,7 @@ export async function ensureDefaultVariantForProduct(productId: string) {
               quantity: true,
               images: true,
               asin: true,
+              storeId: true,
             },
           });
 
@@ -209,8 +216,22 @@ export async function ensureDefaultVariantForProduct(productId: string) {
             return;
           }
 
+          const supplierSettings = await tx.supplierSettings.findUnique({
+            where: {
+              storeId_supplierName: {
+                storeId: product.storeId,
+                supplierName: "Amazon AU",
+              },
+            },
+            select: { automaticSkuFilling: true },
+          });
+
           await tx.variant.create({
-            data: buildDefaultVariantData(product),
+            data: buildDefaultVariantData({
+              ...product,
+              automaticSkuFilling:
+                supplierSettings?.automaticSkuFilling ?? true,
+            }),
           });
         },
         {

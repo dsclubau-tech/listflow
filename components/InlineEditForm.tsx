@@ -700,10 +700,15 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
     specificsObj["_Location"] = countryLocation;
     specificsObj["_PostalCode"] = defaultZipcode.trim() || "3000";
 
+    const parsedQuantity = Number.parseInt(quantity, 10);
+    const normalizedQuantity = Number.isFinite(parsedQuantity)
+      ? Math.max(0, parsedQuantity)
+      : 1;
+
     const body: Record<string, unknown> = {
       title: title.trim().slice(0, 80),
       description,
-      quantity: parseInt(quantity) || 1,
+      quantity: normalizedQuantity,
       condition,
       category: category.trim(),
       categoryName: categoryName.trim() || null,

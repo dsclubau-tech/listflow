@@ -35,6 +35,12 @@ const ERROR_SLEEP_MS = parsePositiveMs(
   process.env.LISTFLOW_WORKER_ERROR_SLEEP_MS,
   Math.max(IDLE_SLEEP_MS, 30_000)
 );
+const STOCK_REPLENISH_ENABLED =
+  process.env.LISTFLOW_STOCK_REPLENISH_ENABLED !== "false";
+const STOCK_REPLENISH_INTERVAL_MS = parsePositiveMs(
+  process.env.LISTFLOW_STOCK_REPLENISH_INTERVAL_MS,
+  10 * 60 * 1000
+);
 const workerName = process.env.LISTFLOW_WORKER_NAME || `${os.hostname()} manual worker`;
 const workerId =
   process.env.LISTFLOW_WORKER_ID ||
@@ -44,6 +50,7 @@ let stopping = false;
 let heartbeatStoreIds: string[] = [];
 let localGuardPath: string | null = null;
 const loggedOnlineStoreIds = new Set<string>();
+const nextStockReplenishAtByStoreId = new Map<string, number>();
 
 async function loadWorkerModules() {
   const [
@@ -52,6 +59,7 @@ async function loadWorkerModules() {
     ebayActionJobs,
     ebayResearch,
     priceCheckJobs,
+    stockReplenishment,
     workerHeartbeat,
     loggerModule,
   ] = await Promise.all([
@@ -60,6 +68,7 @@ async function loadWorkerModules() {
     import("../lib/ebay-action-jobs"),
     import("../lib/ebay-research"),
     import("../lib/price-check-jobs"),
+    import("../lib/stock-replenishment"),
     import("../lib/worker-heartbeat"),
     import("../lib/logger"),
   ]);
@@ -70,6 +79,7 @@ async function loadWorkerModules() {
     runNextEbayActionJobForStore: ebayActionJobs.runNextEbayActionJobForStore,
     runEbayResearchQueueForStore: ebayResearch.runEbayResearchQueueForStore,
     runNextPriceCheckJobForStore: priceCheckJobs.runNextPriceCheckJobForStore,
+    runStockReplenishmentForStore: stockReplenishment.runStockReplenishmentForStore,
     touchWorkerHeartbeat: workerHeartbeat.touchWorkerHeartbeat,
     heartbeatIntervalMs: workerHeartbeat.WORKER_HEARTBEAT_INTERVAL_MS,
     logger: loggerModule.logger.child({
@@ -205,7 +215,25 @@ async function processStore(store: { id: string; name: string; loginId: string |
   }
 
   await modules.runEbayResearchQueueForStore(store.id, worker);
-  return false;
+
+  if (!STOCK_REPLENISH_ENABLED) {
+    return false;
+  }
+
+  const now = Date.now();
+  const nextRunAt = nextStockReplenishAtByStoreId.get(store.id) ?? 0;
+
+  if (now < nextRunAt) {
+    return false;
+  }
+
+  nextStockReplenishAtByStoreId.set(
+    store.id,
+    now + STOCK_REPLENISH_INTERVAL_MS
+  );
+  const result = await modules.runStockReplenishmentForStore(store.id, worker);
+
+  return result.replenished > 0 || result.failed > 0;
 }
 
 async function main() {
@@ -219,10 +247,17 @@ async function main() {
   console.log("ListFlow Worker online");
   console.log(`Worker: ${workerName}`);
   console.log("Waiting for jobs...");
+  if (STOCK_REPLENISH_ENABLED) {
+    console.log(
+      `Stock replenish: every ${Math.round(STOCK_REPLENISH_INTERVAL_MS / 60_000)} min`
+    );
+  }
   modules.logger.info("worker/start", "ListFlow Worker online", {
     workerId,
     workerName,
     storeFilter: parseStoreFilter(),
+    stockReplenishEnabled: STOCK_REPLENISH_ENABLED,
+    stockReplenishIntervalMs: STOCK_REPLENISH_INTERVAL_MS,
   });
 
   const heartbeatTimer = setInterval(() => {

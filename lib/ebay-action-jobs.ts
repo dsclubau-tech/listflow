@@ -364,11 +364,12 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
         : undefined;
     const storeNumber = await getStoreNumber(product.storeId);
     let result: { success: boolean; errorMessage?: string };
+    const holdFromQuantity = quantityChanged && product.quantity <= 0;
 
     if (bulkEditFields.size === 0 || hasOnlyInventoryFields(bulkEditFields)) {
       const inventoryQuantity =
-        quantityChanged && product.status !== ProductStatus.ON_HOLD
-          ? Math.max(1, product.quantity)
+        quantityChanged
+          ? Math.max(0, product.quantity)
           : undefined;
       const inventoryPrice =
         priceChanged ? overrideStartPrice ?? Number(product.price) : undefined;
@@ -386,6 +387,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
     } else {
       const includeQuantity =
         quantityChanged &&
+        !holdFromQuantity &&
         product.status !== ProductStatus.ON_HOLD &&
         product.quantity >= 1;
       const finalDescription = descriptionChanged
@@ -413,6 +415,15 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
         ),
         storeNumber
       );
+
+      if (result.success && holdFromQuantity) {
+        result = await callEbayReviseInventoryStatus(
+          buildReviseInventoryStatusXML(product.ebayItemId, {
+            quantity: 0,
+          }),
+          storeNumber
+        );
+      }
     }
 
     if (!result.success) {

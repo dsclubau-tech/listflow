@@ -33,6 +33,26 @@ function chunk<T>(items: T[], size: number) {
   return chunks;
 }
 
+function parseScopedProductIds(body: unknown) {
+  if (!body || typeof body !== "object" || !("productIds" in body)) {
+    return null;
+  }
+
+  const value = (body as { productIds?: unknown }).productIds;
+
+  if (!Array.isArray(value)) {
+    throw new Error("productIds must be an array.");
+  }
+
+  return Array.from(
+    new Set(
+      value
+        .map((id) => (typeof id === "string" ? id.trim() : ""))
+        .filter(Boolean),
+    ),
+  );
+}
+
 export async function POST(request: Request) {
   const session = await auth();
   const storeSession = await getCurrentStoreSession();
@@ -43,6 +63,29 @@ export async function POST(request: Request) {
 
   if (!session?.user || !storeSession) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let scopedProductIds: string[] | null = null;
+  try {
+    const body = await request.json().catch(() => null);
+    scopedProductIds = parseScopedProductIds(body);
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error:
+          error instanceof Error
+            ? error.message
+            : "Invalid selected products payload.",
+      },
+      { status: 400 },
+    );
+  }
+
+  if (scopedProductIds && scopedProductIds.length === 0) {
+    return NextResponse.json(
+      { error: "Select at least one product to sync eBay ads." },
+      { status: 400 },
+    );
   }
 
   const encoder = new TextEncoder();
@@ -79,18 +122,19 @@ export async function POST(request: Request) {
       }
 
       try {
-        emit({ phase: "Reading eBay promoted campaigns", percent: 5 });
-
-        const storeNumber = await getStoreNumber(storeSession.storeId);
-        const promotedByListingId = await getEbayPromotedListingSync(storeNumber);
-
-        emit({ phase: "Loading ListFlow listings", percent: 15 });
+        emit({
+          phase: scopedProductIds
+            ? "Loading selected ListFlow listings"
+            : "Loading ListFlow listings",
+          percent: 5,
+        });
 
         const listedProducts = await prisma.product.findMany({
           where: {
             storeId: storeSession.storeId,
             status: { in: [ProductStatus.IMPORTED, ProductStatus.ON_HOLD] },
             ebayItemId: { not: null },
+            ...(scopedProductIds ? { id: { in: scopedProductIds } } : {}),
           },
           select: {
             id: true,
@@ -100,7 +144,28 @@ export async function POST(request: Request) {
         const syncedAt = new Date();
         total = listedProducts.length;
 
-        emit({ phase: "Updating ListFlow ad status" });
+        if (total === 0) {
+          emit({
+            type: "done",
+            phase: scopedProductIds
+              ? "No selected eBay listings to sync"
+              : "No eBay listings to sync",
+            percent: 100,
+            syncedAt: syncedAt.toISOString(),
+          });
+          return;
+        }
+
+        emit({ phase: "Reading eBay promoted campaigns", percent: 15 });
+
+        const storeNumber = await getStoreNumber(storeSession.storeId);
+        const promotedByListingId = await getEbayPromotedListingSync(storeNumber);
+
+        const updatePhase = scopedProductIds
+          ? "Updating selected ListFlow ad status"
+          : "Updating ListFlow ad status";
+
+        emit({ phase: updatePhase });
 
         for (const productChunk of chunk(listedProducts, UPDATE_CHUNK_SIZE)) {
           const chunkUpdates = productChunk.map((product) => {
@@ -165,13 +230,14 @@ export async function POST(request: Request) {
             }
           }
 
-          emit({ phase: "Updating ListFlow ad status" });
+          emit({ phase: updatePhase });
         }
 
         invalidateProductCaches(storeSession.storeId);
 
         log.info("ebay/promoted-listings/sync", "Synced promoted listing data", {
           listedProductCount: total,
+          scopedProductCount: scopedProductIds?.length ?? null,
           promoted,
           notPromoted,
           fixedRate,
@@ -180,7 +246,9 @@ export async function POST(request: Request) {
 
         emit({
           type: "done",
-          phase: "eBay ad sync complete",
+          phase: scopedProductIds
+            ? "Selected eBay ad sync complete"
+            : "eBay ad sync complete",
           percent: 100,
           syncedAt: syncedAt.toISOString(),
         });

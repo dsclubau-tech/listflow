@@ -3,8 +3,12 @@ import "server-only";
 import { load, type CheerioAPI } from "cheerio";
 import { extractLocalizedBuyboxPrice } from "@/lib/amazon-buybox-price";
 import {
+  extractAmazonPostcodeToken,
+  extractAmazonProductTitle,
+  parseAmazonPostcodeResponse,
+} from "@/lib/amazon-direct-parse";
+import {
   inferTypeItemSpecific,
-  inferVolumeItemSpecific,
   isUsefulItemSpecificCandidate,
 } from "@/lib/item-specifics";
 import type { ScrapedProduct } from "@/lib/amazon-scraper";
@@ -31,7 +35,7 @@ type ScrapeDirectOptions = {
 type CheerioSelection = ReturnType<CheerioAPI>;
 
 const PRODUCT_FETCH_TIMEOUT_MS = 12_000;
-const POSTCODE_SET_TIMEOUT_MS = 5_000;
+const POSTCODE_SET_TIMEOUT_MS = 8_000;
 
 const AMAZON_FIELDS_TO_REMOVE = new Set([
   "asin",
@@ -44,6 +48,37 @@ const AMAZON_FIELDS_TO_REMOVE = new Set([
   "batteries required",
   "batteries included",
   "country of origin",
+]);
+
+const AMAZON_UNMAPPED_ITEM_SPECIFIC_ALLOWLIST = new Set([
+  "brand",
+  "brand name",
+  "model",
+  "model name",
+  "model number",
+  "mpn",
+  "manufacturer part number",
+  "part number",
+  "type",
+  "product type",
+  "item type",
+  "use for",
+  "recommended uses for product",
+  "compatible devices",
+  "compatible with vehicle type",
+  "vehicle service type",
+  "filter type",
+  "surface recommendation",
+  "mounting type",
+  "form factor",
+  "included components",
+  "display type",
+  "screen size",
+  "video capture resolution",
+  "field of view",
+  "lens type",
+  "focus type",
+  "lens mount",
 ]);
 
 const AMAZON_TO_EBAY_FIELD_MAP: Record<string, string> = {
@@ -68,9 +103,9 @@ const AMAZON_TO_EBAY_FIELD_MAP: Record<string, string> = {
   "connectivity technology": "Connectivity",
   "number of items": "Number of Items",
   "item model number": "Model Number",
-  capacity: "Volume",
-  "item volume": "Volume",
-  volume: "Volume",
+  capacity: "Capacity",
+  "item volume": "Capacity",
+  volume: "Capacity",
   "manufacturer part number": "Manufacturer Part Number",
   "part number": "Manufacturer Part Number",
   "special feature": "Features",
@@ -275,7 +310,8 @@ async function fetchAmazonHtml(
 async function setAmazonDeliveryPostcodeDirect(
   canonicalUrl: string,
   postcode: string,
-  cookieJar: CookieJar
+  cookieJar: CookieJar,
+  pageHtml: string
 ) {
   const normalizedPostcode = postcode.replace(/\D/g, "").slice(0, 4);
   if (normalizedPostcode.length !== 4) {
@@ -283,6 +319,7 @@ async function setAmazonDeliveryPostcodeDirect(
   }
 
   try {
+    const token = extractAmazonPostcodeToken(load(pageHtml), pageHtml);
     const body = new URLSearchParams({
       locationType: "LOCATION_INPUT",
       zipCode: normalizedPostcode,
@@ -291,40 +328,47 @@ async function setAmazonDeliveryPostcodeDirect(
       pageType: "Detail",
       actionSource: "glow",
     });
+    if (token) {
+      body.set("anti-csrftoken-a2z", token);
+    }
+
     const headers = withCookieHeader(
       {
         ...requestHeaders(canonicalUrl),
         accept: "application/json, text/javascript, */*; q=0.01",
         "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
         "x-requested-with": "XMLHttpRequest",
+        ...(token ? { "anti-csrftoken-a2z": token } : {}),
       },
       cookieJar
     );
-    const response = await fetch(
-      "https://www.amazon.com.au/gp/delivery/ajax/address-change.html",
-      {
-        method: "POST",
-        headers,
-        body: body.toString(),
-        redirect: "follow",
-        cache: "no-store",
-        signal: AbortSignal.timeout(POSTCODE_SET_TIMEOUT_MS),
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const response = await fetch(
+        "https://www.amazon.com.au/gp/delivery/ajax/address-change.html",
+        {
+          method: "POST",
+          headers,
+          body: body.toString(),
+          redirect: "follow",
+          cache: "no-store",
+          signal: AbortSignal.timeout(POSTCODE_SET_TIMEOUT_MS),
+        }
+      );
+
+      storeResponseCookies(cookieJar, response.headers);
+
+      if (!response.ok) {
+        continue;
       }
-    );
 
-    storeResponseCookies(cookieJar, response.headers);
-
-    if (!response.ok) {
-      return false;
+      const text = await response.text();
+      if (parseAmazonPostcodeResponse(text, normalizedPostcode)) {
+        return true;
+      }
     }
 
-    const text = await response.text();
-    return (
-      text.includes('"isValidAddress":1') ||
-      text.includes('"isValidAddress": 1') ||
-      text.includes('"isDefault":1') ||
-      text.includes(normalizedPostcode)
-    );
+    return false;
   } catch {
     return false;
   }
@@ -366,11 +410,26 @@ function parseDimensions(raw: string) {
   };
 }
 
+function normalizeAmazonSpecificKey(value: string) {
+  return value.toLowerCase().trim().replace(/\s+/g, " ");
+}
+
+function shouldKeepMappedItemSpecific(mappedKey: string, value: string) {
+  if (
+    mappedKey === "Features" &&
+    (value.length > 160 || (value.match(/>/g)?.length ?? 0) > 0)
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 function normalizeItemSpecificsForEbay(specs: Record<string, string>) {
   const result: Record<string, string> = {};
 
   for (const [rawKey, value] of Object.entries(specs)) {
-    const lowerKey = rawKey.toLowerCase().trim();
+    const lowerKey = normalizeAmazonSpecificKey(rawKey);
     if (AMAZON_FIELDS_TO_REMOVE.has(lowerKey)) {
       continue;
     }
@@ -391,10 +450,13 @@ function normalizeItemSpecificsForEbay(specs: Record<string, string>) {
     }
 
     if (mappedKey) {
+      if (!shouldKeepMappedItemSpecific(mappedKey, value)) {
+        continue;
+      }
       result[mappedKey] ??= value;
     } else {
       const cleanKey = rawKey.trim();
-      if (cleanKey) {
+      if (cleanKey && AMAZON_UNMAPPED_ITEM_SPECIFIC_ALLOWLIST.has(lowerKey)) {
         result[cleanKey] ??= value;
       }
     }
@@ -613,24 +675,9 @@ function extractItemSpecifics($: CheerioAPI) {
 
 function withInferredItemSpecifics(
   itemSpecifics: Record<string, string>,
-  title: string,
-  description: string
+  title: string
 ) {
   const next = { ...itemSpecifics };
-
-  if (!next.Volume) {
-    const inferredVolume = inferVolumeItemSpecific(
-      title,
-      description,
-      Object.entries(next)
-        .map(([key, value]) => `${key}: ${value}`)
-        .join(" ")
-    );
-
-    if (inferredVolume) {
-      next.Volume = inferredVolume;
-    }
-  }
 
   if (!next.Type) {
     const inferredType = inferTypeItemSpecific({
@@ -776,12 +823,7 @@ function parseProductHtml(html: string, canonicalUrl: string): ScrapedProduct {
   }
 
   const $ = load(html);
-  const rawTitle = extractFirstText($, [
-    "#productTitle",
-    "#title",
-    'meta[name="title"]',
-    'meta[property="og:title"]',
-  ]);
+  const rawTitle = extractAmazonProductTitle($, html);
   const title = rawTitle.length > 80 ? rawTitle.slice(0, 80).replace(/\s+\S*$/, "") : rawTitle;
 
   if (!title) {
@@ -797,8 +839,7 @@ function parseProductHtml(html: string, canonicalUrl: string): ScrapedProduct {
   const description = renderDescription($, title);
   const itemSpecifics = withInferredItemSpecifics(
     extractItemSpecifics($),
-    title,
-    description
+    title
   );
   const brand = extractBrand($, itemSpecifics);
 
@@ -875,7 +916,8 @@ export async function scrapeAmazonProductDirect(
   const postcodeApplied = await setAmazonDeliveryPostcodeDirect(
     canonicalUrl,
     postcode,
-    cookieJar
+    cookieJar,
+    html
   );
   logStage(options, "postcode_set", postcodeStartedAt, {
     postcode,

@@ -294,8 +294,8 @@ export default function BulkEditModal({
 
       if (item.field === "quantity") {
         const value = Number(item.value);
-        if (!Number.isInteger(value) || value < 1) {
-          return "Quantity must be a whole number of at least 1.";
+        if (!Number.isInteger(value) || value < 0) {
+          return "Quantity must be a whole number of 0 or greater.";
         }
       }
 
@@ -659,7 +659,7 @@ export default function BulkEditModal({
             : "number"
         }
         value={item.value}
-        min={item.field === "quantity" ? 1 : 0}
+        min={0}
         step={item.field === "quantity" || item.field === "dispatchTimeMax" ? 1 : 0.01}
         onChange={(event) => updateItem(item.id, { value: event.target.value })}
         className="h-10 w-full rounded-md border border-gray-300 px-3 text-sm text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
