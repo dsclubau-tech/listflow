@@ -34,3 +34,30 @@ test("buildAddItemXML sends custom label as eBay SKU", () => {
   assert.match(xml, /<SKU>B07VJ5LG19<\/SKU>/);
 });
 
+test("buildAddItemXML keeps required item specifics when trimming", () => {
+  const product = {
+    ...buildTestProduct(),
+    itemSpecifics: {
+      Brand: "Test Brand",
+      MPN: "Does not apply",
+      Model: "Model 1",
+      Colour: "White",
+      Material: "Polyester",
+      Type: "Wedge Pillow",
+      Size: "Queen",
+      Features: "Adjustable",
+      _Country: "AU",
+      _Currency: "AUD",
+      _Site: "Australia",
+      _Location: "Australia",
+      _PostalCode: "3000",
+    },
+  };
+  const xml = buildAddItemXML(product, undefined, {
+    itemSpecificMaxCount: 4,
+    requiredItemSpecificNames: ["Size", "Type"],
+  });
+
+  assert.match(xml, /<Name>Size<\/Name>\s*<Value>Queen<\/Value>/);
+  assert.match(xml, /<Name>Type<\/Name>\s*<Value>Wedge Pillow<\/Value>/);
+});

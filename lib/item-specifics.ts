@@ -65,6 +65,16 @@ const PRODUCT_IDENTIFIER_UNAVAILABLE_VALUES = new Set([
   "unknown",
 ]);
 
+const BRAND_UNAVAILABLE_VALUES = new Set([
+  "does not apply",
+  "n/a",
+  "na",
+  "none",
+  "not applicable",
+  "unknown",
+  "unbranded",
+]);
+
 const ITEM_SPECIFIC_PRIORITY = new Map(
   HIGH_PRIORITY_ITEM_SPECIFICS.map((name, index) => [
     name.trim().toLowerCase(),
@@ -197,6 +207,47 @@ export function inferVolumeItemSpecific(...texts: Array<string | null | undefine
   }
 
   return null;
+}
+
+function isUnavailableBrandValue(value: string | null | undefined) {
+  const normalized = normalizeSpecificValue(value ?? "");
+  return !normalized || BRAND_UNAVAILABLE_VALUES.has(normalized);
+}
+
+export function inferBrandItemSpecific(input: {
+  itemSpecifics?: unknown;
+  brand?: string | null;
+  allowedValues?: string[];
+}) {
+  const specifics = normalizeItemSpecifics(input.itemSpecifics);
+  const candidates = [
+    input.brand,
+    readItemSpecificValue(specifics, ["Brand"]),
+    readItemSpecificValue(specifics, ["Brand Name"]),
+    readItemSpecificValue(specifics, ["Manufacturer"]),
+    readItemSpecificValue(specifics, ["Maker"]),
+  ];
+
+  for (const candidate of candidates) {
+    if (isUnavailableBrandValue(candidate)) {
+      continue;
+    }
+
+    const matched = matchAllowedSpecificValue(candidate, input.allowedValues);
+    if (matched && !isUnavailableBrandValue(matched)) {
+      return matched;
+    }
+  }
+
+  return null;
+}
+
+function normalizeDimensionValue(value: string) {
+  return value
+    .replace(/[×]/g, "x")
+    .replace(/\s*x\s*/gi, " x ")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function normalizeSpecificValue(value: string) {
@@ -353,6 +404,19 @@ export function inferTypeItemSpecific(input: {
       patterns: [/\bwater\s+bottle\b/i],
     },
     {
+      values: ["Bed Wedge Pillow", "Wedge Pillow", "Pillow", "Cushion"],
+      patterns: [
+        /\bbed\s+wedge\b/i,
+        /\bwedge\s+pillow\b/i,
+        /\borthopedic\b.*\bpillow\b/i,
+        /\bpillow\b.*\bwedge\b/i,
+      ],
+    },
+    {
+      values: ["Pillow", "Cushion"],
+      patterns: [/\bpillow\b/i, /\bcushion\b/i],
+    },
+    {
       values: ["Phone Case"],
       patterns: [/\bphone\s+case\b/i, /\b(?:iphone|galaxy|samsung)\b.*\bcase\b/i],
     },
@@ -380,6 +444,107 @@ export function inferTypeItemSpecific(input: {
       if (matched) {
         return matched;
       }
+    }
+  }
+
+  return null;
+}
+
+export function inferSizeItemSpecific(input: {
+  title?: string | null;
+  categoryName?: string | null;
+  itemSpecifics?: unknown;
+  allowedValues?: string[];
+}) {
+  const specifics = normalizeItemSpecifics(input.itemSpecifics);
+  const directCandidates = [
+    readItemSpecificValue(specifics, ["Size", "Size Name", "Item Size", "Product Size"]),
+    readItemSpecificValue(specifics, ["Style Name"]),
+  ];
+
+  for (const candidate of directCandidates) {
+    const matched = matchAllowedSpecificValue(candidate, input.allowedValues);
+    if (matched) {
+      return matched;
+    }
+  }
+
+  if (input.allowedValues && input.allowedValues.length > 0) {
+    const variantSizeCandidate = readItemSpecificValue(specifics, [
+      "Variant",
+      "Variation",
+      "Selected Size",
+    ]);
+    const matchedVariantSize = matchAllowedSpecificValue(
+      variantSizeCandidate,
+      input.allowedValues
+    );
+    if (matchedVariantSize) {
+      return matchedVariantSize;
+    }
+  }
+
+  const text = [
+    input.title,
+    input.categoryName,
+    ...Object.entries(specifics).map(([key, value]) => `${key}: ${value}`),
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  const allowedPatternCandidates = [
+    "Small",
+    "Medium",
+    "Large",
+    "Extra Large",
+    "XL",
+    "Single",
+    "Double",
+    "Queen",
+    "King",
+    "Twin",
+    "Full",
+    "Standard",
+    "Travel",
+    "One Size",
+  ];
+
+  for (const candidate of allowedPatternCandidates) {
+    if (new RegExp(`\\b${candidate.replace(/\s+/g, "\\s+")}\\b`, "i").test(text)) {
+      const matched = matchAllowedSpecificValue(candidate, input.allowedValues);
+      if (matched) {
+        return matched;
+      }
+    }
+  }
+
+  if (input.allowedValues && input.allowedValues.length > 0) {
+    for (const value of input.allowedValues) {
+      const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (value.trim().length >= 3 && new RegExp(`\\b${escaped}\\b`, "i").test(text)) {
+        return value;
+      }
+    }
+
+    return null;
+  }
+
+  const dimensionCandidates = [
+    readItemSpecificValue(specifics, [
+      "Item Dimensions L x W x H",
+      "Item Dimensions D x W x H",
+      "Product Dimensions",
+      "Dimensions",
+    ]),
+    text.match(
+      /\b\d+(?:\.\d+)?\s*(?:cm|mm|m|in|inch|inches)\s*(?:x|by)\s*\d+(?:\.\d+)?\s*(?:cm|mm|m|in|inch|inches)?(?:\s*(?:x|by)\s*\d+(?:\.\d+)?\s*(?:cm|mm|m|in|inch|inches)?)?/i,
+    )?.[0],
+  ];
+
+  for (const candidate of dimensionCandidates) {
+    const normalized = normalizeDimensionValue(candidate ?? "");
+    if (normalized) {
+      return normalized;
     }
   }
 
@@ -558,13 +723,18 @@ export function sanitizeEbayItemSpecifics(value: unknown): ItemSpecificsRecord {
   const model =
     getItemSpecificValue(specifics, ["Model", "Model Number", "Item Model Number"]) ||
     DEFAULT_MODEL;
+  const brand =
+    inferBrandItemSpecific({ itemSpecifics: specifics }) || DEFAULT_BRAND;
 
   if (!hasItemSpecific(specifics, "Model")) {
     specifics.Model = model;
   }
 
-  if (!hasItemSpecific(specifics, "Brand")) {
-    specifics.Brand = DEFAULT_BRAND;
+  if (
+    !hasItemSpecific(specifics, "Brand") ||
+    isUnavailableBrandValue(getItemSpecificValue(specifics, ["Brand"]))
+  ) {
+    specifics.Brand = brand;
   }
 
   const sanitized: ItemSpecificsRecord = {};
@@ -612,8 +782,12 @@ export function getListingItemSpecifics(
   value: unknown,
   defaultType: string,
   maxCount = EBAY_LISTING_ITEM_SPECIFIC_MAX_COUNT,
+  requiredNames: string[] = [],
 ): ItemSpecificsRecord {
   const specifics = sanitizeEbayItemSpecifics(value);
+  const requiredNameSet = new Set(
+    requiredNames.map((name) => normalizeSpecificName(name)).filter(Boolean),
+  );
 
   if (!hasItemSpecific(specifics, "Type")) {
     specifics.Type = defaultType || "Other";
@@ -624,10 +798,16 @@ export function getListingItemSpecifics(
     .map(([rawKey, rawValue], originalIndex) => ({
       key: rawKey.trim(),
       value: rawValue.trim(),
+      required: requiredNameSet.has(normalizeSpecificName(rawKey)),
       originalIndex,
     }))
-    .filter(({ key, value }) => {
-      if (!key || !value || key.startsWith("_") || isLowValueSpecificName(key)) {
+    .filter(({ key, value, required }) => {
+      if (
+        !key ||
+        !value ||
+        key.startsWith("_") ||
+        (!required && isLowValueSpecificName(key))
+      ) {
         return false;
       }
 
@@ -640,6 +820,10 @@ export function getListingItemSpecifics(
       return true;
     })
     .sort((a, b) => {
+      if (a.required !== b.required) {
+        return a.required ? -1 : 1;
+      }
+
       const aPriority =
         ITEM_SPECIFIC_PRIORITY.get(normalizeSpecificName(a.key)) ?? 1000;
       const bPriority =

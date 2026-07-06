@@ -8,6 +8,8 @@ import {
   parseAmazonPostcodeResponse,
 } from "@/lib/amazon-direct-parse";
 import {
+  inferBrandItemSpecific,
+  inferSizeItemSpecific,
   inferTypeItemSpecific,
   isUsefulItemSpecificCandidate,
 } from "@/lib/item-specifics";
@@ -675,18 +677,50 @@ function extractItemSpecifics($: CheerioAPI) {
 
 function withInferredItemSpecifics(
   itemSpecifics: Record<string, string>,
-  title: string
+  title: string,
+  input?: {
+    brand?: string | null;
+    categoryName?: string | null;
+    variantName?: string | null;
+  }
 ) {
   const next = { ...itemSpecifics };
+
+  if (!next.Brand) {
+    const inferredBrand = inferBrandItemSpecific({
+      itemSpecifics: next,
+      brand: input?.brand,
+    });
+
+    if (inferredBrand) {
+      next.Brand = inferredBrand;
+    }
+  }
 
   if (!next.Type) {
     const inferredType = inferTypeItemSpecific({
       title,
+      categoryName: input?.categoryName,
       itemSpecifics: next,
     });
 
     if (inferredType) {
       next.Type = inferredType;
+    }
+  }
+
+  if (!next.Size) {
+    const inferredSize = inferSizeItemSpecific({
+      title,
+      categoryName: input?.categoryName,
+      itemSpecifics: {
+        ...next,
+        ...(input?.variantName ? { Variant: input.variantName } : {}),
+      },
+    });
+
+    if (inferredSize) {
+      next.Size = inferredSize;
     }
   }
 
@@ -837,11 +871,15 @@ function parseProductHtml(html: string, canonicalUrl: string): ScrapedProduct {
   const asin = extractAsin($, canonicalUrl, html);
   const images = extractImages($, html);
   const description = renderDescription($, title);
-  const itemSpecifics = withInferredItemSpecifics(
-    extractItemSpecifics($),
-    title
-  );
-  const brand = extractBrand($, itemSpecifics);
+  const rawItemSpecifics = extractItemSpecifics($);
+  const category = extractCategory($);
+  const variantName = extractVariantName($);
+  const brand = extractBrand($, rawItemSpecifics);
+  const itemSpecifics = withInferredItemSpecifics(rawItemSpecifics, title, {
+    brand,
+    categoryName: category,
+    variantName,
+  });
 
   return {
     title,
@@ -849,11 +887,11 @@ function parseProductHtml(html: string, canonicalUrl: string): ScrapedProduct {
     images,
     price: null,
     condition: "New" as const,
-    category: extractCategory($),
+    category,
     categoryId: "",
     categoryName: "",
     itemSpecifics,
-    variantName: extractVariantName($),
+    variantName,
     asin,
     brand,
   } satisfies ScrapedProduct;

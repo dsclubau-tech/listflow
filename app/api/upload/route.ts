@@ -170,6 +170,9 @@ export async function POST(request: Request) {
       itemSpecifics: requiredSpecifics.itemSpecifics,
       description: finalDescription,
     };
+    const requiredItemSpecificNames = requiredSpecifics.requiredItemSpecifics.map(
+      (specific) => specific.name,
+    );
     const variants = await prisma.variant.findMany({
       where: { productId: product.id },
       orderBy: { createdAt: "asc" },
@@ -189,6 +192,7 @@ export async function POST(request: Request) {
     const addItemOptions = {
       privateListing: supplierSettings?.privateListing ?? false,
       customLabel,
+      requiredItemSpecificNames,
     };
     let xml = buildAddItemXML(productWithResolvedDesc, overrideStartPrice, addItemOptions);
 

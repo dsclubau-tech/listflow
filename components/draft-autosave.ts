@@ -1,5 +1,10 @@
 import type { ScrapedProduct } from "@/components/AddProductModal";
-import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
+import {
+  inferBrandItemSpecific,
+  inferSizeItemSpecific,
+  inferTypeItemSpecific,
+  sanitizeEbayItemSpecifics,
+} from "@/lib/item-specifics";
 
 type DraftCreateResponse = {
   id?: string;
@@ -54,12 +59,38 @@ function buildItemSpecifics(data: ScrapedProduct) {
     ...data.itemSpecifics,
   };
 
-  if (data.brand?.trim() && !specifics.Brand) {
-    specifics.Brand = data.brand.trim();
+  const inferredBrand = inferBrandItemSpecific({
+    itemSpecifics: specifics,
+    brand: data.brand,
+  });
+  if (inferredBrand) {
+    specifics.Brand = inferredBrand;
   }
 
   if (data.variantName?.trim() && !specifics.Variant) {
     specifics.Variant = data.variantName.trim();
+  }
+
+  if (!specifics.Type) {
+    const inferredType = inferTypeItemSpecific({
+      title: data.title,
+      categoryName: data.categoryName || data.category,
+      itemSpecifics: specifics,
+    });
+    if (inferredType) {
+      specifics.Type = inferredType;
+    }
+  }
+
+  if (!specifics.Size) {
+    const inferredSize = inferSizeItemSpecific({
+      title: data.title,
+      categoryName: data.categoryName || data.category,
+      itemSpecifics: specifics,
+    });
+    if (inferredSize) {
+      specifics.Size = inferredSize;
+    }
   }
 
   return sanitizeEbayItemSpecifics(specifics);

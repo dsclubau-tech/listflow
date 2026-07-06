@@ -12,12 +12,16 @@ import {
   DRAFT_ITEM_SPECIFICS_TAB_INDEX,
   hasMissingItemSpecifics,
   mergeRequiredItemSpecifics,
+  type DraftItemSpecificRow,
   type RequiredItemSpecific,
 } from "@/components/draft-upload-response";
 import ProductVariantsEditor from "@/components/ProductVariantsEditor";
 import RichTextEditor from "@/components/RichTextEditor";
 import { reportClientError } from "@/lib/client-logger";
 import {
+  DEFAULT_BRAND,
+  inferBrandItemSpecific,
+  inferSizeItemSpecific,
   inferTypeItemSpecific,
   parseMissingItemSpecificNames,
   sanitizeEbayItemSpecifics,
@@ -58,6 +62,149 @@ interface SaveMessage {
   text: string;
   title?: string;
   variant: "success" | "error";
+}
+
+function normalizeSpecificName(name: string) {
+  return name.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function getSpecificsObjectFromRows(
+  rows: DraftItemSpecificRow[],
+  brand: string
+) {
+  const specificsObj: Record<string, string> = {};
+
+  for (const spec of rows) {
+    if (spec.key.trim() && spec.value.trim()) {
+      specificsObj[spec.key.trim()] = spec.value.trim();
+    }
+  }
+
+  if (brand.trim()) {
+    specificsObj.Brand = brand.trim();
+  }
+
+  return specificsObj;
+}
+
+function readSpecificValueFromRows(
+  rows: DraftItemSpecificRow[],
+  name: string,
+  brand: string
+) {
+  const normalizedName = normalizeSpecificName(name);
+
+  if (normalizedName === "brand" && brand.trim()) {
+    return brand.trim();
+  }
+
+  const row = rows.find(
+    (specific) => normalizeSpecificName(specific.key) === normalizedName
+  );
+
+  return row?.value.trim() || null;
+}
+
+function isPlaceholderBrand(value: string | null | undefined) {
+  const normalized = value?.trim().toLowerCase();
+  return (
+    !normalized ||
+    normalized === DEFAULT_BRAND.toLowerCase() ||
+    normalized === "does not apply" ||
+    normalized === "unknown" ||
+    normalized === "n/a" ||
+    normalized === "na"
+  );
+}
+
+function upsertSpecificRow(
+  rows: DraftItemSpecificRow[],
+  name: string,
+  value: string
+) {
+  const normalizedName = normalizeSpecificName(name);
+  let changed = false;
+  const next = rows.map((specific) => {
+    if (
+      normalizeSpecificName(specific.key) !== normalizedName ||
+      specific.value.trim()
+    ) {
+      return specific;
+    }
+
+    changed = true;
+    return { ...specific, value };
+  });
+
+  if (!next.some((specific) => normalizeSpecificName(specific.key) === normalizedName)) {
+    return [{ key: name, value }, ...next];
+  }
+
+  return changed ? next : rows;
+}
+
+function prepareRequiredSpecificRows(input: {
+  rows: DraftItemSpecificRow[];
+  requiredItemSpecifics: RequiredItemSpecific[];
+  brand: string;
+  title: string;
+  categoryName: string;
+}) {
+  let rows = addMissingItemSpecificRows(
+    input.rows,
+    input.requiredItemSpecifics.map((specific) => specific.name)
+  );
+  let specificsObj = getSpecificsObjectFromRows(rows, input.brand);
+
+  for (const required of input.requiredItemSpecifics) {
+    const existingValue = readSpecificValueFromRows(rows, required.name, input.brand);
+    if (
+      existingValue &&
+      (normalizeSpecificName(required.name) !== "brand" ||
+        !isPlaceholderBrand(existingValue))
+    ) {
+      continue;
+    }
+
+    const normalizedName = normalizeSpecificName(required.name);
+    let inferred: string | null = null;
+
+    if (normalizedName === "brand") {
+      inferred = inferBrandItemSpecific({
+        itemSpecifics: specificsObj,
+        brand: input.brand,
+        allowedValues: required.values,
+      });
+    } else if (normalizedName === "type") {
+      inferred = inferTypeItemSpecific({
+        title: input.title,
+        categoryName: input.categoryName,
+        itemSpecifics: specificsObj,
+        allowedValues: required.values,
+      });
+    } else if (normalizedName === "size" || normalizedName === "item size") {
+      inferred = inferSizeItemSpecific({
+        title: input.title,
+        categoryName: input.categoryName,
+        itemSpecifics: specificsObj,
+        allowedValues: required.values,
+      });
+    }
+
+    if (inferred) {
+      rows = upsertSpecificRow(rows, required.name, inferred);
+      specificsObj = getSpecificsObjectFromRows(rows, input.brand);
+    }
+  }
+
+  const missingNames = input.requiredItemSpecifics
+    .map((specific) => specific.name)
+    .filter((name) => {
+      const value = readSpecificValueFromRows(rows, name, input.brand);
+      return !value || (normalizeSpecificName(name) === "brand" && isPlaceholderBrand(value));
+    });
+
+  return { rows, missingNames };
 }
 
 // ----- VERO keywords -----
@@ -109,17 +256,52 @@ function normalizeScrapedTitle(data: ScrapedProduct) {
 }
 
 function buildRegrabDraftUpdate(scraped: ScrapedProduct, fallbackAsin: string) {
+  const mergedSpecifics: Record<string, string> = {
+    ...(scraped.supplierDefaults?.defaultItemSpecifics ?? {}),
+    ...scraped.itemSpecifics,
+  };
+  const inferredBrand = inferBrandItemSpecific({
+    itemSpecifics: mergedSpecifics,
+    brand: scraped.brand,
+  });
+  if (inferredBrand) {
+    mergedSpecifics.Brand = inferredBrand;
+  }
+
+  if (scraped.variantName?.trim() && !mergedSpecifics.Variant) {
+    mergedSpecifics.Variant = scraped.variantName.trim();
+  }
+
+  if (!mergedSpecifics.Type) {
+    const inferredType = inferTypeItemSpecific({
+      title: scraped.title,
+      categoryName: scraped.categoryName || scraped.category,
+      itemSpecifics: mergedSpecifics,
+    });
+    if (inferredType) {
+      mergedSpecifics.Type = inferredType;
+    }
+  }
+
+  if (!mergedSpecifics.Size) {
+    const inferredSize = inferSizeItemSpecific({
+      title: scraped.title,
+      categoryName: scraped.categoryName || scraped.category,
+      itemSpecifics: mergedSpecifics,
+    });
+    if (inferredSize) {
+      mergedSpecifics.Size = inferredSize;
+    }
+  }
+
   return {
     title: normalizeScrapedTitle(scraped),
     description: scraped.description,
     price: scraped.price,
     images: [...scraped.images],
     asin: scraped.asin || fallbackAsin,
-    brand: scraped.brand,
-    itemSpecifics: Object.entries({
-      ...(scraped.supplierDefaults?.defaultItemSpecifics ?? {}),
-      ...scraped.itemSpecifics,
-    }).map(([key, value]) => ({
+    brand: inferredBrand || scraped.brand,
+    itemSpecifics: Object.entries(mergedSpecifics).map(([key, value]) => ({
       key,
       value: String(value),
     })),
@@ -234,7 +416,15 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
           .filter(([key]) => !key.startsWith("_"))
           .map(([key, value]) => ({ key, value }))
       );
-      if (specs["Brand"]) setBrand(specs["Brand"]);
+      const inferredBrand = inferBrandItemSpecific({
+        itemSpecifics: specs,
+        brand: specs.Brand,
+      });
+      if (inferredBrand) {
+        setBrand(inferredBrand);
+      } else if (specs["Brand"]) {
+        setBrand(specs["Brand"]);
+      }
       // Restore country location
       if (specs["_Location"]) setCountryLocation(specs["_Location"]);
       // Restore zipcode
@@ -247,6 +437,26 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
     [product.errorMessage]
   );
 
+  const fetchRequiredSpecificsForCategory = useCallback(async () => {
+    if (!/^\d+$/.test(category.trim())) {
+      return [];
+    }
+
+    const response = await fetch(
+      `/api/ebay/category-aspects?categoryId=${encodeURIComponent(category.trim())}`,
+      { cache: "no-store" }
+    );
+    const data = (await response.json().catch(() => ({}))) as {
+      requiredItemSpecifics?: RequiredItemSpecific[];
+    };
+
+    if (!response.ok) {
+      return [];
+    }
+
+    return data.requiredItemSpecifics ?? [];
+  }, [category]);
+
   useEffect(() => {
     if (!/^\d+$/.test(category.trim())) {
       setRequiredItemSpecifics([]);
@@ -257,16 +467,10 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
 
     async function loadRequiredSpecifics() {
       try {
-        const response = await fetch(
-          `/api/ebay/category-aspects?categoryId=${encodeURIComponent(category.trim())}`,
-          { cache: "no-store" }
-        );
-        const data = (await response.json().catch(() => ({}))) as {
-          requiredItemSpecifics?: RequiredItemSpecific[];
-        };
+        const requiredSpecifics = await fetchRequiredSpecificsForCategory();
 
-        if (!cancelled && response.ok) {
-          setRequiredItemSpecifics(data.requiredItemSpecifics ?? []);
+        if (!cancelled) {
+          setRequiredItemSpecifics(requiredSpecifics);
         }
       } catch {
         if (!cancelled) {
@@ -280,7 +484,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
     return () => {
       cancelled = true;
     };
-  }, [category]);
+  }, [category, fetchRequiredSpecificsForCategory]);
 
   useEffect(() => {
     const names = Array.from(
@@ -585,6 +789,42 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
   }, [categoryName, itemSpecifics, requiredSpecificByName, title]);
 
   useEffect(() => {
+    const requiredSize =
+      requiredSpecificByName.get("size") ?? requiredSpecificByName.get("item size");
+    const requiredSizeName = requiredSize?.name ?? "Size";
+    const normalizedRequiredSizeName = normalizeSpecificName(requiredSizeName);
+    const hasSizeRow = itemSpecifics.some(
+      (specific) => normalizeSpecificName(specific.key) === normalizedRequiredSizeName
+    );
+    const hasBlankSizeRow = itemSpecifics.some(
+      (specific) =>
+        normalizeSpecificName(specific.key) === normalizedRequiredSizeName &&
+        !specific.value.trim()
+    );
+
+    if (!hasBlankSizeRow && (!requiredSize || hasSizeRow)) {
+      return;
+    }
+
+    const specificsObj = getSpecificsObjectFromRows(itemSpecifics, brand);
+    const inferredSize = inferSizeItemSpecific({
+      title,
+      categoryName,
+      itemSpecifics: specificsObj,
+      allowedValues: requiredSize?.values,
+    });
+
+    if (!inferredSize) {
+      return;
+    }
+
+    setItemSpecifics((current) => {
+      const next = upsertSpecificRow(current, requiredSizeName, inferredSize);
+      return next === current ? current : next;
+    });
+  }, [brand, categoryName, itemSpecifics, requiredSpecificByName, title]);
+
+  useEffect(() => {
     if (
       requestedEbayDescriptionRef.current ||
       description.trim() ||
@@ -636,8 +876,11 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
 
   // ----- Save -----
 
-  async function handleSave(options?: { showSuccessMessage?: boolean }): Promise<boolean> {
-    const { showSuccessMessage = true } = options ?? {};
+  async function handleSave(options?: {
+    showSuccessMessage?: boolean;
+    itemSpecificRowsOverride?: DraftItemSpecificRow[];
+  }): Promise<boolean> {
+    const { showSuccessMessage = true, itemSpecificRowsOverride } = options ?? {};
 
     setIsSaving(true);
     setSaveMessage(null);
@@ -684,14 +927,17 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
 
     // Build visible itemSpecifics from the table rows
     const specificsObj: Record<string, string> = {};
-    itemSpecifics.forEach((spec) => {
+    const rowsForSpecifics = itemSpecificRowsOverride ?? itemSpecifics;
+    rowsForSpecifics.forEach((spec) => {
       if (spec.key.trim() && spec.value.trim()) {
         specificsObj[spec.key.trim()] = spec.value.trim();
       }
     });
 
-    // Add Brand into specifics
-    if (brand.trim()) specificsObj["Brand"] = brand.trim();
+    // Add Brand into specifics without letting a placeholder overwrite an inferred value.
+    if (brand.trim() && (!specificsObj.Brand || !isPlaceholderBrand(brand))) {
+      specificsObj.Brand = brand.trim();
+    }
 
     // Embed internal location metadata with _ prefix so the XML builder can use it
     specificsObj["_Country"] = countryCodeMap[countryLocation] || "AU";
@@ -826,10 +1072,52 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       return;
     }
 
-    setIsImporting(true);
     setSaveMessage(null);
 
-    const saved = await handleSave({ showSuccessMessage: false });
+    let latestRequiredItemSpecifics = requiredItemSpecifics;
+    try {
+      const fetchedRequiredItemSpecifics = await fetchRequiredSpecificsForCategory();
+      latestRequiredItemSpecifics = mergeRequiredItemSpecifics(
+        requiredItemSpecifics,
+        fetchedRequiredItemSpecifics
+      );
+      setRequiredItemSpecifics(latestRequiredItemSpecifics);
+    } catch {
+      latestRequiredItemSpecifics = requiredItemSpecifics;
+    }
+
+    const preparedSpecifics = prepareRequiredSpecificRows({
+      rows: itemSpecifics,
+      requiredItemSpecifics: latestRequiredItemSpecifics,
+      brand,
+      title,
+      categoryName,
+    });
+    setItemSpecifics(preparedSpecifics.rows);
+    const preparedBrand = inferBrandItemSpecific({
+      itemSpecifics: getSpecificsObjectFromRows(preparedSpecifics.rows, brand),
+      brand,
+    });
+    if (preparedBrand && isPlaceholderBrand(brand)) {
+      setBrand(preparedBrand);
+    }
+
+    if (preparedSpecifics.missingNames.length > 0) {
+      setActiveTab(DRAFT_ITEM_SPECIFICS_TAB_INDEX);
+      setSaveMessage({
+        title: "Import failed",
+        text: `Add ${preparedSpecifics.missingNames.join(", ")} before importing.`,
+        variant: "error",
+      });
+      return;
+    }
+
+    setIsImporting(true);
+
+    const saved = await handleSave({
+      showSuccessMessage: false,
+      itemSpecificRowsOverride: preparedSpecifics.rows,
+    });
     if (!saved) {
       setIsImporting(false);
       return;

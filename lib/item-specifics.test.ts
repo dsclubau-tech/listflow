@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  inferBrandItemSpecific,
+  inferSizeItemSpecific,
   inferTypeItemSpecific,
   inferVolumeItemSpecific,
   parseMissingItemSpecificNames,
@@ -19,6 +21,30 @@ test("inferVolumeItemSpecific reads ounce-only volume", () => {
 
 test("inferVolumeItemSpecific returns null when no volume is present", () => {
   assert.equal(inferVolumeItemSpecific("Insulated stainless steel bottle"), null);
+});
+
+test("inferBrandItemSpecific reads brand name over placeholder brand", () => {
+  assert.equal(
+    inferBrandItemSpecific({
+      itemSpecifics: {
+        Brand: "Unbranded",
+        "Brand Name": "BOTSLAB",
+      },
+    }),
+    "BOTSLAB"
+  );
+});
+
+test("inferBrandItemSpecific preserves real user brand first", () => {
+  assert.equal(
+    inferBrandItemSpecific({
+      brand: "Owalla",
+      itemSpecifics: {
+        "Brand Name": "Owala",
+      },
+    }),
+    "Owalla"
+  );
 });
 
 test("inferTypeItemSpecific reads telephoto lens type from existing specifics", () => {
@@ -80,6 +106,47 @@ test("inferTypeItemSpecific does not guess when allowed values do not match", ()
     inferTypeItemSpecific({
       title: "EF/EF-S 420-800mm F8.3 Telephoto Zoom Lens",
       allowedValues: ["Tripod", "Filter"],
+    }),
+    null
+  );
+});
+
+test("inferTypeItemSpecific reads bed wedge pillow type when allowed", () => {
+  assert.equal(
+    inferTypeItemSpecific({
+      title: "4PCS Orthopedic Bed Wedge Pillow, Adjustable Cushion",
+      allowedValues: ["Mattress Protector", "Wedge Pillow", "Bolster"],
+    }),
+    "Wedge Pillow"
+  );
+});
+
+test("inferSizeItemSpecific reads direct Amazon size when allowed", () => {
+  assert.equal(
+    inferSizeItemSpecific({
+      itemSpecifics: { "Size Name": "Queen" },
+      allowedValues: ["Single", "Double", "Queen", "King"],
+    }),
+    "Queen"
+  );
+});
+
+test("inferSizeItemSpecific reads dimensions when no allowed values are provided", () => {
+  assert.equal(
+    inferSizeItemSpecific({
+      itemSpecifics: {
+        "Item Dimensions L x W x H": "30L x 20W x 10H centimetres",
+      },
+    }),
+    "30L x 20W x 10H centimetres"
+  );
+});
+
+test("inferSizeItemSpecific does not guess product count as size", () => {
+  assert.equal(
+    inferSizeItemSpecific({
+      title: "4PCS Orthopedic Bed Wedge Pillow, Adjustable Cushion",
+      allowedValues: ["Small", "Medium", "Large"],
     }),
     null
   );

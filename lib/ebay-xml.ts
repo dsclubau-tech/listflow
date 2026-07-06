@@ -13,6 +13,7 @@ type AddItemOptions = {
   privateListing?: boolean;
   itemSpecificMaxCount?: number;
   customLabel?: string | null;
+  requiredItemSpecificNames?: string[];
 };
 
 type ReviseItemOptions = {
@@ -143,12 +144,14 @@ function buildItemSpecificsXml(
   product: Product,
   specifics: ProductSpecifics | null,
   maxCount?: number,
+  requiredItemSpecificNames: string[] = [],
 ): string {
   const defaultType = product.categoryName?.split(">").pop()?.trim() || "Other";
   const listingSpecifics = getListingItemSpecifics(
     specifics && Object.keys(specifics).length > 0 ? specifics : { Type: defaultType },
     defaultType,
     maxCount,
+    requiredItemSpecificNames,
   );
   const nameValueLists = Object.entries(listingSpecifics)
     .map(
@@ -202,6 +205,7 @@ export function buildAddItemXML(
     product,
     specifics,
     options.itemSpecificMaxCount,
+    options.requiredItemSpecificNames,
   );
   const productListingDetailsXml = buildProductListingDetailsXml(specifics);
   const sellerProfilesXml = buildSellerProfilesXml(product);

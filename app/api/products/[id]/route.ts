@@ -211,6 +211,11 @@ export async function PATCH(
 
   if (data.itemSpecifics !== undefined) {
     data.itemSpecifics = sanitizeEbayItemSpecifics(data.itemSpecifics);
+
+    if (product.status === ProductStatus.FAILED) {
+      data.status = ProductStatus.DRAFT;
+      data.errorMessage = null;
+    }
   }
 
   const includesPolicyUpdate =

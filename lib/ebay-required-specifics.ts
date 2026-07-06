@@ -3,6 +3,8 @@ import type { EbayCategoryAspect } from "@/lib/ebay";
 import { getEbayCategoryAspects } from "@/lib/ebay";
 import {
   DEFAULT_MPN,
+  inferBrandItemSpecific,
+  inferSizeItemSpecific,
   inferTypeItemSpecific,
   inferVolumeItemSpecific,
   normalizeItemSpecifics,
@@ -15,6 +17,7 @@ import {
 export type RequiredItemSpecific = {
   name: string;
   values?: string[];
+  inputType?: string | null;
 };
 
 export type RequiredSpecificsValidationResult = {
@@ -126,8 +129,24 @@ function inferRequiredSpecific(
     return readPreferredPartNumber(specifics, aspectName);
   }
 
+  if (normalized === "brand") {
+    return inferBrandItemSpecific({
+      itemSpecifics: specifics,
+      allowedValues: aspect.values,
+    });
+  }
+
   if (normalized === "type") {
     return inferTypeItemSpecific({
+      title: product.title,
+      categoryName: product.categoryName,
+      itemSpecifics: specifics,
+      allowedValues: aspect.values,
+    });
+  }
+
+  if (normalized === "size" || normalized === "item size") {
+    return inferSizeItemSpecific({
       title: product.title,
       categoryName: product.categoryName,
       itemSpecifics: specifics,
@@ -160,9 +179,19 @@ export async function validateRequiredItemSpecifics(input: {
   const requiredItemSpecifics = requiredAspects.map((aspect) => ({
     name: aspect.name,
     values: aspect.values.length > 0 ? aspect.values : undefined,
+    inputType: aspect.inputType,
   }));
 
   for (const aspect of requiredAspects) {
+    if (normalizeName(aspect.name) === "brand") {
+      const inferredBrand = inferRequiredSpecific(input.product, specifics, aspect);
+      if (inferredBrand) {
+        specifics.Brand = inferredBrand;
+        addedItemSpecifics.Brand = inferredBrand;
+      }
+      continue;
+    }
+
     addIfMissing(
       specifics,
       addedItemSpecifics,

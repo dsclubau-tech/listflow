@@ -25,6 +25,16 @@ test("sanitizeEbayItemSpecifics removes noisy Amazon script values", () => {
   assert.equal(sanitized.Model, "G980H 4 Channel Kit");
 });
 
+test("sanitizeEbayItemSpecifics promotes Amazon Brand Name to Brand", () => {
+  const sanitized = sanitizeEbayItemSpecifics({
+    Brand: "Unbranded",
+    "Brand Name": "BOTSLAB",
+    Model: "G980H 4 Channel Kit",
+  });
+
+  assert.equal(sanitized.Brand, "BOTSLAB");
+});
+
 test("getListingItemSpecifics keeps essential fields before lower-priority details", () => {
   const specifics = getListingItemSpecifics(
     {
@@ -58,6 +68,28 @@ test("getListingItemSpecifics preserves useful required identifiers", () => {
   assert.equal(specifics["Manufacturer Part Number"], "G980H 4 Channel Kit");
   assert.equal(specifics.Brand, "BOTSLAB");
   assert.equal(specifics.Type, "Dash Camera");
+});
+
+test("getListingItemSpecifics preserves required fields when trimming", () => {
+  const specifics = getListingItemSpecifics(
+    {
+      Brand: "Test Brand",
+      MPN: DEFAULT_MPN,
+      Model: "Model 1",
+      Colour: "White",
+      Material: "Polyester",
+      Type: "Wedge Pillow",
+      Size: "Queen",
+      Features: "Adjustable",
+    },
+    "Other",
+    4,
+    ["Size", "Type"]
+  );
+
+  assert.equal(specifics.Size, "Queen");
+  assert.equal(specifics.Type, "Wedge Pillow");
+  assert.equal(Object.keys(specifics).length, 4);
 });
 
 test("parseMissingItemSpecificNames returns clean missing specifics", () => {
