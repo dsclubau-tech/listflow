@@ -61,6 +61,7 @@ interface PolicyTemplate {
 interface InlineEditFormProps {
   product: ProductWithRelations;
   onCollapse: () => void;
+  onImported?: (productId: string) => void;
 }
 
 interface SaveMessage {
@@ -317,7 +318,7 @@ const tabs = ["Product", "Description", "Variants", "Images", "Item Specificatio
 
 // ===== Component =====
 
-export default function InlineEditForm({ product }: InlineEditFormProps) {
+export default function InlineEditForm({ product, onImported }: InlineEditFormProps) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState(0);
 
@@ -1164,6 +1165,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
 
       if (res.ok) {
         setSaveMessage({ text: "Imported", variant: "success" });
+        onImported?.(product.id);
         router.refresh();
       } else {
         const data = (await res.json().catch(() => ({}))) as {
@@ -1325,7 +1327,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       const res = await fetch("/api/scrape", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url }),
+        body: JSON.stringify({ url, mode: "regrab" }),
         signal: AbortSignal.timeout(90000),
       });
 

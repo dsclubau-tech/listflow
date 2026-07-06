@@ -52,6 +52,7 @@ export async function POST(request: Request) {
   }
 
   const { url } = body;
+  const allowMetadataOnly = body?.mode === "regrab";
 
   if (!url || typeof url !== "string" || url.trim() === "") {
     log.warn("scrape/route", "Scrape request missing URL");
@@ -86,6 +87,7 @@ export async function POST(request: Request) {
     };
 
     const product = await scrapeAmazonProductDirect(url, {
+      allowMetadataOnly,
       onStage: logStage,
       postcode:
         supplierSettings?.scrapePostcode?.trim() ||
@@ -93,7 +95,7 @@ export async function POST(request: Request) {
         "2217",
     });
 
-    if (product.price === null || product.price <= 0) {
+    if (!allowMetadataOnly && (product.price === null || product.price <= 0)) {
       log.warn("scrape/route", "Scrape did not find a valid Amazon price", {
         url,
         asin: product.asin,

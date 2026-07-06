@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import DraftsTable from "@/components/DraftsTable";
 import AddProductModal from "@/components/AddProductModal";
@@ -9,6 +9,7 @@ import Toast from "@/components/Toast";
 import { useToast } from "@/hooks/useToast";
 import type { SerializedProductRow } from "@/types/product-row";
 import { createDraftFromScrapedProduct } from "@/components/draft-autosave";
+import { removeImportedDraftProduct } from "@/lib/draft-products-state";
 
 interface DraftsPageClientProps {
   products: SerializedProductRow[];
@@ -19,8 +20,13 @@ export default function DraftsPageClient({
 }: DraftsPageClientProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [autoExpandProductId, setAutoExpandProductId] = useState<string | null>(null);
+  const [visibleProducts, setVisibleProducts] = useState(products);
   const router = useRouter();
   const { toast, showToast, hideToast } = useToast();
+
+  useEffect(() => {
+    setVisibleProducts(products);
+  }, [products]);
 
   const handleScraped = async (data: ScrapedProduct) => {
     const result = await createDraftFromScrapedProduct(data);
@@ -28,6 +34,13 @@ export default function DraftsPageClient({
     setIsModalOpen(false);
     showToast("Draft created. Review and save changes when ready.", "success");
     router.refresh();
+  };
+
+  const handleDraftImported = (productId: string) => {
+    setVisibleProducts((current) =>
+      removeImportedDraftProduct(current, productId)
+    );
+    setAutoExpandProductId((current) => (current === productId ? null : current));
   };
 
   return (
@@ -48,10 +61,11 @@ export default function DraftsPageClient({
       </div>
 
       <DraftsTable
-        products={products}
+        products={visibleProducts}
         onToast={showToast}
         view="drafts"
         autoExpandProductId={autoExpandProductId}
+        onDraftImported={handleDraftImported}
       />
 
       <AddProductModal

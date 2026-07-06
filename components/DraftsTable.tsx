@@ -24,6 +24,7 @@ interface DraftsTableProps {
   onSyncSelectedEbayAds?: (productIds: string[]) => Promise<void>;
   isEbayAdsSyncing?: boolean;
   onBulkEditSelected?: (productIds: string[]) => void;
+  onDraftImported?: (productId: string) => void;
 }
 
 const storeBadgeColors: Record<string, string> = {
@@ -377,6 +378,7 @@ export default function DraftsTable({
   onSyncSelectedEbayAds,
   isEbayAdsSyncing = false,
   onBulkEditSelected,
+  onDraftImported,
 }: DraftsTableProps) {
   const [loadingId, setLoadingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -560,6 +562,9 @@ export default function DraftsTable({
 
       if (res.ok) {
         onToast("Product imported to eBay successfully!", "success");
+        onDraftImported?.(productId);
+        setSelectedIds((prev) => prev.filter((id) => id !== productId));
+        setExpandedProductId((current) => (current === productId ? null : current));
         router.refresh();
       } else {
         if (hasMissingItemSpecifics(data)) {
@@ -1159,6 +1164,7 @@ export default function DraftsTable({
     let succeeded = 0;
     let failed = 0;
     let skippedAmazon = 0;
+    const successfulImportIds: string[] = [];
     const failureMessages: string[] = [];
 
     for (let i = 0; i < selected.length; i += 1) {
@@ -1181,6 +1187,7 @@ export default function DraftsTable({
 
         if (res.ok) {
           succeeded += 1;
+          successfulImportIds.push(product.id);
         } else {
           const data = (await res.json().catch(() => ({}))) as {
             error?: string;
@@ -1203,6 +1210,9 @@ export default function DraftsTable({
     }
 
     router.refresh();
+    for (const productId of successfulImportIds) {
+      onDraftImported?.(productId);
+    }
     setSelectedIds([]);
     setBulkImporting(false);
 
@@ -1718,6 +1728,7 @@ export default function DraftsTable({
                         <InlineEditForm
                           product={product as never}
                           onCollapse={() => setExpandedProductId(null)}
+                          onImported={onDraftImported}
                         />
                       </td>
                     </tr>

@@ -30,6 +30,7 @@ export type AmazonScrapeStageLogger = (
 ) => void;
 
 type ScrapeDirectOptions = {
+  allowMetadataOnly?: boolean;
   onStage?: AmazonScrapeStageLogger;
   postcode?: string;
 };
@@ -963,6 +964,18 @@ export async function scrapeAmazonProductDirect(
   });
 
   if (!postcodeApplied) {
+    if (options.allowMetadataOnly) {
+      logStage(options, "price_extract", Date.now(), {
+        asin: product.asin,
+        localized: false,
+        price: null,
+        priceFound: false,
+        priceSkipped: true,
+        reason: "postcode_failed_metadata_only",
+      });
+      return product;
+    }
+
     throw new AmazonDirectScrapeError(
       "Could not set the Amazon AU delivery postcode. No draft was created.",
       422,
@@ -1024,6 +1037,10 @@ export async function scrapeAmazonProductDirect(
   });
 
   if (!buyboxPrice) {
+    if (options.allowMetadataOnly) {
+      return product;
+    }
+
     throw new AmazonDirectScrapeError(
       "Amazon product was found, but ListFlow could not read the selected variant buybox price. No draft was created.",
       422,

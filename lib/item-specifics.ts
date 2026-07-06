@@ -291,6 +291,57 @@ export function matchAllowedSpecificValue(
   return null;
 }
 
+const GENERIC_TYPE_FALLBACK_VALUES = new Set([
+  "does not apply",
+  "n/a",
+  "na",
+  "none",
+  "not applicable",
+  "not specified",
+  "other",
+  "unknown",
+]);
+
+function findAllowedTypeInText(text: string, allowedValues?: string[]) {
+  if (!allowedValues || allowedValues.length === 0) {
+    return null;
+  }
+
+  const normalizedText = normalizeSpecificValue(
+    text.replace(/[()[\]{}:;,.]+/g, " ")
+  );
+  if (!normalizedText) {
+    return null;
+  }
+
+  for (const value of allowedValues) {
+    const normalizedAllowed = normalizeSpecificValue(value);
+    if (
+      normalizedAllowed.length < 3 ||
+      GENERIC_TYPE_FALLBACK_VALUES.has(normalizedAllowed)
+    ) {
+      continue;
+    }
+
+    if (normalizedText.includes(normalizedAllowed)) {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+function findGenericAllowedTypeFallback(allowedValues?: string[]) {
+  if (!allowedValues || allowedValues.length === 0) {
+    return null;
+  }
+
+  return (
+    allowedValues.find((value) => normalizeSpecificValue(value) === "other") ??
+    null
+  );
+}
+
 function findAllowedSetCountSize(text: string, allowedValues?: string[]) {
   if (!allowedValues || allowedValues.length === 0) {
     return null;
@@ -373,6 +424,11 @@ export function inferTypeItemSpecific(input: {
   const directCandidates = [
     readItemSpecificValue(specifics, ["Type", "Product Type", "Item Type"]),
     readItemSpecificValue(specifics, ["Lens Type", "Lens"]),
+    readItemSpecificValue(specifics, [
+      "Form factor",
+      "Form Factor",
+      "FormFactor",
+    ]),
     readItemSpecificValue(specifics, ["Style"]),
   ];
 
@@ -476,6 +532,33 @@ export function inferTypeItemSpecific(input: {
       patterns: [/\bwater\s+bottle\b/i],
     },
     {
+      values: [
+        "Earbud (In Ear)",
+        "Earbuds",
+        "Earbud",
+        "In-Ear Headphones",
+        "In Ear",
+        "Open-Ear Headphones",
+        "Open Ear",
+        "Clip-On Headphones",
+        "Clip-On",
+        "Headphones",
+        "Headset",
+        "Other",
+      ],
+      patterns: [
+        /\bearbuds?\b/i,
+        /\bearphones?\b/i,
+        /\bopen[-\s]?ear\b/i,
+        /\bclip[-\s]?on\b/i,
+        /\bheadphones?\b/i,
+        /\bheadsets?\b/i,
+        /\bin[-\s]?ear\b/i,
+        /\bon[-\s]?ear\b/i,
+        /\bover[-\s]?ear\b/i,
+      ],
+    },
+    {
       values: ["Bed Wedge Pillow", "Wedge Pillow", "Pillow", "Cushion"],
       patterns: [
         /\bbed\s+wedge\b/i,
@@ -519,7 +602,12 @@ export function inferTypeItemSpecific(input: {
     }
   }
 
-  return null;
+  const matchedAllowedTextValue = findAllowedTypeInText(text, input.allowedValues);
+  if (matchedAllowedTextValue) {
+    return matchedAllowedTextValue;
+  }
+
+  return findGenericAllowedTypeFallback(input.allowedValues);
 }
 
 export function inferSizeItemSpecific(input: {

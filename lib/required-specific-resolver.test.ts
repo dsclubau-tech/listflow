@@ -54,6 +54,28 @@ test("resolveRequiredItemSpecifics preserves user-entered required values", () =
   );
 });
 
+test("resolveRequiredItemSpecifics autofills headphone Type from Amazon specifics", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "SOUNDPEATS PearlClip Pro Ear Clip Earbuds, Open-Ear Wireless Earphones",
+    categoryName: "Electronics > Portable Audio & Headphones > Headphones",
+    brand: "SoundPEATS",
+    itemSpecifics: {
+      Brand: "SoundPEATS",
+      "Form factor": "Clip-On",
+      Connectivity: "Wireless",
+      MPN: "Does not apply",
+    },
+    requiredItemSpecifics: [
+      { name: "Type", values: ["Earbud (In Ear)", "Headphones", "Headset", "Other"] },
+      { name: "Brand", values: ["SoundPEATS", "Unbranded"] },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics.Type, "Earbud (In Ear)");
+  assert.equal(result.itemSpecifics.Brand, "SoundPEATS");
+  assert.deepEqual(result.missingItemSpecifics, []);
+});
+
 test("resolveRequiredItemSpecifics blocks missing unsafe size guesses", () => {
   const result = resolveRequiredItemSpecifics({
     title: "4Pcs Memory Foam Wedge Pillow Set Post Surgery",

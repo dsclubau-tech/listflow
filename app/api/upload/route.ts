@@ -216,10 +216,20 @@ export async function POST(request: Request) {
       });
     }
 
-    if (Object.keys(requiredSpecifics.addedItemSpecifics).length > 0) {
+    const addedRequiredSpecifics = Object.keys(requiredSpecifics.addedItemSpecifics);
+    if (
+      addedRequiredSpecifics.length > 0 ||
+      (requiredSpecifics.missingItemSpecifics.length === 0 &&
+        product.status === ProductStatus.FAILED)
+    ) {
       await prisma.product.update({
         where: { id: product.id },
-        data: { itemSpecifics: requiredSpecifics.itemSpecifics },
+        data: {
+          itemSpecifics: requiredSpecifics.itemSpecifics,
+          ...(requiredSpecifics.missingItemSpecifics.length === 0
+            ? { status: ProductStatus.DRAFT, errorMessage: null }
+            : {}),
+        },
       });
     }
 

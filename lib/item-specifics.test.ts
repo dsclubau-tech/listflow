@@ -101,6 +101,70 @@ test("inferTypeItemSpecific falls back to allowed massager type", () => {
   );
 });
 
+test("inferTypeItemSpecific reads earbud type from headphone products", () => {
+  assert.equal(
+    inferTypeItemSpecific({
+      title: "SOUNDPEATS PearlClip Pro Ear Clip Earbuds, Open-Ear Wireless Earphones",
+      categoryName: "Electronics > Portable Audio & Headphones > Headphones",
+      itemSpecifics: {
+        Brand: "SoundPEATS",
+        "Form factor": "Clip-On",
+        Connectivity: "Wireless",
+      },
+      allowedValues: ["Earbud (In Ear)", "Headphones", "Headset", "Other"],
+    }),
+    "Earbud (In Ear)"
+  );
+});
+
+test("inferTypeItemSpecific uses broad headphone type when specific earbud value is unavailable", () => {
+  assert.equal(
+    inferTypeItemSpecific({
+      title: "SOUNDPEATS PearlClip Pro Ear Clip Earbuds, Open-Ear Wireless Earphones",
+      categoryName: "Electronics > Portable Audio & Headphones > Headphones",
+      itemSpecifics: {
+        "Form factor": "Clip-On",
+      },
+      allowedValues: ["Headphones", "Headset", "Other"],
+    }),
+    "Headphones"
+  );
+});
+
+test("inferTypeItemSpecific reads Amazon form factor when eBay allows it", () => {
+  assert.equal(
+    inferTypeItemSpecific({
+      title: "Wireless audio accessory",
+      itemSpecifics: {
+        "Form factor": "Clip-On",
+      },
+      allowedValues: ["Earbud (In Ear)", "Clip-On", "Headphones", "Other"],
+    }),
+    "Clip-On"
+  );
+});
+
+test("inferTypeItemSpecific matches visible eBay allowed type before Other", () => {
+  assert.equal(
+    inferTypeItemSpecific({
+      title: "Stainless Steel Air Fryer Basket with Handle",
+      categoryName: "Home & Garden > Kitchen Appliances > Air Fryers",
+      allowedValues: ["Deep Fryer", "Air Fryer", "Other"],
+    }),
+    "Air Fryer"
+  );
+});
+
+test("inferTypeItemSpecific uses Other only when eBay allows no better type", () => {
+  assert.equal(
+    inferTypeItemSpecific({
+      title: "Universal household accessory organizer",
+      allowedValues: ["Belt", "Hat", "Other"],
+    }),
+    "Other"
+  );
+});
+
 test("inferTypeItemSpecific does not guess when allowed values do not match", () => {
   assert.equal(
     inferTypeItemSpecific({
