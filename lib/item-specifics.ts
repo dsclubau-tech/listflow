@@ -258,7 +258,7 @@ function normalizeSpecificValue(value: string) {
     .toLowerCase();
 }
 
-function matchAllowedSpecificValue(
+export function matchAllowedSpecificValue(
   candidate: string | null | undefined,
   allowedValues?: string[]
 ) {
@@ -285,6 +285,78 @@ function matchAllowedSpecificValue(
         normalizedAllowed.includes(normalizedCandidate))
     ) {
       return value;
+    }
+  }
+
+  return null;
+}
+
+function findAllowedSetCountSize(text: string, allowedValues?: string[]) {
+  if (!allowedValues || allowedValues.length === 0) {
+    return null;
+  }
+
+  const countMatches = Array.from(
+    text.matchAll(/\b(\d+)\s*(?:pcs?|pieces?|pack|packs|set)\b/gi),
+  );
+
+  if (countMatches.length === 0) {
+    return null;
+  }
+
+  for (const match of countMatches) {
+    const count = match[1];
+    for (const allowed of allowedValues) {
+      const normalizedAllowed = normalizeSpecificValue(allowed);
+      if (
+        normalizedAllowed.includes(count) &&
+        /\b(?:pc|pcs|piece|pieces|pack|set)\b/i.test(normalizedAllowed)
+      ) {
+        return allowed;
+      }
+    }
+  }
+
+  return null;
+}
+
+function findNeutralAllowedSize(
+  text: string,
+  allowedValues?: string[],
+) {
+  if (!allowedValues || allowedValues.length === 0) {
+    return null;
+  }
+
+  const lowerText = text.toLowerCase();
+  const hasVariableSizeHint =
+    /\b(?:twin|single|double|queen|king|small|medium|large|xl|extra\s+large|standard|travel)\b/i.test(
+      lowerText,
+    );
+  if (hasVariableSizeHint) {
+    return null;
+  }
+
+  const looksSingleSizeProduct =
+    /\b(?:wedge\s+pillow|bed\s+wedge|orthopedic\s+pillow|cushion|foot\s+massager|massager|charger|adapter|controller|tile\s+cutter|dash\s+cam|camera|lens|phone\s+case|vacuum|mop|water\s+bottle|router|switch)\b/i.test(
+      lowerText,
+    );
+  if (!looksSingleSizeProduct) {
+    return null;
+  }
+
+  const neutralCandidates = [
+    "One Size",
+    "One Size Fits All",
+    "Universal",
+    "Standard",
+    "Regular",
+  ];
+
+  for (const candidate of neutralCandidates) {
+    const matched = matchAllowedSpecificValue(candidate, allowedValues);
+    if (matched) {
+      return matched;
     }
   }
 
@@ -519,11 +591,21 @@ export function inferSizeItemSpecific(input: {
   }
 
   if (input.allowedValues && input.allowedValues.length > 0) {
+    const setCountSize = findAllowedSetCountSize(text, input.allowedValues);
+    if (setCountSize) {
+      return setCountSize;
+    }
+
     for (const value of input.allowedValues) {
       const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       if (value.trim().length >= 3 && new RegExp(`\\b${escaped}\\b`, "i").test(text)) {
         return value;
       }
+    }
+
+    const neutralSize = findNeutralAllowedSize(text, input.allowedValues);
+    if (neutralSize) {
+      return neutralSize;
     }
 
     return null;

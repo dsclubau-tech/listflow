@@ -6,6 +6,11 @@ import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
 import { resolveProductPolicySelection } from "@/lib/policy-defaults";
 import { invalidateDraftCaches } from "@/lib/cache-tags";
+import { getEbayCategoryAspects, getStoreNumber } from "@/lib/ebay";
+import { resolveRequiredItemSpecifics } from "@/lib/required-specific-resolver";
+import { applyEbayLocationMetadata } from "@/lib/ebay-location";
+
+const SUPPLIER_NAME = "Amazon AU";
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -152,6 +157,59 @@ export async function POST(request: Request) {
       storeSession.storeId
     );
     const createdById = await getInternalUserId();
+    let resolvedItemSpecifics = sanitizeEbayItemSpecifics(itemSpecifics);
+    const supplierSettings =
+      (await prisma.supplierSettings.findUnique({
+        where: {
+          storeId_supplierName: {
+            storeId: storeSession.storeId,
+            supplierName: SUPPLIER_NAME,
+          },
+        },
+        select: { defaultCountry: true, defaultZipcode: true },
+      })) ??
+      (await prisma.supplierSettings.findFirst({
+        where: { storeId: null, supplierName: SUPPLIER_NAME },
+        select: { defaultCountry: true, defaultZipcode: true },
+      }));
+
+    if (/^\d+$/.test(normalizedCategory)) {
+      try {
+        const storeNumber = await getStoreNumber(storeSession.storeId);
+        const aspects = await getEbayCategoryAspects(
+          normalizedCategory,
+          storeNumber,
+        );
+        const requiredItemSpecifics = aspects
+          .filter((aspect) => aspect.required)
+          .map((aspect) => ({
+            name: aspect.name,
+            values: aspect.values.length > 0 ? aspect.values : undefined,
+            inputType: aspect.inputType,
+          }));
+
+        if (requiredItemSpecifics.length > 0) {
+          const resolved = resolveRequiredItemSpecifics({
+            title: filtered.title,
+            categoryName: categoryName || null,
+            description: filtered.description,
+            brand: resolvedItemSpecifics.Brand,
+            itemSpecifics: resolvedItemSpecifics,
+            requiredItemSpecifics,
+          });
+          resolvedItemSpecifics = sanitizeEbayItemSpecifics(
+            resolved.itemSpecifics,
+          );
+        }
+      } catch {
+        // Draft creation should not fail only because eBay Taxonomy is unavailable.
+      }
+    }
+
+    resolvedItemSpecifics = applyEbayLocationMetadata(resolvedItemSpecifics, {
+      country: supplierSettings?.defaultCountry ?? "Australia",
+      postalCode: supplierSettings?.defaultZipcode ?? "3170",
+    });
 
     // Create product
     const product = await prisma.product.create({
@@ -164,7 +222,7 @@ export async function POST(request: Request) {
         categoryName: categoryName || null,
         condition: condition || "New",
         images,
-        itemSpecifics: sanitizeEbayItemSpecifics(itemSpecifics),
+        itemSpecifics: resolvedItemSpecifics,
         status: "DRAFT",
         storeId: storeSession.storeId,
         createdById,

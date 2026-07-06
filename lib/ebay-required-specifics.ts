@@ -2,17 +2,14 @@ import type { Product } from "@/app/generated/prisma/client";
 import type { EbayCategoryAspect } from "@/lib/ebay";
 import { getEbayCategoryAspects } from "@/lib/ebay";
 import {
-  DEFAULT_MPN,
-  inferBrandItemSpecific,
-  inferSizeItemSpecific,
-  inferTypeItemSpecific,
-  inferVolumeItemSpecific,
-  normalizeItemSpecifics,
   parseMissingItemSpecificNames,
-  readItemSpecificValue,
   sanitizeEbayItemSpecifics,
   type ItemSpecificsRecord,
 } from "@/lib/item-specifics";
+import {
+  resolveRequiredItemSpecifics,
+  type RequiredSpecificDecision,
+} from "@/lib/required-specific-resolver";
 
 export type RequiredItemSpecific = {
   name: string;
@@ -25,136 +22,11 @@ export type RequiredSpecificsValidationResult = {
   addedItemSpecifics: ItemSpecificsRecord;
   missingItemSpecifics: string[];
   requiredItemSpecifics: RequiredItemSpecific[];
+  decisions: RequiredSpecificDecision[];
 };
-
-function normalizeName(value: string) {
-  return value.trim().replace(/\s+/g, " ").toLowerCase();
-}
-
-function hasSpecific(specifics: ItemSpecificsRecord, name: string) {
-  return readItemSpecificValue(specifics, [name]) !== null;
-}
-
-function addIfMissing(
-  specifics: ItemSpecificsRecord,
-  added: ItemSpecificsRecord,
-  name: string,
-  value: string | null | undefined
-) {
-  const normalizedValue = value?.trim();
-  if (!normalizedValue || hasSpecific(specifics, name)) {
-    return false;
-  }
-
-  specifics[name] = normalizedValue;
-  added[name] = normalizedValue;
-  return true;
-}
-
-function mergeDefaults(
-  specifics: ItemSpecificsRecord,
-  added: ItemSpecificsRecord,
-  defaults: unknown
-) {
-  const defaultSpecifics = normalizeItemSpecifics(defaults);
-
-  for (const [name, value] of Object.entries(defaultSpecifics)) {
-    addIfMissing(specifics, added, name, value);
-  }
-}
 
 function getRequiredAspects(aspects: EbayCategoryAspect[]) {
   return aspects.filter((aspect) => aspect.required);
-}
-
-function isUnavailablePartNumber(value: string | null | undefined) {
-  const normalized = value?.trim().toLowerCase();
-  return !normalized || normalized === DEFAULT_MPN.toLowerCase();
-}
-
-function readPreferredPartNumber(
-  specifics: ItemSpecificsRecord,
-  aspectName: string
-) {
-  const candidates = [
-    aspectName,
-    "Manufacturer Part Number",
-    "Part Number",
-    "Model Number",
-    "Model name",
-    "Model Name",
-    "Item model number",
-    "Model",
-  ];
-
-  for (const candidate of candidates) {
-    const value = readItemSpecificValue(specifics, [candidate]);
-    if (!isUnavailablePartNumber(value)) {
-      return value;
-    }
-  }
-
-  const mpn = readItemSpecificValue(specifics, ["MPN"]);
-  if (!isUnavailablePartNumber(mpn)) {
-    return mpn;
-  }
-
-  return DEFAULT_MPN;
-}
-
-function inferRequiredSpecific(
-  product: Product,
-  specifics: ItemSpecificsRecord,
-  aspect: EbayCategoryAspect
-) {
-  const aspectName = aspect.name;
-  const normalized = normalizeName(aspectName);
-  const allSpecificText = Object.entries(specifics)
-    .filter(([key]) => !key.startsWith("_"))
-    .map(([key, value]) => `${key}: ${value}`)
-    .join(" ");
-  const descriptionText = product.description.replace(/<[^>]+>/g, " ");
-  const sourceText = [
-    product.title,
-    product.categoryName,
-    descriptionText,
-    allSpecificText,
-  ];
-
-  if (normalized === "volume" || normalized === "capacity") {
-    return inferVolumeItemSpecific(...sourceText);
-  }
-
-  if (normalized === "mpn" || normalized === "manufacturer part number") {
-    return readPreferredPartNumber(specifics, aspectName);
-  }
-
-  if (normalized === "brand") {
-    return inferBrandItemSpecific({
-      itemSpecifics: specifics,
-      allowedValues: aspect.values,
-    });
-  }
-
-  if (normalized === "type") {
-    return inferTypeItemSpecific({
-      title: product.title,
-      categoryName: product.categoryName,
-      itemSpecifics: specifics,
-      allowedValues: aspect.values,
-    });
-  }
-
-  if (normalized === "size" || normalized === "item size") {
-    return inferSizeItemSpecific({
-      title: product.title,
-      categoryName: product.categoryName,
-      itemSpecifics: specifics,
-      allowedValues: aspect.values,
-    });
-  }
-
-  return null;
 }
 
 export async function validateRequiredItemSpecifics(input: {
@@ -163,13 +35,6 @@ export async function validateRequiredItemSpecifics(input: {
   supplierDefaultItemSpecifics?: unknown;
 }): Promise<RequiredSpecificsValidationResult> {
   const specifics = sanitizeEbayItemSpecifics(input.product.itemSpecifics);
-  const addedItemSpecifics: ItemSpecificsRecord = {};
-
-  mergeDefaults(
-    specifics,
-    addedItemSpecifics,
-    input.supplierDefaultItemSpecifics
-  );
 
   const aspects = await getEbayCategoryAspects(
     input.product.category,
@@ -181,34 +46,22 @@ export async function validateRequiredItemSpecifics(input: {
     values: aspect.values.length > 0 ? aspect.values : undefined,
     inputType: aspect.inputType,
   }));
-
-  for (const aspect of requiredAspects) {
-    if (normalizeName(aspect.name) === "brand") {
-      const inferredBrand = inferRequiredSpecific(input.product, specifics, aspect);
-      if (inferredBrand) {
-        specifics.Brand = inferredBrand;
-        addedItemSpecifics.Brand = inferredBrand;
-      }
-      continue;
-    }
-
-    addIfMissing(
-      specifics,
-      addedItemSpecifics,
-      aspect.name,
-      inferRequiredSpecific(input.product, specifics, aspect)
-    );
-  }
-
-  const missingItemSpecifics = requiredAspects
-    .filter((aspect) => !hasSpecific(specifics, aspect.name))
-    .map((aspect) => aspect.name);
+  const resolved = resolveRequiredItemSpecifics({
+    title: input.product.title,
+    categoryName: input.product.categoryName,
+    description: input.product.description,
+    brand: specifics.Brand,
+    itemSpecifics: specifics,
+    supplierDefaultItemSpecifics: input.supplierDefaultItemSpecifics,
+    requiredItemSpecifics,
+  });
 
   return {
-    itemSpecifics: sanitizeEbayItemSpecifics(specifics),
-    addedItemSpecifics,
-    missingItemSpecifics,
+    itemSpecifics: sanitizeEbayItemSpecifics(resolved.itemSpecifics),
+    addedItemSpecifics: resolved.addedItemSpecifics,
+    missingItemSpecifics: resolved.missingItemSpecifics,
     requiredItemSpecifics,
+    decisions: resolved.decisions,
   };
 }
 

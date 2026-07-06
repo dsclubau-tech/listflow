@@ -61,3 +61,23 @@ test("buildAddItemXML keeps required item specifics when trimming", () => {
   assert.match(xml, /<Name>Size<\/Name>\s*<Value>Queen<\/Value>/);
   assert.match(xml, /<Name>Type<\/Name>\s*<Value>Wedge Pillow<\/Value>/);
 });
+
+test("buildAddItemXML repairs country-only item location from postcode", () => {
+  const product = {
+    ...buildTestProduct(),
+    itemSpecifics: {
+      Brand: "Test Brand",
+      _Country: "Australia",
+      _Currency: "AUD",
+      _Site: "Australia",
+      _Location: "Australia",
+      _PostalCode: "3170",
+    },
+  };
+  const xml = buildAddItemXML(product);
+
+  assert.match(xml, /<Country>AU<\/Country>/);
+  assert.match(xml, /<Location>Mulgrave, VIC<\/Location>/);
+  assert.match(xml, /<PostalCode>3170<\/PostalCode>/);
+  assert.doesNotMatch(xml, /<Location>Australia<\/Location>/);
+});

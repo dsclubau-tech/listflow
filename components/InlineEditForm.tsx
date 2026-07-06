@@ -27,6 +27,11 @@ import {
   sanitizeEbayItemSpecifics,
 } from "@/lib/item-specifics";
 import { isValidAsin, normalizeAsin } from "@/lib/price-check-eligibility";
+import { resolveRequiredItemSpecifics } from "@/lib/required-specific-resolver";
+import {
+  getEbayCountryLabel,
+  resolveEbayLocationMetadata,
+} from "@/lib/ebay-location";
 
 // ----- Types -----
 
@@ -120,15 +125,20 @@ function isPlaceholderBrand(value: string | null | undefined) {
 function upsertSpecificRow(
   rows: DraftItemSpecificRow[],
   name: string,
-  value: string
+  value: string,
+  options?: { replaceExisting?: boolean }
 ) {
   const normalizedName = normalizeSpecificName(name);
   let changed = false;
   const next = rows.map((specific) => {
     if (
       normalizeSpecificName(specific.key) !== normalizedName ||
-      specific.value.trim()
+      (specific.value.trim() && !options?.replaceExisting)
     ) {
+      return specific;
+    }
+
+    if (specific.value === value) {
       return specific;
     }
 
@@ -143,57 +153,47 @@ function upsertSpecificRow(
   return changed ? next : rows;
 }
 
+function itemSpecificRowsEqual(
+  left: DraftItemSpecificRow[],
+  right: DraftItemSpecificRow[]
+) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every(
+    (row, index) =>
+      row.key === right[index]?.key && row.value === right[index]?.value
+  );
+}
+
 function prepareRequiredSpecificRows(input: {
   rows: DraftItemSpecificRow[];
   requiredItemSpecifics: RequiredItemSpecific[];
   brand: string;
   title: string;
   categoryName: string;
+  description?: string;
 }) {
   let rows = addMissingItemSpecificRows(
     input.rows,
     input.requiredItemSpecifics.map((specific) => specific.name)
   );
-  let specificsObj = getSpecificsObjectFromRows(rows, input.brand);
 
-  for (const required of input.requiredItemSpecifics) {
-    const existingValue = readSpecificValueFromRows(rows, required.name, input.brand);
-    if (
-      existingValue &&
-      (normalizeSpecificName(required.name) !== "brand" ||
-        !isPlaceholderBrand(existingValue))
-    ) {
-      continue;
-    }
+  const resolved = resolveRequiredItemSpecifics({
+    title: input.title,
+    categoryName: input.categoryName,
+    description: input.description,
+    brand: input.brand,
+    itemSpecifics: getSpecificsObjectFromRows(rows, input.brand),
+    requiredItemSpecifics: input.requiredItemSpecifics,
+  });
 
-    const normalizedName = normalizeSpecificName(required.name);
-    let inferred: string | null = null;
-
-    if (normalizedName === "brand") {
-      inferred = inferBrandItemSpecific({
-        itemSpecifics: specificsObj,
-        brand: input.brand,
-        allowedValues: required.values,
+  for (const decision of resolved.decisions) {
+    if (decision.value) {
+      rows = upsertSpecificRow(rows, decision.name, decision.value, {
+        replaceExisting: decision.source !== "user",
       });
-    } else if (normalizedName === "type") {
-      inferred = inferTypeItemSpecific({
-        title: input.title,
-        categoryName: input.categoryName,
-        itemSpecifics: specificsObj,
-        allowedValues: required.values,
-      });
-    } else if (normalizedName === "size" || normalizedName === "item size") {
-      inferred = inferSizeItemSpecific({
-        title: input.title,
-        categoryName: input.categoryName,
-        itemSpecifics: specificsObj,
-        allowedValues: required.values,
-      });
-    }
-
-    if (inferred) {
-      rows = upsertSpecificRow(rows, required.name, inferred);
-      specificsObj = getSpecificsObjectFromRows(rows, input.brand);
     }
   }
 
@@ -425,12 +425,29 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       } else if (specs["Brand"]) {
         setBrand(specs["Brand"]);
       }
-      // Restore country location
-      if (specs["_Location"]) setCountryLocation(specs["_Location"]);
+      // Restore country code/label separately from item location.
+      if (specs["_Country"]) {
+        setCountryLocation(getEbayCountryLabel(specs["_Country"]));
+      } else if (
+        ["Australia", "United States", "United Kingdom", "Canada"].includes(
+          specs["_Location"],
+        )
+      ) {
+        setCountryLocation(getEbayCountryLabel(specs["_Location"]));
+      }
       // Restore zipcode
       if (specs["_PostalCode"]) setDefaultZipcode(specs["_PostalCode"]);
     }
   }, [product.itemSpecifics]);
+
+  const resolvedItemLocation = useMemo(
+    () =>
+      resolveEbayLocationMetadata({
+        country: countryLocation,
+        postalCode: defaultZipcode,
+      }).location,
+    [countryLocation, defaultZipcode],
+  );
 
   const missingSpecificsFromError = useMemo(
     () => parseMissingItemSpecificNames(product.errorMessage),
@@ -504,6 +521,33 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       setActiveTab(DRAFT_ITEM_SPECIFICS_TAB_INDEX);
     }
   }, [missingSpecificsFromError, requiredItemSpecifics]);
+
+  useEffect(() => {
+    if (requiredItemSpecifics.length === 0) {
+      return;
+    }
+
+    const preparedSpecifics = prepareRequiredSpecificRows({
+      rows: itemSpecifics,
+      requiredItemSpecifics,
+      brand,
+      title,
+      categoryName,
+      description,
+    });
+
+    if (!itemSpecificRowsEqual(itemSpecifics, preparedSpecifics.rows)) {
+      setItemSpecifics(preparedSpecifics.rows);
+    }
+
+    const preparedBrand = inferBrandItemSpecific({
+      itemSpecifics: getSpecificsObjectFromRows(preparedSpecifics.rows, brand),
+      brand,
+    });
+    if (preparedBrand && isPlaceholderBrand(brand)) {
+      setBrand(preparedBrand);
+    }
+  }, [brand, categoryName, description, itemSpecifics, requiredItemSpecifics, title]);
 
   // Fetch policies
   const fetchPolicies = useCallback(async () => {
@@ -908,23 +952,6 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       return false;
     }
 
-    // Country → eBay codes
-    const countryCodeMap: Record<string, string> = {
-      Australia: "AU",
-      "United States": "US",
-      "United Kingdom": "GB",
-    };
-    const currencyMap: Record<string, string> = {
-      Australia: "AUD",
-      "United States": "USD",
-      "United Kingdom": "GBP",
-    };
-    const siteMap: Record<string, string> = {
-      Australia: "Australia",
-      "United States": "US",
-      "United Kingdom": "UK",
-    };
-
     // Build visible itemSpecifics from the table rows
     const specificsObj: Record<string, string> = {};
     const rowsForSpecifics = itemSpecificRowsOverride ?? itemSpecifics;
@@ -939,12 +966,16 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       specificsObj.Brand = brand.trim();
     }
 
-    // Embed internal location metadata with _ prefix so the XML builder can use it
-    specificsObj["_Country"] = countryCodeMap[countryLocation] || "AU";
-    specificsObj["_Currency"] = currencyMap[countryLocation] || "AUD";
-    specificsObj["_Site"] = siteMap[countryLocation] || "Australia";
-    specificsObj["_Location"] = countryLocation;
-    specificsObj["_PostalCode"] = defaultZipcode.trim() || "3000";
+    // Embed internal location metadata with _ prefix so the XML builder can use it.
+    const locationMetadata = resolveEbayLocationMetadata({
+      country: countryLocation,
+      postalCode: defaultZipcode,
+    });
+    specificsObj["_Country"] = locationMetadata.country;
+    specificsObj["_Currency"] = locationMetadata.currency;
+    specificsObj["_Site"] = locationMetadata.site;
+    specificsObj["_Location"] = locationMetadata.location;
+    specificsObj["_PostalCode"] = locationMetadata.postalCode;
 
     const parsedQuantity = Number.parseInt(quantity, 10);
     const normalizedQuantity = Number.isFinite(parsedQuantity)
@@ -1092,6 +1123,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       brand,
       title,
       categoryName,
+      description,
     });
     setItemSpecifics(preparedSpecifics.rows);
     const preparedBrand = inferBrandItemSpecific({
@@ -1824,9 +1856,9 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
               )}
             </div>
 
-            {/* Country Location */}
+            {/* Default Item Country */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Country Location</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Default Item Country</label>
               <select
                 value={countryLocation}
                 onChange={(e) => setCountryLocation(e.target.value)}
@@ -1847,6 +1879,9 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
                 onChange={(e) => setDefaultZipcode(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
               />
+              <p className="mt-1 text-xs text-gray-500">
+                eBay item location: {resolvedItemLocation}
+              </p>
             </div>
 
             {/* Condition */}

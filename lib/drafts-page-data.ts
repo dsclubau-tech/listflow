@@ -1,13 +1,38 @@
 import "server-only";
 
 import { cacheLife, cacheTag } from "next/cache";
+import { ProductStatus } from "@/app/generated/prisma/enums";
 import {
   draftsCacheTag,
+  invalidateProductCaches,
   LISTFLOW_FRESH_CACHE_LIFE,
   productsCacheTag,
 } from "@/lib/cache-tags";
 import { prisma } from "@/lib/prisma";
 import type { SerializedProductRow } from "@/types/product-row";
+
+export async function repairAlreadyListedDrafts(storeId: string) {
+  const result = await prisma.product.updateMany({
+    where: {
+      storeId,
+      status: {
+        in: [ProductStatus.DRAFT, ProductStatus.FAILED],
+      },
+      ebayItemId: { not: null },
+      NOT: { ebayItemId: "" },
+    },
+    data: {
+      status: ProductStatus.IMPORTED,
+      errorMessage: null,
+    },
+  });
+
+  if (result.count > 0) {
+    invalidateProductCaches(storeId);
+  }
+
+  return result.count;
+}
 
 export async function getCachedDraftsPageData(storeId: string) {
   "use cache";

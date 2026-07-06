@@ -5,6 +5,7 @@ import {
   inferTypeItemSpecific,
   sanitizeEbayItemSpecifics,
 } from "@/lib/item-specifics";
+import { applyEbayLocationMetadata } from "@/lib/ebay-location";
 
 type DraftCreateResponse = {
   id?: string;
@@ -93,7 +94,12 @@ function buildItemSpecifics(data: ScrapedProduct) {
     }
   }
 
-  return sanitizeEbayItemSpecifics(specifics);
+  return sanitizeEbayItemSpecifics(
+    applyEbayLocationMetadata(specifics, {
+      country: data.supplierDefaults?.country,
+      postalCode: data.supplierDefaults?.zipcode,
+    }),
+  );
 }
 
 export async function createDraftFromScrapedProduct(data: ScrapedProduct) {

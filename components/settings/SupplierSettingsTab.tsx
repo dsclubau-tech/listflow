@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { getZipcodeLocationText } from "@/lib/ebay-location";
 
 interface SupplierSettingsData {
   id: string;
@@ -49,18 +50,6 @@ type SubTab = (typeof subTabs)[number];
 
 const countries = ["Australia", "United States", "United Kingdom", "Canada"];
 const weightUnits = ["Kg", "Lb", "Oz", "G"];
-
-function zipcodeLocationText(zip: string): string {
-  const map: Record<string, string> = {
-    "3170": "Mulgrave, VIC",
-    "2000": "Sydney, NSW",
-    "4000": "Brisbane, QLD",
-    "5000": "Adelaide, SA",
-    "6000": "Perth, WA",
-    "7000": "Hobart, TAS",
-  };
-  return map[zip] || "";
-}
 
 export default function SupplierSettingsTab() {
   const [loading, setLoading] = useState(true);
@@ -301,8 +290,10 @@ export default function SupplierSettingsTab() {
                       onChange={(e) => updateField("defaultZipcode", e.target.value)}
                       className="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
                     />
-                    {zipcodeLocationText(settings.defaultZipcode) && (
-                      <span className="text-xs text-gray-400">{zipcodeLocationText(settings.defaultZipcode)}</span>
+                    {getZipcodeLocationText(settings.defaultZipcode, settings.defaultCountry) && (
+                      <span className="text-xs text-gray-400">
+                        {getZipcodeLocationText(settings.defaultZipcode, settings.defaultCountry)}
+                      </span>
                     )}
                   </div>
                 </div>

@@ -9,6 +9,9 @@ import { resolveProductPolicySelection } from "@/lib/policy-defaults";
 import { invalidateProductCaches } from "@/lib/cache-tags";
 import { isValidAsin, normalizeAsin } from "@/lib/price-check-eligibility";
 import { ProductStatus } from "@/app/generated/prisma/enums";
+import { applyEbayLocationMetadata } from "@/lib/ebay-location";
+
+const SUPPLIER_NAME = "Amazon AU";
 
 export async function PATCH(
   request: Request,
@@ -210,7 +213,28 @@ export async function PATCH(
   }
 
   if (data.itemSpecifics !== undefined) {
-    data.itemSpecifics = sanitizeEbayItemSpecifics(data.itemSpecifics);
+    const supplierSettings =
+      (await prisma.supplierSettings.findUnique({
+        where: {
+          storeId_supplierName: {
+            storeId: storeSession.storeId,
+            supplierName: SUPPLIER_NAME,
+          },
+        },
+        select: { defaultCountry: true, defaultZipcode: true },
+      })) ??
+      (await prisma.supplierSettings.findFirst({
+        where: { storeId: null, supplierName: SUPPLIER_NAME },
+        select: { defaultCountry: true, defaultZipcode: true },
+      }));
+
+    data.itemSpecifics = applyEbayLocationMetadata(
+      sanitizeEbayItemSpecifics(data.itemSpecifics),
+      {
+        country: supplierSettings?.defaultCountry ?? "Australia",
+        postalCode: supplierSettings?.defaultZipcode ?? "3170",
+      },
+    );
 
     if (product.status === ProductStatus.FAILED) {
       data.status = ProductStatus.DRAFT;

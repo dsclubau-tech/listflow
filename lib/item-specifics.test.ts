@@ -152,6 +152,28 @@ test("inferSizeItemSpecific does not guess product count as size", () => {
   );
 });
 
+test("inferSizeItemSpecific uses neutral allowed size for single-size products", () => {
+  assert.equal(
+    inferSizeItemSpecific({
+      title: "4Pcs Memory Foam Wedge Pillow Set Post Surgery",
+      categoryName: "Bed Wedge Pillows",
+      allowedValues: ["Small", "Medium", "One Size"],
+    }),
+    "One Size"
+  );
+});
+
+test("inferSizeItemSpecific only uses count as size when eBay allows it", () => {
+  assert.equal(
+    inferSizeItemSpecific({
+      title: "4Pcs Memory Foam Wedge Pillow Set Post Surgery",
+      categoryName: "Bed Wedge Pillows",
+      allowedValues: ["Set of 4", "Set of 6"],
+    }),
+    "Set of 4"
+  );
+});
+
 test("parseMissingItemSpecificNames extracts missing eBay specifics", () => {
   assert.deepEqual(
     parseMissingItemSpecificNames(

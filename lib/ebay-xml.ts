@@ -5,6 +5,7 @@ import {
   normalizeItemSpecifics,
   type ItemSpecificsRecord,
 } from "@/lib/item-specifics";
+import { resolveEbayLocationMetadata } from "@/lib/ebay-location";
 
 type ProductWithStore = Product & { store: Store };
 type ProductSpecifics = ItemSpecificsRecord;
@@ -111,12 +112,20 @@ function getValidatedCategoryId(product: Product): string {
 }
 
 function getLocationMetadata(specifics: ProductSpecifics | null) {
+  const metadata = resolveEbayLocationMetadata({
+    country: specifics?.["_Country"],
+    currency: specifics?.["_Currency"],
+    site: specifics?.["_Site"],
+    location: specifics?.["_Location"],
+    postalCode: specifics?.["_PostalCode"],
+  });
+
   return {
-    country: specifics?.["_Country"] || "AU",
-    currency: specifics?.["_Currency"] || "AUD",
-    site: specifics?.["_Site"] || "Australia",
-    location: specifics?.["_Location"] || "Australia",
-    postalCode: specifics?.["_PostalCode"] || "3000",
+    country: metadata.country,
+    currency: metadata.currency,
+    site: metadata.site,
+    location: metadata.location,
+    postalCode: metadata.postalCode,
   };
 }
 

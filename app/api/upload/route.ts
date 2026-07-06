@@ -14,9 +14,74 @@ import {
   validateRequiredItemSpecifics,
 } from "@/lib/ebay-required-specifics";
 import { getEbayCustomLabel } from "@/lib/sku";
+import { extractDuplicateListingItemId } from "@/lib/ebay-upload-reconciliation";
 
 function isTooManyItemSpecificsError(message: string | undefined) {
   return /too many item specifics|maximum.+item specifics/i.test(message ?? "");
+}
+
+async function createSuccessUploadLog(input: {
+  productId: string;
+  storeId: string;
+  userId: string;
+  ebayItemId: string;
+}) {
+  try {
+    await prisma.uploadLog.create({
+      data: {
+        productId: input.productId,
+        storeId: input.storeId,
+        userId: input.userId,
+        status: "SUCCESS",
+        ebayItemId: input.ebayItemId,
+      },
+    });
+  } catch {
+    // Upload logs are diagnostic only; never let logging put a live listing back into Drafts.
+  }
+}
+
+async function markProductImported(input: {
+  productId: string;
+  storeId: string;
+  userId: string;
+  ebayItemId: string;
+  price?: number;
+}) {
+  const ebayItemId = input.ebayItemId.trim();
+  if (!ebayItemId) {
+    throw new Error("eBay upload succeeded but did not return an item ID.");
+  }
+
+  await prisma.product.update({
+    where: { id: input.productId },
+    data: {
+      status: ProductStatus.IMPORTED,
+      ebayItemId,
+      errorMessage: null,
+      ...(input.price !== undefined ? { price: input.price } : {}),
+    },
+  });
+
+  await createSuccessUploadLog({
+    productId: input.productId,
+    storeId: input.storeId,
+    userId: input.userId,
+    ebayItemId,
+  });
+
+  invalidateProductCaches(input.storeId);
+
+  return ebayItemId;
+}
+
+async function getCurrentListedItemId(productId: string, storeId: string) {
+  const currentProduct = await prisma.product.findFirst({
+    where: { id: productId, storeId },
+    select: { ebayItemId: true },
+  });
+
+  return currentProduct?.ebayItemId?.trim() || null;
 }
 
 export async function POST(request: Request) {
@@ -59,24 +124,41 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Product not found" }, { status: 404 });
   }
 
-  if (
-    product.ebayItemId ||
-    product.status === ProductStatus.IMPORTED ||
-    product.status === ProductStatus.ON_HOLD
-  ) {
-    log.warn("upload/route", "Rejected upload for already listed product", {
-      productId,
-      status: product.status,
-      ebayItemId: product.ebayItemId,
-    });
-    return NextResponse.json(
-      { error: "Product is already listed on eBay" },
-      { status: 400 },
-    );
-  }
-
   try {
     const userId = await getInternalUserId();
+
+    const existingEbayItemId = product.ebayItemId?.trim();
+    if (existingEbayItemId) {
+      const itemId = await markProductImported({
+        productId,
+        storeId: product.storeId,
+        userId,
+        ebayItemId: existingEbayItemId,
+      });
+
+      log.info("upload/route", "Already-listed draft reconciled as imported", {
+        productId,
+        ebayItemId: itemId,
+        previousStatus: product.status,
+      });
+
+      return NextResponse.json({ success: true, itemId, reconciled: true });
+    }
+
+    if (
+      product.status === ProductStatus.IMPORTED ||
+      product.status === ProductStatus.ON_HOLD
+    ) {
+      log.warn("upload/route", "Rejected upload for listed product without eBay item id", {
+        productId,
+        status: product.status,
+      });
+      return NextResponse.json(
+        { error: "Product is already listed on eBay but is missing the eBay item ID." },
+        { status: 400 },
+      );
+    }
+
     const storeNumber = await getStoreNumber(product.storeId);
     const policySelection = await resolveProductPolicySelection(
       product.storeId,
@@ -126,6 +208,13 @@ export async function POST(request: Request) {
       storeNumber,
       supplierDefaultItemSpecifics: supplierSettings?.defaultItemSpecifics,
     });
+    if (requiredSpecifics.decisions.length > 0) {
+      log.info("upload/route", "Required item specifics preflight completed", {
+        productId,
+        decisions: requiredSpecifics.decisions,
+        missingItemSpecifics: requiredSpecifics.missingItemSpecifics,
+      });
+    }
 
     if (Object.keys(requiredSpecifics.addedItemSpecifics).length > 0) {
       await prisma.product.update({
@@ -228,29 +317,69 @@ export async function POST(request: Request) {
         storeNumber,
       });
 
-      await prisma.product.update({
-        where: { id: productId },
-        data: {
-          status: "IMPORTED",
-          ebayItemId: result.itemId,
-          errorMessage: null,
-          ...(overrideStartPrice !== undefined ? { price: overrideStartPrice } : {}),
-        },
+      const itemId = await markProductImported({
+        productId,
+        storeId: product.storeId,
+        userId,
+        ebayItemId: result.itemId ?? "",
+        price: overrideStartPrice,
       });
 
-      await prisma.uploadLog.create({
-        data: {
+      return NextResponse.json({ success: true, itemId });
+    }
+
+    const currentListedItemId = await getCurrentListedItemId(
+      productId,
+      product.storeId,
+    );
+    if (currentListedItemId) {
+      const itemId = await markProductImported({
+        productId,
+        storeId: product.storeId,
+        userId,
+        ebayItemId: currentListedItemId,
+        price: overrideStartPrice,
+      });
+
+      log.warn("upload/route", "Ignored stale AddItem failure because product is already listed", {
+        productId,
+        ebayItemId: itemId,
+        storeNumber,
+        staleError: result.errorMessage,
+      });
+
+      return NextResponse.json({ success: true, itemId, reconciled: true });
+    }
+
+    const duplicateListingItemId = extractDuplicateListingItemId(result.errorMessage);
+    if (duplicateListingItemId) {
+      const existingProduct = await prisma.product.findFirst({
+        where: {
+          id: { not: productId },
+          storeId: product.storeId,
+          ebayItemId: duplicateListingItemId,
+        },
+        select: { id: true },
+      });
+
+      if (!existingProduct) {
+        const itemId = await markProductImported({
           productId,
           storeId: product.storeId,
           userId,
-          status: "SUCCESS",
-          ebayItemId: result.itemId,
-        },
-      });
+          ebayItemId: duplicateListingItemId,
+          price: overrideStartPrice,
+        });
 
-      invalidateProductCaches(storeSession.storeId);
+        log.warn("upload/route", "Duplicate listing response reconciled as imported", {
+          productId,
+          ebayItemId: itemId,
+          storeNumber,
+          ebayError: result.errorMessage,
+        });
 
-      return NextResponse.json({ success: true, itemId: result.itemId });
+        return NextResponse.json({ success: true, itemId, reconciled: true });
+      }
     }
 
     const missingSpecificsResponse = buildMissingItemSpecificsResponse(
