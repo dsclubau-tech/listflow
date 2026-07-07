@@ -40,6 +40,14 @@ type CheerioSelection = ReturnType<CheerioAPI>;
 const PRODUCT_FETCH_TIMEOUT_MS = 12_000;
 const POSTCODE_SET_TIMEOUT_MS = 8_000;
 
+type PostcodeApplyResult = {
+  attempts: number;
+  lastStatus: number | null;
+  requestedPostcode: string;
+  responseConfirmed: boolean;
+  tokenFound: boolean;
+};
+
 const AMAZON_FIELDS_TO_REMOVE = new Set([
   "asin",
   "date first available",
@@ -317,12 +325,21 @@ async function setAmazonDeliveryPostcodeDirect(
   pageHtml: string
 ) {
   const normalizedPostcode = postcode.replace(/\D/g, "").slice(0, 4);
+  const result: PostcodeApplyResult = {
+    attempts: 0,
+    lastStatus: null,
+    requestedPostcode: normalizedPostcode,
+    responseConfirmed: false,
+    tokenFound: false,
+  };
+
   if (normalizedPostcode.length !== 4) {
-    return false;
+    return result;
   }
 
   try {
     const token = extractAmazonPostcodeToken(load(pageHtml), pageHtml);
+    result.tokenFound = Boolean(token);
     const body = new URLSearchParams({
       locationType: "LOCATION_INPUT",
       zipCode: normalizedPostcode,
@@ -340,6 +357,11 @@ async function setAmazonDeliveryPostcodeDirect(
         ...requestHeaders(canonicalUrl),
         accept: "application/json, text/javascript, */*; q=0.01",
         "content-type": "application/x-www-form-urlencoded; charset=UTF-8",
+        origin: "https://www.amazon.com.au",
+        referer: canonicalUrl,
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
         "x-requested-with": "XMLHttpRequest",
         ...(token ? { "anti-csrftoken-a2z": token } : {}),
       },
@@ -347,6 +369,7 @@ async function setAmazonDeliveryPostcodeDirect(
     );
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
+      result.attempts += 1;
       const response = await fetch(
         "https://www.amazon.com.au/gp/delivery/ajax/address-change.html",
         {
@@ -360,6 +383,7 @@ async function setAmazonDeliveryPostcodeDirect(
       );
 
       storeResponseCookies(cookieJar, response.headers);
+      result.lastStatus = response.status;
 
       if (!response.ok) {
         continue;
@@ -367,13 +391,14 @@ async function setAmazonDeliveryPostcodeDirect(
 
       const text = await response.text();
       if (parseAmazonPostcodeResponse(text, normalizedPostcode)) {
-        return true;
+        result.responseConfirmed = true;
+        return result;
       }
     }
 
-    return false;
+    return result;
   } catch {
-    return false;
+    return result;
   }
 }
 
@@ -383,6 +408,26 @@ function detectAmazonBlock(html: string) {
     text.includes("robot check") ||
     text.includes("enter the characters you see below") ||
     text.includes("sorry, we just need to make sure you're not a robot")
+  );
+}
+
+export function verifyAmazonDeliveryPostcode(html: string, postcode: string) {
+  const normalizedPostcode = postcode.replace(/\D/g, "").slice(0, 4);
+  if (normalizedPostcode.length !== 4 || detectAmazonBlock(html)) {
+    return false;
+  }
+
+  const $ = load(html);
+  const text = normalizeText($("body").text());
+  const visibleOrStructuredLocationText = `${text} ${html.slice(0, 80_000)}`;
+
+  return (
+    new RegExp(`\\b${normalizedPostcode}\\b`).test(
+      visibleOrStructuredLocationText
+    ) &&
+    /\b(?:deliver|delivery|postcode|postal|location|address|australia|au)\b/i.test(
+      visibleOrStructuredLocationText
+    )
   );
 }
 
@@ -952,7 +997,7 @@ export async function scrapeAmazonProductDirect(
 
   const postcode = getScrapePostcode(options.postcode);
   const postcodeStartedAt = Date.now();
-  const postcodeApplied = await setAmazonDeliveryPostcodeDirect(
+  const postcodeResult = await setAmazonDeliveryPostcodeDirect(
     canonicalUrl,
     postcode,
     cookieJar,
@@ -960,10 +1005,27 @@ export async function scrapeAmazonProductDirect(
   );
   logStage(options, "postcode_set", postcodeStartedAt, {
     postcode,
-    applied: postcodeApplied,
+    attempts: postcodeResult.attempts,
+    lastStatus: postcodeResult.lastStatus,
+    responseConfirmed: postcodeResult.responseConfirmed,
+    tokenFound: postcodeResult.tokenFound,
   });
 
-  if (!postcodeApplied) {
+  let localizedHtml: string;
+  try {
+    const refetchStartedAt = Date.now();
+    localizedHtml = await fetchAmazonHtml(
+      canonicalUrl,
+      PRODUCT_FETCH_TIMEOUT_MS,
+      canonicalUrl,
+      cookieJar
+    );
+    logStage(options, "page_fetch", refetchStartedAt, {
+      canonicalUrl,
+      bytes: localizedHtml.length,
+      localized: true,
+    });
+  } catch (error) {
     if (options.allowMetadataOnly) {
       logStage(options, "price_extract", Date.now(), {
         asin: product.asin,
@@ -971,33 +1033,40 @@ export async function scrapeAmazonProductDirect(
         price: null,
         priceFound: false,
         priceSkipped: true,
-        reason: "postcode_failed_metadata_only",
+        reason: "localized_refetch_failed_metadata_only",
       });
       return product;
     }
 
-    throw new AmazonDirectScrapeError(
-      "Could not set the Amazon AU delivery postcode. No draft was created.",
-      422,
-      "AMAZON_POSTCODE_FAILED"
-    );
+    throw error;
   }
 
-  const refetchStartedAt = Date.now();
-  const localizedHtml = await fetchAmazonHtml(
-    canonicalUrl,
-    PRODUCT_FETCH_TIMEOUT_MS,
-    canonicalUrl,
-    cookieJar
+  const postcodeVerified = verifyAmazonDeliveryPostcode(
+    localizedHtml,
+    postcode
   );
-  logStage(options, "page_fetch", refetchStartedAt, {
-    canonicalUrl,
-    bytes: localizedHtml.length,
-    localized: true,
-  });
+  const postcodeApplied =
+    postcodeResult.responseConfirmed || postcodeVerified;
 
   const localizedParseStartedAt = Date.now();
-  const localizedProduct = parseProductHtml(localizedHtml, canonicalUrl);
+  let localizedProduct: ScrapedProduct;
+  try {
+    localizedProduct = parseProductHtml(localizedHtml, canonicalUrl);
+  } catch (error) {
+    if (options.allowMetadataOnly) {
+      logStage(options, "price_extract", Date.now(), {
+        asin: product.asin,
+        localized: false,
+        price: null,
+        priceFound: false,
+        priceSkipped: true,
+        reason: "localized_parse_failed_metadata_only",
+      });
+      return product;
+    }
+
+    throw error;
+  }
   logStage(options, "html_parse", localizedParseStartedAt, {
     asin: localizedProduct.asin,
     title: localizedProduct.title,
@@ -1006,6 +1075,9 @@ export async function scrapeAmazonProductDirect(
     priceSkipped: true,
     reason: "price_extracted_by_localized_buybox_only",
     localized: true,
+    postcodeApplied,
+    postcodeResponseConfirmed: postcodeResult.responseConfirmed,
+    postcodeVerified,
   });
 
   product.title = localizedProduct.title || product.title;
@@ -1032,6 +1104,9 @@ export async function scrapeAmazonProductDirect(
     price: buyboxPrice?.price ?? null,
     priceFound: buyboxPrice !== null,
     priceSource: buyboxPrice?.priceSource ?? "localized_buybox",
+    postcodeApplied,
+    postcodeResponseConfirmed: postcodeResult.responseConfirmed,
+    postcodeVerified,
     selector: buyboxPrice?.selector ?? null,
     containerSelector: buyboxPrice?.containerSelector ?? null,
   });
@@ -1042,7 +1117,7 @@ export async function scrapeAmazonProductDirect(
     }
 
     throw new AmazonDirectScrapeError(
-      "Amazon product was found, but ListFlow could not read the selected variant buybox price. No draft was created.",
+      "Amazon product was found, but ListFlow could not read the selected variant buybox price after checking delivery location. No draft was created.",
       422,
       "AMAZON_BUYBOX_PRICE_MISSING"
     );
