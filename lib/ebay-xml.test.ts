@@ -34,6 +34,23 @@ test("buildAddItemXML sends custom label as eBay SKU", () => {
   assert.match(xml, /<SKU>B07VJ5LG19<\/SKU>/);
 });
 
+test("buildAddItemXML caps eBay title without changing description", () => {
+  const longTitle =
+    "ZipString Aracna Glow-in-The-Dark Webshooter - Superhero String Launcher Toy for Kids, Teens & Adults - Patented, Reloading, Durable & Viral Web Shooting Action Toy";
+  const product = {
+    ...buildTestProduct(),
+    title: longTitle,
+    description: `<h2>${longTitle}</h2>`,
+  };
+
+  const xml = buildAddItemXML(product);
+  const titleMatch = xml.match(/<Title>([^<]+)<\/Title>/);
+
+  assert.ok(titleMatch);
+  assert.equal(titleMatch[1].length <= 80, true);
+  assert.match(xml, /Superhero String Launcher Toy/);
+});
+
 test("buildAddItemXML keeps required item specifics when trimming", () => {
   const product = {
     ...buildTestProduct(),

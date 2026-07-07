@@ -1,4 +1,5 @@
 import { Prisma, type Product, type Variant } from "@/app/generated/prisma/client";
+import { dedupeProductImages } from "@/lib/product-images";
 import { prisma } from "@/lib/prisma";
 import { getAutomaticSku } from "@/lib/sku";
 import type { VariantPayload, VariantRecord } from "@/types/variant";
@@ -52,10 +53,7 @@ function normalizeImages(value: unknown) {
     return [];
   }
 
-  return value
-    .filter((image): image is string => typeof image === "string")
-    .map((image) => image.trim())
-    .filter(Boolean);
+  return dedupeProductImages(value);
 }
 
 function normalizeItemSpecifics(value: unknown) {
@@ -76,7 +74,7 @@ export function serializeVariant(variant: VariantSource): VariantRecord {
     id: variant.id,
     sku: variant.sku,
     title: variant.title,
-    images: [...variant.images],
+    images: dedupeProductImages(variant.images),
     buyPrice: variant.buyPrice.toString(),
     feesPercent: variant.feesPercent,
     feesFixed: variant.feesFixed,
@@ -155,7 +153,7 @@ function buildDefaultVariantData(product: DefaultVariantSource) {
       automaticSkuFilling: product.automaticSkuFilling,
     }),
     title: "Default",
-    images: [...product.images],
+    images: dedupeProductImages(product.images),
     buyPrice: product.price,
     feesPercent: 0,
     feesFixed: 0,

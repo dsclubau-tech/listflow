@@ -1,9 +1,16 @@
 import type { Browser, Page } from "playwright-core";
 import { launchScraperBrowser } from "@/lib/scraper-browser";
 import { isUsefulItemSpecificCandidate } from "@/lib/item-specifics";
+import {
+  DEFAULT_AMAZON_PRICE_TRACKING_MODE,
+  type AmazonPriceTrackingMode,
+} from "@/lib/amazon-price-tracking";
+import { dedupeProductImages } from "@/lib/product-images";
+import { toEbayListingTitle } from "@/lib/product-title";
 
 export interface ScrapedProduct {
   title: string;
+  fullTitle?: string;
   description: string;
   images: string[];
   price: number | null;
@@ -15,6 +22,11 @@ export interface ScrapedProduct {
   variantName: string | null;
   asin: string;
   brand: string;
+  amazonPriceTrackingMode?: AmazonPriceTrackingMode;
+  priceChoices?: {
+    regular: { price: number; label: string } | null;
+    deal: { price: number; label: string } | null;
+  };
   supplierDefaults?: {
     quantity: number;
     country: string;
@@ -32,6 +44,7 @@ export interface ScrapedProduct {
 export interface ScrapedAmazonPrice {
   price: number | null;
   stockLeft: number | null;
+  priceMode?: AmazonPriceTrackingMode;
 }
 
 const USER_AGENTS = [
@@ -449,6 +462,138 @@ async function extractAmazonPriceFromPage(
   return bestPrice;
 }
 
+async function extractAmazonBuyboxPriceForMode(
+  page: Page,
+  mode: AmazonPriceTrackingMode
+): Promise<number | null> {
+  return page
+    .evaluate((requestedMode) => {
+      const containerSelectors = [
+        "#corePrice_feature_div",
+        "#corePriceDisplay_desktop_feature_div",
+        "#apex_desktop",
+        "#buybox",
+        "#desktop_buybox",
+      ];
+      const priceSelectors = [
+        ".priceToPay .a-offscreen",
+        ".apexPriceToPay .a-offscreen",
+        ".a-price.priceToPay .a-offscreen",
+        ".a-price.apexPriceToPay .a-offscreen",
+        'span.a-price[data-a-color="price"]:not(.a-text-price) .a-offscreen',
+        'span.a-price[data-a-color="base"]:not(.a-text-price) .a-offscreen',
+        ".a-price:not(.a-text-price) .a-offscreen",
+        "#priceblock_ourprice",
+        "#priceblock_dealprice",
+        "#price_inside_buybox",
+      ];
+      const ignoredAncestorSelector = [
+        ".a-text-price",
+        ".basisPrice",
+        ".coupon",
+        ".couponBadge",
+        ".promoPriceBlockMessage",
+        ".reinventPriceSavingsPercentageMargin",
+        ".savingsPercentage",
+        "#dealprice_savings",
+        "#listPrice",
+        "#regularprice_savings",
+        "#sns-base-price",
+        '[class*="coupon"]',
+        '[id*="coupon"]',
+      ].join(",");
+
+      function parsePrice(value: string | null | undefined) {
+        if (!value) return null;
+        const normalized = value.replace(/[^\d.,]/g, "").trim();
+        if (!normalized) return null;
+        const parsed = Number.parseFloat(normalized.replace(/,/g, ""));
+        if (!Number.isFinite(parsed) || parsed < 1) return null;
+        return Math.round(parsed * 100) / 100;
+      }
+
+      function parseFirstPrice(value: string) {
+        const match = value.match(/(?:A(?:U)?\$|\$)\s*[\d,]+(?:\.\d{2})?/i);
+        return parsePrice(match?.[0]);
+      }
+
+      function findLabelledPrice(
+        text: string,
+        labelPattern: RegExp,
+        stopPattern: RegExp
+      ) {
+        const normalized = text.replace(/\s+/g, " ").trim();
+        const labelMatch = normalized.match(labelPattern);
+        if (!labelMatch || labelMatch.index === undefined) return null;
+
+        const sectionStart = labelMatch.index + labelMatch[0].length;
+        const rest = normalized.slice(sectionStart);
+        const stopMatch = rest.match(stopPattern);
+        const section =
+          stopMatch && stopMatch.index !== undefined
+            ? rest.slice(0, stopMatch.index)
+            : rest;
+        return parseFirstPrice(section);
+      }
+
+      for (const containerSelector of containerSelectors) {
+        const container = document.querySelector(containerSelector);
+        if (!container) continue;
+
+        const containerText = container.textContent ?? "";
+        const labelledDeal = findLabelledPrice(
+          containerText,
+          /deal price/i,
+          /regular price/i
+        );
+        const labelledRegular = findLabelledPrice(
+          containerText,
+          /regular price/i,
+          /deal price/i
+        );
+
+        if (requestedMode === "DEAL" && labelledDeal !== null) {
+          return labelledDeal;
+        }
+
+        if (requestedMode === "REGULAR" && labelledRegular !== null) {
+          return labelledRegular;
+        }
+
+        for (const selector of priceSelectors) {
+          const elements = Array.from(container.querySelectorAll(selector));
+          for (const element of elements) {
+            if (element.closest(ignoredAncestorSelector)) continue;
+
+            const price = parsePrice(element.textContent);
+            if (price === null) continue;
+
+            const nearbyText = (
+              element.closest("div, li, td, tr, span")?.textContent ?? ""
+            )
+              .replace(/\s+/g, " ")
+              .trim();
+            const selectorLooksDeal = selector.includes("dealprice");
+            const contextLooksDeal =
+              /deal price|prime exclusive|prime deal/i.test(nearbyText);
+            const contextLooksRegular = /regular price/i.test(nearbyText);
+            const elementMode =
+              selectorLooksDeal || (contextLooksDeal && !contextLooksRegular)
+                ? "DEAL"
+                : "REGULAR";
+
+            if (elementMode === requestedMode) {
+              return price;
+            }
+          }
+        }
+      }
+
+      return null;
+    }, mode)
+    .catch(() => null);
+}
+
 async function extractAmazonBuyingOptionsPrice(
   page: Page,
   normalizedAsin: string,
@@ -507,7 +652,8 @@ async function extractAmazonBuyingOptionsPrice(
 export async function scrapeAmazonPrice(
   asin: string,
   browser?: Browser,
-  postcode?: string
+  postcode?: string,
+  priceTrackingMode: AmazonPriceTrackingMode = DEFAULT_AMAZON_PRICE_TRACKING_MODE
 ): Promise<ScrapedAmazonPrice> {
   const normalizedAsin = asin.trim().toUpperCase();
 
@@ -653,11 +799,10 @@ export async function scrapeAmazonPrice(
       })
       .catch(() => null);
 
-    let price = await extractAmazonPriceFromPage(page);
-
-    if (price === null) {
-      price = await extractAmazonBuyingOptionsPrice(page, normalizedAsin);
-    }
+    const price = await extractAmazonBuyboxPriceForMode(
+      page,
+      priceTrackingMode
+    );
 
     // Diagnostic: log page context when price extraction fails
     if (price === null) {
@@ -678,7 +823,7 @@ export async function scrapeAmazonPrice(
       );
     }
 
-    return { price, stockLeft };
+    return { price, stockLeft, priceMode: priceTrackingMode };
   } finally {
     await context.close().catch(() => {});
 
@@ -839,7 +984,7 @@ export async function scrapeAmazonProduct(
     );
 
     // Images — extract all unique full-size image URLs
-    const images = await page.evaluate(() => {
+    const scrapedImages = await page.evaluate(() => {
       const scripts = Array.from(document.querySelectorAll("script"));
       for (const script of scripts) {
         const match = script.textContent?.match(
@@ -871,6 +1016,7 @@ export async function scrapeAmazonProduct(
           (u) => u.includes("amazon") && !u.includes("play-button")
         );
     });
+    const images = dedupeProductImages(scrapedImages);
 
     // ASIN
     const asin = await page
@@ -1322,16 +1468,12 @@ export async function scrapeAmazonProduct(
       return specs;
     });
 
-    // Truncate title to eBay's 80-character limit at a word boundary
-    const truncatedTitle = title.length > 80
-      ? title.slice(0, 80).replace(/\s+\S*$/, "")
-      : title;
-
     // Map Amazon field names to eBay-required field names
     const normalizedSpecs = normalizeItemSpecificsForEbay(itemSpecifics);
 
     return {
-      title: truncatedTitle,
+      title: toEbayListingTitle(title),
+      fullTitle: title,
       description: cleanDescriptionHtml(description),
       images,
       price,

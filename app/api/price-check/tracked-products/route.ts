@@ -31,6 +31,7 @@ export async function GET(request: Request) {
         title: true,
         asin: true,
         amazonPrice: true,
+        amazonPriceTrackingMode: true,
         ebayItemId: true,
         variants: {
           orderBy: { createdAt: "asc" },
@@ -49,6 +50,7 @@ export async function GET(request: Request) {
         title: product.title,
         asin: product.asin,
         amazonPrice: product.amazonPrice?.toString() ?? null,
+        amazonPriceTrackingMode: product.amazonPriceTrackingMode,
         ebayItemId: product.ebayItemId,
         buyPrice: product.variants[0]?.buyPrice.toString() ?? "0.00",
         sellPrice: product.variants[0]?.sellPrice.toString() ?? "0.00",

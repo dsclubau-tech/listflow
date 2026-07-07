@@ -6,6 +6,8 @@ import {
   type ItemSpecificsRecord,
 } from "@/lib/item-specifics";
 import { resolveEbayLocationMetadata } from "@/lib/ebay-location";
+import { dedupeProductImages } from "@/lib/product-images";
+import { toEbayListingTitle } from "@/lib/product-title";
 
 type ProductWithStore = Product & { store: Store };
 type ProductSpecifics = ItemSpecificsRecord;
@@ -141,7 +143,7 @@ function getDispatchTimeMax(specifics: ProductSpecifics | null) {
 }
 
 function buildPictureDetailsXml(images: string[]): string {
-  const pictureUrls = images
+  const pictureUrls = dedupeProductImages(images)
     .slice(0, 12)
     .map((url) => `      <PictureURL>${escapeXml(url)}</PictureURL>`)
     .join("\n");
@@ -225,7 +227,7 @@ export function buildAddItemXML(
   <ErrorLanguage>en_US</ErrorLanguage>
   <WarningLevel>High</WarningLevel>
   <Item>
-    <Title>${escapeXml(product.title.slice(0, 80))}</Title>
+    <Title>${escapeXml(toEbayListingTitle(product.title))}</Title>
     <Description><![CDATA[${product.description}]]></Description>
     <PrimaryCategory>
       <CategoryID>${escapeXml(categoryId)}</CategoryID>
@@ -441,7 +443,7 @@ export function buildReviseItemXML(
   <WarningLevel>High</WarningLevel>
   <Item>
     <ItemID>${escapeXml(product.ebayItemId)}</ItemID>
-${includeTitle ? `    <Title>${escapeXml(product.title.slice(0, 80))}</Title>` : ""}
+${includeTitle ? `    <Title>${escapeXml(toEbayListingTitle(product.title))}</Title>` : ""}
 ${includeDescription ? `    <Description><![CDATA[${product.description}]]></Description>` : ""}
 ${startPrice ? `    <StartPrice>${startPrice}</StartPrice>` : ""}
 ${includeDispatchTimeMax ? `    <DispatchTimeMax>${dispatchTimeMax}</DispatchTimeMax>` : ""}

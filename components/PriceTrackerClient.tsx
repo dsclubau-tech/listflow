@@ -5,6 +5,10 @@ import { useRouter } from "next/navigation";
 import AsinLink from "@/components/AsinLink";
 import Toast from "@/components/Toast";
 import { useToast } from "@/hooks/useToast";
+import {
+  getAmazonPriceTrackingLabel,
+  type AmazonPriceTrackingMode,
+} from "@/lib/amazon-price-tracking";
 
 interface PriceTrackerSummary {
   trackedCount: number;
@@ -44,6 +48,7 @@ interface TrackedProductOption {
   title: string;
   asin: string | null;
   amazonPrice: string | null;
+  amazonPriceTrackingMode: AmazonPriceTrackingMode;
   ebayItemId: string | null;
   buyPrice: string;
   sellPrice: string;
@@ -1124,6 +1129,13 @@ export default function PriceTrackerClient({
                             ? formatMoney(selectedProduct.amazonPrice)
                             : "Not stored"}
                         </p>
+                        {selectedProduct && (
+                          <p className="mt-1 text-xs text-gray-500">
+                            {getAmazonPriceTrackingLabel(
+                              selectedProduct.amazonPriceTrackingMode
+                            )}
+                          </p>
+                        )}
                       </div>
                       <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-3">
                         <p className="text-xs font-medium uppercase tracking-wide text-gray-500">

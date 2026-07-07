@@ -7,6 +7,12 @@ import { callEbayReviseItem, getStoreNumber } from "@/lib/ebay";
 import { resolveDescriptionTemplate } from "@/lib/template-resolver";
 import { logger } from "@/lib/logger";
 import { invalidatePriceCaches } from "@/lib/cache-tags";
+import {
+  getAmazonPriceTrackingLabel,
+  getAmazonPriceUnavailableMessage,
+  normalizeAmazonPriceTrackingMode,
+  type AmazonPriceTrackingMode,
+} from "@/lib/amazon-price-tracking";
 
 const PRICE_TOLERANCE = 0.01;
 const MIN_SAFE_PRODUCT_DELAY_MS = 1000;
@@ -308,12 +314,17 @@ export async function runPriceCheck(
 
   await reportProgress();
 
-  const scrapeAmazonPriceWithRetry = async (productId: string, asin: string) => {
+  const scrapeAmazonPriceWithRetry = async (
+    productId: string,
+    asin: string,
+    priceTrackingMode: AmazonPriceTrackingMode
+  ) => {
     const scrapeWithOwnedBrowser = () =>
       scrapeAmazonPrice(
         asin,
         undefined,
-        supplierSettings.scrapePostcode || undefined
+        supplierSettings.scrapePostcode || undefined,
+        priceTrackingMode
       );
 
     try {
@@ -325,6 +336,7 @@ export async function runPriceCheck(
         {
           productId,
           asin,
+          priceTrackingMode,
           errorMessage: getErrorMessage(error),
         }
       );
@@ -335,6 +347,7 @@ export async function runPriceCheck(
         logger.warn("price-checker/run", "Amazon scrape retry failed", {
           productId,
           asin,
+          priceTrackingMode,
           errorMessage: getErrorMessage(retryError),
         });
 
@@ -383,6 +396,9 @@ export async function runPriceCheck(
       );
       const priceHistorySource =
         simulatedAmazonPrice !== null ? "SIMULATED" : "LIVE";
+      const priceTrackingMode = normalizeAmazonPriceTrackingMode(
+        product.amazonPriceTrackingMode
+      );
 
       try {
         let currentAmazonPrice: number | null;
@@ -393,7 +409,8 @@ export async function runPriceCheck(
         } else {
           const scrapeResult = await scrapeAmazonPriceWithRetry(
             product.id,
-            product.asin
+            product.asin,
+            priceTrackingMode
           );
           currentAmazonPrice = scrapeResult.price;
           scrapedAmazonStockLeft = scrapeResult.stockLeft;
@@ -408,13 +425,16 @@ export async function runPriceCheck(
             where: { id: product.id },
             data: {
               lastPriceCheck: checkedAt,
-              priceCheckError: "Current Amazon price is unavailable.",
+              priceCheckError:
+                getAmazonPriceUnavailableMessage(priceTrackingMode),
             },
           });
 
           logger.warn("price-checker/run", "Amazon price unavailable", {
             productId: product.id,
             asin: product.asin,
+            priceTrackingMode,
+            requestedPrice: getAmazonPriceTrackingLabel(priceTrackingMode),
           });
 
           await reportProductComplete(product.id);
@@ -458,6 +478,7 @@ export async function runPriceCheck(
             productId: product.id,
             asin: product.asin,
             baselinePrice: currentAmazonPrice,
+            priceTrackingMode,
           });
 
           await reportProductComplete(product.id);
@@ -600,6 +621,7 @@ export async function runPriceCheck(
                 ebayRevised: false,
                 errorMessage: null,
                 source: priceHistorySource,
+                amazonPriceTrackingMode: priceTrackingMode,
                 appliedAt: null,
                 createdAt: checkedAt,
               })),
@@ -615,6 +637,7 @@ export async function runPriceCheck(
             oldBuyPrice: primaryBuyPrice,
             newBuyPrice: currentAmazonPrice,
             newSellPrice: mismatchVariants[0]?.nextSellPrice,
+            priceTrackingMode,
           });
 
           await reportProductComplete(product.id);
@@ -748,6 +771,7 @@ export async function runPriceCheck(
               ebayRevised: false,
               errorMessage: null,
               source: priceHistorySource,
+              amazonPriceTrackingMode: priceTrackingMode,
               appliedAt: null,
               createdAt: checkedAt,
             })),
@@ -764,6 +788,7 @@ export async function runPriceCheck(
           currentAmazonPrice,
           changePercent: roundMoney(changePercent),
           usedSimulatedPrice: simulatedAmazonPrice !== null,
+          priceTrackingMode,
         });
       } catch (error) {
         result.failed += 1;

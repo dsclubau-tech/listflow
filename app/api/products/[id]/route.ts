@@ -10,6 +10,9 @@ import { invalidateProductCaches } from "@/lib/cache-tags";
 import { isValidAsin, normalizeAsin } from "@/lib/price-check-eligibility";
 import { ProductStatus } from "@/app/generated/prisma/enums";
 import { applyEbayLocationMetadata } from "@/lib/ebay-location";
+import { isAmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
+import { dedupeProductImages } from "@/lib/product-images";
+import { normalizeFullProductTitle, toEbayListingTitle } from "@/lib/product-title";
 
 const SUPPLIER_NAME = "Amazon AU";
 
@@ -52,6 +55,7 @@ export async function PATCH(
 
   const allowedFields = [
     "title",
+    "fullTitle",
     "description",
     "price",
     "quantity",
@@ -68,6 +72,7 @@ export async function PATCH(
     "templateId",
     "internalNote",
     "promotedAdPercent",
+    "amazonPriceTrackingMode",
   ];
 
   const data: Record<string, unknown> = {};
@@ -89,7 +94,20 @@ export async function PATCH(
     if (typeof data.title !== "string" || !data.title.trim()) {
       return NextResponse.json({ error: "Title is required" }, { status: 400 });
     }
-    data.title = data.title.trim();
+    data.title = toEbayListingTitle(data.title as string);
+  }
+
+  if (data.fullTitle !== undefined) {
+    if (data.fullTitle !== null && typeof data.fullTitle !== "string") {
+      return NextResponse.json(
+        { error: "Full title must be a string or null" },
+        { status: 400 },
+      );
+    }
+    data.fullTitle =
+      typeof data.fullTitle === "string"
+        ? normalizeFullProductTitle(data.fullTitle as string) || null
+        : null;
   }
 
   if (data.description !== undefined) {
@@ -167,6 +185,15 @@ export async function PATCH(
     }
   }
 
+  if (data.amazonPriceTrackingMode !== undefined) {
+    if (!isAmazonPriceTrackingMode(data.amazonPriceTrackingMode)) {
+      return NextResponse.json(
+        { error: "Amazon price tracking mode must be REGULAR or DEAL" },
+        { status: 400 },
+      );
+    }
+  }
+
   if (data.category !== undefined) {
     if (typeof data.category !== "string" || !/^\d+$/.test(data.category.trim())) {
       return NextResponse.json(
@@ -198,18 +225,18 @@ export async function PATCH(
   }
 
   if (data.images !== undefined) {
-    if (
-      !Array.isArray(data.images) ||
-      data.images.length === 0 ||
-      data.images.some((image) => typeof image !== "string" || !image.trim())
-    ) {
+    const normalizedImages = Array.isArray(data.images)
+      ? dedupeProductImages(data.images)
+      : [];
+
+    if (normalizedImages.length === 0) {
       return NextResponse.json(
         { error: "At least one valid image URL is required" },
         { status: 400 },
       );
     }
 
-    data.images = data.images.map((image) => image.trim());
+    data.images = normalizedImages;
   }
 
   if (data.itemSpecifics !== undefined) {
@@ -308,16 +335,22 @@ export async function PATCH(
 
   try {
     const titleStr = typeof data.title === "string" ? data.title : undefined;
+    const fullTitleStr = typeof data.fullTitle === "string" ? data.fullTitle : undefined;
     const descStr = typeof data.description === "string" ? data.description : undefined;
     let removedKeywords: string[] = [];
 
-    if (titleStr || descStr) {
+    if (fullTitleStr || titleStr || descStr) {
       const filtered = await applyKeywordFilter(
-        titleStr || product.title,
+        fullTitleStr || titleStr || product.fullTitle || product.title,
         descStr || product.description,
         storeSession.storeId,
       );
-      if (titleStr) data.title = filtered.title;
+      if (fullTitleStr) {
+        data.fullTitle = normalizeFullProductTitle(filtered.title);
+        data.title = toEbayListingTitle(filtered.title);
+      } else if (titleStr) {
+        data.title = toEbayListingTitle(filtered.title);
+      }
       if (descStr) data.description = filtered.description;
       removedKeywords = filtered.removedKeywords;
     }

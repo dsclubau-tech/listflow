@@ -1,10 +1,12 @@
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
 import { normalizeBuiltinDescriptionTemplate } from "@/lib/builtin-description-templates";
+import { getTemplateProductTitle } from "@/lib/product-title";
 
 interface ProductForTemplate {
   storeId: string;
   title: string;
+  fullTitle?: string | null;
   description: string;
   images: string[];
   itemSpecifics: unknown;
@@ -72,8 +74,9 @@ export async function resolveDescriptionTemplate(product: ProductForTemplate): P
     contentLength: normalizedTemplate.content.length,
   });
 
+  const templateTitle = getTemplateProductTitle(product);
   const mainImage = product.images.length > 0
-    ? `<img src="${escapeHtml(product.images[0])}" alt="${escapeHtml(product.title)}" style="max-width:100%;height:auto;" />`
+    ? `<img src="${escapeHtml(product.images[0])}" alt="${escapeHtml(templateTitle)}" style="max-width:100%;height:auto;" />`
     : "";
   const specs = product.itemSpecifics as Record<string, string> | null;
   const specificsHtml = specs
@@ -89,7 +92,7 @@ export async function resolveDescriptionTemplate(product: ProductForTemplate): P
   const resolved = replacePlaceholder(
     replacePlaceholder(
       replacePlaceholder(
-        replacePlaceholder(content, "title", escapeHtml(product.title)),
+        replacePlaceholder(content, "title", escapeHtml(templateTitle)),
         "main_image_with_tag",
         mainImage,
       ),

@@ -11,6 +11,10 @@ import {
   getSelectedPriceCheckSummary,
 } from "@/lib/price-check-eligibility";
 import { getProductDisplayProfits } from "@/lib/product-profit";
+import {
+  getAmazonPriceTrackingLabel,
+  normalizeAmazonPriceTrackingMode,
+} from "@/lib/amazon-price-tracking";
 import type { SerializedProductRow } from "@/types/product-row";
 
 interface DraftsTableProps {
@@ -198,6 +202,10 @@ function PriceCell({ product }: { product: SerializedProductRow }) {
     .filter((value): value is number => value !== null);
   const fallbackBuyPrice = parseMoney(product.amazonPrice ?? product.price);
   const fallbackSellPrice = parseMoney(product.price);
+  const hasAmazonTracking = Boolean(product.asin);
+  const amazonPriceTrackingMode = normalizeAmazonPriceTrackingMode(
+    (product as { amazonPriceTrackingMode?: unknown }).amazonPriceTrackingMode
+  );
 
   return (
     <div className="min-w-0 space-y-1 text-xs font-medium leading-5">
@@ -213,6 +221,11 @@ function PriceCell({ product }: { product: SerializedProductRow }) {
           )}
         </span>
       </div>
+      {hasAmazonTracking && (
+        <div className="text-[11px] font-medium text-gray-500">
+          {getAmazonPriceTrackingLabel(amazonPriceTrackingMode)}
+        </div>
+      )}
       <div className="max-w-full whitespace-normal break-words">
         <span className="text-gray-500">SELL</span>{" "}
         <span className="font-semibold text-gray-900">

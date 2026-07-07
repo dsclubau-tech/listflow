@@ -6,6 +6,12 @@ import {
   sanitizeEbayItemSpecifics,
 } from "@/lib/item-specifics";
 import { applyEbayLocationMetadata } from "@/lib/ebay-location";
+import { dedupeProductImages } from "@/lib/product-images";
+import {
+  applyTitleCase,
+  normalizeFullProductTitle,
+  toEbayListingTitle,
+} from "@/lib/product-title";
 
 type DraftCreateResponse = {
   id?: string;
@@ -44,17 +50,16 @@ async function readDraftCreateResponse(response: Response) {
 }
 
 function normalizeTitle(data: ScrapedProduct) {
+  const sourceTitle = data.fullTitle || data.title;
   if (!data.supplierDefaults?.capitalizeTitle) {
-    return data.title;
+    return normalizeFullProductTitle(sourceTitle);
   }
 
-  return data.title
-    .split(" ")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(" ");
+  return applyTitleCase(normalizeFullProductTitle(sourceTitle));
 }
 
 function buildItemSpecifics(data: ScrapedProduct) {
+  const sourceTitle = data.fullTitle || data.title;
   const specifics: Record<string, string> = {
     ...(data.supplierDefaults?.defaultItemSpecifics ?? {}),
     ...data.itemSpecifics,
@@ -74,7 +79,7 @@ function buildItemSpecifics(data: ScrapedProduct) {
 
   if (!specifics.Type) {
     const inferredType = inferTypeItemSpecific({
-      title: data.title,
+      title: sourceTitle,
       categoryName: data.categoryName || data.category,
       itemSpecifics: specifics,
     });
@@ -85,7 +90,7 @@ function buildItemSpecifics(data: ScrapedProduct) {
 
   if (!specifics.Size) {
     const inferredSize = inferSizeItemSpecific({
-      title: data.title,
+      title: sourceTitle,
       categoryName: data.categoryName || data.category,
       itemSpecifics: specifics,
     });
@@ -110,20 +115,27 @@ export async function createDraftFromScrapedProduct(data: ScrapedProduct) {
   }
 
   const defaults = data.supplierDefaults;
+  const images = dedupeProductImages(data.images);
+  if (images.length === 0) {
+    throw new Error("Amazon product was found, but no usable product images were found.");
+  }
+
   const response = await fetch("/api/products", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      title: normalizeTitle(data),
+      title: toEbayListingTitle(normalizeTitle(data)),
+      fullTitle: normalizeTitle(data),
       description: data.description,
       price: data.price,
       quantity: defaults?.quantity ?? 1,
       condition: data.condition || "New",
       category: data.categoryId || "",
       categoryName: data.categoryName || data.category || null,
-      images: data.images,
+      images,
       itemSpecifics: buildItemSpecifics(data),
       asin: data.asin || undefined,
+      amazonPriceTrackingMode: data.amazonPriceTrackingMode ?? "REGULAR",
       shippingPolicyId: defaults?.shippingPolicyId || undefined,
       returnPolicyId: defaults?.returnPolicyId || undefined,
       paymentPolicyId: defaults?.paymentPolicyId || undefined,

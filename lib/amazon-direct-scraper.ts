@@ -1,18 +1,33 @@
 import "server-only";
 
 import { load, type CheerioAPI } from "cheerio";
-import { extractLocalizedBuyboxPrice } from "@/lib/amazon-buybox-price";
+import {
+  extractLocalizedBuyboxPriceChoices,
+  type AmazonBuyboxPriceChoices,
+  type AmazonBuyboxPriceResult,
+} from "@/lib/amazon-buybox-price";
 import {
   extractAmazonPostcodeToken,
   extractAmazonProductTitle,
   parseAmazonPostcodeResponse,
 } from "@/lib/amazon-direct-parse";
 import {
+  DEFAULT_AMAZON_PRICE_TRACKING_MODE,
+  getAmazonPriceTrackingLabel,
+  normalizeAmazonPriceTrackingMode,
+  type AmazonPriceTrackingMode,
+} from "@/lib/amazon-price-tracking";
+import {
   inferBrandItemSpecific,
   inferSizeItemSpecific,
   inferTypeItemSpecific,
   isUsefulItemSpecificCandidate,
 } from "@/lib/item-specifics";
+import {
+  dedupeProductImages,
+  normalizeProductImageUrl,
+} from "@/lib/product-images";
+import { normalizeFullProductTitle, toEbayListingTitle } from "@/lib/product-title";
 import type { ScrapedProduct } from "@/lib/amazon-scraper";
 
 export type AmazonScrapeStage =
@@ -33,6 +48,7 @@ type ScrapeDirectOptions = {
   allowMetadataOnly?: boolean;
   onStage?: AmazonScrapeStageLogger;
   postcode?: string;
+  priceTrackingMode?: AmazonPriceTrackingMode;
 };
 
 type CheerioSelection = ReturnType<CheerioAPI>;
@@ -525,12 +541,7 @@ function extractFirstText($: CheerioAPI, selectors: string[]) {
 }
 
 function normalizeImageUrl(url: string) {
-  const clean = url
-    .replace(/&amp;/g, "&")
-    .replace(/\._[A-Z]{2}\d+_\./, ".")
-    .replace(/\._.*?_\./, ".");
-
-  return /^https?:\/\//i.test(clean) ? clean : "";
+  return normalizeProductImageUrl(url) ?? "";
 }
 
 function addImage(images: string[], url: string | null | undefined) {
@@ -604,7 +615,7 @@ function extractImages($: CheerioAPI, html: string) {
     addImage(images, $(image).attr("src"));
   });
 
-  return images;
+  return dedupeProductImages(images);
 }
 
 function extractAsin($: CheerioAPI, canonicalUrl: string, html: string) {
@@ -903,10 +914,10 @@ function parseProductHtml(html: string, canonicalUrl: string): ScrapedProduct {
   }
 
   const $ = load(html);
-  const rawTitle = extractAmazonProductTitle($, html);
-  const title = rawTitle.length > 80 ? rawTitle.slice(0, 80).replace(/\s+\S*$/, "") : rawTitle;
+  const fullTitle = normalizeFullProductTitle(extractAmazonProductTitle($, html));
+  const title = toEbayListingTitle(fullTitle);
 
-  if (!title) {
+  if (!fullTitle) {
     throw new AmazonDirectScrapeError(
       "Could not read the Amazon product title. No draft was created.",
       422,
@@ -916,12 +927,12 @@ function parseProductHtml(html: string, canonicalUrl: string): ScrapedProduct {
 
   const asin = extractAsin($, canonicalUrl, html);
   const images = extractImages($, html);
-  const description = renderDescription($, title);
+  const description = renderDescription($, fullTitle);
   const rawItemSpecifics = extractItemSpecifics($);
   const category = extractCategory($);
   const variantName = extractVariantName($);
   const brand = extractBrand($, rawItemSpecifics);
-  const itemSpecifics = withInferredItemSpecifics(rawItemSpecifics, title, {
+  const itemSpecifics = withInferredItemSpecifics(rawItemSpecifics, fullTitle, {
     brand,
     categoryName: category,
     variantName,
@@ -929,6 +940,7 @@ function parseProductHtml(html: string, canonicalUrl: string): ScrapedProduct {
 
   return {
     title,
+    fullTitle,
     description,
     images,
     price: null,
@@ -940,7 +952,26 @@ function parseProductHtml(html: string, canonicalUrl: string): ScrapedProduct {
     variantName,
     asin,
     brand,
+    amazonPriceTrackingMode: DEFAULT_AMAZON_PRICE_TRACKING_MODE,
   } satisfies ScrapedProduct;
+}
+
+function toScrapedPriceChoice(choice: AmazonBuyboxPriceResult | null) {
+  if (!choice) {
+    return null;
+  }
+
+  return {
+    price: choice.price,
+    label: getAmazonPriceTrackingLabel(choice.mode),
+  };
+}
+
+function toScrapedPriceChoices(choices: AmazonBuyboxPriceChoices) {
+  return {
+    regular: toScrapedPriceChoice(choices.regular),
+    deal: toScrapedPriceChoice(choices.deal),
+  };
 }
 
 function logStage(
@@ -1081,6 +1112,7 @@ export async function scrapeAmazonProductDirect(
   });
 
   product.title = localizedProduct.title || product.title;
+  product.fullTitle = localizedProduct.fullTitle || product.fullTitle;
   product.description = localizedProduct.description || product.description;
   product.images =
     localizedProduct.images.length > 0 ? localizedProduct.images : product.images;
@@ -1094,22 +1126,40 @@ export async function scrapeAmazonProductDirect(
   product.brand = localizedProduct.brand || product.brand;
 
   const priceStartedAt = Date.now();
-  const buyboxPrice = extractLocalizedBuyboxPrice(
+  const priceChoices = extractLocalizedBuyboxPriceChoices(
     load(localizedHtml),
     product.asin
   );
+  const hasExplicitMode = options.priceTrackingMode !== undefined;
+  const requestedMode = normalizeAmazonPriceTrackingMode(
+    options.priceTrackingMode
+  );
+  const buyboxPrice = hasExplicitMode
+    ? requestedMode === "DEAL"
+      ? priceChoices.deal
+      : priceChoices.regular
+    : priceChoices.regular ?? priceChoices.deal;
+  const availableModes = [
+    priceChoices.regular ? "REGULAR" : null,
+    priceChoices.deal ? "DEAL" : null,
+  ].filter(Boolean);
   logStage(options, "price_extract", priceStartedAt, {
     asin: product.asin,
     localized: true,
     price: buyboxPrice?.price ?? null,
     priceFound: buyboxPrice !== null,
     priceSource: buyboxPrice?.priceSource ?? "localized_buybox",
+    requestedMode,
+    selectedMode: buyboxPrice?.mode ?? null,
+    availableModes,
     postcodeApplied,
     postcodeResponseConfirmed: postcodeResult.responseConfirmed,
     postcodeVerified,
     selector: buyboxPrice?.selector ?? null,
     containerSelector: buyboxPrice?.containerSelector ?? null,
   });
+
+  product.priceChoices = toScrapedPriceChoices(priceChoices);
 
   if (!buyboxPrice) {
     if (options.allowMetadataOnly) {
@@ -1124,6 +1174,7 @@ export async function scrapeAmazonProductDirect(
   }
 
   product.price = buyboxPrice.price;
+  product.amazonPriceTrackingMode = buyboxPrice.mode;
 
   if (product.images.length === 0) {
     throw new AmazonDirectScrapeError(

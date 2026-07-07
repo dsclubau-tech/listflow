@@ -77,6 +77,11 @@ enum PriceCheckSource {
   SIMULATED
 }
 
+enum AmazonPriceTrackingMode {
+  REGULAR
+  DEAL
+}
+
 enum PriceCheckJobStatus {
   QUEUED
   RUNNING
@@ -166,6 +171,7 @@ enum PromotedAdRateStrategy {
 model Product {
   id            String        @id @default(cuid())
   title         String
+  fullTitle     String?
   description   String        @db.Text
   price         Decimal       @db.Decimal(10, 2)
   quantity      Int           @default(1)
@@ -179,6 +185,7 @@ model Product {
   errorMessage  String?       @db.Text
   asin          String?
   amazonPrice   Decimal?      @db.Decimal(10, 2)
+  amazonPriceTrackingMode AmazonPriceTrackingMode @default(REGULAR)
   amazonStockLeft Int?
   promotedAdPercent Float      @default(0)
   promotedAdStatus PromotedAdStatus @default(UNKNOWN)
@@ -207,6 +214,7 @@ model Product {
 
   @@index([storeId, status])
   @@index([storeId, asin])
+  @@index([storeId, amazonPriceTrackingMode])
   @@index([storeId, ebayItemId])
   @@index([storeId, promotedAdStatus])
   @@index([storeId, promotedAdPercent])
@@ -256,6 +264,7 @@ model PriceHistory {
   ebayRevised       Boolean  @default(false)
   errorMessage      String?  @db.Text
   source            PriceCheckSource @default(LIVE)
+  amazonPriceTrackingMode AmazonPriceTrackingMode @default(REGULAR)
   appliedAt         DateTime?
   createdAt         DateTime @default(now())
 

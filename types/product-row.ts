@@ -1,4 +1,5 @@
 import type { Product, Store, User } from "@/app/generated/prisma/client";
+import type { AmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
 
 export interface SerializedPriceHistorySummary {
   id: string;
@@ -9,6 +10,7 @@ export interface SerializedPriceHistorySummary {
   changePercent: number;
   ebayRevised: boolean;
   errorMessage: string | null;
+  amazonPriceTrackingMode?: AmazonPriceTrackingMode;
   appliedAt: string | null;
   createdAt: string;
 }

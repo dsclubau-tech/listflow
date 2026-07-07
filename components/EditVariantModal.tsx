@@ -9,6 +9,7 @@ import {
   calculateSellPrice,
   calculateTotalFees,
 } from "@/lib/variant-pricing";
+import { dedupeProductImages } from "@/lib/product-images";
 import type { VariantPayload, VariantRecord } from "@/types/variant";
 
 interface EditVariantModalProps {
@@ -67,10 +68,7 @@ function toFiniteNumber(value: unknown) {
 }
 
 function parseImages(imagesText: string) {
-  return imagesText
-    .split(/\r?\n/)
-    .map((image) => image.trim())
-    .filter(Boolean);
+  return dedupeProductImages(imagesText.split(/\r?\n/));
 }
 
 function normalizeItemSpecifics(
@@ -120,7 +118,7 @@ function buildFormState(props: {
     return {
       sku: variant.sku || "",
       title: variant.title,
-      imagesText: variant.images.join("\n"),
+      imagesText: dedupeProductImages(variant.images).join("\n"),
       buyPrice: variant.buyPrice,
       feesPercent: String(variant.feesPercent),
       feesFixed: String(variant.feesFixed),
@@ -144,7 +142,7 @@ function buildFormState(props: {
   return recalculateSellPriceForState({
     sku: defaultSku || "",
     title: "Default",
-    imagesText: defaultImages.join("\n"),
+    imagesText: dedupeProductImages(defaultImages).join("\n"),
     buyPrice: toMoneyString(defaultBuyPrice),
     feesPercent: String(pricingDefaults?.feesPercent ?? 0),
     feesFixed: String(pricingDefaults?.feesFixed ?? 0),
@@ -405,7 +403,7 @@ export default function EditVariantModal({
     const payload: VariantPayload = {
       sku: form.sku.trim() || null,
       title: form.title.trim(),
-      images: imageUrls,
+      images: dedupeProductImages(imageUrls),
       buyPrice: toNumber(form.buyPrice),
       feesPercent: toNumber(form.feesPercent),
       feesFixed: toNumber(form.feesFixed),

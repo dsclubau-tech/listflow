@@ -9,6 +9,21 @@ import RichTextEditor from "@/components/RichTextEditor";
 import type { ScrapedProduct } from "@/components/AddProductModal";
 import { reportClientError } from "@/lib/client-logger";
 import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
+import {
+  DEFAULT_AMAZON_PRICE_TRACKING_MODE,
+  getAmazonPriceTrackingLabel,
+  normalizeAmazonPriceTrackingMode,
+  type AmazonPriceTrackingMode,
+} from "@/lib/amazon-price-tracking";
+import {
+  dedupeProductImages,
+  normalizeProductImageUrl,
+} from "@/lib/product-images";
+import {
+  applyTitleCase,
+  normalizeFullProductTitle,
+  toEbayListingTitle,
+} from "@/lib/product-title";
 
 interface Store {
   id: string;
@@ -81,10 +96,13 @@ export default function DraftEditForm({
 
   // Product fields
   const [title, setTitle] = useState("");
+  const [fullTitle, setFullTitle] = useState("");
   const [category, setCategory] = useState("");
   const [categoryName, setCategoryName] = useState("");
   const [condition, setCondition] = useState("New");
   const [price, setPrice] = useState("");
+  const [amazonPriceTrackingMode, setAmazonPriceTrackingMode] =
+    useState<AmazonPriceTrackingMode>(DEFAULT_AMAZON_PRICE_TRACKING_MODE);
   const [quantity, setQuantity] = useState("1");
   const [brand, setBrand] = useState("");
   const [variant, setVariant] = useState("");
@@ -102,6 +120,12 @@ export default function DraftEditForm({
   // Images
   const [images, setImages] = useState<string[]>([]);
   const [hoveredImage, setHoveredImage] = useState<number | null>(null);
+  const [manualImageUrl, setManualImageUrl] = useState("");
+  const [imageMessage, setImageMessage] = useState<{
+    text: string;
+    title?: string;
+    variant: "success" | "error";
+  } | null>(null);
 
   // Item specifics
   const [itemSpecifics, setItemSpecifics] = useState<
@@ -131,14 +155,14 @@ export default function DraftEditForm({
       const defaults = scrapedData.supplierDefaults;
 
       // Apply title — capitalize if supplier setting is enabled
-      let scrapedTitle = scrapedData.title;
+      let scrapedTitle = normalizeFullProductTitle(
+        scrapedData.fullTitle || scrapedData.title
+      );
       if (defaults?.capitalizeTitle) {
-        scrapedTitle = scrapedTitle
-          .split(" ")
-          .map((w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase())
-          .join(" ");
+        scrapedTitle = applyTitleCase(scrapedTitle);
       }
-      setTitle(scrapedTitle);
+      setFullTitle(scrapedTitle);
+      setTitle(toEbayListingTitle(scrapedTitle));
 
       setCategory(scrapedData.categoryId || "");
       setCategoryName(scrapedData.categoryName || scrapedData.category || "");
@@ -146,12 +170,17 @@ export default function DraftEditForm({
       setPrice(
         scrapedData.price !== null ? scrapedData.price.toFixed(2) : ""
       );
+      setAmazonPriceTrackingMode(
+        normalizeAmazonPriceTrackingMode(scrapedData.amazonPriceTrackingMode)
+      );
       setQuantity(String(defaults?.quantity ?? 1));
       setBrand(scrapedData.brand);
       setVariant(scrapedData.variantName || "");
       setDescription(scrapedData.description);
-      setImages([...scrapedData.images]);
+      setImages(dedupeProductImages(scrapedData.images));
       setHoveredImage(null);
+      setManualImageUrl("");
+      setImageMessage(null);
       setItemSpecifics(
         Object.entries({
           ...(defaults?.defaultItemSpecifics ?? {}),
@@ -448,17 +477,19 @@ export default function DraftEditForm({
     }
 
     const body = {
-      title: title.trim().slice(0, 80),
+      title: toEbayListingTitle(title),
+      fullTitle,
       description,
       price: parseFloat(price),
       quantity: parseInt(quantity),
       condition,
       category: category.trim(),
       categoryName: categoryName.trim() || null,
-      images,
+      images: dedupeProductImages(images),
       itemSpecifics: sanitizeEbayItemSpecifics(specificsObj),
       storeId,
       asin: scrapedData.asin || undefined,
+      amazonPriceTrackingMode,
       shippingPolicyId: shippingPolicyId || undefined,
       returnPolicyId: returnPolicyId || undefined,
       paymentPolicyId: paymentPolicyId || undefined,
@@ -490,9 +521,75 @@ export default function DraftEditForm({
       }
     } catch {
       onError("An unexpected error occurred");
-    } finally {
+  } finally {
       setIsSubmitting(false);
     }
+  }
+
+  function addManualImage() {
+    const normalized = normalizeProductImageUrl(manualImageUrl);
+    if (!normalized) {
+      setImageMessage({
+        title: "Image not added",
+        text: "Enter a valid direct image URL.",
+        variant: "error",
+      });
+      return;
+    }
+
+    const nextImages = dedupeProductImages([...images, normalized]);
+    if (nextImages.length === images.length) {
+      setImageMessage({
+        title: "Image already exists",
+        text: "That image is already in this listing.",
+        variant: "error",
+      });
+      return;
+    }
+
+    setImages(nextImages);
+    setManualImageUrl("");
+    setImageMessage({
+      text: "Image added",
+      variant: "success",
+    });
+  }
+
+  function setMainImage(url: string) {
+    const normalized = normalizeProductImageUrl(url);
+    if (!normalized) {
+      return;
+    }
+
+    setImages((current) =>
+      dedupeProductImages([
+        normalized,
+        ...current.filter(
+          (candidate) =>
+            normalizeProductImageUrl(candidate)?.toLowerCase() !==
+            normalized.toLowerCase()
+        ),
+      ])
+    );
+    setHoveredImage(0);
+  }
+
+  function removeImage(url: string) {
+    const normalized = normalizeProductImageUrl(url);
+    setImages((current) =>
+      current.filter((candidate) => {
+        if (!normalized) {
+          return candidate !== url;
+        }
+
+        return (
+          normalizeProductImageUrl(candidate)?.toLowerCase() !==
+          normalized.toLowerCase()
+        );
+      })
+    );
+    setHoveredImage(null);
+    setImageMessage(null);
   }
 
   // Item specifics handlers
@@ -810,22 +907,23 @@ export default function DraftEditForm({
               {/* Price */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Price (AUD)
+                  Amazon Buy Price (AUD)
                 </label>
                 <div className="relative">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-sm">
                     $
                   </span>
                   <input
-                    type="number"
-                    step="0.01"
-                    min="0"
+                    type="text"
                     value={price}
-                    onChange={(e) => setPrice(e.target.value)}
-                    className="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    readOnly
+                    className="w-full pl-7 pr-3 py-2 border border-gray-300 rounded-md bg-gray-50 text-sm text-gray-700 focus:outline-none"
                     placeholder="0.00"
                   />
                 </div>
+                <p className="mt-1 text-xs text-gray-500">
+                  Tracking: {getAmazonPriceTrackingLabel(amazonPriceTrackingMode)}
+                </p>
                 {errors.price && (
                   <p className="mt-1 text-sm text-red-600">{errors.price}</p>
                 )}
@@ -919,6 +1017,49 @@ export default function DraftEditForm({
           {/* ===================== Tab 3 — Images ===================== */}
           {activeTab === 2 && (
             <div>
+              <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start">
+                <div className="flex-1">
+                  <label className="sr-only" htmlFor="draft-manual-image">
+                    Add image URL
+                  </label>
+                  <input
+                    id="draft-manual-image"
+                    type="url"
+                    value={manualImageUrl}
+                    onChange={(event) => {
+                      setManualImageUrl(event.target.value);
+                      setImageMessage(null);
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        addManualImage();
+                      }
+                    }}
+                    placeholder="Paste image URL"
+                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={addManualImage}
+                  className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700"
+                >
+                  Add Image
+                </button>
+              </div>
+              {imageMessage && (
+                <div
+                  className={`mb-4 rounded-md border px-3 py-2 text-sm ${
+                    imageMessage.variant === "error"
+                      ? "border-red-200 bg-red-50 text-red-700"
+                      : "border-green-200 bg-green-50 text-green-700"
+                  }`}
+                >
+                  {imageMessage.title ? `${imageMessage.title}: ` : ""}
+                  {imageMessage.text}
+                </div>
+              )}
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                 {images.map((url, i) => {
                   const isMain = i === 0;
@@ -944,13 +1085,7 @@ export default function DraftEditForm({
                           {!isMain && (
                             <button
                               type="button"
-                              onClick={() => {
-                                setImages((prev) => {
-                                  const filtered = prev.filter((u) => u !== url);
-                                  return [url, ...filtered];
-                                });
-                                setHoveredImage(0);
-                              }}
+                              onClick={() => setMainImage(url)}
                               className="border border-white text-white text-xs px-3 py-1.5 rounded hover:bg-white hover:text-black transition-colors w-36 text-center"
                             >
                               Set as Main Image
@@ -958,10 +1093,7 @@ export default function DraftEditForm({
                           )}
                           <button
                             type="button"
-                            onClick={() => {
-                              setImages((prev) => prev.filter((u) => u !== url));
-                              setHoveredImage(null);
-                            }}
+                            onClick={() => removeImage(url)}
                             className="border border-white text-white text-xs px-3 py-1.5 rounded hover:bg-white hover:text-black transition-colors w-36 text-center"
                           >
                             Remove

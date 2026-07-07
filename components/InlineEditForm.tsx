@@ -32,6 +32,21 @@ import {
   getEbayCountryLabel,
   resolveEbayLocationMetadata,
 } from "@/lib/ebay-location";
+import {
+  DEFAULT_AMAZON_PRICE_TRACKING_MODE,
+  getAmazonPriceTrackingLabel,
+  normalizeAmazonPriceTrackingMode,
+  type AmazonPriceTrackingMode,
+} from "@/lib/amazon-price-tracking";
+import {
+  dedupeProductImages,
+  normalizeProductImageUrl,
+} from "@/lib/product-images";
+import {
+  applyTitleCase,
+  normalizeFullProductTitle,
+  toEbayListingTitle,
+} from "@/lib/product-title";
 
 // ----- Types -----
 
@@ -246,17 +261,16 @@ function buildRegrabAmazonUrl(asin: string) {
 }
 
 function normalizeScrapedTitle(data: ScrapedProduct) {
+  const sourceTitle = normalizeFullProductTitle(data.fullTitle || data.title);
   if (!data.supplierDefaults?.capitalizeTitle) {
-    return data.title;
+    return sourceTitle;
   }
 
-  return data.title
-    .split(" ")
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(" ");
+  return applyTitleCase(sourceTitle);
 }
 
 function buildRegrabDraftUpdate(scraped: ScrapedProduct, fallbackAsin: string) {
+  const fullTitle = normalizeScrapedTitle(scraped);
   const mergedSpecifics: Record<string, string> = {
     ...(scraped.supplierDefaults?.defaultItemSpecifics ?? {}),
     ...scraped.itemSpecifics,
@@ -275,7 +289,7 @@ function buildRegrabDraftUpdate(scraped: ScrapedProduct, fallbackAsin: string) {
 
   if (!mergedSpecifics.Type) {
     const inferredType = inferTypeItemSpecific({
-      title: scraped.title,
+      title: fullTitle,
       categoryName: scraped.categoryName || scraped.category,
       itemSpecifics: mergedSpecifics,
     });
@@ -286,7 +300,7 @@ function buildRegrabDraftUpdate(scraped: ScrapedProduct, fallbackAsin: string) {
 
   if (!mergedSpecifics.Size) {
     const inferredSize = inferSizeItemSpecific({
-      title: scraped.title,
+      title: fullTitle,
       categoryName: scraped.categoryName || scraped.category,
       itemSpecifics: mergedSpecifics,
     });
@@ -296,10 +310,11 @@ function buildRegrabDraftUpdate(scraped: ScrapedProduct, fallbackAsin: string) {
   }
 
   return {
-    title: normalizeScrapedTitle(scraped),
+    title: toEbayListingTitle(fullTitle),
+    fullTitle,
     description: scraped.description,
     price: scraped.price,
-    images: [...scraped.images],
+    images: dedupeProductImages(scraped.images),
     asin: scraped.asin || fallbackAsin,
     brand: inferredBrand || scraped.brand,
     itemSpecifics: Object.entries(mergedSpecifics).map(([key, value]) => ({
@@ -309,6 +324,8 @@ function buildRegrabDraftUpdate(scraped: ScrapedProduct, fallbackAsin: string) {
     categoryId: scraped.categoryId,
     categoryName: scraped.categoryName || scraped.category,
     supplierDefaults: scraped.supplierDefaults,
+    amazonPriceTrackingMode:
+      scraped.amazonPriceTrackingMode ?? DEFAULT_AMAZON_PRICE_TRACKING_MODE,
   };
 }
 
@@ -328,6 +345,11 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
 
   // Product tab fields
   const [title, setTitle] = useState(product.title);
+  const [fullTitle, setFullTitle] = useState(
+    normalizeFullProductTitle(
+      (product as { fullTitle?: string | null }).fullTitle || product.title
+    )
+  );
   const [category, setCategory] = useState(product.category);
   const [categoryName, setCategoryName] = useState((product as Record<string, unknown>).categoryName as string || "");
   const [asin, setAsin] = useState(product.asin ?? "");
@@ -354,6 +376,13 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
   const [promotedAdPercent, setPromotedAdPercent] = useState(
     String(product.promotedAdPercent ?? 0)
   );
+  const [amazonPriceTrackingMode, setAmazonPriceTrackingMode] =
+    useState<AmazonPriceTrackingMode>(
+      normalizeAmazonPriceTrackingMode(
+        (product as { amazonPriceTrackingMode?: unknown })
+          .amazonPriceTrackingMode
+      )
+    );
   const [amazonPriceUpdatePending, setAmazonPriceUpdatePending] = useState(false);
 
   // Description
@@ -364,8 +393,12 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
   const requestedEbayDescriptionRef = useRef(false);
 
   // Images
-  const [images, setImages] = useState<string[]>([...product.images]);
+  const [images, setImages] = useState<string[]>(() =>
+    dedupeProductImages(product.images)
+  );
   const [hoveredImage, setHoveredImage] = useState<number | null>(null);
+  const [manualImageUrl, setManualImageUrl] = useState("");
+  const [imageMessage, setImageMessage] = useState<SaveMessage | null>(null);
 
   // Item Specifics
   const [itemSpecifics, setItemSpecifics] = useState<{ key: string; value: string }[]>([]);
@@ -398,6 +431,21 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
   }, [product.asin]);
 
   useEffect(() => {
+    setImages(dedupeProductImages(product.images));
+    setManualImageUrl("");
+    setImageMessage(null);
+    setHoveredImage(null);
+  }, [product.id, product.images]);
+
+  useEffect(() => {
+    setFullTitle(
+      normalizeFullProductTitle(
+        (product as { fullTitle?: string | null }).fullTitle || product.title
+      )
+    );
+  }, [product]);
+
+  useEffect(() => {
     if (!amazonPriceUpdatePending) {
       setPrice(product.price.toString());
     }
@@ -406,6 +454,15 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
   useEffect(() => {
     setPromotedAdPercent(String(product.promotedAdPercent ?? 0));
   }, [product.promotedAdPercent]);
+
+  useEffect(() => {
+    setAmazonPriceTrackingMode(
+      normalizeAmazonPriceTrackingMode(
+        (product as { amazonPriceTrackingMode?: unknown })
+          .amazonPriceTrackingMode
+      )
+    );
+  }, [product]);
 
   // Parse brand / location from itemSpecifics on load
   useEffect(() => {
@@ -984,14 +1041,15 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       : 1;
 
     const body: Record<string, unknown> = {
-      title: title.trim().slice(0, 80),
+      title: toEbayListingTitle(title),
+      fullTitle,
       description,
       quantity: normalizedQuantity,
       condition,
       category: category.trim(),
       categoryName: categoryName.trim() || null,
       asin: normalizedAsin,
-      images,
+      images: dedupeProductImages(images),
       itemSpecifics: sanitizeEbayItemSpecifics(specificsObj),
       shippingPolicyId: shippingPolicyId || null,
       returnPolicyId: returnPolicyId || null,
@@ -1004,6 +1062,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
     if (amazonPriceUpdatePending) {
       body.price = parseFloat(price) || 0;
       body.amazonPriceUpdateSource = "regrab";
+      body.amazonPriceTrackingMode = amazonPriceTrackingMode;
     }
 
     try {
@@ -1327,7 +1386,11 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       const res = await fetch("/api/scrape", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, mode: "regrab" }),
+        body: JSON.stringify({
+          url,
+          mode: "regrab",
+          amazonPriceTrackingMode,
+        }),
         signal: AbortSignal.timeout(90000),
       });
 
@@ -1361,12 +1424,27 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       const update = buildRegrabDraftUpdate(scraped, currentAsin);
 
       setTitle(update.title);
+      setFullTitle(update.fullTitle);
       setDescription(update.description);
       setImages(update.images);
       setAsin(update.asin);
-      if (update.price !== null && update.price > 0) {
-        setPrice(update.price.toFixed(2));
+      const regrabPrice =
+        typeof update.price === "number" && update.price > 0
+          ? update.price
+          : null;
+      const regrabPriceUpdated = regrabPrice !== null;
+      if (regrabPriceUpdated) {
+        setPrice(regrabPrice.toFixed(2));
+        setAmazonPriceTrackingMode(update.amazonPriceTrackingMode);
         setAmazonPriceUpdatePending(true);
+      } else {
+        setSaveMessage({
+          title: "Regrab updated product details",
+          text: `${getAmazonPriceTrackingLabel(
+            amazonPriceTrackingMode
+          )} was not available, so the Amazon buy price was not changed.`,
+          variant: "success",
+        });
       }
       setHoveredImage(null);
       setBrand(update.brand);
@@ -1389,11 +1467,13 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
         );
       }
 
-      setSaveMessage({
-        title: "Regrab complete",
-        text: "Product details refreshed from Amazon. Review and Save when you're ready.",
-        variant: "success",
-      });
+      if (regrabPriceUpdated) {
+        setSaveMessage({
+          title: "Regrab complete",
+          text: "Product details refreshed from Amazon. Review and Save when you're ready.",
+          variant: "success",
+        });
+      }
     } catch (err) {
       void reportClientError(
         "inline-edit/regrab",
@@ -1410,6 +1490,74 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
     } finally {
       setIsRegrabbing(false);
     }
+  }
+
+  // ----- Images -----
+
+  function addManualImage() {
+    const normalized = normalizeProductImageUrl(manualImageUrl);
+    if (!normalized) {
+      setImageMessage({
+        title: "Image not added",
+        text: "Enter a valid direct image URL.",
+        variant: "error",
+      });
+      return;
+    }
+
+    const nextImages = dedupeProductImages([...images, normalized]);
+    if (nextImages.length === images.length) {
+      setImageMessage({
+        title: "Image already exists",
+        text: "That image is already in this listing.",
+        variant: "error",
+      });
+      return;
+    }
+
+    setImages(nextImages);
+    setManualImageUrl("");
+    setImageMessage({
+      text: "Image added",
+      variant: "success",
+    });
+  }
+
+  function setMainImage(url: string) {
+    const normalized = normalizeProductImageUrl(url);
+    if (!normalized) {
+      return;
+    }
+
+    setImages((current) =>
+      dedupeProductImages([
+        normalized,
+        ...current.filter(
+          (candidate) =>
+            normalizeProductImageUrl(candidate)?.toLowerCase() !==
+            normalized.toLowerCase()
+        ),
+      ])
+    );
+    setHoveredImage(0);
+  }
+
+  function removeImage(url: string) {
+    const normalized = normalizeProductImageUrl(url);
+    setImages((current) =>
+      current.filter((candidate) => {
+        if (!normalized) {
+          return candidate !== url;
+        }
+
+        return (
+          normalizeProductImageUrl(candidate)?.toLowerCase() !==
+          normalized.toLowerCase()
+        );
+      })
+    );
+    setHoveredImage(null);
+    setImageMessage(null);
   }
 
   // ----- Item specifics -----
@@ -1913,7 +2061,8 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                 />
               </div>
               <p className="mt-1 text-xs text-gray-500">
-                Updated by Add Product, Regrab, or price check.
+                Updated by Add Product, Regrab, or price check. Tracking:{" "}
+                {getAmazonPriceTrackingLabel(amazonPriceTrackingMode)}.
               </p>
             </div>
 
@@ -2072,6 +2221,49 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
         {/* ===== Tab 4 — Images ===== */}
         {activeTab === 3 && (
           <div>
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start">
+              <div className="flex-1">
+                <label className="sr-only" htmlFor={`manual-image-${product.id}`}>
+                  Add image URL
+                </label>
+                <input
+                  id={`manual-image-${product.id}`}
+                  type="url"
+                  value={manualImageUrl}
+                  onChange={(event) => {
+                    setManualImageUrl(event.target.value);
+                    setImageMessage(null);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      addManualImage();
+                    }
+                  }}
+                  placeholder="Paste image URL"
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={addManualImage}
+                className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700"
+              >
+                Add Image
+              </button>
+            </div>
+            {imageMessage && (
+              <div
+                className={`mb-4 rounded-md border px-3 py-2 text-sm ${
+                  imageMessage.variant === "error"
+                    ? "border-red-200 bg-red-50 text-red-700"
+                    : "border-green-200 bg-green-50 text-green-700"
+                }`}
+              >
+                {imageMessage.title ? `${imageMessage.title}: ` : ""}
+                {imageMessage.text}
+              </div>
+            )}
             <div className="grid grid-cols-7 gap-2">
               {images.map((url, i) => {
                 const isMain = i === 0;
@@ -2095,13 +2287,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                         {!isMain && (
                           <button
                             type="button"
-                            onClick={() => {
-                              setImages((prev) => {
-                                const filtered = prev.filter((u) => u !== url);
-                                return [url, ...filtered];
-                              });
-                              setHoveredImage(0);
-                            }}
+                            onClick={() => setMainImage(url)}
                             className="border border-white text-white text-xs px-2 py-1 rounded hover:bg-white hover:text-black transition-colors text-center"
                           >
                             Set as Main
@@ -2109,10 +2295,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                         )}
                         <button
                           type="button"
-                          onClick={() => {
-                            setImages((prev) => prev.filter((u) => u !== url));
-                            setHoveredImage(null);
-                          }}
+                          onClick={() => removeImage(url)}
                           className="border border-white text-white text-xs px-2 py-1 rounded hover:bg-white hover:text-black transition-colors text-center"
                         >
                           Remove

@@ -42,7 +42,10 @@ function loadAmazonDirectScraper() {
 const originalFetch = globalThis.fetch;
 
 function amazonProductHtml(input: {
+  title?: string;
   buyboxPrice?: string | null;
+  dealPrice?: string | null;
+  regularPrice?: string | null;
   pageWidePrice?: string | null;
   postcode?: string | null;
 }) {
@@ -51,6 +54,19 @@ function amazonProductHtml(input: {
     : `<div id="glow-ingress-line1">Deliver to RK</div>`;
   const buybox = input.buyboxPrice
     ? `<div id="corePrice_feature_div"><span class="a-price priceToPay"><span class="a-offscreen">${input.buyboxPrice}</span></span></div>`
+    : input.dealPrice || input.regularPrice
+    ? `<div id="corePrice_feature_div">
+        ${
+          input.dealPrice
+            ? `<div><span>Deal price</span><span class="a-price priceToPay"><span class="a-offscreen">${input.dealPrice}</span></span></div>`
+            : ""
+        }
+        ${
+          input.regularPrice
+            ? `<div><span>Regular Price</span><span class="a-price"><span class="a-offscreen">${input.regularPrice}</span></span></div>`
+            : ""
+        }
+      </div>`
     : "";
   const pageWide = input.pageWidePrice
     ? `<section class="recommendation"><span class="a-price"><span class="a-offscreen">${input.pageWidePrice}</span></span></section>`
@@ -59,7 +75,7 @@ function amazonProductHtml(input: {
   return `
     <html>
       <head>
-        <meta property="og:title" content="SOUNDPEATS H3 Cancelling Headphones : Amazon.com.au: Electronics" />
+        <meta property="og:title" content="${input.title ?? "SOUNDPEATS H3 Cancelling Headphones"} : Amazon.com.au: Electronics" />
         <meta property="og:image" content="https://m.media-amazon.com/images/I/test-image.jpg" />
       </head>
       <body>
@@ -113,6 +129,73 @@ test("extractAmazonProductTitle reads meta content when text title is missing", 
     extractAmazonProductTitle($),
     "SoundPEATS Air5 Pro Cancelling Earbuds"
   );
+});
+
+test("scrapeAmazonProductDirect uses selected Amazon price tracking mode", async (t) => {
+  const { scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
+
+  installFetchMock(t, [
+    {
+      body: amazonProductHtml({
+        dealPrice: "$63.99",
+        regularPrice: "$79.99",
+      }),
+    },
+    { body: '{"isValidAddress":1}' },
+    {
+      body: amazonProductHtml({
+        dealPrice: "$63.99",
+        regularPrice: "$79.99",
+        postcode: "2217",
+      }),
+    },
+  ]);
+
+  const product = await scrapeAmazonProductDirect(
+    "https://www.amazon.com.au/dp/B0TEST1234",
+    {
+      postcode: "2217",
+      priceTrackingMode: "DEAL",
+    }
+  );
+
+  assert.equal(product.price, 63.99);
+  assert.equal(product.amazonPriceTrackingMode, "DEAL");
+  assert.equal(product.priceChoices?.regular?.price, 79.99);
+  assert.equal(product.priceChoices?.deal?.price, 63.99);
+});
+
+test("scrapeAmazonProductDirect keeps full Amazon title separately from eBay listing title", async (t) => {
+  const { scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
+  const longTitle =
+    "ZipString Aracna Glow-in-The-Dark Webshooter - Superhero String Launcher Toy for Kids, Teens & Adults - Patented, Reloading, Durable & Viral Web Shooting Action Toy";
+
+  installFetchMock(t, [
+    {
+      body: amazonProductHtml({
+        title: longTitle,
+        buyboxPrice: "$89.59",
+      }),
+    },
+    { body: '{"isValidAddress":1}' },
+    {
+      body: amazonProductHtml({
+        title: longTitle,
+        buyboxPrice: "$89.59",
+        postcode: "2217",
+      }),
+    },
+  ]);
+
+  const product = await scrapeAmazonProductDirect(
+    "https://www.amazon.com.au/dp/B0TEST1234",
+    { postcode: "2217" }
+  );
+
+  assert.equal(product.fullTitle, longTitle);
+  assert.equal(product.title.length <= 80, true);
+  assert.notEqual(product.title, product.fullTitle);
+  assert.match(product.description, /Superhero String Launcher Toy/);
 });
 
 test("extractAmazonProductTitle reads product JSON-LD title", () => {

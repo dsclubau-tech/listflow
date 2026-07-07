@@ -9,6 +9,9 @@ import { invalidateDraftCaches } from "@/lib/cache-tags";
 import { getEbayCategoryAspects, getStoreNumber } from "@/lib/ebay";
 import { resolveRequiredItemSpecifics } from "@/lib/required-specific-resolver";
 import { applyEbayLocationMetadata } from "@/lib/ebay-location";
+import { normalizeAmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
+import { dedupeProductImages } from "@/lib/product-images";
+import { normalizeFullProductTitle, toEbayListingTitle } from "@/lib/product-title";
 
 const SUPPLIER_NAME = "Amazon AU";
 
@@ -29,6 +32,7 @@ export async function POST(request: Request) {
 
   const {
     title,
+    fullTitle,
     description,
     price,
     quantity,
@@ -46,6 +50,7 @@ export async function POST(request: Request) {
     templateId,
     allowIncompleteDraft,
     promotedAdPercent,
+    amazonPriceTrackingMode,
   } = body;
   const isIncompleteDraftAllowed = allowIncompleteDraft === true;
   const normalizedPrice =
@@ -61,6 +66,12 @@ export async function POST(request: Request) {
     promotedAdPercent === ""
       ? 0
       : Number(promotedAdPercent);
+  const normalizedAmazonPriceTrackingMode = normalizeAmazonPriceTrackingMode(
+    amazonPriceTrackingMode
+  );
+  const normalizedImages = Array.isArray(images)
+    ? dedupeProductImages(images)
+    : [];
 
   // Validate required fields
   if (!title?.trim()) {
@@ -110,7 +121,7 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
-  if (!images || !Array.isArray(images) || images.length === 0) {
+  if (normalizedImages.length === 0) {
     return NextResponse.json(
       { error: "At least one image is required" },
       { status: 400 }
@@ -151,11 +162,16 @@ export async function POST(request: Request) {
 
   try {
     // Apply keyword blacklist filter
+    const sourceFullTitle = normalizeFullProductTitle(
+      typeof fullTitle === "string" && fullTitle.trim() ? fullTitle : title,
+    );
     const filtered = await applyKeywordFilter(
-      title.trim(),
+      sourceFullTitle,
       description.trim(),
       storeSession.storeId
     );
+    const filteredFullTitle = normalizeFullProductTitle(filtered.title);
+    const listingTitle = toEbayListingTitle(filteredFullTitle);
     const createdById = await getInternalUserId();
     let resolvedItemSpecifics = sanitizeEbayItemSpecifics(itemSpecifics);
     const supplierSettings =
@@ -190,7 +206,7 @@ export async function POST(request: Request) {
 
         if (requiredItemSpecifics.length > 0) {
           const resolved = resolveRequiredItemSpecifics({
-            title: filtered.title,
+            title: filteredFullTitle,
             categoryName: categoryName || null,
             description: filtered.description,
             brand: resolvedItemSpecifics.Brand,
@@ -214,20 +230,22 @@ export async function POST(request: Request) {
     // Create product
     const product = await prisma.product.create({
       data: {
-        title: filtered.title,
+        title: listingTitle,
+        fullTitle: filteredFullTitle || null,
         description: filtered.description,
         price: normalizedPrice,
         quantity: normalizedQuantity,
         category: normalizedCategory,
         categoryName: categoryName || null,
         condition: condition || "New",
-        images,
+        images: normalizedImages,
         itemSpecifics: resolvedItemSpecifics,
         status: "DRAFT",
         storeId: storeSession.storeId,
         createdById,
         asin: asin || null,
         amazonPrice: asin ? normalizedPrice : null,
+        amazonPriceTrackingMode: normalizedAmazonPriceTrackingMode,
         promotedAdPercent: normalizedPromotedAdPercent,
         shippingPolicyId: policySelection.shippingPolicyId,
         returnPolicyId: policySelection.returnPolicyId,

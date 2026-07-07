@@ -11,6 +11,7 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { getStorePolicyDefaults } from "@/lib/policy-defaults";
 import { normalizeItemSpecifics } from "@/lib/item-specifics";
+import { isAmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
 
 export const maxDuration = 60;
 
@@ -53,6 +54,11 @@ export async function POST(request: Request) {
 
   const { url } = body;
   const allowMetadataOnly = body?.mode === "regrab";
+  const priceTrackingMode = isAmazonPriceTrackingMode(
+    body?.amazonPriceTrackingMode
+  )
+    ? body.amazonPriceTrackingMode
+    : undefined;
 
   if (!url || typeof url !== "string" || url.trim() === "") {
     log.warn("scrape/route", "Scrape request missing URL");
@@ -89,6 +95,7 @@ export async function POST(request: Request) {
     const product = await scrapeAmazonProductDirect(url, {
       allowMetadataOnly,
       onStage: logStage,
+      priceTrackingMode,
       postcode:
         supplierSettings?.scrapePostcode?.trim() ||
         supplierSettings?.defaultZipcode?.trim() ||
@@ -115,6 +122,7 @@ export async function POST(request: Request) {
       asin: product.asin,
       title: product.title,
       imageCount: product.images.length,
+      amazonPriceTrackingMode: product.amazonPriceTrackingMode,
     });
 
     let categoryId = "";
@@ -170,6 +178,10 @@ export async function POST(request: Request) {
       asin: product.asin,
       title: product.title,
       price: product.price,
+      amazonPriceTrackingMode: product.amazonPriceTrackingMode,
+      availableAmazonPriceModes: Object.entries(product.priceChoices ?? {})
+        .filter(([, choice]) => choice)
+        .map(([mode]) => mode),
       imageCount: product.images.length,
     });
 

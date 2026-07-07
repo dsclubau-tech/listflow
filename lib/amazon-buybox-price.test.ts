@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { load } from "cheerio";
-import { extractLocalizedBuyboxPrice } from "@/lib/amazon-buybox-price";
+import {
+  extractLocalizedBuyboxPrice,
+  extractLocalizedBuyboxPriceChoices,
+  extractLocalizedBuyboxPriceForMode,
+} from "@/lib/amazon-buybox-price";
 
 test("extractLocalizedBuyboxPrice prefers buybox price over hidden widget prices", () => {
   const $ = load(`
@@ -60,4 +64,65 @@ test("extractLocalizedBuyboxPrice ignores RRP and coupon prices", () => {
   `);
 
   assert.equal(extractLocalizedBuyboxPrice($, "B0D45VM3V8")?.price, 79.99);
+});
+
+test("extractLocalizedBuyboxPriceChoices returns deal and regular buybox prices", () => {
+  const $ = load(`
+    <main>
+      <section class="recommendation">
+        <span class="a-price"><span class="a-offscreen">$105.93</span></span>
+      </section>
+      <div id="corePrice_feature_div">
+        <div>
+          <span>Deal price</span>
+          <span class="a-price priceToPay">
+            <span class="a-offscreen">$63.99</span>
+          </span>
+        </div>
+        <div>
+          <span>Regular Price</span>
+          <span class="a-price">
+            <span class="a-offscreen">$79.99</span>
+          </span>
+        </div>
+      </div>
+    </main>
+  `);
+
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0DEAL1234");
+
+  assert.equal(choices.deal?.price, 63.99);
+  assert.equal(choices.deal?.mode, "DEAL");
+  assert.equal(choices.regular?.price, 79.99);
+  assert.equal(choices.regular?.mode, "REGULAR");
+  assert.equal(
+    extractLocalizedBuyboxPriceForMode($, "B0DEAL1234", "DEAL")?.price,
+    63.99
+  );
+  assert.equal(
+    extractLocalizedBuyboxPriceForMode($, "B0DEAL1234", "REGULAR")?.price,
+    79.99
+  );
+});
+
+test("extractLocalizedBuyboxPriceForMode does not fall back to another mode", () => {
+  const $ = load(`
+    <div id="corePrice_feature_div">
+      <div>
+        <span>Deal price</span>
+        <span class="a-price priceToPay">
+          <span class="a-offscreen">$63.99</span>
+        </span>
+      </div>
+    </div>
+  `);
+
+  assert.equal(
+    extractLocalizedBuyboxPriceForMode($, "B0DEAL1234", "REGULAR"),
+    null
+  );
+  assert.equal(
+    extractLocalizedBuyboxPriceForMode($, "B0DEAL1234", "DEAL")?.price,
+    63.99
+  );
 });
