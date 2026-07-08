@@ -551,6 +551,9 @@ async function extractAmazonBuyboxPriceForMode(
           /regular price/i,
           /deal price/i
         );
+        const hasLabelledPriceSection = /deal price|regular price/i.test(
+          containerText
+        );
 
         if (requestedMode === "DEAL" && labelledDeal !== null) {
           return labelledDeal;
@@ -558,6 +561,10 @@ async function extractAmazonBuyboxPriceForMode(
 
         if (requestedMode === "REGULAR" && labelledRegular !== null) {
           return labelledRegular;
+        }
+
+        if (hasLabelledPriceSection) {
+          continue;
         }
 
         for (const selector of priceSelectors) {
@@ -985,36 +992,153 @@ export async function scrapeAmazonProduct(
 
     // Images — extract all unique full-size image URLs
     const scrapedImages = await page.evaluate(() => {
-      const scripts = Array.from(document.querySelectorAll("script"));
-      for (const script of scripts) {
-        const match = script.textContent?.match(
-          /'colorImages':\s*\{[^}]*'initial':\s*(\[[\s\S]*?\])\s*\}/
-        );
-        if (match) {
-          try {
-            const parsed = JSON.parse(match[1]);
-            return parsed
-              .map(
-                (img: { hiRes?: string; large?: string; main?: Record<string, string> }) =>
-                  img.hiRes || img.large || (typeof img.main === "string" ? img.main : "")
-              )
-              .filter((u: string) => u && u.startsWith("https"));
-          } catch {
+      function extractBalancedArrayAfter(source: string, markerPattern: RegExp) {
+        const markerMatch = markerPattern.exec(source);
+        if (!markerMatch || markerMatch.index === undefined) return null;
+
+        const start = source.indexOf("[", markerMatch.index + markerMatch[0].length);
+        if (start < 0) return null;
+
+        let depth = 0;
+        let quote: string | null = null;
+        let escaped = false;
+
+        for (let index = start; index < source.length; index += 1) {
+          const char = source[index];
+
+          if (quote) {
+            if (escaped) escaped = false;
+            else if (char === "\\") escaped = true;
+            else if (char === quote) quote = null;
             continue;
           }
+
+          if (char === '"' || char === "'") {
+            quote = char;
+            continue;
+          }
+
+          if (char === "[") depth += 1;
+          else if (char === "]") {
+            depth -= 1;
+            if (depth === 0) return source.slice(start, index + 1);
+          }
+        }
+
+        return null;
+      }
+
+      function collectImageDataUrls(image: unknown) {
+        if (!image || typeof image !== "object") return [];
+
+        const source = image as Record<string, unknown>;
+        for (const key of ["hiRes", "large", "mainUrl", "variant"]) {
+          if (typeof source[key] === "string") return [source[key]];
+        }
+
+        const main = source.main;
+        if (typeof main === "string") {
+          return [main];
+        } else if (main && typeof main === "object") {
+          const entries = Object.entries(main as Record<string, unknown>)
+            .filter(([url]) => /^https?:\/\//i.test(url))
+            .map(([url, dimensions]) => {
+              const [width, height] = Array.isArray(dimensions)
+                ? dimensions.map((value) =>
+                    typeof value === "number" ? value : Number(value)
+                  )
+                : [];
+              const area =
+                typeof width === "number" &&
+                Number.isFinite(width) &&
+                typeof height === "number" &&
+                Number.isFinite(height)
+                  ? width * height
+                  : 0;
+
+              return { url, area };
+            });
+
+          entries.sort((left, right) => right.area - left.area);
+          return entries[0]?.url ? [entries[0].url] : [];
+        }
+
+        return [];
+      }
+
+      function addDynamicImages(images: string[], raw: string | null) {
+        if (!raw) return;
+        try {
+          const parsed = JSON.parse(raw.replace(/&quot;/g, '"').replace(/&amp;/g, "&"));
+          images.push(...Object.keys(parsed));
+        } catch {
+          images.push(...(raw.match(/https?:\/\/[^"'}\],\s]+/gi) ?? []));
         }
       }
-      // Fallback: grab from thumbnail strip
-      const thumbs = Array.from(document.querySelectorAll("#altImages img"));
-      return thumbs
-        .map((img) =>
-          (img as HTMLImageElement).src
-            .replace(/\._[A-Z]{2}\d+_\./, ".")
-            .replace(/\._.*?_\./, ".")
-        )
-        .filter(
-          (u) => u.includes("amazon") && !u.includes("play-button")
+
+      const images: string[] = [];
+      const imageBlock =
+        (window as typeof window & {
+          ImageBlockATF?: { colorImages?: { initial?: unknown[] } };
+          ImageBlockBTF?: { colorImages?: { initial?: unknown[] } };
+        }).ImageBlockATF ??
+        (window as typeof window & {
+          ImageBlockBTF?: { colorImages?: { initial?: unknown[] } };
+        }).ImageBlockBTF;
+
+      for (const image of imageBlock?.colorImages?.initial ?? []) {
+        images.push(...collectImageDataUrls(image));
+      }
+
+      for (const script of Array.from(document.querySelectorAll("script"))) {
+        const json = extractBalancedArrayAfter(
+          script.textContent ?? "",
+          /['"]colorImages['"]\s*:\s*\{[\s\S]*?['"]initial['"]\s*:/i
         );
+        if (!json) continue;
+
+        try {
+          const parsed = JSON.parse(json) as unknown[];
+          for (const image of parsed) {
+            images.push(...collectImageDataUrls(image));
+          }
+        } catch {
+          continue;
+        }
+      }
+
+      if (images.length < 2) {
+        for (const image of Array.from(
+          document.querySelectorAll<HTMLImageElement>("img[data-a-dynamic-image]")
+        )) {
+          addDynamicImages(images, image.getAttribute("data-a-dynamic-image"));
+        }
+
+        const landingImage =
+          document.querySelector<HTMLImageElement>("#landingImage");
+        if (landingImage) {
+          images.push(landingImage.getAttribute("data-old-hires") ?? "");
+          images.push(landingImage.src);
+        }
+
+        for (const image of Array.from(
+          document.querySelectorAll<HTMLImageElement>("#altImages img")
+        )) {
+          const context = [
+            image.className,
+            image.parentElement?.className,
+            image.closest("li")?.className,
+            image.closest("li")?.id,
+          ].join(" ");
+          if (/video/i.test(context)) continue;
+
+          addDynamicImages(images, image.getAttribute("data-a-dynamic-image"));
+          images.push(image.getAttribute("data-old-hires") ?? "");
+          images.push(image.src);
+        }
+      }
+
+      return images.filter(Boolean);
     });
     const images = dedupeProductImages(scrapedImages);
 

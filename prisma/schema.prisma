@@ -331,6 +331,20 @@ model UploadLog {
   @@index([userId])
 }
 
+model UploadedImage {
+  id          String   @id @default(cuid())
+  storeId     String
+  createdById String
+  fileName    String
+  contentType String
+  byteLength  Int
+  data        Bytes
+  createdAt   DateTime @default(now())
+
+  @@index([storeId, createdAt])
+  @@index([createdById])
+}
+
 model EbayImportStatsCache {
   id             String   @id @default(cuid())
   storeId        String   @unique

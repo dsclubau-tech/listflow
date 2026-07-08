@@ -48,6 +48,7 @@ function amazonProductHtml(input: {
   regularPrice?: string | null;
   pageWidePrice?: string | null;
   postcode?: string | null;
+  imageScript?: string | null;
 }) {
   const deliveryLocation = input.postcode
     ? `<div id="glow-ingress-line1">Deliver to RK</div><div id="glow-ingress-line2">Kogarah ${input.postcode}</div>`
@@ -82,6 +83,7 @@ function amazonProductHtml(input: {
         ${deliveryLocation}
         <input id="ASIN" value="B0TEST1234" />
         <img id="landingImage" src="https://m.media-amazon.com/images/I/test-image.jpg" />
+        ${input.imageScript ?? ""}
         ${pageWide}
         ${buybox}
       </body>
@@ -196,6 +198,65 @@ test("scrapeAmazonProductDirect keeps full Amazon title separately from eBay lis
   assert.equal(product.title.length <= 80, true);
   assert.notEqual(product.title, product.fullTitle);
   assert.match(product.description, /Superhero String Launcher Toy/);
+});
+
+test("scrapeAmazonProductDirect reads original Amazon color images and skips video thumbnails", async (t) => {
+  const { scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
+  const imageScript = `
+    <script>
+      window.ImageBlockATF = {
+        "colorImages": {
+          "initial": [
+            {
+              "hiRes": "https://m.media-amazon.com/images/I/main-original._AC_SL1500_.jpg",
+              "large": "https://m.media-amazon.com/images/I/main-preview._AC_SY450_.jpg"
+            },
+            {
+              "hiRes": "https://m.media-amazon.com/images/I/second-original._AC_SL1500_.jpg",
+              "large": "https://m.media-amazon.com/images/I/second-preview._AC_SY450_.jpg"
+            },
+            {
+              "large": "https://m.media-amazon.com/images/I/product-video-preview._AC_SL1500_.jpg"
+            },
+            {
+              "main": {
+                "https://m.media-amazon.com/images/I/third-small._AC_SX300_.jpg": [300, 300],
+                "https://m.media-amazon.com/images/I/third-large._AC_SX679_.jpg": [679, 679]
+              }
+            }
+          ]
+        }
+      };
+    </script>
+  `;
+
+  installFetchMock(t, [
+    {
+      body: amazonProductHtml({
+        buyboxPrice: "$166.24",
+        imageScript,
+      }),
+    },
+    { body: '{"isValidAddress":1}' },
+    {
+      body: amazonProductHtml({
+        buyboxPrice: "$166.24",
+        imageScript,
+        postcode: "2217",
+      }),
+    },
+  ]);
+
+  const product = await scrapeAmazonProductDirect(
+    "https://www.amazon.com.au/dp/B0TEST1234",
+    { postcode: "2217" }
+  );
+
+  assert.deepEqual(product.images, [
+    "https://m.media-amazon.com/images/I/main-original.jpg",
+    "https://m.media-amazon.com/images/I/second-original.jpg",
+    "https://m.media-amazon.com/images/I/third-large.jpg",
+  ]);
 });
 
 test("extractAmazonProductTitle reads product JSON-LD title", () => {

@@ -105,6 +105,34 @@ test("extractLocalizedBuyboxPriceChoices returns deal and regular buybox prices"
   );
 });
 
+test("extractLocalizedBuyboxPriceChoices does not treat a labelled deal as regular", () => {
+  const $ = load(`
+    <main>
+      <div id="corePrice_feature_div">
+        <div>
+          <span>Deal price</span>
+          <span class="a-price priceToPay">
+            <span class="a-offscreen">$166.24</span>
+          </span>
+        </div>
+      </div>
+      <div id="desktop_buybox">
+        <div>
+          <span>Regular Price</span>
+          <span class="a-price">
+            <span class="a-offscreen">$219.99</span>
+          </span>
+        </div>
+      </div>
+    </main>
+  `);
+
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0BVDJD5S4");
+
+  assert.equal(choices.deal?.price, 166.24);
+  assert.equal(choices.regular?.price, 219.99);
+});
+
 test("extractLocalizedBuyboxPriceForMode does not fall back to another mode", () => {
   const $ = load(`
     <div id="corePrice_feature_div">

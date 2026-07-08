@@ -1,6 +1,6 @@
 const AMAZON_IMAGE_SIZE_SUFFIX = /\._[^/.]+_\.(jpg|jpeg|png|webp|gif)$/i;
 const BAD_IMAGE_URL_PATTERN =
-  /play-button|spinner|loading|transparent|pixel|grey-pixel|sprite/i;
+  /play-button|play_icon|spinner|loading|transparent|pixel|grey-pixel|sprite|video/i;
 
 function extractFirstUrl(value: string) {
   const match = value.match(/https?:\/\/[^\s"'<>\\]+/i);
@@ -49,6 +49,9 @@ export function normalizeProductImageUrl(
     url.search = "";
 
     if (/amazon|ssl-images/i.test(url.hostname)) {
+      if (!/\/images\/I\//i.test(url.pathname)) {
+        return null;
+      }
       url.pathname = stripAmazonImageSizeSuffix(url.pathname);
     }
 

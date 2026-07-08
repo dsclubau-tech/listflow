@@ -1306,7 +1306,7 @@ export default function ProductsPageClient({
                 />
               </svg>
               <input
-                type="search"
+                type="text"
                 value={searchDraft}
                 onChange={(event) => setSearchDraft(event.target.value)}
                 placeholder="Search products, IDs, ASIN..."

@@ -42,9 +42,27 @@ test("drops invalid and placeholder image URLs", () => {
       "",
       "not a url",
       "https://m.media-amazon.com/images/G/play-button._AC_.png",
+      "https://m.media-amazon.com/images/I/product-video-preview._AC_.jpg",
       "https://example.com/manual-image.jpg",
     ]),
     ["https://example.com/manual-image.jpg"],
   );
 });
 
+test("drops Amazon non-product UI image assets", () => {
+  assert.equal(
+    normalizeProductImageUrl("https://m.media-amazon.com/images/G/01/video/play-button.png"),
+    null,
+  );
+  assert.equal(
+    normalizeProductImageUrl("https://m.media-amazon.com/images/G/01/x-locale/common/transparent-pixel.gif"),
+    null,
+  );
+});
+
+test("keeps manually uploaded ListFlow image URLs", () => {
+  assert.equal(
+    normalizeProductImageUrl("https://listflow-pi.vercel.app/api/images/clx123abc"),
+    "https://listflow-pi.vercel.app/api/images/clx123abc",
+  );
+});

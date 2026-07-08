@@ -574,46 +574,150 @@ function extractDynamicImageUrls(raw: string | undefined) {
   }
 }
 
-function extractImages($: CheerioAPI, html: string) {
-  const images: string[] = [];
+function extractBalancedArrayAfter(source: string, markerPattern: RegExp) {
+  const markerMatch = markerPattern.exec(source);
+  if (!markerMatch || markerMatch.index === undefined) {
+    return null;
+  }
 
-  $("img[data-a-dynamic-image]").each((_, image) => {
-    extractDynamicImageUrls($(image).attr("data-a-dynamic-image")).forEach((url) =>
-      addImage(images, url)
-    );
-  });
+  const start = source.indexOf("[", markerMatch.index + markerMatch[0].length);
+  if (start < 0) {
+    return null;
+  }
 
-  addImage(images, $("#landingImage").attr("data-old-hires"));
-  addImage(images, $("#landingImage").attr("src"));
-  addImage(images, $("#imgTagWrapperId img").attr("src"));
-  addImage(images, $('meta[property="og:image"]').attr("content"));
+  let depth = 0;
+  let quote: string | null = null;
+  let escaped = false;
 
-  const colorImageMatch = html.match(
-    /'colorImages':\s*\{[^}]*'initial':\s*(\[[\s\S]*?\])\s*\}/
-  );
-  if (colorImageMatch) {
-    try {
-      const parsed = JSON.parse(colorImageMatch[1]) as Array<{
-        hiRes?: string;
-        large?: string;
-        main?: string | Record<string, string>;
-      }>;
-      for (const image of parsed) {
-        addImage(
-          images,
-          image.hiRes ||
-            image.large ||
-            (typeof image.main === "string" ? image.main : "")
-        );
+  for (let index = start; index < source.length; index += 1) {
+    const char = source[index];
+
+    if (quote) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === quote) {
+        quote = null;
       }
-    } catch {
-      // Keep selector-based images.
+      continue;
+    }
+
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+
+    if (char === "[") {
+      depth += 1;
+      continue;
+    }
+
+    if (char === "]") {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(start, index + 1);
+      }
     }
   }
 
-  $("#altImages img").each((_, image) => {
-    addImage(images, $(image).attr("src"));
-  });
+  return null;
+}
+
+function collectImageDataUrls(image: unknown) {
+  if (!image || typeof image !== "object") {
+    return [];
+  }
+
+  const source = image as Record<string, unknown>;
+  for (const key of ["hiRes", "large", "mainUrl", "variant"]) {
+    if (typeof source[key] === "string") {
+      return [source[key]];
+    }
+  }
+
+  const main = source.main;
+  if (typeof main === "string") {
+    return [main];
+  } else if (main && typeof main === "object") {
+    const entries = Object.entries(main as Record<string, unknown>)
+      .filter(([url]) => /^https?:\/\//i.test(url))
+      .map(([url, dimensions]) => {
+        const [width, height] = Array.isArray(dimensions)
+          ? dimensions.map((value) =>
+              typeof value === "number" ? value : Number(value)
+            )
+          : [];
+        const area =
+          typeof width === "number" &&
+          Number.isFinite(width) &&
+          typeof height === "number" &&
+          Number.isFinite(height)
+            ? width * height
+            : 0;
+
+        return { url, area };
+      });
+
+    entries.sort((left, right) => right.area - left.area);
+    return entries[0]?.url ? [entries[0].url] : [];
+  }
+
+  return [];
+}
+
+function extractColorImages(html: string) {
+  const json = extractBalancedArrayAfter(
+    html,
+    /['"]colorImages['"]\s*:\s*\{[\s\S]*?['"]initial['"]\s*:/i
+  );
+  if (!json) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(json) as unknown[];
+    return parsed.flatMap(collectImageDataUrls);
+  } catch {
+    return [];
+  }
+}
+
+function extractImages($: CheerioAPI, html: string) {
+  const images: string[] = [];
+
+  extractColorImages(html).forEach((url) => addImage(images, url));
+
+  if (images.length < 2) {
+    $("img[data-a-dynamic-image]").each((_, image) => {
+      extractDynamicImageUrls($(image).attr("data-a-dynamic-image")).forEach((url) =>
+        addImage(images, url)
+      );
+    });
+
+    addImage(images, $("#landingImage").attr("data-old-hires"));
+    addImage(images, $("#landingImage").attr("src"));
+    addImage(images, $("#imgTagWrapperId img").attr("src"));
+    addImage(images, $('meta[property="og:image"]').attr("content"));
+
+    $("#altImages img").each((_, image) => {
+      const context = [
+        $(image).attr("class"),
+        $(image).parent().attr("class"),
+        $(image).closest("li").attr("class"),
+        $(image).closest("li").attr("id"),
+      ].join(" ");
+      if (/video/i.test(context)) {
+        return;
+      }
+
+      extractDynamicImageUrls($(image).attr("data-a-dynamic-image")).forEach((url) =>
+        addImage(images, url)
+      );
+      addImage(images, $(image).attr("data-old-hires"));
+      addImage(images, $(image).attr("src"));
+    });
+  }
 
   return dedupeProductImages(images);
 }

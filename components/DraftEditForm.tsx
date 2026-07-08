@@ -19,6 +19,7 @@ import {
   dedupeProductImages,
   normalizeProductImageUrl,
 } from "@/lib/product-images";
+import { uploadProductImageFile } from "@/lib/client-product-image-upload";
 import {
   applyTitleCase,
   normalizeFullProductTitle,
@@ -126,6 +127,8 @@ export default function DraftEditForm({
     title?: string;
     variant: "success" | "error";
   } | null>(null);
+  const [isUploadingImage, setIsUploadingImage] = useState(false);
+  const manualImageFileInputRef = useRef<HTMLInputElement | null>(null);
 
   // Item specifics
   const [itemSpecifics, setItemSpecifics] = useState<
@@ -181,6 +184,10 @@ export default function DraftEditForm({
       setHoveredImage(null);
       setManualImageUrl("");
       setImageMessage(null);
+      setIsUploadingImage(false);
+      if (manualImageFileInputRef.current) {
+        manualImageFileInputRef.current.value = "";
+      }
       setItemSpecifics(
         Object.entries({
           ...(defaults?.defaultItemSpecifics ?? {}),
@@ -526,15 +533,15 @@ export default function DraftEditForm({
     }
   }
 
-  function addManualImage() {
-    const normalized = normalizeProductImageUrl(manualImageUrl);
+  function addImageUrlToList(url: string, successText = "Image added") {
+    const normalized = normalizeProductImageUrl(url);
     if (!normalized) {
       setImageMessage({
         title: "Image not added",
         text: "Enter a valid direct image URL.",
         variant: "error",
       });
-      return;
+      return false;
     }
 
     const nextImages = dedupeProductImages([...images, normalized]);
@@ -544,15 +551,46 @@ export default function DraftEditForm({
         text: "That image is already in this listing.",
         variant: "error",
       });
-      return;
+      return false;
     }
 
     setImages(nextImages);
-    setManualImageUrl("");
     setImageMessage({
-      text: "Image added",
+      text: successText,
       variant: "success",
     });
+    return true;
+  }
+
+  function addManualImage() {
+    if (addImageUrlToList(manualImageUrl)) {
+      setManualImageUrl("");
+    }
+  }
+
+  async function uploadManualImage(file: File | null | undefined) {
+    if (!file) {
+      return;
+    }
+
+    setIsUploadingImage(true);
+    setImageMessage(null);
+
+    try {
+      const uploadedUrl = await uploadProductImageFile(file);
+      addImageUrlToList(uploadedUrl, "Image uploaded");
+    } catch (error) {
+      setImageMessage({
+        title: "Upload failed",
+        text: error instanceof Error ? error.message : "Image upload failed.",
+        variant: "error",
+      });
+    } finally {
+      setIsUploadingImage(false);
+      if (manualImageFileInputRef.current) {
+        manualImageFileInputRef.current.value = "";
+      }
+    }
   }
 
   function setMainImage(url: string) {
@@ -1046,6 +1084,23 @@ export default function DraftEditForm({
                   className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700"
                 >
                   Add Image
+                </button>
+                <input
+                  ref={manualImageFileInputRef}
+                  type="file"
+                  accept="image/jpeg,image/png,image/gif"
+                  className="hidden"
+                  onChange={(event) => {
+                    void uploadManualImage(event.target.files?.[0] ?? null);
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => manualImageFileInputRef.current?.click()}
+                  disabled={isUploadingImage}
+                  className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isUploadingImage ? "Uploading..." : "Upload Image"}
                 </button>
               </div>
               {imageMessage && (

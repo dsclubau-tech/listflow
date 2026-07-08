@@ -123,6 +123,10 @@ function buildResult(
   };
 }
 
+function isLabelledPriceResult(result: AmazonBuyboxPriceResult | null) {
+  return result?.selector.startsWith("label:") ?? false;
+}
+
 export function extractLocalizedBuyboxPriceChoices(
   $: CheerioAPI,
   asin: string
@@ -141,10 +145,16 @@ export function extractLocalizedBuyboxPriceChoices(
     }
 
     const containerText = normalizeText(container.text());
+    const hasLabelledPriceSection = /deal price|regular price/i.test(
+      containerText
+    );
     const labelledDeal = extractLabelledPrice(containerText, /deal price/i, [
       /regular price/i,
     ]);
-    if (labelledDeal !== null && !choices.deal) {
+    if (
+      labelledDeal !== null &&
+      (!choices.deal || !isLabelledPriceResult(choices.deal))
+    ) {
       choices.deal = buildResult(
         normalizedAsin,
         containerSelector,
@@ -159,7 +169,10 @@ export function extractLocalizedBuyboxPriceChoices(
       /regular price/i,
       [/deal price/i]
     );
-    if (labelledRegular !== null && !choices.regular) {
+    if (
+      labelledRegular !== null &&
+      (!choices.regular || !isLabelledPriceResult(choices.regular))
+    ) {
       choices.regular = buildResult(
         normalizedAsin,
         containerSelector,
@@ -167,6 +180,13 @@ export function extractLocalizedBuyboxPriceChoices(
         labelledRegular,
         "REGULAR"
       );
+    }
+
+    if (hasLabelledPriceSection) {
+      if (choices.regular && choices.deal) {
+        return choices;
+      }
+      continue;
     }
 
     for (const selector of BUYBOX_PRICE_VALUE_SELECTORS) {
