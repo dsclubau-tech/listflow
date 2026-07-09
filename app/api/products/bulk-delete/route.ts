@@ -5,6 +5,7 @@ import { createRequestLogger } from "@/lib/logger";
 import { NextResponse } from "next/server";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { invalidateProductCaches } from "@/lib/cache-tags";
+import { deleteProductsFromListflow } from "@/lib/product-removal";
 
 const DELETABLE_STATUSES = [ProductStatus.DRAFT, ProductStatus.FAILED];
 
@@ -61,19 +62,16 @@ export async function POST(request: Request) {
   };
 
   try {
-    const [, , deletedProducts] = await prisma.$transaction([
-      prisma.uploadLog.deleteMany({
-        where: { product: { is: productWhere } },
-      }),
-      prisma.variant.deleteMany({
-        where: { product: { is: productWhere } },
-      }),
-      prisma.product.deleteMany({
-        where: productWhere,
-      }),
-    ]);
+    const productsToDelete = await prisma.product.findMany({
+      where: productWhere,
+      select: { id: true },
+    });
+    const result = await deleteProductsFromListflow({
+      storeId: storeSession.storeId,
+      productIds: productsToDelete.map((product) => product.id),
+    });
 
-    if (deletedProducts.count === 0) {
+    if (result.deletedProducts === 0) {
       return NextResponse.json(
         { error: "No draft or failed products were found to delete" },
         { status: 400 },
@@ -82,14 +80,14 @@ export async function POST(request: Request) {
 
     log.info("api/products/bulk-delete/POST", "Products deleted", {
       requestedCount: productIds.length,
-      deletedCount: deletedProducts.count,
+      deletedCount: result.deletedProducts,
     });
 
     invalidateProductCaches(storeSession.storeId);
 
     return NextResponse.json({
       success: true,
-      deletedCount: deletedProducts.count,
+      deletedCount: result.deletedProducts,
     });
   } catch (error) {
     log.error("api/products/bulk-delete/POST", "Bulk delete failed", error, {

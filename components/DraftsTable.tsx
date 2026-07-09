@@ -409,7 +409,11 @@ export default function DraftsTable({
   const [isBulkDismissing, setIsBulkDismissing] = useState(false);
   const [isBulkResuming, setIsBulkResuming] = useState(false);
   const [isBulkHolding, setIsBulkHolding] = useState(false);
+  const [isBulkEnding, setIsBulkEnding] = useState(false);
+  const [isBulkRemovingListflow, setIsBulkRemovingListflow] = useState(false);
   const [notingProduct, setNotingProduct] =
+    useState<SerializedProductRow | null>(null);
+  const [removalProduct, setRemovalProduct] =
     useState<SerializedProductRow | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
   const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
@@ -513,7 +517,7 @@ export default function DraftsTable({
     event.stopPropagation();
 
     const menuWidth = 224;
-    const menuHeight = 126;
+    const menuHeight = 170;
     const x = Math.min(event.clientX, window.innerWidth - menuWidth - 8);
     const y = Math.min(event.clientY, window.innerHeight - menuHeight - 8);
 
@@ -621,15 +625,35 @@ export default function DraftsTable({
     }
   }
 
-  async function handleEndListing(productId: string) {
-    const confirmed = window.confirm(
-      "Are you sure you want to end this listing on eBay and permanently remove it from ListFlow? This action cannot be undone."
-    );
+  function openRemovalDialog(product: SerializedProductRow) {
+    setContextMenu(null);
+    setRemovalProduct(product);
+  }
 
-    if (!confirmed) {
-      return;
+  async function handleRemoveFromListflow(productId: string) {
+    setDeletingId(productId);
+
+    try {
+      const res = await fetch(`/api/products/${productId}`, { method: "DELETE" });
+      const data = (await res.json().catch(() => ({}))) as { error?: string };
+
+      if (res.ok) {
+        onToast("Removed from ListFlow. eBay listing was not changed.", "success");
+        setSelectedIds((prev) => prev.filter((id) => id !== productId));
+        setExpandedProductId((current) => (current === productId ? null : current));
+        setRemovalProduct(null);
+        router.refresh();
+      } else {
+        onToast(data.error || "Failed to remove product from ListFlow.", "error");
+      }
+    } catch {
+      onToast("Network error while removing product from ListFlow.", "error");
+    } finally {
+      setDeletingId(null);
     }
+  }
 
+  async function handleEndListing(productId: string) {
     setEndingId(productId);
 
     try {
@@ -639,6 +663,8 @@ export default function DraftsTable({
       if (res.ok) {
         onToast("Listing ended on eBay and removed from ListFlow", "success");
         setSelectedIds((prev) => prev.filter((id) => id !== productId));
+        setExpandedProductId((current) => (current === productId ? null : current));
+        setRemovalProduct(null);
         router.refresh();
       } else {
         onToast(data.error || "Failed to end listing.", "error");
@@ -773,6 +799,8 @@ export default function DraftsTable({
         selectedIds.includes(product.id) && product.status === "IMPORTED"
     ).length;
   }, [isProductsView, products, selectedIds]);
+
+  const selectedListedCount = selectedImportedCount + selectedOnHoldCount;
 
   const selectedPriceCheckSummary = useMemo(
     () =>
@@ -1092,6 +1120,118 @@ export default function DraftsTable({
       onToast("Network error while putting products on hold.", "error");
     } finally {
       setIsBulkHolding(false);
+    }
+  }
+
+  async function handleBulkRemoveFromListflowSelected() {
+    const listedIds = products
+      .filter(
+        (product) =>
+          selectedIds.includes(product.id) &&
+          (product.status === "IMPORTED" || product.status === "ON_HOLD")
+      )
+      .map((product) => product.id);
+
+    if (listedIds.length === 0) {
+      onToast("No selected listed products to remove.", "error");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `Remove ${listedIds.length} product(s) from ListFlow only?\n\nLive eBay listings will remain active and unchanged.`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsBulkRemovingListflow(true);
+
+    try {
+      const res = await fetch("/api/products/bulk-remove-listflow", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds: listedIds }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        deletedCount?: number;
+        error?: string;
+      };
+
+      if (!res.ok) {
+        onToast(data.error || "Failed to remove products from ListFlow.", "error");
+        router.refresh();
+        return;
+      }
+
+      onToast(
+        `Removed ${data.deletedCount ?? listedIds.length} product(s) from ListFlow. eBay was not changed.`,
+        "success"
+      );
+      setSelectedIds([]);
+      router.refresh();
+    } catch {
+      onToast("Network error while removing products from ListFlow.", "error");
+    } finally {
+      setIsBulkRemovingListflow(false);
+    }
+  }
+
+  async function handleBulkEndAndRemoveSelected() {
+    const listedIds = products
+      .filter(
+        (product) =>
+          selectedIds.includes(product.id) &&
+          (product.status === "IMPORTED" || product.status === "ON_HOLD")
+      )
+      .map((product) => product.id);
+
+    if (listedIds.length === 0) {
+      onToast("No selected listed products to end.", "error");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `End ${listedIds.length} eBay listing(s) and remove them from ListFlow?\n\nThis will change eBay. It cannot be undone.`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setIsBulkEnding(true);
+
+    try {
+      const res = await fetch("/api/products/bulk-end", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds: listedIds }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        total?: number;
+        ended?: number;
+        failed?: number;
+        message?: string;
+        error?: string;
+      };
+
+      if (!res.ok) {
+        onToast(data.error || "Failed to queue eBay removal.", "error");
+        router.refresh();
+        return;
+      }
+
+      onToast(
+        data.message ||
+          `Queued ${data.total ?? listedIds.length} listing(s) to end on eBay and remove from ListFlow.`,
+        "success"
+      );
+      setSelectedIds([]);
+      router.refresh();
+    } catch {
+      onToast("Network error while queueing eBay removal.", "error");
+    } finally {
+      setIsBulkEnding(false);
     }
   }
 
@@ -1676,20 +1816,22 @@ export default function DraftsTable({
                           (product.status === "IMPORTED" ||
                             product.status === "ON_HOLD") && (
                           <button
-                            onClick={() => handleEndListing(product.id)}
-                            disabled={endingId === product.id}
+                            onClick={() => openRemovalDialog(product)}
+                            disabled={
+                              endingId === product.id || deletingId === product.id
+                            }
                             className="flex items-center gap-1 whitespace-nowrap rounded bg-red-500 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-40"
-                            title="End listing on eBay and remove from ListFlow"
+                            title="Choose how to remove this product"
                           >
-                            {endingId === product.id ? (
+                            {endingId === product.id || deletingId === product.id ? (
                               <>
                                 <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
                                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                                   <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                                 </svg>
-                                Ending...
+                                Removing...
                               </>
-                            ) : "End & Remove"}
+                            ) : "Remove"}
                           </button>
                         )}
 
@@ -1781,6 +1923,76 @@ export default function DraftsTable({
           >
             Copy product link
           </button>
+          <button
+            type="button"
+            onClick={() => openRemovalDialog(contextMenu.product)}
+            className="block w-full px-3 py-2 text-left text-sm font-medium text-red-600 transition-colors hover:bg-red-50"
+          >
+            Remove...
+          </button>
+        </div>
+      )}
+
+      {removalProduct && (
+        <div
+          className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 px-4"
+          onClick={() => {
+            if (!deletingId && !endingId) {
+              setRemovalProduct(null);
+            }
+          }}
+        >
+          <div
+            className="w-full max-w-lg rounded-lg bg-white p-5 shadow-xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-4">
+              <h2 className="text-base font-semibold text-gray-900">
+                Remove product
+              </h2>
+              <p className="mt-1 truncate text-sm text-gray-500">
+                {removalProduct.title}
+              </p>
+            </div>
+            <div className="space-y-3">
+              <button
+                type="button"
+                onClick={() => void handleRemoveFromListflow(removalProduct.id)}
+                disabled={Boolean(deletingId || endingId)}
+                className="w-full rounded-md border border-gray-300 px-4 py-3 text-left transition-colors hover:bg-gray-50 disabled:opacity-50"
+              >
+                <span className="block text-sm font-semibold text-gray-900">
+                  Remove from ListFlow only
+                </span>
+                <span className="mt-1 block text-xs text-gray-500">
+                  Keeps the live eBay listing active and unchanged.
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleEndListing(removalProduct.id)}
+                disabled={Boolean(deletingId || endingId)}
+                className="w-full rounded-md border border-red-200 bg-red-50 px-4 py-3 text-left transition-colors hover:bg-red-100 disabled:opacity-50"
+              >
+                <span className="block text-sm font-semibold text-red-700">
+                  End on eBay and remove from ListFlow
+                </span>
+                <span className="mt-1 block text-xs text-red-600">
+                  Ends the eBay listing, then deletes the local product record.
+                </span>
+              </button>
+            </div>
+            <div className="mt-4 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setRemovalProduct(null)}
+                disabled={Boolean(deletingId || endingId)}
+                className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
@@ -1996,6 +2208,44 @@ export default function DraftsTable({
                       </>
                     ) : (
                       `Resume ${selectedOnHoldCount} On Hold`
+                    )}
+                  </button>
+                )}
+                {selectedListedCount > 0 && (
+                  <button
+                    onClick={handleBulkRemoveFromListflowSelected}
+                    disabled={isBulkRemovingListflow || isBulkEnding}
+                    className="px-4 py-2 border border-red-200 text-red-700 text-sm font-medium rounded-md hover:bg-red-50 transition-colors disabled:opacity-60 flex items-center gap-2"
+                  >
+                    {isBulkRemovingListflow ? (
+                      <>
+                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        Removing...
+                      </>
+                    ) : (
+                      "Remove from ListFlow"
+                    )}
+                  </button>
+                )}
+                {selectedListedCount > 0 && (
+                  <button
+                    onClick={handleBulkEndAndRemoveSelected}
+                    disabled={isBulkEnding || isBulkRemovingListflow}
+                    className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
+                  >
+                    {isBulkEnding ? (
+                      <>
+                        <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                        </svg>
+                        Queueing...
+                      </>
+                    ) : (
+                      "End on eBay & Remove"
                     )}
                   </button>
                 )}

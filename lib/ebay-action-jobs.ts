@@ -30,6 +30,7 @@ import { policyIdsMatch, resolveProductPolicySelection } from "@/lib/policy-defa
 import { prisma } from "@/lib/prisma";
 import { invalidateJobCaches, invalidateProductCaches } from "@/lib/cache-tags";
 import { resolveDescriptionTemplate } from "@/lib/template-resolver";
+import { deleteProductFromListflow } from "@/lib/product-removal";
 
 const ACTIVE_ACTION_JOB_STATUSES: EbayActionJobStatus[] = [
   EbayActionJobStatus.QUEUED,
@@ -489,7 +490,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
     };
   }
 
-  await prisma.product.delete({ where: { id: product.id } });
+  await deleteProductFromListflow(product.storeId, product.id);
   return { ok: true, failure: null };
 }
 

@@ -13,6 +13,7 @@ import { applyEbayLocationMetadata } from "@/lib/ebay-location";
 import { isAmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
 import { dedupeProductImages } from "@/lib/product-images";
 import { normalizeFullProductTitle, toEbayListingTitle } from "@/lib/product-title";
+import { deleteProductFromListflow } from "@/lib/product-removal";
 
 const SUPPLIER_NAME = "Amazon AU";
 
@@ -395,16 +396,19 @@ export async function DELETE(
   }
 
   try {
-    await prisma.uploadLog.deleteMany({
-      where: { productId: id, storeId: storeSession.storeId },
-    });
-    await prisma.variant.deleteMany({ where: { productId: id } });
-    await prisma.product.delete({ where: { id } });
+    const result = await deleteProductFromListflow(storeSession.storeId, id);
 
     invalidateProductCaches(storeSession.storeId);
 
-    log.info("api/products/DELETE", "Product deleted", { id });
-    return NextResponse.json({ success: true });
+    log.info("api/products/DELETE", "Product removed from ListFlow", {
+      id,
+      ebayItemId: product.ebayItemId,
+      deletedProducts: result.deletedProducts,
+      deletedVariants: result.deletedVariants,
+      deletedPriceHistory: result.deletedPriceHistory,
+      deletedUploadLogs: result.deletedUploadLogs,
+    });
+    return NextResponse.json({ success: true, deleted: result.deletedProducts });
   } catch (error) {
     log.error("api/products/DELETE", "Delete failed", error, { id });
     return NextResponse.json({ error: "Failed to delete product" }, { status: 500 });

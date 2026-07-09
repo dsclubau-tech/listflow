@@ -7,6 +7,7 @@ import { createRequestLogger } from "@/lib/logger";
 import { ProductStatus } from "@/app/generated/prisma/enums";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { invalidateProductCaches } from "@/lib/cache-tags";
+import { deleteProductFromListflow } from "@/lib/product-removal";
 
 const ENDABLE_STATUSES: ProductStatus[] = [
   ProductStatus.IMPORTED,
@@ -78,12 +79,7 @@ export async function POST(
         storeNumber,
       });
 
-      await prisma.$transaction([
-        prisma.uploadLog.deleteMany({ where: { productId: product.id } }),
-        prisma.variant.deleteMany({ where: { productId: product.id } }),
-        prisma.priceHistory.deleteMany({ where: { productId: product.id } }),
-        prisma.product.delete({ where: { id: product.id } }),
-      ]);
+      await deleteProductFromListflow(storeSession.storeId, product.id);
 
       invalidateProductCaches(storeSession.storeId);
 
