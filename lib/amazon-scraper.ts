@@ -1,4 +1,6 @@
 import type { Browser, Page } from "playwright-core";
+import { load } from "cheerio";
+import { extractLocalizedBuyboxPriceChoices } from "@/lib/amazon-buybox-price";
 import { launchScraperBrowser } from "@/lib/scraper-browser";
 import { isUsefulItemSpecificCandidate } from "@/lib/item-specifics";
 import {
@@ -462,143 +464,16 @@ async function extractAmazonPriceFromPage(
   return bestPrice;
 }
 
-async function extractAmazonBuyboxPriceForMode(
+async function extractAmazonBuyboxPriceChoicesFromPage(
   page: Page,
-  mode: AmazonPriceTrackingMode
-): Promise<number | null> {
-  return page
-    .evaluate((requestedMode) => {
-      const containerSelectors = [
-        "#corePrice_feature_div",
-        "#corePriceDisplay_desktop_feature_div",
-        "#apex_desktop",
-        "#buybox",
-        "#desktop_buybox",
-      ];
-      const priceSelectors = [
-        ".priceToPay .a-offscreen",
-        ".apexPriceToPay .a-offscreen",
-        ".a-price.priceToPay .a-offscreen",
-        ".a-price.apexPriceToPay .a-offscreen",
-        'span.a-price[data-a-color="price"]:not(.a-text-price) .a-offscreen',
-        'span.a-price[data-a-color="base"]:not(.a-text-price) .a-offscreen',
-        ".a-price:not(.a-text-price) .a-offscreen",
-        "#priceblock_ourprice",
-        "#priceblock_dealprice",
-        "#price_inside_buybox",
-      ];
-      const ignoredAncestorSelector = [
-        ".a-text-price",
-        ".basisPrice",
-        ".coupon",
-        ".couponBadge",
-        ".promoPriceBlockMessage",
-        ".reinventPriceSavingsPercentageMargin",
-        ".savingsPercentage",
-        "#dealprice_savings",
-        "#listPrice",
-        "#regularprice_savings",
-        "#sns-base-price",
-        '[class*="coupon"]',
-        '[id*="coupon"]',
-      ].join(",");
+  asin: string
+) {
+  const html = await page.content().catch(() => "");
+  if (!html) {
+    return extractLocalizedBuyboxPriceChoices(load(""), asin);
+  }
 
-      function parsePrice(value: string | null | undefined) {
-        if (!value) return null;
-        const normalized = value.replace(/[^\d.,]/g, "").trim();
-        if (!normalized) return null;
-        const parsed = Number.parseFloat(normalized.replace(/,/g, ""));
-        if (!Number.isFinite(parsed) || parsed < 1) return null;
-        return Math.round(parsed * 100) / 100;
-      }
-
-      function parseFirstPrice(value: string) {
-        const match = value.match(/(?:A(?:U)?\$|\$)\s*[\d,]+(?:\.\d{2})?/i);
-        return parsePrice(match?.[0]);
-      }
-
-      function findLabelledPrice(
-        text: string,
-        labelPattern: RegExp,
-        stopPattern: RegExp
-      ) {
-        const normalized = text.replace(/\s+/g, " ").trim();
-        const labelMatch = normalized.match(labelPattern);
-        if (!labelMatch || labelMatch.index === undefined) return null;
-
-        const sectionStart = labelMatch.index + labelMatch[0].length;
-        const rest = normalized.slice(sectionStart);
-        const stopMatch = rest.match(stopPattern);
-        const section =
-          stopMatch && stopMatch.index !== undefined
-            ? rest.slice(0, stopMatch.index)
-            : rest;
-        return parseFirstPrice(section);
-      }
-
-      for (const containerSelector of containerSelectors) {
-        const container = document.querySelector(containerSelector);
-        if (!container) continue;
-
-        const containerText = container.textContent ?? "";
-        const labelledDeal = findLabelledPrice(
-          containerText,
-          /deal price/i,
-          /regular price/i
-        );
-        const labelledRegular = findLabelledPrice(
-          containerText,
-          /regular price/i,
-          /deal price/i
-        );
-        const hasLabelledPriceSection = /deal price|regular price/i.test(
-          containerText
-        );
-
-        if (requestedMode === "DEAL" && labelledDeal !== null) {
-          return labelledDeal;
-        }
-
-        if (requestedMode === "REGULAR" && labelledRegular !== null) {
-          return labelledRegular;
-        }
-
-        if (hasLabelledPriceSection) {
-          continue;
-        }
-
-        for (const selector of priceSelectors) {
-          const elements = Array.from(container.querySelectorAll(selector));
-          for (const element of elements) {
-            if (element.closest(ignoredAncestorSelector)) continue;
-
-            const price = parsePrice(element.textContent);
-            if (price === null) continue;
-
-            const nearbyText = (
-              element.closest("div, li, td, tr, span")?.textContent ?? ""
-            )
-              .replace(/\s+/g, " ")
-              .trim();
-            const selectorLooksDeal = selector.includes("dealprice");
-            const contextLooksDeal =
-              /deal price|prime exclusive|prime deal/i.test(nearbyText);
-            const contextLooksRegular = /regular price/i.test(nearbyText);
-            const elementMode =
-              selectorLooksDeal || (contextLooksDeal && !contextLooksRegular)
-                ? "DEAL"
-                : "REGULAR";
-
-            if (elementMode === requestedMode) {
-              return price;
-            }
-          }
-        }
-      }
-
-      return null;
-    }, mode)
-    .catch(() => null);
+  return extractLocalizedBuyboxPriceChoices(load(html), asin);
 }
 
 async function extractAmazonBuyingOptionsPrice(
@@ -806,15 +681,22 @@ export async function scrapeAmazonPrice(
       })
       .catch(() => null);
 
-    const price = await extractAmazonBuyboxPriceForMode(
+    const priceChoices = await extractAmazonBuyboxPriceChoicesFromPage(
       page,
-      priceTrackingMode
+      normalizedAsin
     );
+    const selectedPrice =
+      priceTrackingMode === "DEAL" ? priceChoices.deal : priceChoices.regular;
+    const price = selectedPrice?.price ?? null;
 
     // Diagnostic: log page context when price extraction fails
     if (price === null) {
       const pageTitle = await page.title().catch(() => "(unknown)");
       const pageUrl = page.url();
+      const alternatePrice =
+        priceTrackingMode === "DEAL"
+          ? priceChoices.regular?.price ?? null
+          : priceChoices.deal?.price ?? null;
       const bodySnippet = await page
         .evaluate(() => {
           const body = document.body?.innerText ?? "";
@@ -824,6 +706,10 @@ export async function scrapeAmazonPrice(
 
       console.warn(
         `[scrapeAmazonPrice] Price not found for ASIN ${normalizedAsin}.\n` +
+          `  Requested mode: ${priceTrackingMode}\n` +
+          `  Regular price:  ${priceChoices.regular?.price ?? "not found"}\n` +
+          `  Deal price:     ${priceChoices.deal?.price ?? "not found"}\n` +
+          `  Alternate mode: ${alternatePrice ?? "not found"}\n` +
           `  Page title: ${pageTitle}\n` +
           `  Page URL:   ${pageUrl}\n` +
           `  Body start: ${bodySnippet.slice(0, 200)}`

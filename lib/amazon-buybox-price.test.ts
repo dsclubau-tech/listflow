@@ -66,6 +66,20 @@ test("extractLocalizedBuyboxPrice ignores RRP and coupon prices", () => {
   assert.equal(extractLocalizedBuyboxPrice($, "B0D45VM3V8")?.price, 79.99);
 });
 
+test("extractLocalizedBuyboxPrice reads split whole and fraction price markup", () => {
+  const $ = load(`
+    <div id="apex_desktop">
+      <span class="a-price priceToPay">
+        <span class="a-price-symbol">$</span>
+        <span class="a-price-whole">169</span>
+        <span class="a-price-fraction">95</span>
+      </span>
+    </div>
+  `);
+
+  assert.equal(extractLocalizedBuyboxPrice($, "B0SPLIT123")?.price, 169.95);
+});
+
 test("extractLocalizedBuyboxPriceChoices returns deal and regular buybox prices", () => {
   const $ = load(`
     <main>
@@ -103,6 +117,45 @@ test("extractLocalizedBuyboxPriceChoices returns deal and regular buybox prices"
     extractLocalizedBuyboxPriceForMode($, "B0DEAL1234", "REGULAR")?.price,
     79.99
   );
+});
+
+test("extractLocalizedBuyboxPriceChoices reads split labelled deal and regular prices", () => {
+  const $ = load(`
+    <div id="corePrice_feature_div">
+      <div>
+        <span>Deal price</span>
+        <span class="a-price priceToPay">
+          <span class="a-price-symbol">$</span>
+          <span class="a-price-whole">166</span>
+          <span class="a-price-fraction">24</span>
+        </span>
+      </div>
+      <div>
+        <span>Regular Price</span>
+        <span class="a-price">
+          <span class="a-price-symbol">$</span>
+          <span class="a-price-whole">219</span>
+          <span class="a-price-fraction">99</span>
+        </span>
+      </div>
+    </div>
+  `);
+
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0BVDJD5S4");
+
+  assert.equal(choices.deal?.price, 166.24);
+  assert.equal(choices.regular?.price, 219.99);
+});
+
+test("extractLocalizedBuyboxPriceChoices reads compact split labelled prices without inflating cents", () => {
+  const $ = load(`
+    <div id="corePrice_feature_div"><div><span>Deal price</span><span class="a-price priceToPay"><span class="a-price-symbol">$</span><span class="a-price-whole">166</span><span class="a-price-fraction">24</span></span></div><div><span>Regular Price</span><span class="a-price"><span class="a-price-symbol">$</span><span class="a-price-whole">219</span><span class="a-price-fraction">99</span></span></div></div>
+  `);
+
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0BVDJD5S4");
+
+  assert.equal(choices.deal?.price, 166.24);
+  assert.equal(choices.regular?.price, 219.99);
 });
 
 test("extractLocalizedBuyboxPriceChoices does not treat a labelled deal as regular", () => {

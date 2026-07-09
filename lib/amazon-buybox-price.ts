@@ -19,6 +19,13 @@ const BUYBOX_PRICE_VALUE_SELECTORS = [
   'span.a-price[data-a-color="price"]:not(.a-text-price) .a-offscreen',
   'span.a-price[data-a-color="base"]:not(.a-text-price) .a-offscreen',
   ".a-price:not(.a-text-price) .a-offscreen",
+  ".priceToPay",
+  ".apexPriceToPay",
+  ".a-price.priceToPay",
+  ".a-price.apexPriceToPay",
+  'span.a-price[data-a-color="price"]:not(.a-text-price)',
+  'span.a-price[data-a-color="base"]:not(.a-text-price)',
+  ".a-price:not(.a-text-price)",
   "#priceblock_ourprice",
   "#priceblock_dealprice",
   "#price_inside_buybox",
@@ -74,8 +81,19 @@ function parseAmazonPriceValue(value: string | null | undefined): number | null 
 }
 
 function parseFirstPriceFromText(value: string): number | null {
-  const match = value.match(/(?:A(?:U)?\$|\$)\s*[\d,]+(?:\.\d{2})?/i);
-  return parseAmazonPriceValue(match?.[0]);
+  const match = value.match(
+    /(?:A(?:U)?\$|\$)\s*([\d,]+)(?:(?:\.|\s+)(\d{2}))?/i
+  );
+  if (!match) {
+    return null;
+  }
+
+  const [, whole, cents] = match;
+  if (!cents && !whole.includes(",") && whole.replace(/\D/g, "").length > 3) {
+    return null;
+  }
+
+  return parseAmazonPriceValue(`${whole}${cents ? `.${cents}` : ""}`);
 }
 
 function normalizeText(value: string) {
@@ -125,6 +143,39 @@ function buildResult(
 
 function isLabelledPriceResult(result: AmazonBuyboxPriceResult | null) {
   return result?.selector.startsWith("label:") ?? false;
+}
+
+function parsePriceElement(
+  $: CheerioAPI,
+  element: Parameters<CheerioAPI>[0]
+) {
+  const priceElement = $(element);
+  const offscreen = priceElement.find(".a-offscreen").first().text();
+  const offscreenPrice = parseAmazonPriceValue(offscreen);
+  if (offscreenPrice !== null) {
+    return offscreenPrice;
+  }
+
+  const whole = priceElement.find(".a-price-whole").first().text();
+  if (whole) {
+    const wholeDigits = whole.replace(/[^\d,]/g, "").replace(/,/g, "");
+    const fractionDigits = priceElement
+      .find(".a-price-fraction")
+      .first()
+      .text()
+      .replace(/\D/g, "")
+      .slice(0, 2);
+    if (wholeDigits) {
+      const price = parseAmazonPriceValue(
+        `${wholeDigits}.${fractionDigits.padEnd(2, "0") || "00"}`
+      );
+      if (price !== null) {
+        return price;
+      }
+    }
+  }
+
+  return parseFirstPriceFromText(priceElement.text());
 }
 
 export function extractLocalizedBuyboxPriceChoices(
@@ -182,11 +233,8 @@ export function extractLocalizedBuyboxPriceChoices(
       );
     }
 
-    if (hasLabelledPriceSection) {
-      if (choices.regular && choices.deal) {
-        return choices;
-      }
-      continue;
+    if (hasLabelledPriceSection && choices.regular && choices.deal) {
+      return choices;
     }
 
     for (const selector of BUYBOX_PRICE_VALUE_SELECTORS) {
@@ -200,7 +248,7 @@ export function extractLocalizedBuyboxPriceChoices(
           return;
         }
 
-        const price = parseAmazonPriceValue(priceElement.text());
+        const price = parsePriceElement($, element);
         if (price === null) {
           return;
         }
@@ -217,6 +265,14 @@ export function extractLocalizedBuyboxPriceChoices(
           nearbyText
         );
         const contextLooksRegular = /regular price/i.test(nearbyText);
+        if (
+          hasLabelledPriceSection &&
+          contextLooksDeal &&
+          contextLooksRegular
+        ) {
+          return;
+        }
+
         const mode: AmazonPriceTrackingMode =
           selectorLooksDeal || (contextLooksDeal && !contextLooksRegular)
             ? "DEAL"
