@@ -300,6 +300,8 @@ export default function EditVariantModal({
     feesPercent: toNumber(form.feesPercent),
     feesFixed: toNumber(form.feesFixed),
   });
+  const desiredQuantity = Math.max(0, Math.floor(toNumber(form.quantity)));
+  const willResumeOnSave = isProductOnHold && desiredQuantity > 0;
 
   function recalculateSellPrice(next: VariantFormState) {
     return recalculateSellPriceForState(next);
@@ -444,6 +446,28 @@ export default function EditVariantModal({
       if (!response.ok) {
         setError(data.error || "Failed to save variant.");
         return;
+      }
+
+      if (isProductOnHold && normalizedQuantity > 0) {
+        const resumeResponse = await fetch("/api/products/bulk-resume", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ productIds: [productId] }),
+        });
+        const resumeData = (await resumeResponse.json().catch(() => ({}))) as {
+          error?: string;
+        };
+
+        if (!resumeResponse.ok) {
+          setError(
+            `Quantity was saved, but the listing could not be queued to resume: ${
+              resumeData.error || "Unknown resume error"
+            }`
+          );
+          return;
+        }
       }
 
       onSaved(data as VariantRecord, variant ? "edit" : "create");
@@ -676,6 +700,9 @@ export default function EditVariantModal({
                 {isProductOnHold && (
                   <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                     <p className="font-medium">This eBay listing is on hold. Current quantity is 0.</p>
+                    <p className="mt-1 text-xs">
+                      Set Quantity above 0 and save to queue the listing to resume on eBay.
+                    </p>
                   </div>
                 )}
                 <div className="grid gap-4 md:grid-cols-2">
@@ -700,15 +727,14 @@ export default function EditVariantModal({
                     <input
                       type="number"
                       min="0"
-                      value={isProductOnHold ? "0" : form.quantity}
+                      step="1"
+                      value={form.quantity}
                       onChange={(event) =>
                         setForm((prev) => ({ ...prev, quantity: event.target.value }))
                       }
-                      readOnly={isProductOnHold}
-                      aria-readonly={isProductOnHold}
                       className={`w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 ${
                         isProductOnHold
-                          ? "border-amber-200 bg-amber-50 font-medium text-amber-800"
+                          ? "border-amber-300 bg-white font-medium text-gray-900"
                           : "border-gray-300 text-gray-900"
                       }`}
                     />
@@ -733,8 +759,16 @@ export default function EditVariantModal({
                       Inventory Status
                     </label>
                     {isProductOnHold ? (
-                      <div className="flex h-[38px] items-center rounded-md border border-amber-200 bg-amber-50 px-3 text-sm font-medium text-amber-800">
-                        On Hold (eBay quantity 0)
+                      <div
+                        className={`flex h-[38px] items-center rounded-md border px-3 text-sm font-medium ${
+                          willResumeOnSave
+                            ? "border-green-200 bg-green-50 text-green-800"
+                            : "border-amber-200 bg-amber-50 text-amber-800"
+                        }`}
+                      >
+                        {willResumeOnSave
+                          ? `Will resume with quantity ${desiredQuantity}`
+                          : "On Hold (eBay quantity 0)"}
                       </div>
                     ) : (
                       <select
@@ -856,7 +890,15 @@ export default function EditVariantModal({
                   disabled={isSaving}
                   className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-40"
                 >
-                  {isSaving ? "Saving..." : variant ? "Save Variant" : "Create Variant"}
+                  {isSaving
+                    ? willResumeOnSave
+                      ? "Saving & Queuing..."
+                      : "Saving..."
+                    : willResumeOnSave
+                      ? "Save & Resume"
+                      : variant
+                        ? "Save Variant"
+                        : "Create Variant"}
                 </button>
               </div>
             </div>
