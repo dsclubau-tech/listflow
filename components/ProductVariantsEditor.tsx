@@ -12,6 +12,7 @@ interface ProductVariantsEditorProps {
     title: string;
     price: string | number;
     quantity: number;
+    status?: string;
     images: string[];
     asin?: string | null;
   };
@@ -240,6 +241,7 @@ export default function ProductVariantsEditor({
         isOpen={modalOpen}
         productId={product.id}
         productTitle={product.title}
+        isProductOnHold={product.status === "ON_HOLD"}
         defaultBuyPrice={toNumber(product.price)}
         defaultQuantity={product.quantity}
         defaultImages={product.images}

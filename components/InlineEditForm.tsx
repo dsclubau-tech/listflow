@@ -2191,6 +2191,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                 title: product.title,
                 price,
                 quantity: product.quantity,
+                status: product.status,
                 images: product.images,
                 asin: currentAsin,
               }}

@@ -16,6 +16,7 @@ interface EditVariantModalProps {
   isOpen: boolean;
   productId: string;
   productTitle: string;
+  isProductOnHold?: boolean;
   defaultBuyPrice: number;
   defaultQuantity: number;
   defaultImages: string[];
@@ -164,6 +165,7 @@ export default function EditVariantModal({
   isOpen,
   productId,
   productTitle,
+  isProductOnHold = false,
   defaultBuyPrice,
   defaultQuantity,
   defaultImages,
@@ -400,6 +402,7 @@ export default function EditVariantModal({
       return;
     }
 
+    const normalizedQuantity = Math.max(0, Math.floor(toNumber(form.quantity)));
     const payload: VariantPayload = {
       sku: form.sku.trim() || null,
       title: form.title.trim(),
@@ -411,8 +414,9 @@ export default function EditVariantModal({
       profitFixed: toNumber(form.profitFixed),
       promotedAdPercent: Math.min(100, Math.max(0, toNumber(form.promotedAdPercent))),
       sellPrice: toNumber(form.sellPrice),
-      quantity: Math.max(0, Math.floor(toNumber(form.quantity))),
-      status: form.status,
+      quantity: normalizedQuantity,
+      status:
+        isProductOnHold && normalizedQuantity > 0 ? "IN_STOCK" : form.status,
       automation: form.automation.trim() || null,
       includeShipping: form.includeShipping,
       allowMarketplace: form.allowMarketplace,
@@ -669,6 +673,14 @@ export default function EditVariantModal({
 
             {activeTab === "general" && (
               <div className="space-y-4">
+                {isProductOnHold && (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                    <p className="font-medium">This eBay listing is on hold with quantity 0.</p>
+                    <p className="mt-1 text-xs leading-5">
+                      The resume quantity below is stored in ListFlow and will be sent to eBay when the listing is resumed.
+                    </p>
+                  </div>
+                )}
                 <div className="grid gap-4 md:grid-cols-2">
                   <div>
                     <label className="mb-1 block text-sm font-medium text-gray-700">
@@ -686,7 +698,7 @@ export default function EditVariantModal({
 
                   <div>
                     <label className="mb-1 block text-sm font-medium text-gray-700">
-                      Quantity
+                      {isProductOnHold ? "Resume Quantity" : "Quantity"}
                     </label>
                     <input
                       type="number"
@@ -717,19 +729,25 @@ export default function EditVariantModal({
                     <label className="mb-1 block text-sm font-medium text-gray-700">
                       Inventory Status
                     </label>
-                    <select
-                      value={form.status}
-                      onChange={(event) =>
-                        setForm((prev) => ({
-                          ...prev,
-                          status: event.target.value as VariantPayload["status"],
-                        }))
-                      }
-                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                    >
-                      <option value="IN_STOCK">In Stock</option>
-                      <option value="OUT_OF_STOCK">Out of Stock</option>
-                    </select>
+                    {isProductOnHold ? (
+                      <div className="flex h-[38px] items-center rounded-md border border-amber-200 bg-amber-50 px-3 text-sm font-medium text-amber-800">
+                        On Hold (eBay quantity 0)
+                      </div>
+                    ) : (
+                      <select
+                        value={form.status}
+                        onChange={(event) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            status: event.target.value as VariantPayload["status"],
+                          }))
+                        }
+                        className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      >
+                        <option value="IN_STOCK">In Stock</option>
+                        <option value="OUT_OF_STOCK">Out of Stock</option>
+                      </select>
+                    )}
                   </div>
                 </div>
 

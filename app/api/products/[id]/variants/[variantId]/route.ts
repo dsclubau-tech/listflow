@@ -54,24 +54,26 @@ export async function PATCH(
         data,
       });
 
-      if (data.quantity === 0) {
-        const parent = await tx.product.findFirst({
-          where: { id: productId, storeId: storeSession.storeId },
-          select: { status: true },
-        });
+      const parent = await tx.product.findFirst({
+        where: { id: productId, storeId: storeSession.storeId },
+        select: {
+          status: true,
+          _count: { select: { variants: true } },
+        },
+      });
 
-        if (parent) {
-          await tx.product.update({
-            where: { id: productId },
-            data: {
-              quantity: 0,
-              ...(parent.status === ProductStatus.IMPORTED ||
-              parent.status === ProductStatus.ON_HOLD
-                ? { status: ProductStatus.ON_HOLD }
-                : {}),
-            },
-          });
-        }
+      if (parent && parent._count.variants === 1) {
+        await tx.product.update({
+          where: { id: productId },
+          data: {
+            quantity: data.quantity,
+            ...(data.quantity === 0 &&
+            (parent.status === ProductStatus.IMPORTED ||
+              parent.status === ProductStatus.ON_HOLD)
+              ? { status: ProductStatus.ON_HOLD }
+              : {}),
+          },
+        });
       }
 
       return updatedVariant;
