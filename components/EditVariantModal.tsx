@@ -675,10 +675,7 @@ export default function EditVariantModal({
               <div className="space-y-4">
                 {isProductOnHold && (
                   <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                    <p className="font-medium">This eBay listing is on hold with quantity 0.</p>
-                    <p className="mt-1 text-xs leading-5">
-                      The resume quantity below is stored in ListFlow and will be sent to eBay when the listing is resumed.
-                    </p>
+                    <p className="font-medium">This eBay listing is on hold. Current quantity is 0.</p>
                   </div>
                 )}
                 <div className="grid gap-4 md:grid-cols-2">
@@ -698,16 +695,22 @@ export default function EditVariantModal({
 
                   <div>
                     <label className="mb-1 block text-sm font-medium text-gray-700">
-                      {isProductOnHold ? "Resume Quantity" : "Quantity"}
+                      Quantity
                     </label>
                     <input
                       type="number"
                       min="0"
-                      value={form.quantity}
+                      value={isProductOnHold ? "0" : form.quantity}
                       onChange={(event) =>
                         setForm((prev) => ({ ...prev, quantity: event.target.value }))
                       }
-                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      readOnly={isProductOnHold}
+                      aria-readonly={isProductOnHold}
+                      className={`w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 ${
+                        isProductOnHold
+                          ? "border-amber-200 bg-amber-50 font-medium text-amber-800"
+                          : "border-gray-300 text-gray-900"
+                      }`}
                     />
                   </div>
 
