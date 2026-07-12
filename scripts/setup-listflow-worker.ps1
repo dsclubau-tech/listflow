@@ -122,6 +122,7 @@ try {
   }
 
   Invoke-CheckedCommand "Installing dependencies" "npm.cmd" @("install")
+  Invoke-CheckedCommand "Installing Chromium for worker scraping" "npm.cmd" @("run", "browser:install")
   Invoke-CheckedCommand "Generating Prisma client" "npm.cmd" @("exec", "prisma", "generate")
   Invoke-CheckedCommand "Creating desktop shortcuts" "powershell.exe" @(
     "-NoProfile",

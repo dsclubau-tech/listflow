@@ -13,8 +13,9 @@
     "lint": "eslint",
     "worker": "tsx scripts/listflow-worker.ts",
     "worker:shortcut": "powershell -ExecutionPolicy Bypass -File scripts/install-worker-shortcut.ps1",
+    "browser:install": "playwright install chromium",
     "store:reset-password": "tsx scripts/reset-store-password.ts",
-    "postinstall": "playwright install chromium"
+    "postinstall": "prisma generate"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"

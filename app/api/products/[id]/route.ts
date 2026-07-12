@@ -341,19 +341,41 @@ export async function PATCH(
     let removedKeywords: string[] = [];
 
     if (fullTitleStr || titleStr || descStr) {
-      const filtered = await applyKeywordFilter(
-        fullTitleStr || titleStr || product.fullTitle || product.title,
-        descStr || product.description,
-        storeSession.storeId,
-      );
+      let filteredDescription = descStr || product.description;
+      const removedKeywordSet = new Set<string>();
+
       if (fullTitleStr) {
-        data.fullTitle = normalizeFullProductTitle(filtered.title);
-        data.title = toEbayListingTitle(filtered.title);
-      } else if (titleStr) {
-        data.title = toEbayListingTitle(filtered.title);
+        const filteredFullTitle = await applyKeywordFilter(
+          fullTitleStr,
+          filteredDescription,
+          storeSession.storeId,
+        );
+        data.fullTitle = normalizeFullProductTitle(filteredFullTitle.title);
+        filteredDescription = filteredFullTitle.description;
+        filteredFullTitle.removedKeywords.forEach((keyword) =>
+          removedKeywordSet.add(keyword)
+        );
+
+        if (!titleStr) {
+          data.title = toEbayListingTitle(filteredFullTitle.title);
+        }
       }
-      if (descStr) data.description = filtered.description;
-      removedKeywords = filtered.removedKeywords;
+
+      if (titleStr) {
+        const filteredListingTitle = await applyKeywordFilter(
+          titleStr,
+          filteredDescription,
+          storeSession.storeId,
+        );
+        data.title = toEbayListingTitle(filteredListingTitle.title);
+        filteredDescription = filteredListingTitle.description;
+        filteredListingTitle.removedKeywords.forEach((keyword) =>
+          removedKeywordSet.add(keyword)
+        );
+      }
+
+      if (descStr) data.description = filteredDescription;
+      removedKeywords = [...removedKeywordSet];
     }
 
     const updated = await prisma.product.update({

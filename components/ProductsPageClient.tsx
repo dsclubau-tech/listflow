@@ -10,9 +10,13 @@ import {
   useState,
 } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import Image from "next/image";
 import ActionProgressBar from "@/components/ActionProgressBar";
 import BulkEditModal from "@/components/BulkEditModal";
 import DraftsTable from "@/components/DraftsTable";
+import PromotedListingsModal, {
+  type PromotedListingsJob,
+} from "@/components/PromotedListingsModal";
 import Toast from "@/components/Toast";
 import { useToast } from "@/hooks/useToast";
 import { getSelectedPriceCheckSummary } from "@/lib/price-check-eligibility";
@@ -37,6 +41,8 @@ interface ProductsPageClientProps {
 const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 const PAGE_SIZE_STORAGE_KEY = "listflow.products.pageSize";
 const PRICE_CHECK_JOB_STORAGE_KEY = "listflow.products.activePriceCheckJobId";
+const PROMOTED_LISTINGS_JOB_STORAGE_KEY =
+  "listflow.products.activePromotedListingsJobId";
 
 type PriceCheckJobStatus =
   | "QUEUED"
@@ -60,6 +66,21 @@ type EbayAdsSyncProgress = {
   syncedAt?: string;
   error?: string;
 };
+type ProductSearchSuggestion = {
+  id: string;
+  title: string;
+  asin: string | null;
+  ebayItemId: string | null;
+  image: string | null;
+};
+
+function isActivePromotedListingsJob(job: PromotedListingsJob | null) {
+  return job?.status === "QUEUED" || job?.status === "RUNNING";
+}
+
+function getPromotedListingsJobSummary(job: PromotedListingsJob) {
+  return `${job.succeeded} listing${job.succeeded === 1 ? "" : "s"} updated, ${job.failed} failed.`;
+}
 
 const PRODUCT_FILTER_OPTIONS: Array<{ value: ProductFilter; label: string }> = [
   { value: "all", label: "All" },
@@ -361,16 +382,31 @@ export default function ProductsPageClient({
   const [priceCheckJob, setPriceCheckJob] = useState<PriceCheckJob | null>(null);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
+  const [isPromotedListingsOpen, setIsPromotedListingsOpen] = useState(false);
+  const [promotedListingsJob, setPromotedListingsJob] =
+    useState<PromotedListingsJob | null>(null);
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
   const [searchDraft, setSearchDraft] = useState(searchQuery);
+  const [searchSuggestions, setSearchSuggestions] = useState<
+    ProductSearchSuggestion[]
+  >([]);
+  const [isSearchSuggestionsOpen, setIsSearchSuggestionsOpen] = useState(false);
+  const [isLoadingSearchSuggestions, setIsLoadingSearchSuggestions] =
+    useState(false);
+  const [activeSearchSuggestionIndex, setActiveSearchSuggestionIndex] =
+    useState(-1);
   const [advancedFilterDraft, setAdvancedFilterDraft] = useState<AdvancedFilterDraft>(
     appliedAdvancedFilterDraft
   );
   const [pageJumpDraft, setPageJumpDraft] = useState(String(page));
   const notifiedTerminalJobIds = useRef<Set<string>>(new Set());
+  const notifiedPromotionJobIds = useRef<Set<string>>(new Set());
+  const searchContainerRef = useRef<HTMLDivElement | null>(null);
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const { toast, showToast, hideToast } = useToast();
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const isPriceCheckJobActive = isActivePriceCheckJob(priceCheckJob);
+  const isPromotionJobActive = isActivePromotedListingsJob(promotedListingsJob);
   const selectedPriceCheckSummary = useMemo(
     () => getSelectedPriceCheckSummary(products, selectedProductIds),
     [products, selectedProductIds]
@@ -415,6 +451,72 @@ export default function ProductsPageClient({
   useEffect(() => {
     setSearchDraft(searchQuery);
   }, [searchQuery]);
+
+  useEffect(() => {
+    const query = searchDraft.trim();
+
+    if (query.length < 2) {
+      setSearchSuggestions([]);
+      setIsSearchSuggestionsOpen(false);
+      setIsLoadingSearchSuggestions(false);
+      setActiveSearchSuggestionIndex(-1);
+      return;
+    }
+
+    const controller = new AbortController();
+    const timeout = window.setTimeout(async () => {
+      setIsLoadingSearchSuggestions(true);
+
+      try {
+        const response = await fetch(
+          `/api/products/search-suggestions?q=${encodeURIComponent(query)}`,
+          { cache: "no-store", signal: controller.signal }
+        );
+        const data = (await response.json().catch(() => ({}))) as {
+          suggestions?: ProductSearchSuggestion[];
+        };
+
+        if (!response.ok) {
+          throw new Error("Failed to load product suggestions.");
+        }
+
+        const suggestions = data.suggestions ?? [];
+        setSearchSuggestions(suggestions);
+        setActiveSearchSuggestionIndex(-1);
+        setIsSearchSuggestionsOpen(
+          document.activeElement === searchInputRef.current
+        );
+      } catch (error) {
+        if (!(error instanceof DOMException && error.name === "AbortError")) {
+          setSearchSuggestions([]);
+        }
+      } finally {
+        if (!controller.signal.aborted) {
+          setIsLoadingSearchSuggestions(false);
+        }
+      }
+    }, 180);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeout);
+    };
+  }, [searchDraft]);
+
+  useEffect(() => {
+    function closeSearchSuggestions(event: MouseEvent) {
+      if (
+        searchContainerRef.current &&
+        !searchContainerRef.current.contains(event.target as Node)
+      ) {
+        setIsSearchSuggestionsOpen(false);
+        setActiveSearchSuggestionIndex(-1);
+      }
+    }
+
+    document.addEventListener("mousedown", closeSearchSuggestions);
+    return () => document.removeEventListener("mousedown", closeSearchSuggestions);
+  }, []);
 
   useEffect(() => {
     setAdvancedFilterDraft(appliedAdvancedFilterDraft);
@@ -689,6 +791,102 @@ export default function ProductsPageClient({
     };
   }, [applyPriceCheckJob, fetchPriceCheckJob, priceCheckJob]);
 
+  const applyPromotedListingsJob = useCallback(
+    (job: PromotedListingsJob | null, notifyTerminal = false) => {
+      setPromotedListingsJob(job);
+
+      if (!job) {
+        window.localStorage.removeItem(PROMOTED_LISTINGS_JOB_STORAGE_KEY);
+        return;
+      }
+
+      if (isActivePromotedListingsJob(job)) {
+        window.localStorage.setItem(PROMOTED_LISTINGS_JOB_STORAGE_KEY, job.id);
+        return;
+      }
+
+      window.localStorage.removeItem(PROMOTED_LISTINGS_JOB_STORAGE_KEY);
+      if (!notifyTerminal || notifiedPromotionJobIds.current.has(job.id)) {
+        return;
+      }
+
+      notifiedPromotionJobIds.current.add(job.id);
+      router.refresh();
+      showToast(
+        getPromotedListingsJobSummary(job),
+        job.status === "FAILED" || job.failed > 0 ? "error" : "success",
+      );
+    },
+    [router, showToast],
+  );
+
+  const fetchPromotedListingsJob = useCallback(async (jobId: string) => {
+    const response = await fetch(`/api/ebay/promoted-listings/jobs/${jobId}`, {
+      cache: "no-store",
+    });
+    if (response.status === 404) return null;
+
+    const data = (await response.json().catch(() => ({}))) as {
+      job?: PromotedListingsJob;
+      error?: string;
+    };
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to load promotion job.");
+    }
+    return data.job ?? null;
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function restorePromotedListingsJob() {
+      const jobId = window.localStorage.getItem(
+        PROMOTED_LISTINGS_JOB_STORAGE_KEY,
+      );
+      if (!jobId) return;
+
+      try {
+        const job = await fetchPromotedListingsJob(jobId);
+        if (!cancelled) applyPromotedListingsJob(job, true);
+      } catch {
+        if (!cancelled) {
+          window.localStorage.removeItem(PROMOTED_LISTINGS_JOB_STORAGE_KEY);
+        }
+      }
+    }
+
+    void restorePromotedListingsJob();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyPromotedListingsJob, fetchPromotedListingsJob]);
+
+  useEffect(() => {
+    const activeJob = promotedListingsJob;
+    if (!activeJob || !isActivePromotedListingsJob(activeJob)) return;
+
+    let cancelled = false;
+    const jobId = activeJob.id;
+
+    async function pollPromotedListingsJob() {
+      try {
+        const job = await fetchPromotedListingsJob(jobId);
+        if (!cancelled) applyPromotedListingsJob(job, true);
+      } catch {
+        // Keep the current state visible; a later poll can recover.
+      }
+    }
+
+    const interval = window.setInterval(() => {
+      void pollPromotedListingsJob();
+    }, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [applyPromotedListingsJob, fetchPromotedListingsJob, promotedListingsJob]);
+
   const applyProductSearchAndFilters = useCallback(
     (
       mode: "push" | "replace" = "push",
@@ -696,6 +894,7 @@ export default function ProductsPageClient({
         search?: string;
         advancedDraft?: AdvancedFilterDraft;
         productFilterOverride?: ProductFilter;
+        productId?: string | null;
       }
     ) => {
       const trimmed = (options?.search ?? searchDraft).trim();
@@ -707,6 +906,12 @@ export default function ProductsPageClient({
         params.set("q", trimmed);
       } else {
         params.delete("q");
+      }
+
+      if (options?.productId) {
+        params.set("productId", options.productId);
+      } else {
+        params.delete("productId");
       }
 
       applyAdvancedFilterDraftToParams(params, filtersToApply);
@@ -730,6 +935,48 @@ export default function ProductsPageClient({
     },
     [advancedFilterDraft, pathname, router, searchDraft, searchParams]
   );
+
+  const selectSearchSuggestion = useCallback(
+    (suggestion: ProductSearchSuggestion) => {
+      setSearchDraft(suggestion.title);
+      setSearchSuggestions([]);
+      setIsSearchSuggestionsOpen(false);
+      setActiveSearchSuggestionIndex(-1);
+      applyProductSearchAndFilters("push", {
+        search: suggestion.title,
+        productId: suggestion.id,
+      });
+    },
+    [applyProductSearchAndFilters]
+  );
+
+  function handleSearchInputKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (!isSearchSuggestionsOpen || searchSuggestions.length === 0) {
+      if (event.key === "Escape") {
+        setIsSearchSuggestionsOpen(false);
+      }
+      return;
+    }
+
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setActiveSearchSuggestionIndex((current) =>
+        current >= searchSuggestions.length - 1 ? 0 : current + 1
+      );
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setActiveSearchSuggestionIndex((current) =>
+        current <= 0 ? searchSuggestions.length - 1 : current - 1
+      );
+    } else if (event.key === "Enter" && activeSearchSuggestionIndex >= 0) {
+      event.preventDefault();
+      selectSearchSuggestion(searchSuggestions[activeSearchSuggestionIndex]);
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      setIsSearchSuggestionsOpen(false);
+      setActiveSearchSuggestionIndex(-1);
+    }
+  }
 
   function navigateProductsPage(nextPage: number, nextPageSize = pageSize) {
     const boundedPage = Math.min(
@@ -1212,6 +1459,25 @@ export default function ProductsPageClient({
   const priceCheckProgressPercent = priceCheckJob?.total
     ? Math.min(100, Math.round((priceCheckJob.checked / priceCheckJob.total) * 100))
     : 0;
+  const promotionProgressPercent = promotedListingsJob?.total
+    ? Math.min(
+        100,
+        Math.round(
+          (promotedListingsJob.processed / promotedListingsJob.total) * 100,
+        ),
+      )
+    : 0;
+
+  const openPromotedListings = (productIds: string[]) => {
+    setSelectedProductIds(productIds);
+    if (
+      promotedListingsJob &&
+      !isActivePromotedListingsJob(promotedListingsJob)
+    ) {
+      setPromotedListingsJob(null);
+    }
+    setIsPromotedListingsOpen(true);
+  };
 
   return (
     <>
@@ -1273,6 +1539,61 @@ export default function ProductsPageClient({
         </div>
       )}
 
+      {promotedListingsJob && !isPromotedListingsOpen && (
+        <div
+          className={`mb-4 rounded-md border px-4 py-3 ${
+            promotedListingsJob.failed > 0 ||
+            promotedListingsJob.status === "FAILED"
+              ? "border-red-200 bg-red-50"
+              : isPromotionJobActive
+                ? "border-blue-200 bg-blue-50"
+                : "border-green-200 bg-green-50"
+          }`}
+        >
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="min-w-[260px] flex-1">
+              <ActionProgressBar
+                label={
+                  promotedListingsJob.status === "QUEUED"
+                    ? "Promotion changes queued - waiting for worker"
+                    : promotedListingsJob.status === "RUNNING"
+                      ? "Updating eBay promoted listings"
+                      : promotedListingsJob.status === "COMPLETED"
+                        ? "Promotion job complete"
+                        : "Promotion job failed"
+                }
+                percent={promotionProgressPercent}
+                detail={`${promotedListingsJob.processed}/${promotedListingsJob.total} processed, ${promotedListingsJob.succeeded} succeeded, ${promotedListingsJob.failed} failed`}
+                tone={
+                  promotedListingsJob.failed > 0 ||
+                  promotedListingsJob.status === "FAILED"
+                    ? "red"
+                    : isPromotionJobActive
+                      ? "blue"
+                      : "green"
+                }
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsPromotedListingsOpen(true)}
+              className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              View
+            </button>
+            {!isPromotionJobActive && (
+              <button
+                type="button"
+                onClick={() => setPromotedListingsJob(null)}
+                className="text-sm font-medium text-gray-600 hover:text-gray-900"
+              >
+                Dismiss
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-semibold text-gray-900">Products</h1>
@@ -1286,11 +1607,16 @@ export default function ProductsPageClient({
             role="search"
             onSubmit={(event) => {
               event.preventDefault();
+              setIsSearchSuggestionsOpen(false);
+              setActiveSearchSuggestionIndex(-1);
               applyProductSearchAndFilters("push");
             }}
             className="flex w-full items-center gap-2 sm:w-auto"
           >
-            <div className="relative w-full sm:w-72 lg:w-80">
+            <div
+              ref={searchContainerRef}
+              className="relative w-full sm:w-72 lg:w-80"
+            >
               <svg
                 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
                 fill="none"
@@ -1306,11 +1632,26 @@ export default function ProductsPageClient({
                 />
               </svg>
               <input
+                ref={searchInputRef}
                 type="text"
                 value={searchDraft}
-                onChange={(event) => setSearchDraft(event.target.value)}
+                onChange={(event) => {
+                  setSearchDraft(event.target.value);
+                  setIsSearchSuggestionsOpen(true);
+                  setActiveSearchSuggestionIndex(-1);
+                }}
+                onFocus={() => {
+                  if (searchDraft.trim().length >= 2) {
+                    setIsSearchSuggestionsOpen(true);
+                  }
+                }}
+                onKeyDown={handleSearchInputKeyDown}
                 placeholder="Search products, IDs, ASIN..."
                 aria-label="Search products"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-controls="product-search-suggestions"
+                aria-expanded={isSearchSuggestionsOpen}
                 className="h-10 w-full rounded-md border border-gray-300 bg-white py-2 pl-9 pr-9 text-sm text-gray-900 shadow-sm transition-colors placeholder:text-gray-400 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
               />
               {searchDraft && (
@@ -1318,6 +1659,9 @@ export default function ProductsPageClient({
                   type="button"
                   onClick={() => {
                     setSearchDraft("");
+                    setSearchSuggestions([]);
+                    setIsSearchSuggestionsOpen(false);
+                    setActiveSearchSuggestionIndex(-1);
                     applyProductSearchAndFilters("push", { search: "" });
                   }}
                   className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
@@ -1334,6 +1678,68 @@ export default function ProductsPageClient({
                     <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
                   </svg>
                 </button>
+              )}
+              {isSearchSuggestionsOpen && searchDraft.trim().length >= 2 && (
+                <div
+                  id="product-search-suggestions"
+                  role="listbox"
+                  className="absolute left-0 right-0 top-full z-40 mt-1 overflow-hidden rounded-md border border-gray-200 bg-white shadow-lg"
+                >
+                  {isLoadingSearchSuggestions ? (
+                    <div className="px-3 py-3 text-sm text-gray-500">
+                      Searching products...
+                    </div>
+                  ) : searchSuggestions.length > 0 ? (
+                    searchSuggestions.map((suggestion, index) => (
+                      <button
+                        key={suggestion.id}
+                        type="button"
+                        role="option"
+                        aria-selected={index === activeSearchSuggestionIndex}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => selectSearchSuggestion(suggestion)}
+                        onMouseEnter={() => setActiveSearchSuggestionIndex(index)}
+                        className={`flex w-full items-center gap-3 border-b border-gray-100 px-3 py-2 text-left last:border-b-0 ${
+                          index === activeSearchSuggestionIndex
+                            ? "bg-orange-50"
+                            : "hover:bg-gray-50"
+                        }`}
+                      >
+                        {suggestion.image ? (
+                          <Image
+                            src={suggestion.image}
+                            alt=""
+                            width={40}
+                            height={40}
+                            unoptimized
+                            className="h-10 w-10 flex-none rounded border border-gray-100 object-cover"
+                          />
+                        ) : (
+                          <span className="h-10 w-10 flex-none rounded bg-gray-100" />
+                        )}
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-sm font-medium text-gray-900">
+                            {suggestion.title}
+                          </span>
+                          <span className="block truncate text-xs text-gray-500">
+                            {[
+                              suggestion.asin ? `ASIN ${suggestion.asin}` : null,
+                              suggestion.ebayItemId
+                                ? `eBay ${suggestion.ebayItemId}`
+                                : null,
+                            ]
+                              .filter(Boolean)
+                              .join("  |  ") || "ListFlow product"}
+                          </span>
+                        </span>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="px-3 py-3 text-sm text-gray-500">
+                      No matching products
+                    </div>
+                  )}
+                </div>
               )}
             </div>
             <button
@@ -1602,6 +2008,8 @@ export default function ProductsPageClient({
         isPriceCheckJobActive={isStartingPriceCheckJob || isPriceCheckJobActive}
         onSyncSelectedEbayAds={handleSyncEbayAds}
         isEbayAdsSyncing={isSyncingEbayAds}
+        onManagePromotionsSelected={openPromotedListings}
+        isPromotionJobActive={isPromotionJobActive}
         onBulkEditSelected={(ids) => {
           setSelectedProductIds(ids);
           setIsBulkEditOpen(true);
@@ -1613,6 +2021,15 @@ export default function ProductsPageClient({
         products={products}
         selectedProductIds={selectedProductIds}
         onClose={() => setIsBulkEditOpen(false)}
+        onToast={showToast}
+      />
+
+      <PromotedListingsModal
+        open={isPromotedListingsOpen}
+        selectedProductIds={selectedProductIds}
+        job={promotedListingsJob}
+        onClose={() => setIsPromotedListingsOpen(false)}
+        onJobStarted={(job) => applyPromotedListingsJob(job)}
         onToast={showToast}
       />
 

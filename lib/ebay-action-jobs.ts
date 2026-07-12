@@ -16,7 +16,15 @@ import {
   callEbayEndItem,
   callEbayReviseInventoryStatus,
   callEbayReviseItem,
+  createEbayGeneralCampaign,
+  createEbayPromotedAds,
+  deleteEbayPromotedAds,
+  getEbayGeneralCampaignOptions,
+  getEbayPromotedListingSync,
+  getEbayPromotedListingsEligibility,
   getStoreNumber,
+  updateEbayPromotedAdRates,
+  type EbayPromotedListingSyncRecord,
 } from "@/lib/ebay";
 import {
   assertNoEbayLaneStartConflict,
@@ -156,6 +164,9 @@ function actionLabel(type: EbayActionJobType) {
   if (type === EbayActionJobType.HOLD) return "Put listings on hold";
   if (type === EbayActionJobType.RESUME) return "Resume listings";
   if (type === EbayActionJobType.BULK_EDIT_REVISE) return "Bulk edit listings";
+  if (type === EbayActionJobType.MANAGE_PROMOTED_ADS) {
+    return "Manage promoted listings";
+  }
   return "End listings";
 }
 
@@ -172,6 +183,7 @@ export function serializeEbayActionJob(job: EbayActionJobRecord) {
     succeeded: job.succeeded,
     failed: job.failed,
     errors: normalizeErrors(job.errors),
+    metadata: job.metadata,
     errorMessage: job.errorMessage,
     createdAt: job.createdAt.toISOString(),
     updatedAt: job.updatedAt.toISOString(),
@@ -179,6 +191,457 @@ export function serializeEbayActionJob(job: EbayActionJobRecord) {
     completedAt: job.completedAt?.toISOString() ?? null,
     dismissedAt: job.dismissedAt?.toISOString() ?? null,
   };
+}
+
+type PromotedAdsJobMetadata = {
+  kind: "promoted-ads";
+  operation: "APPLY" | "REMOVE";
+  bidPercentage: number | null;
+  campaignMode: "EXISTING" | "CREATE" | null;
+  campaignId: string | null;
+  campaignName: string | null;
+};
+
+function getPromotedAdsMetadata(job: EbayActionJobRecord): PromotedAdsJobMetadata {
+  const record =
+    job.metadata && typeof job.metadata === "object" && !Array.isArray(job.metadata)
+      ? (job.metadata as Record<string, unknown>)
+      : {};
+  const operation = record.operation === "REMOVE" ? "REMOVE" : "APPLY";
+  const numericBid = Number(record.bidPercentage);
+
+  return {
+    kind: "promoted-ads",
+    operation,
+    bidPercentage:
+      operation === "APPLY" && Number.isFinite(numericBid) ? numericBid : null,
+    campaignMode:
+      record.campaignMode === "CREATE"
+        ? "CREATE"
+        : record.campaignMode === "EXISTING"
+          ? "EXISTING"
+          : null,
+    campaignId:
+      typeof record.campaignId === "string" && record.campaignId.trim()
+        ? record.campaignId.trim()
+        : null,
+    campaignName:
+      typeof record.campaignName === "string" && record.campaignName.trim()
+        ? record.campaignName.trim()
+        : null,
+  };
+}
+
+function promotionFailure(
+  product: { id: string; title: string },
+  error: string,
+): ProductFailure {
+  return { productId: product.id, title: product.title, error };
+}
+
+async function updateLocalPromotedStatus(
+  productId: string,
+  input:
+    | { promoted: false }
+    | {
+        promoted: true;
+        campaignId: string;
+        campaignName: string;
+        bidPercentage: number;
+      },
+) {
+  const syncedAt = new Date();
+
+  await prisma.product.update({
+    where: { id: productId },
+    data: input.promoted
+      ? {
+          promotedAdStatus: "PROMOTED",
+          promotedAdPercent: input.bidPercentage,
+          promotedAdCampaignId: input.campaignId,
+          promotedAdCampaignName: input.campaignName,
+          promotedAdRateStrategy: "FIXED",
+          promotedAdSyncedAt: syncedAt,
+        }
+      : {
+          promotedAdStatus: "NOT_PROMOTED",
+          promotedAdPercent: 0,
+          promotedAdCampaignId: null,
+          promotedAdCampaignName: null,
+          promotedAdRateStrategy: "UNKNOWN",
+          promotedAdSyncedAt: syncedAt,
+        },
+  });
+}
+
+async function failPromotionProducts(
+  job: EbayActionJobRecord,
+  products: Array<{ id: string; title: string }>,
+  error: unknown,
+) {
+  const message = error instanceof Error ? error.message : String(error);
+
+  for (const product of products) {
+    await markProgress(job, product.id, false, promotionFailure(product, message));
+  }
+}
+
+async function runPromotedAdsJob(job: EbayActionJobRecord) {
+  const completed = new Set(job.completedProductIds);
+  const remainingIds = job.productIds.filter((id) => !completed.has(id));
+  const products = await prisma.product.findMany({
+    where: { id: { in: remainingIds }, storeId: job.storeId },
+    select: { id: true, title: true, ebayItemId: true, status: true },
+  });
+  const productById = new Map(products.map((product) => [product.id, product]));
+
+  for (const productId of remainingIds) {
+    if (!productById.has(productId)) {
+      await markProgress(job, productId, false, {
+        productId,
+        title: "(missing)",
+        error: "Product was not found in the current store.",
+      });
+    }
+  }
+
+  const eligibleProducts = products.filter(
+    (product) =>
+      Boolean(product.ebayItemId) &&
+      (product.status === ProductStatus.IMPORTED ||
+        product.status === ProductStatus.ON_HOLD),
+  );
+  const ineligibleProducts = products.filter(
+    (product) => !eligibleProducts.some((eligible) => eligible.id === product.id),
+  );
+
+  for (const product of ineligibleProducts) {
+    await markProgress(
+      job,
+      product.id,
+      false,
+      promotionFailure(product, "Product is not an imported eBay listing."),
+    );
+  }
+
+  if (eligibleProducts.length === 0) {
+    return;
+  }
+
+  try {
+    const metadata = getPromotedAdsMetadata(job);
+    const storeNumber = await getStoreNumber(job.storeId);
+    const eligibility = await getEbayPromotedListingsEligibility(storeNumber);
+
+    if (!eligibility.eligible) {
+      throw new Error(
+        eligibility.reason
+          ? `This eBay account is not eligible for General Promoted Listings: ${eligibility.reason}.`
+          : "This eBay account is not eligible for General Promoted Listings.",
+      );
+    }
+
+    const livePromotions = await getEbayPromotedListingSync(storeNumber);
+
+    if (metadata.operation === "REMOVE") {
+      const grouped = new Map<string, typeof eligibleProducts>();
+
+      for (const product of eligibleProducts) {
+        const listingId = String(product.ebayItemId);
+        const current = livePromotions.get(listingId);
+
+        if (!current) {
+          await updateLocalPromotedStatus(product.id, { promoted: false });
+          await markProgress(job, product.id, true, null);
+          continue;
+        }
+
+        const group = grouped.get(current.campaignId) ?? [];
+        group.push(product);
+        grouped.set(current.campaignId, group);
+      }
+
+      for (const [campaignId, campaignProducts] of grouped) {
+        try {
+          const results = await deleteEbayPromotedAds(
+            storeNumber,
+            campaignId,
+            campaignProducts.map((product) => String(product.ebayItemId)),
+          );
+          const byListingId = new Map(results.map((result) => [result.listingId, result]));
+
+          for (const product of campaignProducts) {
+            const result = byListingId.get(String(product.ebayItemId));
+            if (!result?.success) {
+              await markProgress(
+                job,
+                product.id,
+                false,
+                promotionFailure(
+                  product,
+                  result?.errorMessage ?? "eBay did not remove this promotion.",
+                ),
+              );
+              continue;
+            }
+
+            await updateLocalPromotedStatus(product.id, { promoted: false });
+            await markProgress(job, product.id, true, null);
+          }
+        } catch (error) {
+          await failPromotionProducts(job, campaignProducts, error);
+        }
+      }
+
+      return;
+    }
+
+    if (
+      metadata.bidPercentage === null ||
+      metadata.bidPercentage < 2 ||
+      metadata.bidPercentage > 100
+    ) {
+      throw new Error("Promoted Listings rate must be between 2.0% and 100.0%.");
+    }
+
+    let targetCampaignId = metadata.campaignId;
+    let targetCampaignName = metadata.campaignName;
+
+    if (metadata.campaignMode === "CREATE") {
+      if (!targetCampaignName) {
+        throw new Error("Campaign name is required.");
+      }
+      const created = await createEbayGeneralCampaign(storeNumber, {
+        campaignName: targetCampaignName,
+        bidPercentage: metadata.bidPercentage,
+      });
+      targetCampaignId = created.campaignId;
+      targetCampaignName = created.campaignName;
+      const nextMetadata = {
+        ...(job.metadata as Record<string, unknown>),
+        campaignId: targetCampaignId,
+        campaignName: targetCampaignName,
+      } as Prisma.InputJsonValue;
+      const updatedJob = await prisma.ebayActionJob.update({
+        where: { id: job.id },
+        data: { metadata: nextMetadata },
+      });
+      job.metadata = updatedJob.metadata;
+    } else {
+      const campaigns = await getEbayGeneralCampaignOptions(storeNumber);
+      const campaign = campaigns.find(
+        (candidate) => candidate.campaignId === targetCampaignId,
+      );
+      if (!campaign || !campaign.supported || campaign.rateStrategy !== "FIXED") {
+        throw new Error("The selected eBay campaign is unavailable or is not fixed-rate.");
+      }
+      targetCampaignName = campaign.campaignName;
+    }
+
+    if (!targetCampaignId || !targetCampaignName) {
+      throw new Error("A valid eBay campaign is required.");
+    }
+
+    const createProducts: typeof eligibleProducts = [];
+    const updateProducts: typeof eligibleProducts = [];
+    const moveProductsByCampaign = new Map<
+      string,
+      Array<{ product: (typeof eligibleProducts)[number]; current: EbayPromotedListingSyncRecord }>
+    >();
+
+    for (const product of eligibleProducts) {
+      const current = livePromotions.get(String(product.ebayItemId));
+      if (!current) {
+        createProducts.push(product);
+      } else if (current.campaignId === targetCampaignId) {
+        updateProducts.push(product);
+      } else if (current.rateStrategy !== "FIXED" || current.bidPercentage === null) {
+        await markProgress(
+          job,
+          product.id,
+          false,
+          promotionFailure(
+            product,
+            "This listing is in a dynamic campaign. Remove that promotion first before moving it to a fixed-rate campaign.",
+          ),
+        );
+      } else {
+        const group = moveProductsByCampaign.get(current.campaignId) ?? [];
+        group.push({ product, current });
+        moveProductsByCampaign.set(current.campaignId, group);
+      }
+    }
+
+    if (updateProducts.length > 0) {
+      try {
+        const results = await updateEbayPromotedAdRates(
+          storeNumber,
+          targetCampaignId,
+          updateProducts.map((product) => String(product.ebayItemId)),
+          metadata.bidPercentage,
+        );
+        const byListingId = new Map(results.map((result) => [result.listingId, result]));
+        for (const product of updateProducts) {
+          const result = byListingId.get(String(product.ebayItemId));
+          if (!result?.success) {
+            await markProgress(
+              job,
+              product.id,
+              false,
+              promotionFailure(product, result?.errorMessage ?? "Rate update failed."),
+            );
+            continue;
+          }
+          await updateLocalPromotedStatus(product.id, {
+            promoted: true,
+            campaignId: targetCampaignId,
+            campaignName: targetCampaignName,
+            bidPercentage: metadata.bidPercentage,
+          });
+          await markProgress(job, product.id, true, null);
+        }
+      } catch (error) {
+        await failPromotionProducts(job, updateProducts, error);
+      }
+    }
+
+    const movedProducts = new Map<
+      string,
+      { product: (typeof eligibleProducts)[number]; current: EbayPromotedListingSyncRecord }
+    >();
+    for (const [oldCampaignId, entries] of moveProductsByCampaign) {
+      try {
+        const results = await deleteEbayPromotedAds(
+          storeNumber,
+          oldCampaignId,
+          entries.map(({ product }) => String(product.ebayItemId)),
+        );
+        const byListingId = new Map(results.map((result) => [result.listingId, result]));
+        for (const entry of entries) {
+          const listingId = String(entry.product.ebayItemId);
+          const result = byListingId.get(listingId);
+          if (result?.success) {
+            movedProducts.set(listingId, entry);
+            createProducts.push(entry.product);
+          } else {
+            await markProgress(
+              job,
+              entry.product.id,
+              false,
+              promotionFailure(
+                entry.product,
+                result?.errorMessage ?? "Could not remove the listing from its old campaign.",
+              ),
+            );
+          }
+        }
+      } catch (error) {
+        await failPromotionProducts(
+          job,
+          entries.map(({ product }) => product),
+          error,
+        );
+      }
+    }
+
+    if (createProducts.length > 0) {
+      try {
+        const results = await createEbayPromotedAds(
+          storeNumber,
+          targetCampaignId,
+          createProducts.map((product) => String(product.ebayItemId)),
+          metadata.bidPercentage,
+        );
+        const byListingId = new Map(results.map((result) => [result.listingId, result]));
+
+        for (const product of createProducts) {
+          const listingId = String(product.ebayItemId);
+          const result = byListingId.get(listingId);
+          if (result?.success) {
+            await updateLocalPromotedStatus(product.id, {
+              promoted: true,
+              campaignId: targetCampaignId,
+              campaignName: targetCampaignName,
+              bidPercentage: metadata.bidPercentage,
+            });
+            await markProgress(job, product.id, true, null);
+            continue;
+          }
+
+          const moved = movedProducts.get(listingId);
+          let rollbackMessage = "";
+          if (moved && moved.current.bidPercentage !== null) {
+            try {
+              const rollback = await createEbayPromotedAds(
+                storeNumber,
+                moved.current.campaignId,
+                [listingId],
+                moved.current.bidPercentage,
+              );
+              rollbackMessage = rollback[0]?.success
+                ? " The original promotion was restored."
+                : ` The original promotion could not be restored: ${rollback[0]?.errorMessage ?? "unknown error"}`;
+            } catch (rollbackError) {
+              rollbackMessage = ` The original promotion could not be restored: ${
+                rollbackError instanceof Error ? rollbackError.message : "unknown error"
+              }`;
+            }
+          }
+
+          await markProgress(
+            job,
+            product.id,
+            false,
+            promotionFailure(
+              product,
+              `${result?.errorMessage ?? "Could not add this listing to the campaign."}${rollbackMessage}`,
+            ),
+          );
+        }
+      } catch (error) {
+        const createError =
+          error instanceof Error ? error.message : String(error);
+
+        for (const product of createProducts) {
+          const listingId = String(product.ebayItemId);
+          const moved = movedProducts.get(listingId);
+          let rollbackMessage = "";
+
+          if (moved && moved.current.bidPercentage !== null) {
+            try {
+              const rollback = await createEbayPromotedAds(
+                storeNumber,
+                moved.current.campaignId,
+                [listingId],
+                moved.current.bidPercentage,
+              );
+              rollbackMessage = rollback[0]?.success
+                ? " The original promotion was restored."
+                : ` The original promotion could not be restored: ${rollback[0]?.errorMessage ?? "unknown error"}`;
+            } catch (rollbackError) {
+              rollbackMessage = ` The original promotion could not be restored: ${
+                rollbackError instanceof Error
+                  ? rollbackError.message
+                  : "unknown error"
+              }`;
+            }
+          }
+
+          await markProgress(
+            job,
+            product.id,
+            false,
+            promotionFailure(product, `${createError}${rollbackMessage}`),
+          );
+        }
+      }
+    }
+  } catch (error) {
+    const unfinished = eligibleProducts.filter(
+      (product) => !job.completedProductIds.includes(product.id),
+    );
+    await failPromotionProducts(job, unfinished, error);
+  }
 }
 
 async function markProgress(
@@ -511,24 +974,28 @@ async function runEbayActionJobClaimed(jobId: string) {
   });
   Object.assign(job, { status: EbayActionJobStatus.RUNNING });
 
-  const completed = new Set(job.completedProductIds);
-  const remaining = job.productIds.filter((productId) => !completed.has(productId));
+  if (job.type === EbayActionJobType.MANAGE_PROMOTED_ADS) {
+    await runPromotedAdsJob(job);
+  } else {
+    const completed = new Set(job.completedProductIds);
+    const remaining = job.productIds.filter((productId) => !completed.has(productId));
 
-  for (const productId of remaining) {
-    try {
-      const result = await processProduct(job, productId);
-      await markProgress(job, productId, result.ok, result.failure);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Internal error";
-      logger.error("ebay-action/jobs", "eBay action product failed", error, {
-        jobId: job.id,
-        productId,
-      });
-      await markProgress(job, productId, false, {
-        productId,
-        title: "(unknown)",
-        error: message,
-      });
+    for (const productId of remaining) {
+      try {
+        const result = await processProduct(job, productId);
+        await markProgress(job, productId, result.ok, result.failure);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Internal error";
+        logger.error("ebay-action/jobs", "eBay action product failed", error, {
+          jobId: job.id,
+          productId,
+        });
+        await markProgress(job, productId, false, {
+          productId,
+          title: "(unknown)",
+          error: message,
+        });
+      }
     }
   }
 

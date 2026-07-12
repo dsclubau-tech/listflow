@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildAddItemXML } from "@/lib/ebay-xml";
+import { buildAddItemXML, buildReviseItemXML } from "@/lib/ebay-xml";
 
 function buildTestProduct() {
   return {
@@ -97,4 +97,21 @@ test("buildAddItemXML repairs country-only item location from postcode", () => {
   assert.match(xml, /<Location>Mulgrave, VIC<\/Location>/);
   assert.match(xml, /<PostalCode>3170<\/PostalCode>/);
   assert.doesNotMatch(xml, /<Location>Australia<\/Location>/);
+});
+
+test("buildReviseItemXML sends the edited eBay listing title", () => {
+  const editedTitle =
+    "Nail Dust Collector, Compact Vacuum Fan Dust Collector for Beginner";
+  const product = {
+    ...buildTestProduct(),
+    title: editedTitle,
+    fullTitle:
+      "MelodySusie Nail Dust Collector, Compact Vacuum Fan Dust Collector for Beginner",
+    ebayItemId: "307056203187",
+  } as Parameters<typeof buildReviseItemXML>[0];
+
+  const xml = buildReviseItemXML(product);
+
+  assert.match(xml, new RegExp(`<Title>${editedTitle}<\\/Title>`));
+  assert.doesNotMatch(xml, /<Title>MelodySusie/);
 });

@@ -1,6 +1,11 @@
 import type { NextAuthConfig } from "next-auth";
+import {
+  DEFAULT_AUTHENTICATED_PATH,
+  getSafeCallbackPath,
+  isPrivateAppPath,
+} from "@/lib/auth-navigation";
 
-// This file is Edge-compatible — no Prisma, no Node.js modules.
+// This file is Edge-compatible - no Prisma or Node.js-only modules.
 // It contains only the NextAuth config that can run in Edge middleware.
 export const authConfig = {
   session: {
@@ -32,19 +37,19 @@ export const authConfig = {
     },
     authorized({ auth, request: { nextUrl } }) {
       const isStoreSession = !!auth?.user?.storeId;
-      const protectedPaths = ["/dashboard", "/history", "/settings"];
-      const isProtected = protectedPaths.some((path) =>
-        nextUrl.pathname.startsWith(path)
-      );
+      const isProtected = isPrivateAppPath(nextUrl.pathname);
       const isLoginPage = nextUrl.pathname === "/login";
 
       if (isLoginPage && isStoreSession) {
-        return Response.redirect(new URL("/dashboard", nextUrl));
+        return Response.redirect(new URL(DEFAULT_AUTHENTICATED_PATH, nextUrl));
       }
 
       if (isProtected && !isStoreSession) {
         const loginUrl = new URL("/login", nextUrl);
-        loginUrl.searchParams.set("callbackUrl", nextUrl.pathname);
+        loginUrl.searchParams.set(
+          "callbackUrl",
+          getSafeCallbackPath(`${nextUrl.pathname}${nextUrl.search}`)
+        );
         return Response.redirect(loginUrl);
       }
 

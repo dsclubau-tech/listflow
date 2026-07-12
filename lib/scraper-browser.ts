@@ -8,20 +8,28 @@ function isEnabled(value: string | undefined) {
   return value === "1" || value?.toLowerCase() === "true";
 }
 
+type BrowserRuntimeEnvironment = Record<string, string | undefined>;
+
+export function getScraperBrowserRuntime(
+  environment: BrowserRuntimeEnvironment = process.env as BrowserRuntimeEnvironment
+) {
+  if (isEnabled(environment.LISTFLOW_USE_LOCAL_PLAYWRIGHT)) {
+    return "local" as const;
+  }
+
+  if (isEnabled(environment.LISTFLOW_USE_SERVERLESS_CHROMIUM)) {
+    return "serverless" as const;
+  }
+
+  return environment.VERCEL ||
+    environment.AWS_LAMBDA_FUNCTION_NAME ||
+    environment.NETLIFY
+    ? ("serverless" as const)
+    : ("local" as const);
+}
+
 function shouldUseServerlessChromium() {
-  if (isEnabled(process.env.LISTFLOW_USE_LOCAL_PLAYWRIGHT)) {
-    return false;
-  }
-
-  if (isEnabled(process.env.LISTFLOW_USE_SERVERLESS_CHROMIUM)) {
-    return true;
-  }
-
-  return Boolean(
-    process.env.VERCEL ||
-      process.env.AWS_LAMBDA_FUNCTION_NAME ||
-      process.env.NETLIFY
-  );
+  return getScraperBrowserRuntime() === "serverless";
 }
 
 export async function launchScraperBrowser(

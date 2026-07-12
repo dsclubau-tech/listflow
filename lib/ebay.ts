@@ -307,6 +307,9 @@ type EbayMarketingCampaign = {
   campaignId?: string;
   campaignName?: string;
   campaignStatus?: string;
+  marketplaceId?: string;
+  startDate?: string;
+  endDate?: string;
   fundingStrategy?: {
     fundingModel?: string;
     adRateStrategy?: string;
@@ -333,6 +336,26 @@ export type EbayPromotedListingSyncRecord = {
   campaignName: string;
   rateStrategy: EbayPromotedRateStrategy;
   bidPercentage: number | null;
+};
+
+export type EbayGeneralCampaignOption = {
+  campaignId: string;
+  campaignName: string;
+  campaignStatus: string;
+  marketplaceId: string;
+  startDate: string | null;
+  endDate: string | null;
+  rateStrategy: EbayPromotedRateStrategy;
+  bidPercentage: number | null;
+  supported: boolean;
+};
+
+export type EbayPromotedAdWriteResult = {
+  listingId: string;
+  success: boolean;
+  statusCode: number;
+  adId: string | null;
+  errorMessage: string | null;
 };
 
 function parseBidPercentage(value: unknown) {
@@ -362,6 +385,7 @@ async function fetchEbayMarketingJson<T>(
   storeNumber: 1 | 2 | 3,
   accessToken: string,
   url: URL,
+  extraHeaders: Record<string, string> = {},
 ): Promise<T> {
   const storeId = await waitForStoreEbayLimit(storeNumber, "BROWSE");
   const response = await fetch(url, {
@@ -370,6 +394,7 @@ async function fetchEbayMarketingJson<T>(
       Authorization: `Bearer ${accessToken}`,
       Accept: "application/json",
       "Content-Type": "application/json",
+      ...extraHeaders,
     },
   });
   const responseText = await response.text();
@@ -399,22 +424,96 @@ async function fetchEbayMarketingJson<T>(
   }
 }
 
+type EbayRestError = {
+  message?: unknown;
+  longMessage?: unknown;
+  parameters?: Array<{ name?: unknown; value?: unknown }>;
+};
+
+type EbayBulkAdResponse = {
+  responses?: Array<{
+    listingId?: string | number;
+    statusCode?: string | number;
+    adId?: string;
+    errors?: EbayRestError[];
+  }>;
+  errors?: EbayRestError[];
+};
+
+function formatEbayRestErrors(errors: EbayRestError[] | undefined) {
+  const messages = (errors ?? []).flatMap((error) => [
+    cleanEbayText(error.longMessage),
+    cleanEbayText(error.message),
+    ...(error.parameters ?? []).map((parameter) => cleanEbayText(parameter.value)),
+  ]);
+
+  return uniqueMessages(messages.filter(Boolean)).join("; ");
+}
+
+async function sendEbayMarketingRequest(
+  storeNumber: 1 | 2 | 3,
+  accessToken: string,
+  url: URL,
+  init: RequestInit,
+) {
+  const storeId = await waitForStoreEbayLimit(storeNumber, "TRADING");
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      ...(init.headers ?? {}),
+    },
+  });
+  const responseText = await response.text();
+
+  if (response.status === 429) {
+    await recordStoreEbayBackoff(storeId, "TRADING", `HTTP ${response.status}`);
+  }
+
+  if (!response.ok) {
+    let responseError = "";
+    try {
+      const payload = JSON.parse(responseText) as EbayBulkAdResponse;
+      responseError = formatEbayRestErrors(payload.errors);
+    } catch {
+      responseError = cleanEbayText(responseText);
+    }
+
+    logger.error(
+      "ebay/sendEbayMarketingRequest",
+      `Marketing API returned HTTP ${response.status}`,
+      undefined,
+      {
+        storeNumber,
+        method: init.method ?? "GET",
+        url: url.pathname,
+        responseBody: responseText.slice(0, 1000),
+      },
+    );
+    throw new Error(
+      responseError || `eBay Marketing API request failed (${response.status}).`,
+    );
+  }
+
+  return { response, responseText };
+}
+
 async function getEbayGeneralAdCampaigns(
   storeNumber: 1 | 2 | 3,
   accessToken: string,
+  campaignStatus: string | null = "RUNNING",
 ) {
-  const campaigns: Array<{
-    campaignId: string;
-    campaignName: string;
-    rateStrategy: EbayPromotedRateStrategy;
-    bidPercentage: number | null;
-  }> = [];
+  const campaigns: EbayGeneralCampaignOption[] = [];
   const limit = 500;
   let offset = 0;
 
   while (true) {
     const url = new URL(`${EBAY_API_BASE_URL}/sell/marketing/v1/ad_campaign`);
-    url.searchParams.set("campaign_status", "RUNNING");
+    if (campaignStatus) {
+      url.searchParams.set("campaign_status", campaignStatus);
+    }
     url.searchParams.set("funding_strategy", "COST_PER_SALE");
     url.searchParams.set("limit", String(limit));
     url.searchParams.set("offset", String(offset));
@@ -449,11 +548,22 @@ async function getEbayGeneralAdCampaigns(
       campaigns.push({
         campaignId,
         campaignName: String(campaign.campaignName ?? campaignId).trim(),
+        campaignStatus: String(campaign.campaignStatus ?? "UNKNOWN").toUpperCase(),
+        marketplaceId: String(campaign.marketplaceId ?? "EBAY_AU").toUpperCase(),
+        startDate:
+          typeof campaign.startDate === "string" ? campaign.startDate : null,
+        endDate: typeof campaign.endDate === "string" ? campaign.endDate : null,
         rateStrategy:
           declaredStrategy === "UNKNOWN" && bidPercentage !== null
             ? "FIXED"
             : declaredStrategy,
         bidPercentage,
+        supported:
+          (declaredStrategy === "FIXED" ||
+            (declaredStrategy === "UNKNOWN" && bidPercentage !== null)) &&
+          ["RUNNING", "SCHEDULED", "PENDING"].includes(
+            String(campaign.campaignStatus ?? "").toUpperCase(),
+          ),
       });
     }
 
@@ -466,6 +576,41 @@ async function getEbayGeneralAdCampaigns(
   }
 
   return campaigns;
+}
+
+export async function getEbayGeneralCampaignOptions(
+  storeNumber: 1 | 2 | 3,
+) {
+  const accessToken = await getOAuthAccessToken(storeNumber);
+  return getEbayGeneralAdCampaigns(storeNumber, accessToken, null);
+}
+
+export async function getEbayPromotedListingsEligibility(
+  storeNumber: 1 | 2 | 3,
+) {
+  const accessToken = await getOAuthAccessToken(storeNumber);
+  const url = new URL(
+    `${EBAY_API_BASE_URL}/sell/account/v1/advertising_eligibility`,
+  );
+  url.searchParams.set("program_types", "PROMOTED_LISTINGS_STANDARD");
+  const data = await fetchEbayMarketingJson<{
+    advertisingEligibility?: Array<{
+      programType?: string;
+      status?: string;
+      reason?: string;
+    }>;
+  }>(storeNumber, accessToken, url, {
+    "X-EBAY-C-MARKETPLACE-ID": "EBAY_AU",
+  });
+  const eligibility = data.advertisingEligibility?.find(
+    (entry) => entry.programType === "PROMOTED_LISTINGS_STANDARD",
+  );
+
+  return {
+    eligible: eligibility?.status === "ELIGIBLE",
+    status: eligibility?.status ?? "UNKNOWN",
+    reason: eligibility?.reason ?? null,
+  };
 }
 
 async function getEbayAdsForCampaign(
@@ -575,6 +720,165 @@ export async function getEbayPromotedListingSync(
   });
 
   return promotedByListingId;
+}
+
+function normalizeBulkAdResults(
+  requestedListingIds: string[],
+  payload: EbayBulkAdResponse,
+) {
+  const responseByListingId = new Map(
+    (payload.responses ?? []).map((response) => [
+      String(response.listingId ?? "").trim(),
+      response,
+    ]),
+  );
+
+  return requestedListingIds.map<EbayPromotedAdWriteResult>((listingId) => {
+    const response = responseByListingId.get(listingId);
+    const statusCode = Number(response?.statusCode ?? 0);
+    const errorMessage = formatEbayRestErrors(response?.errors);
+    const success = statusCode >= 200 && statusCode < 300 && !errorMessage;
+
+    return {
+      listingId,
+      success,
+      statusCode,
+      adId: response?.adId ? String(response.adId) : null,
+      errorMessage:
+        errorMessage ||
+        (success ? null : "eBay did not confirm the promoted listing change."),
+    };
+  });
+}
+
+async function callEbayBulkAdAction(
+  storeNumber: 1 | 2 | 3,
+  campaignId: string,
+  action:
+    | "bulk_create_ads_by_listing_id"
+    | "bulk_update_ads_bid_by_listing_id"
+    | "bulk_delete_ads_by_listing_id",
+  requests: Array<{ listingId: string; bidPercentage?: string }>,
+) {
+  const accessToken = await getOAuthAccessToken(storeNumber);
+  const results: EbayPromotedAdWriteResult[] = [];
+
+  for (let index = 0; index < requests.length; index += 500) {
+    const requestChunk = requests.slice(index, index + 500);
+    const url = new URL(
+      `${EBAY_API_BASE_URL}/sell/marketing/v1/ad_campaign/${encodeURIComponent(campaignId)}/${action}`,
+    );
+    const { responseText } = await sendEbayMarketingRequest(
+      storeNumber,
+      accessToken,
+      url,
+      {
+        method: "POST",
+        body: JSON.stringify({ requests: requestChunk }),
+      },
+    );
+    const payload = responseText
+      ? (JSON.parse(responseText) as EbayBulkAdResponse)
+      : { responses: [] };
+    results.push(
+      ...normalizeBulkAdResults(
+        requestChunk.map((request) => request.listingId),
+        payload,
+      ),
+    );
+  }
+
+  return results;
+}
+
+export async function createEbayGeneralCampaign(
+  storeNumber: 1 | 2 | 3,
+  input: { campaignName: string; bidPercentage: number },
+) {
+  const accessToken = await getOAuthAccessToken(storeNumber);
+  const url = new URL(`${EBAY_API_BASE_URL}/sell/marketing/v1/ad_campaign`);
+  const startDate = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+  const { response } = await sendEbayMarketingRequest(
+    storeNumber,
+    accessToken,
+    url,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        campaignName: input.campaignName,
+        startDate,
+        marketplaceId: "EBAY_AU",
+        fundingStrategy: {
+          fundingModel: "COST_PER_SALE",
+          adRateStrategy: "FIXED",
+          bidPercentage: input.bidPercentage.toFixed(1),
+        },
+      }),
+    },
+  );
+  const location = response.headers.get("location") ?? "";
+  const campaignId = decodeURIComponent(
+    location.split("/").filter(Boolean).at(-1) ?? "",
+  ).trim();
+
+  if (!campaignId) {
+    throw new Error("eBay created the campaign but did not return its campaign ID.");
+  }
+
+  return {
+    campaignId,
+    campaignName: input.campaignName,
+    campaignStatus: "SCHEDULED",
+    bidPercentage: input.bidPercentage,
+    startDate,
+  };
+}
+
+export function createEbayPromotedAds(
+  storeNumber: 1 | 2 | 3,
+  campaignId: string,
+  listingIds: string[],
+  bidPercentage: number,
+) {
+  return callEbayBulkAdAction(
+    storeNumber,
+    campaignId,
+    "bulk_create_ads_by_listing_id",
+    listingIds.map((listingId) => ({
+      listingId,
+      bidPercentage: bidPercentage.toFixed(1),
+    })),
+  );
+}
+
+export function updateEbayPromotedAdRates(
+  storeNumber: 1 | 2 | 3,
+  campaignId: string,
+  listingIds: string[],
+  bidPercentage: number,
+) {
+  return callEbayBulkAdAction(
+    storeNumber,
+    campaignId,
+    "bulk_update_ads_bid_by_listing_id",
+    listingIds.map((listingId) => ({
+      listingId,
+      bidPercentage: bidPercentage.toFixed(1),
+    })),
+  );
+}
+
+export function deleteEbayPromotedAds(
+  storeNumber: 1 | 2 | 3,
+  campaignId: string,
+  listingIds: string[],
+) {
+  return callEbayBulkAdAction(
+    storeNumber,
+    campaignId,
+    "bulk_delete_ads_by_listing_id",
+    listingIds.map((listingId) => ({ listingId })),
+  );
 }
 
 /**

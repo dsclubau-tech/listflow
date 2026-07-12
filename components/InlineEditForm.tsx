@@ -351,6 +351,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       (product as { fullTitle?: string | null }).fullTitle || product.title
     )
   );
+  const [fullTitleUpdatePending, setFullTitleUpdatePending] = useState(false);
   const [category, setCategory] = useState(product.category);
   const [categoryName, setCategoryName] = useState((product as Record<string, unknown>).categoryName as string || "");
   const [asin, setAsin] = useState(product.asin ?? "");
@@ -450,6 +451,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
         (product as { fullTitle?: string | null }).fullTitle || product.title
       )
     );
+    setFullTitleUpdatePending(false);
   }, [product]);
 
   useEffect(() => {
@@ -1049,7 +1051,6 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
 
     const body: Record<string, unknown> = {
       title: toEbayListingTitle(title),
-      fullTitle,
       description,
       quantity: normalizedQuantity,
       condition,
@@ -1065,6 +1066,12 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       templateId: selectedTemplateId || null,
       promotedAdPercent: Math.min(100, Math.max(0, Number(promotedAdPercent) || 0)),
     };
+
+    // A manual title edit changes the eBay listing title only. Regrab is the
+    // only editor action that replaces the original full Amazon title.
+    if (fullTitleUpdatePending) {
+      body.fullTitle = fullTitle;
+    }
 
     if (amazonPriceUpdatePending) {
       body.price = parseFloat(price) || 0;
@@ -1099,6 +1106,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
           });
         }
         setAmazonPriceUpdatePending(false);
+        setFullTitleUpdatePending(false);
         router.refresh();
         return true;
       } else {
@@ -1432,6 +1440,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
 
       setTitle(update.title);
       setFullTitle(update.fullTitle);
+      setFullTitleUpdatePending(true);
       setDescription(update.description);
       setImages(update.images);
       setAsin(update.asin);

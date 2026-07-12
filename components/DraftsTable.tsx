@@ -27,6 +27,8 @@ interface DraftsTableProps {
   isPriceCheckJobActive?: boolean;
   onSyncSelectedEbayAds?: (productIds: string[]) => Promise<void>;
   isEbayAdsSyncing?: boolean;
+  onManagePromotionsSelected?: (productIds: string[]) => void;
+  isPromotionJobActive?: boolean;
   onBulkEditSelected?: (productIds: string[]) => void;
   onDraftImported?: (productId: string) => void;
 }
@@ -390,6 +392,8 @@ export default function DraftsTable({
   isPriceCheckJobActive = false,
   onSyncSelectedEbayAds,
   isEbayAdsSyncing = false,
+  onManagePromotionsSelected,
+  isPromotionJobActive = false,
   onBulkEditSelected,
   onDraftImported,
 }: DraftsTableProps) {
@@ -1880,11 +1884,19 @@ export default function DraftsTable({
                   {isExpanded && (
                     <tr>
                       <td colSpan={columnCount} className="p-0">
-                        <InlineEditForm
-                          product={product as never}
-                          onCollapse={() => setExpandedProductId(null)}
-                          onImported={onDraftImported}
-                        />
+                        <div
+                          className={
+                            isProductsView
+                              ? "sticky left-0 w-[calc(100vw-20rem)] max-w-full"
+                              : undefined
+                          }
+                        >
+                          <InlineEditForm
+                            product={product as never}
+                            onCollapse={() => setExpandedProductId(null)}
+                            onImported={onDraftImported}
+                          />
+                        </div>
                       </td>
                     </tr>
                   )}
@@ -2110,6 +2122,16 @@ export default function DraftsTable({
             )}
             {isProductsView && (
               <>
+                {onManagePromotionsSelected && (
+                  <button
+                    type="button"
+                    onClick={() => onManagePromotionsSelected(selectedIds)}
+                    disabled={selectedIds.length === 0 || isPromotionJobActive}
+                    className="flex items-center gap-2 rounded-md border border-violet-200 px-4 py-2 text-sm font-medium text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-60"
+                  >
+                    Manage Promotions
+                  </button>
+                )}
                 {onSyncSelectedEbayAds && (
                   <button
                     onClick={() => void onSyncSelectedEbayAds(selectedIds)}

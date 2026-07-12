@@ -3,6 +3,7 @@
 import { Suspense, useState } from "react";
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
+import { getSafeCallbackPath } from "@/lib/auth-navigation";
 
 function LoginForm() {
   const [storeId, setStoreId] = useState("");
@@ -12,7 +13,7 @@ function LoginForm() {
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const searchParams = useSearchParams();
-  const callbackUrl = searchParams.get("callbackUrl") || "/dashboard";
+  const callbackUrl = getSafeCallbackPath(searchParams.get("callbackUrl"));
   const authError = searchParams.get("error");
   const passwordChanged = searchParams.get("passwordChanged") === "1";
 
@@ -32,7 +33,7 @@ function LoginForm() {
         setError("Invalid store ID or password. Please try again.");
         setIsLoading(false);
       } else {
-        window.location.href = callbackUrl;
+        window.location.assign(callbackUrl);
       }
     } catch {
       setError("An unexpected error occurred. Please try again.");

@@ -1,16 +1,18 @@
 # ListFlow
 
 ListFlow is a store-scoped eBay listing operations app built with Next.js,
-Prisma, and PostgreSQL. The current production-ready setup is local-first:
-ListFlow runs on this PC and stores data in Supabase Postgres.
+Prisma, and PostgreSQL. The supported production setup is hybrid: the Next.js
+UI/API can run on Vercel or locally, Supabase hosts PostgreSQL, and a trusted
+Windows PC runs the manual worker for long jobs.
 
 ## Current Stack
 
-- App runtime: local Windows PC running `npm.cmd run dev` or `npm.cmd run start`
+- App runtime: Vercel or a local Windows PC running `npm.cmd run dev`/`start`
 - Database: Supabase Postgres
 - ORM: Prisma with `@prisma/adapter-pg`
 - Auth: store ID and password through NextAuth credentials
-- Scheduled work: protected Next.js cron routes called manually or by a local scheduler
+- Long jobs: manual Windows worker connected to the same Supabase database
+- Scheduled cleanup: protected Next.js cron routes
 
 ListFlow does not require Supabase anon keys or service-role keys. Database
 access stays server-side through Prisma.
@@ -57,6 +59,14 @@ Install dependencies:
 ```bash
 npm install
 ```
+
+Install local Chromium before running browser-backed jobs on this PC:
+
+```bash
+npm.cmd run browser:install
+```
+
+Vercel uses `@sparticuz/chromium` and does not need this local browser download.
 
 Validate and generate Prisma:
 
@@ -172,12 +182,12 @@ Suggested schedule:
 */30 * * * *
 ```
 
-eBay Research records expire two hours after a research job or batch reaches a
+eBay Research records expire 24 hours after a research job or batch reaches a
 terminal state. Queued, running, pausing, and paused research work is preserved
 for recovery.
 
-## Hosting Later
+## Hosted Runtime
 
-If you later want ListFlow available 24/7, the app can be moved to a host such
-as Railway or another Node.js host. Vercel is possible for the UI/API, but the
-long-running price-check and queue workers need extra care on serverless hosting.
+Vercel hosts the UI and short API requests. Keep the manual worker running on a
+trusted PC while price checks, imports, research batches, or eBay actions are in
+progress. Closing the browser does not stop a queued worker job.

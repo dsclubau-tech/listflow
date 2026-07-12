@@ -207,6 +207,7 @@ function actionJobLabel(type: string) {
   if (type === "RESUME") return "Resume listings";
   if (type === "END") return "End listings";
   if (type === "BULK_EDIT_REVISE") return "Bulk edit listings";
+  if (type === "MANAGE_PROMOTED_ADS") return "Manage promoted listings";
   return "eBay listing action";
 }
 

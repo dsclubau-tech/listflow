@@ -184,6 +184,7 @@ export interface ActionCenterEbayActionJob {
   processed: number;
   succeeded: number;
   failed: number;
+  metadata?: unknown;
   errorMessage: string | null;
   createdAt: string;
   updatedAt: string;

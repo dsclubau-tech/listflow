@@ -60,6 +60,17 @@ model Store {
   appLogs              AppLog[]
 }
 
+model LoginAttempt {
+  id        String   @id @default(cuid())
+  loginHash String
+  ipHash    String
+  createdAt DateTime @default(now())
+
+  @@index([loginHash, ipHash, createdAt])
+  @@index([ipHash, createdAt])
+  @@index([createdAt])
+}
+
 enum ProductStatus {
   DRAFT
   IMPORTED
@@ -154,6 +165,7 @@ enum EbayActionJobType {
   RESUME
   END
   BULK_EDIT_REVISE
+  MANAGE_PROMOTED_ADS
 }
 
 enum PromotedAdStatus {
