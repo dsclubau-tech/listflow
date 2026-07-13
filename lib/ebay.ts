@@ -1474,8 +1474,49 @@ export async function getEbaySuggestedCategories(
       }>;
     };
 
-    if (!data.categorySuggestions || data.categorySuggestions.length === 0) {
-      logger.info("ebay/getEbaySuggestedCategories", "No category suggestions returned", {
+    let suggestionsToUse = data.categorySuggestions ?? [];
+
+    if (suggestionsToUse.length === 0) {
+      // 1. Clean the query to remove compatibility clauses, commas, dashes, and other noise
+      let cleanQuery = title
+        .split(/[,|\-|—–]|(\sfits\s)|(\sfor\s)|(\scompatible\s)/i)[0]
+        .trim();
+
+      // If cleanQuery is too short or unchanged, take the first 5 words
+      if (cleanQuery.length < 10 || cleanQuery === query) {
+        cleanQuery = title.split(/\s+/).slice(0, 5).join(" ");
+      }
+
+      if (cleanQuery && cleanQuery !== query) {
+        logger.info("ebay/getEbaySuggestedCategories", "Retrying category suggestions with fallback query", {
+          originalQuery: query,
+          fallbackQuery: cleanQuery,
+        });
+
+        const fallbackUrl = `${EBAY_API_BASE_URL}/commerce/taxonomy/v1/category_tree/15/get_category_suggestions?q=${encodeURIComponent(cleanQuery)}`;
+        const fallbackRes = await fetch(fallbackUrl, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+        });
+
+        if (fallbackRes.ok) {
+          const fallbackText = await fallbackRes.text();
+          const fallbackData = JSON.parse(fallbackText) as {
+            categorySuggestions?: typeof data.categorySuggestions;
+          };
+          if (fallbackData.categorySuggestions && fallbackData.categorySuggestions.length > 0) {
+            suggestionsToUse = fallbackData.categorySuggestions;
+          }
+        }
+      }
+    }
+
+    if (suggestionsToUse.length === 0) {
+      logger.info("ebay/getEbaySuggestedCategories", "No category suggestions returned after fallback retries", {
         storeNumber,
         query: query.slice(0, 60),
       });
@@ -1486,7 +1527,7 @@ export async function getEbaySuggestedCategories(
     const seen = new Set<string>();
     const mapped: Array<{ categoryId: string; categoryName: string }> = [];
 
-    for (const suggestion of data.categorySuggestions) {
+    for (const suggestion of suggestionsToUse) {
       const id = suggestion.category.categoryId;
       if (seen.has(id)) continue;
       seen.add(id);

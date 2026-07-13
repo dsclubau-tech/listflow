@@ -271,12 +271,14 @@ export function matchAllowedSpecificValue(
     return candidate?.trim() || null;
   }
 
+  // 1. Exact Match
   for (const value of allowedValues) {
     if (normalizeSpecificValue(value) === normalizedCandidate) {
       return value;
     }
   }
 
+  // 2. Substring Match
   for (const value of allowedValues) {
     const normalizedAllowed = normalizeSpecificValue(value);
     if (
@@ -286,6 +288,79 @@ export function matchAllowedSpecificValue(
     ) {
       return value;
     }
+  }
+
+  // 3. Smart Token-based Match
+  const stopwords = new Set([
+    "for",
+    "fit",
+    "fits",
+    "compatible",
+    "with",
+    "to",
+    "devices",
+    "device",
+    "models",
+    "model",
+    "the",
+    "and",
+    "charging",
+    "replacement",
+    "universal",
+    "standard",
+    "original",
+    "generic",
+  ]);
+
+  const getCleanTokens = (str: string) => {
+    return str
+      .toLowerCase()
+      .replace(/\+/g, " plus ")
+      .replace(/[^a-z0-9]+/g, " ")
+      .split(/\s+/)
+      .filter((t) => t.length >= 2 && !stopwords.has(t));
+  };
+
+  const candidateTokens = getCleanTokens(normalizedCandidate);
+  if (candidateTokens.length === 0) {
+    return null;
+  }
+
+  let bestMatch: string | null = null;
+  let bestScore = 0;
+
+  for (const value of allowedValues) {
+    const allowedTokens = getCleanTokens(value);
+    const intersection = candidateTokens.filter((t) => allowedTokens.includes(t));
+
+    if (intersection.length > 0) {
+      // Calculate basic intersection score
+      let score = intersection.length * 10;
+
+      // Deduct points for mismatch of version qualifiers (pro, max, plus) to avoid matching "Dyson TP02" to "Dyson TP04"
+      const hasProDifference =
+        (candidateTokens.includes("pro") && !allowedTokens.includes("pro")) ||
+        (!candidateTokens.includes("pro") && allowedTokens.includes("pro"));
+      if (hasProDifference) {
+        score -= 4;
+      }
+
+      const hasPlusDifference =
+        (candidateTokens.includes("plus") && !allowedTokens.includes("plus")) ||
+        (!candidateTokens.includes("plus") && allowedTokens.includes("plus"));
+      if (hasPlusDifference) {
+        score -= 4;
+      }
+
+      if (score > bestScore) {
+        bestScore = score;
+        bestMatch = value;
+      }
+    }
+  }
+
+  if (bestScore > 0) {
+    return bestMatch;
   }
 
   return null;
@@ -594,6 +669,36 @@ export function inferTypeItemSpecific(input: {
       continue;
     }
 
+    // Tier 1: Exact Matches across all candidate values
+    if (input.allowedValues && input.allowedValues.length > 0) {
+      for (const value of candidate.values) {
+        const normalizedCandidate = normalizeSpecificValue(value);
+        const exactMatch = input.allowedValues.find(
+          (allowed) => normalizeSpecificValue(allowed) === normalizedCandidate
+        );
+        if (exactMatch) {
+          return exactMatch;
+        }
+      }
+
+      // Tier 2: Substring Matches across all candidate values
+      for (const value of candidate.values) {
+        const normalizedCandidate = normalizeSpecificValue(value);
+        const substringMatch = input.allowedValues.find((allowed) => {
+          const normalizedAllowed = normalizeSpecificValue(allowed);
+          return (
+            normalizedAllowed.length >= 3 &&
+            (normalizedCandidate.includes(normalizedAllowed) ||
+              normalizedAllowed.includes(normalizedCandidate))
+          );
+        });
+        if (substringMatch) {
+          return substringMatch;
+        }
+      }
+    }
+
+    // Tier 3: Token-based Fallback Match
     for (const value of candidate.values) {
       const matched = matchAllowedSpecificValue(value, input.allowedValues);
       if (matched) {

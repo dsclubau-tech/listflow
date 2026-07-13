@@ -409,15 +409,42 @@ export function resolveRequiredItemSpecifics(
   mergeDefaults(specifics, input.supplierDefaultItemSpecifics);
 
   for (const required of input.requiredItemSpecifics) {
-    if (hasUsableSpecificValue(specifics, required.name)) {
+    const hasValue = hasUsableSpecificValue(specifics, required.name);
+    const existingValue = hasValue ? readSpecificValue(specifics, required.name) : null;
+    let isValueAllowed = true;
+
+    if (hasValue && existingValue && required.values && required.values.length > 0) {
+      isValueAllowed = required.values.some(
+        (allowed) => normalizeName(allowed) === normalizeName(existingValue)
+      );
+    }
+
+    if (hasValue && isValueAllowed) {
       decisions.push({
         name: required.name,
-        value: readSpecificValue(specifics, required.name),
+        value: existingValue,
         source: "user",
       });
       continue;
     }
 
+    // Try to map existing invalid value to allowed values
+    let mappedValue: string | null = null;
+    if (hasValue && existingValue && required.values && required.values.length > 0) {
+      mappedValue = matchAllowedSpecificValue(existingValue, required.values);
+    }
+
+    if (mappedValue) {
+      upsertSpecific(specifics, addedItemSpecifics, required.name, mappedValue);
+      decisions.push({
+        name: required.name,
+        value: mappedValue,
+        source: "amazon",
+      });
+      continue;
+    }
+
+    // Run full inference
     const inferred = inferRequiredSpecific(input, specifics, required);
     if (inferred.value) {
       upsertSpecific(specifics, addedItemSpecifics, required.name, inferred.value);
@@ -431,7 +458,19 @@ export function resolveRequiredItemSpecifics(
   }
 
   const missingItemSpecifics = input.requiredItemSpecifics
-    .filter((required) => !hasUsableSpecificValue(specifics, required.name))
+    .filter((required) => {
+      const hasValue = hasUsableSpecificValue(specifics, required.name);
+      if (!hasValue) {
+        return true;
+      }
+      const val = readSpecificValue(specifics, required.name);
+      if (val && required.values && required.values.length > 0) {
+        return !required.values.some(
+          (allowed) => normalizeName(allowed) === normalizeName(val)
+        );
+      }
+      return false;
+    })
     .map((required) => required.name);
 
   return {

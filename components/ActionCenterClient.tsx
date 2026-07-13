@@ -110,6 +110,29 @@ function formatDateTime(value: string | null) {
   });
 }
 
+function formatDuration(startedAt: string | null, completedAt: string | null) {
+  if (!startedAt || !completedAt) {
+    return null;
+  }
+
+  const ms = new Date(completedAt).getTime() - new Date(startedAt).getTime();
+
+  if (!Number.isFinite(ms) || ms < 0) {
+    return null;
+  }
+
+  const totalSeconds = Math.round(ms / 1000);
+
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
 function formatWorkerLastSeen(value: string | null) {
   if (!value) {
     return "Never seen";
@@ -1375,6 +1398,9 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                             {batch.running} running, {batch.queued} queued, {batch.paused} paused
                             {batch.cooldownUntil
                               ? `, next after ${formatDateTime(batch.cooldownUntil)}`
+                              : ""}
+                            {batch.completedAt && formatDuration(batch.startedAt, batch.completedAt)
+                              ? ` - took ${formatDuration(batch.startedAt, batch.completedAt)}`
                               : ""}
                           </div>
                           <div className="mt-2 max-w-sm">

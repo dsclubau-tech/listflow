@@ -193,3 +193,41 @@ test("resolveRequiredItemSpecifics reports Compatible Model missing when no data
   assert.equal(result.itemSpecifics["Compatible Model"], undefined);
   assert.deepEqual(result.missingItemSpecifics, ["Compatible Model"]);
 });
+
+test("resolveRequiredItemSpecifics infers Model from Amazon item specifics and title", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "BRITA MAXTRA PRO Limescale Expert Water Filter Cartridges",
+    categoryName: "Water Filter Cartridges",
+    brand: "BRITA",
+    itemSpecifics: {
+      Brand: "BRITA",
+      "Model Number": "Maxtra Pro Limescale",
+    },
+    requiredItemSpecifics: [
+      { name: "Model", values: ["Maxtra", "Maxtra Pro", "Maxtra+"] },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics["Model"], "Maxtra");
+  assert.deepEqual(result.missingItemSpecifics, []);
+});
+
+test("resolveRequiredItemSpecifics matches Maxtra Pro candidate to For Brita Maxtra+ dropdown option", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "BRITA MAXTRA PRO Limescale Expert Water Filter Cartridges",
+    categoryName: "Water Filter Cartridges",
+    brand: "BRITA",
+    itemSpecifics: {
+      Brand: "BRITA",
+      "Compatible Model": "Maxtra Pro",
+    },
+    requiredItemSpecifics: [
+      { name: "Compatible Model", values: ["For Aqua Optima Evolve", "For Brita Maxtra+", "For Samsung Aquarius"] },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics["Compatible Model"], "For Brita Maxtra+");
+  assert.deepEqual(result.missingItemSpecifics, []);
+});
+
+

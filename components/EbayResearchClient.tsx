@@ -1264,6 +1264,9 @@ export default function EbayResearchClient({
                         {batch.cooldownUntil
                           ? ` - next search after ${formatDate(batch.cooldownUntil)}`
                           : ""}
+                        {batch.completedAt && formatDuration(batch.startedAt, batch.completedAt)
+                          ? ` - took ${formatDuration(batch.startedAt, batch.completedAt)}`
+                          : ""}
                       </div>
                       <div className="mt-2 max-w-sm">
                         <ActionProgressBar
