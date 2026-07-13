@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import {
+  clearAllResearchData,
   createEbayResearchJob,
   getRecentEbayResearchJobs,
 } from "@/lib/ebay-research";
@@ -103,6 +104,35 @@ export async function POST(request: Request) {
             ? 409
             : 400,
       }
+    );
+  }
+}
+
+export async function DELETE(request: Request) {
+  const session = await auth();
+  const storeSession = await getCurrentStoreSession();
+  const log = createRequestLogger(
+    request,
+    storeSession ? { storeId: storeSession.storeId } : {}
+  );
+
+  if (!session?.user || !storeSession) {
+    log.warn("ebay-research/jobs/DELETE", "Unauthorized clear request");
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const result = await clearAllResearchData(storeSession.storeId);
+
+    log.info("ebay-research/jobs/DELETE", "Cleared research data", result);
+    invalidateJobCaches(storeSession.storeId);
+
+    return NextResponse.json({ ...result, cleared: true });
+  } catch (error) {
+    log.error("ebay-research/jobs/DELETE", "Failed to clear research data", error);
+    return NextResponse.json(
+      { error: "Failed to clear research data." },
+      { status: 500 }
     );
   }
 }

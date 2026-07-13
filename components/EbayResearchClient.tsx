@@ -217,6 +217,29 @@ function formatDate(value: string | null | undefined) {
   }).format(date);
 }
 
+function formatDuration(startedAt: string | null, completedAt: string | null) {
+  if (!startedAt || !completedAt) {
+    return null;
+  }
+
+  const ms = new Date(completedAt).getTime() - new Date(startedAt).getTime();
+
+  if (!Number.isFinite(ms) || ms < 0) {
+    return null;
+  }
+
+  const totalSeconds = Math.round(ms / 1000);
+
+  if (totalSeconds < 60) {
+    return `${totalSeconds}s`;
+  }
+
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+
+  return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
+}
+
 function statusClasses(status: ResearchStatus) {
   if (status === "COMPLETED") {
     return "bg-green-100 text-green-700";
@@ -633,6 +656,31 @@ export default function EbayResearchClient({
 
     setJobs(data.jobs ?? []);
   }, []);
+
+  async function clearAllResearch() {
+    if (!window.confirm("Clear all completed research history and cached results?")) {
+      return;
+    }
+
+    setError(null);
+
+    try {
+      const response = await fetch("/api/ebay-research/jobs", {
+        method: "DELETE",
+      });
+
+      if (!response.ok) {
+        const data = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || "Failed to clear research data");
+      }
+
+      setJobs([]);
+      setBatches([]);
+      setSelectedJob(null);
+    } catch (caughtError) {
+      setError(getErrorMessage(caughtError));
+    }
+  }
 
   const refreshBatches = useCallback(async () => {
     const response = await fetch("/api/ebay-research/batches/current", {
@@ -1317,7 +1365,7 @@ export default function EbayResearchClient({
                 <SummaryStat
                   label="Safe Mode"
                   value="API-only"
-                  subtext={selectedJob.completedAt ? `Done ${formatDate(selectedJob.completedAt)}` : "Sold comps off"}
+                  subtext={selectedJob.completedAt ? `Done ${formatDate(selectedJob.completedAt)}${formatDuration(selectedJob.startedAt, selectedJob.completedAt) ? ` (${formatDuration(selectedJob.startedAt, selectedJob.completedAt)})` : ""}` : "Sold comps off"}
                 />
               </>
             ) : (
@@ -1335,7 +1383,7 @@ export default function EbayResearchClient({
                 <SummaryStat
                   label="Median sold"
                   value={formatMoney(selectedJob.soldSummary.medianPrice)}
-                  subtext={selectedJob.completedAt ? `Done ${formatDate(selectedJob.completedAt)}` : undefined}
+                  subtext={selectedJob.completedAt ? `Done ${formatDate(selectedJob.completedAt)}${formatDuration(selectedJob.startedAt, selectedJob.completedAt) ? ` (${formatDuration(selectedJob.startedAt, selectedJob.completedAt)})` : ""}` : undefined}
                 />
               </>
             )}
@@ -1448,13 +1496,24 @@ export default function EbayResearchClient({
       <section className="border border-gray-200 bg-white">
         <div className="flex items-center justify-between border-b border-gray-200 px-4 py-3">
           <h2 className="font-semibold text-gray-900">Recent Research</h2>
-          <button
-            type="button"
-            onClick={() => void refreshJobs().catch((caughtError) => setError(getErrorMessage(caughtError)))}
-            className="text-sm font-medium text-gray-600 hover:text-gray-900"
-          >
-            Refresh
-          </button>
+          <div className="flex items-center gap-3">
+            {jobs.length > 0 && (
+              <button
+                type="button"
+                onClick={() => void clearAllResearch()}
+                className="text-sm font-medium text-red-500 hover:text-red-700"
+              >
+                Clear All
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => void refreshJobs().catch((caughtError) => setError(getErrorMessage(caughtError)))}
+              className="text-sm font-medium text-gray-600 hover:text-gray-900"
+            >
+              Refresh
+            </button>
+          </div>
         </div>
 
         {jobs.length === 0 ? (

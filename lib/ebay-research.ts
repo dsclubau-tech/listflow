@@ -1959,12 +1959,56 @@ export async function cleanupExpiredEbayResearchRecords(
       }
     );
 
-    return {
+  return {
       deletedBatches: 0,
       deletedJobs: 0,
       skipped: true,
     };
   }
+}
+
+export async function clearAllResearchData(storeId: string) {
+  const result = await prisma.$transaction(async (tx) => {
+    const batches = await tx.ebayResearchBatch.deleteMany({
+      where: {
+        storeId,
+        status: { in: TERMINAL_RESEARCH_BATCH_STATUSES },
+      },
+    });
+    const standaloneJobs = await tx.ebayResearchJob.deleteMany({
+      where: {
+        storeId,
+        batchId: null,
+        status: { in: TERMINAL_RESEARCH_JOB_STATUSES },
+      },
+    });
+
+    return {
+      deletedBatches: batches.count,
+      deletedJobs: standaloneJobs.count,
+    };
+  });
+
+  const cache = getActiveSearchCache();
+  const keysToDelete: string[] = [];
+
+  for (const key of cache.keys()) {
+    if (key.includes(storeId)) {
+      keysToDelete.push(key);
+    }
+  }
+
+  for (const key of keysToDelete) {
+    cache.delete(key);
+  }
+
+  logger.info("ebay-research/clear", "Cleared all research data", {
+    storeId,
+    ...result,
+    clearedCacheKeys: keysToDelete.length,
+  });
+
+  return result;
 }
 
 export async function createEbayResearchJob(input: CreateEbayResearchJobInput) {
