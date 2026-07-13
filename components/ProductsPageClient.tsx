@@ -381,6 +381,7 @@ export default function ProductsPageClient({
   const [isResumingPriceCheckJob, setIsResumingPriceCheckJob] = useState(false);
   const [priceCheckJob, setPriceCheckJob] = useState<PriceCheckJob | null>(null);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [isCopyingTitles, setIsCopyingTitles] = useState(false);
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
   const [isPromotedListingsOpen, setIsPromotedListingsOpen] = useState(false);
   const [promotedListingsJob, setPromotedListingsJob] =
@@ -1258,6 +1259,36 @@ export default function ProductsPageClient({
     }
   };
 
+  const handleCopyTitles = async () => {
+    if (selectedProductIds.length === 0) return;
+
+    const selectedSet = new Set(selectedProductIds);
+    const titles = products
+      .filter((p) => selectedSet.has(p.id))
+      .map((p) => p.title.trim())
+      .filter(Boolean)
+      .join("\n");
+
+    if (!titles) {
+      showToast("No titles found for the selected products.", "error");
+      return;
+    }
+
+    setIsCopyingTitles(true);
+
+    try {
+      await navigator.clipboard.writeText(titles);
+      showToast(
+        `Copied ${selectedProductIds.length} title${selectedProductIds.length === 1 ? "" : "s"} to clipboard.`,
+        "success"
+      );
+    } catch {
+      showToast("Failed to copy to clipboard. Check browser permissions.", "error");
+    } finally {
+      setIsCopyingTitles(false);
+    }
+  };
+
   const handleSyncEbayAds = async (productIds?: string[]) => {
     const scopedProductIds = productIds?.filter(Boolean) ?? [];
     const isSelectedSync = scopedProductIds.length > 0;
@@ -1898,6 +1929,33 @@ export default function ProductsPageClient({
                   : "Check Selected"
                 : "Check Prices Now"}
           </button>
+          {selectedProductIds.length > 0 && (
+            <button
+              type="button"
+              onClick={() => void handleCopyTitles()}
+              disabled={isCopyingTitles}
+              title="Copy selected product titles to clipboard for eBay Research"
+              className="inline-flex items-center gap-2 rounded-md border border-violet-300 bg-white px-3 py-2 text-sm font-medium text-violet-700 transition-colors hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <svg
+                className="h-4 w-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+                aria-hidden="true"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"
+                />
+              </svg>
+              {isCopyingTitles
+                ? "Copying..."
+                : `Copy ${selectedProductIds.length} Title${selectedProductIds.length === 1 ? "" : "s"}`}
+            </button>
+          )}
           <button
             onClick={handleExportCsv}
             disabled={isExporting}

@@ -20,6 +20,7 @@ import {
   normalizeProductImageUrl,
 } from "@/lib/product-images";
 import { uploadProductImageFile } from "@/lib/client-product-image-upload";
+import { getStoreBadgeClass } from "@/lib/store-badge";
 import {
   applyTitleCase,
   normalizeFullProductTitle,
@@ -60,12 +61,6 @@ interface DraftEditFormProps {
   onError: (message: string) => void;
   onClose: () => void;
 }
-
-const storeBadgeColors: Record<string, string> = {
-  "Store 1": "bg-blue-100 text-blue-800",
-  "Store 2": "bg-purple-100 text-purple-800",
-  "Store 3": "bg-orange-100 text-orange-800",
-};
 
 const tabs = ["Product", "Description", "Images", "Item Specifications"];
 
@@ -700,9 +695,10 @@ export default function DraftEditForm({
                 {storeId && stores.find((s) => s.id === storeId) && (
                   <span
                     className={`inline-flex items-center mt-2 px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                      storeBadgeColors[
-                        stores.find((s) => s.id === storeId)?.name || ""
-                      ] || "bg-gray-100 text-gray-800"
+                      getStoreBadgeClass(
+                        storeId,
+                        stores.find((store) => store.id === storeId)?.name || "",
+                      )
                     }`}
                   >
                     {stores.find((s) => s.id === storeId)?.name}

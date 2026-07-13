@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import DraftsTable from "@/components/DraftsTable";
 import AddProductModal from "@/components/AddProductModal";
@@ -21,12 +21,38 @@ export default function DraftsPageClient({
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [autoExpandProductId, setAutoExpandProductId] = useState<string | null>(null);
   const [visibleProducts, setVisibleProducts] = useState(products);
+  const didRunMaintenance = useRef(false);
   const router = useRouter();
   const { toast, showToast, hideToast } = useToast();
 
   useEffect(() => {
     setVisibleProducts(products);
   }, [products]);
+
+  useEffect(() => {
+    if (didRunMaintenance.current) return;
+    didRunMaintenance.current = true;
+
+    const controller = new AbortController();
+
+    void fetch("/api/drafts/maintenance", {
+      method: "POST",
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const data = (await response.json()) as { repaired?: number };
+        if (data.repaired && data.repaired > 0) {
+          router.refresh();
+        }
+      })
+      .catch(() => {
+        // Maintenance is best effort and must never block the Drafts page.
+      });
+
+    return () => controller.abort();
+  }, [router]);
 
   const handleScraped = async (data: ScrapedProduct) => {
     const result = await createDraftFromScrapedProduct(data);

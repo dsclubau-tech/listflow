@@ -1,5 +1,3 @@
-import ActionProgressBar from "@/components/ActionProgressBar";
-
 function SkeletonBlock({ className }: { className: string }) {
   return <div className={`animate-pulse rounded-md bg-gray-200 ${className}`} />;
 }
@@ -9,8 +7,9 @@ export default function AppLoading() {
     <div className="p-8" role="status" aria-live="polite">
       <span className="sr-only">Loading</span>
 
-      <div className="mb-5 max-w-md">
-        <ActionProgressBar label="Loading page" percent={68} tone="blue" />
+      <div className="mb-5 flex items-center gap-2 text-sm text-gray-600">
+        <span className="h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-700" />
+        Loading page...
       </div>
 
       <div className="mb-6 flex items-center justify-between gap-4">

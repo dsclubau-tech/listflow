@@ -6,15 +6,8 @@ import {
   getRecentEbayResearchJobs,
 } from "@/lib/ebay-research";
 import { logger } from "@/lib/logger";
+import { getSafeResearchLoadErrorMessage } from "@/lib/page-load-errors";
 import { getCurrentStoreSession } from "@/lib/store-session";
-
-function getResearchLoadErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-
-  return "Research history is temporarily unavailable.";
-}
 
 export default async function EbayResearchPage() {
   const storeSession = await getCurrentStoreSession();
@@ -37,7 +30,7 @@ export default async function EbayResearchPage() {
       ? [firstJob, ...recentJobs.filter((job) => job.id !== firstJob.id)]
       : recentJobs;
   } catch (error) {
-    initialError = getResearchLoadErrorMessage(error);
+    initialError = getSafeResearchLoadErrorMessage(error);
     logger.error(
       "ebay-research/page",
       "Failed to load recent eBay research jobs",
@@ -49,7 +42,7 @@ export default async function EbayResearchPage() {
   try {
     batches = await getCurrentEbayResearchBatches(storeSession.storeId);
   } catch (error) {
-    initialError = initialError ?? getResearchLoadErrorMessage(error);
+    initialError = initialError ?? getSafeResearchLoadErrorMessage(error);
     logger.error(
       "ebay-research/page",
       "Failed to load current eBay research batches",

@@ -2,12 +2,13 @@ import { prisma } from "@/lib/prisma";
 import ClearHistoryButton from "@/components/ClearHistoryButton";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { redirect } from "next/navigation";
-
-const storeBadgeColors: Record<string, string> = {
-  "Store 1": "bg-blue-100 text-blue-800",
-  "Store 2": "bg-purple-100 text-purple-800",
-  "Store 3": "bg-orange-100 text-orange-800",
-};
+import Link from "next/link";
+import {
+  getUploadHistoryPagination,
+  parseUploadHistoryPage,
+  UPLOAD_HISTORY_PAGE_SIZE,
+} from "@/lib/upload-history-pagination";
+import { getStoreBadgeClass } from "@/lib/store-badge";
 
 function formatDate(date: Date): string {
   const d = new Date(date);
@@ -23,16 +24,28 @@ function formatDate(date: Date): string {
   return `${day} ${month} ${year}, ${hours}:${minutes}`;
 }
 
-export default async function HistoryPage() {
+export default async function HistoryPage({
+  searchParams,
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const storeSession = await getCurrentStoreSession();
 
   if (!storeSession) {
     redirect("/login");
   }
 
+  const params = (await searchParams) ?? {};
+  const requestedPage = parseUploadHistoryPage(params.page);
+  const totalCount = await prisma.uploadLog.count({
+    where: { storeId: storeSession.storeId },
+  });
+  const pagination = getUploadHistoryPagination(totalCount, requestedPage);
   const logs = await prisma.uploadLog.findMany({
     where: { storeId: storeSession.storeId },
     orderBy: { createdAt: "desc" },
+    skip: pagination.skip,
+    take: UPLOAD_HISTORY_PAGE_SIZE,
     include: {
       product: true,
       store: true,
@@ -49,7 +62,7 @@ export default async function HistoryPage() {
             Upload History
           </h1>
           <span className="text-sm text-gray-500">
-            ({logs.length} uploads)
+            ({totalCount} uploads)
           </span>
         </div>
         <ClearHistoryButton />
@@ -113,8 +126,7 @@ export default async function HistoryPage() {
                   <td className="px-4 py-3">
                     <span
                       className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                        storeBadgeColors[log.store.name] ||
-                        "bg-gray-100 text-gray-800"
+                        getStoreBadgeClass(log.store.id, log.store.name)
                       }`}
                     >
                       {log.store.name}
@@ -172,6 +184,42 @@ export default async function HistoryPage() {
               ))}
             </tbody>
           </table>
+        </div>
+      )}
+
+      {totalCount > 0 && (
+        <div className="mt-4 flex items-center justify-between gap-3 text-sm text-gray-600">
+          <span>
+            {(pagination.page - 1) * UPLOAD_HISTORY_PAGE_SIZE + 1}-
+            {Math.min(pagination.page * UPLOAD_HISTORY_PAGE_SIZE, totalCount)} of {totalCount}
+          </span>
+          <div className="flex items-center gap-2">
+            <Link
+              href={`/history?page=${pagination.page - 1}`}
+              aria-disabled={pagination.page <= 1}
+              className={`rounded-md border px-3 py-1.5 font-medium ${
+                pagination.page <= 1
+                  ? "pointer-events-none border-gray-200 text-gray-400"
+                  : "border-gray-300 text-gray-700 hover:bg-gray-50"
+              }`}
+            >
+              Previous
+            </Link>
+            <span>
+              Page {pagination.page} of {pagination.totalPages}
+            </span>
+            <Link
+              href={`/history?page=${pagination.page + 1}`}
+              aria-disabled={pagination.page >= pagination.totalPages}
+              className={`rounded-md border px-3 py-1.5 font-medium ${
+                pagination.page >= pagination.totalPages
+                  ? "pointer-events-none border-gray-200 text-gray-400"
+                  : "border-gray-300 text-gray-700 hover:bg-gray-50"
+              }`}
+            >
+              Next
+            </Link>
+          </div>
         </div>
       )}
     </div>

@@ -1,8 +1,5 @@
 import DraftsPageClient from "@/components/DraftsPageClient";
-import {
-  getCachedDraftsPageData,
-  repairAlreadyListedDrafts,
-} from "@/lib/drafts-page-data";
+import { getCachedDraftsPageData } from "@/lib/drafts-page-data";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { redirect } from "next/navigation";
 
@@ -13,7 +10,6 @@ export default async function DraftsPage() {
     redirect("/login");
   }
 
-  await repairAlreadyListedDrafts(storeSession.storeId);
   const data = await getCachedDraftsPageData(storeSession.storeId);
 
   return (

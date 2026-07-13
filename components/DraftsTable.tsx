@@ -15,6 +15,7 @@ import {
   getAmazonPriceTrackingLabel,
   normalizeAmazonPriceTrackingMode,
 } from "@/lib/amazon-price-tracking";
+import { getStoreBadgeClass } from "@/lib/store-badge";
 import type { SerializedProductRow } from "@/types/product-row";
 
 interface DraftsTableProps {
@@ -32,12 +33,6 @@ interface DraftsTableProps {
   onBulkEditSelected?: (productIds: string[]) => void;
   onDraftImported?: (productId: string) => void;
 }
-
-const storeBadgeColors: Record<string, string> = {
-  "Store 1": "bg-blue-100 text-blue-800",
-  "Store 2": "bg-purple-100 text-purple-800",
-  "Store 3": "bg-orange-100 text-orange-800",
-};
 
 const statusBadgeLabels: Record<string, string> = {
   DRAFT: "Draft",
@@ -1652,7 +1647,7 @@ export default function DraftsTable({
                     <td className="px-3 py-3">
                       <span
                         className={`inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                          storeBadgeColors[product.store.name] || "bg-gray-100 text-gray-800"
+                          getStoreBadgeClass(product.store.id, product.store.name)
                         }`}
                       >
                         {product.store.name}

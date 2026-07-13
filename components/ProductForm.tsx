@@ -4,6 +4,7 @@
 import { useState, useEffect } from "react";
 import { reportClientError } from "@/lib/client-logger";
 import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
+import { getStoreBadgeClass } from "@/lib/store-badge";
 
 interface Store {
   id: string;
@@ -15,12 +16,6 @@ interface ProductFormProps {
   onError: (message: string) => void;
   onCancel: () => void;
 }
-
-const storeBadgeColors: Record<string, string> = {
-  "Store 1": "bg-blue-100 text-blue-800",
-  "Store 2": "bg-purple-100 text-purple-800",
-  "Store 3": "bg-orange-100 text-orange-800",
-};
 
 export default function ProductForm({
   onSuccess,
@@ -208,9 +203,10 @@ export default function ProductForm({
         {storeId && stores.find((s) => s.id === storeId) && (
           <span
             className={`inline-flex items-center mt-2 px-2.5 py-0.5 rounded-full text-xs font-medium ${
-              storeBadgeColors[
-                stores.find((s) => s.id === storeId)?.name || ""
-              ] || "bg-gray-100 text-gray-800"
+              getStoreBadgeClass(
+                storeId,
+                stores.find((store) => store.id === storeId)?.name || "",
+              )
             }`}
           >
             {stores.find((s) => s.id === storeId)?.name}

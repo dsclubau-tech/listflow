@@ -46,3 +46,7 @@ next-env.d.ts
 
 # logs
 /logs
+
+# reports (local docs, not committed to git)
+*_REPORT.md
+[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md

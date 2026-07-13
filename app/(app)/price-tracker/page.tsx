@@ -1,6 +1,5 @@
 import PriceTrackerClient from "@/components/PriceTrackerClient";
 import { getCachedPriceTrackerPageData } from "@/lib/price-tracker-page-data";
-import { dismissObsoletePendingPriceChanges } from "@/lib/price-history-cleanup";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { redirect } from "next/navigation";
 
@@ -10,8 +9,6 @@ export default async function PriceTrackerPage() {
   if (!storeSession) {
     redirect("/login");
   }
-
-  await dismissObsoletePendingPriceChanges(storeSession.storeId);
 
   const todayUtc = new Date();
   todayUtc.setUTCHours(0, 0, 0, 0);

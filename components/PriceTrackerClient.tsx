@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import AsinLink from "@/components/AsinLink";
 import Toast from "@/components/Toast";
@@ -202,6 +202,7 @@ export default function PriceTrackerClient({
   const router = useRouter();
   const { toast, showToast, hideToast } = useToast();
   const [isChecking, setIsChecking] = useState(false);
+  const didRunMaintenance = useRef(false);
   const [sourceFilter, setSourceFilter] = useState<SourceFilter>("all");
   const [directionFilter, setDirectionFilter] =
     useState<DirectionFilter>("all");
@@ -227,6 +228,31 @@ export default function PriceTrackerClient({
   const [isBulkHolding, setIsBulkHolding] = useState(false);
   const [selectedLowStockIds, setSelectedLowStockIds] = useState<string[]>([]);
   const [isBulkHoldingLowStock, setIsBulkHoldingLowStock] = useState(false);
+
+  useEffect(() => {
+    if (didRunMaintenance.current) return;
+    didRunMaintenance.current = true;
+
+    const controller = new AbortController();
+
+    void fetch("/api/price-tracker/maintenance", {
+      method: "POST",
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) return;
+        const data = (await response.json()) as { dismissed?: number };
+        if (data.dismissed && data.dismissed > 0) {
+          router.refresh();
+        }
+      })
+      .catch(() => {
+        // Maintenance is best effort and must never block the Price Tracker.
+      });
+
+    return () => controller.abort();
+  }, [router]);
 
   const handleSelectLowStockAll = (checked: boolean) => {
     if (checked) {
