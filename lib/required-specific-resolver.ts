@@ -270,6 +270,58 @@ function inferCompatibleModel(
   return { value: null, source: "missing" as const };
 }
 
+function inferModel(
+  input: ResolveRequiredSpecificsInput,
+  specifics: ItemSpecificsRecord,
+  allowedValues: string[] | undefined,
+  text: ReturnType<typeof buildSourceText>,
+) {
+  const directCandidates = [
+    readItemSpecificValue(specifics, [
+      "Model",
+      "Model Number",
+      "Item Model Number",
+      "Model Name",
+      "Item Part Number",
+      "Part Number",
+    ]),
+  ];
+
+  for (const candidate of directCandidates) {
+    if (!candidate) {
+      continue;
+    }
+
+    if (!allowedValues || allowedValues.length === 0) {
+      return { value: candidate, source: "amazon" as const };
+    }
+
+    const matched = matchAllowedSpecificValue(candidate, allowedValues);
+    if (matched) {
+      return { value: matched, source: "amazon" as const };
+    }
+  }
+
+  if (allowedValues && allowedValues.length > 0) {
+    const searchText = [text.title, text.category, text.specifics]
+      .filter(Boolean)
+      .join(" ")
+      .toLowerCase()
+      .replace(/[()[]{};:,.]+/g, " ");
+
+    for (const value of allowedValues) {
+      if (
+        value.trim().length >= 3 &&
+        searchText.includes(value.toLowerCase())
+      ) {
+        return { value, source: "title" as const };
+      }
+    }
+  }
+
+  return { value: null, source: "missing" as const };
+}
+
 function inferRequiredSpecific(
   input: ResolveRequiredSpecificsInput,
   specifics: ItemSpecificsRecord,
@@ -334,6 +386,10 @@ function inferRequiredSpecific(
 
   if (normalized === "compatible brand") {
     return inferCompatibleBrand(input, specifics, required.values);
+  }
+
+  if (normalized === "model") {
+    return inferModel(input, specifics, required.values, text);
   }
 
   if (normalized === "compatible model") {
