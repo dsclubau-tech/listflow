@@ -123,6 +123,7 @@ type EbayResearchPhase = "QUICK" | "REFINING" | "COMPLETE";
 type SearchPlan = {
   primary: string;
   strict: string | null;
+  broad: string | null;
   tokens: string[];
   strongTokens: string[];
   tokenSet: Set<string>;
@@ -521,9 +522,32 @@ function buildSearchPlan(rawQuery: string): SearchPlan {
   const strict =
     strictTokens.length >= 2 ? strictTokens.join(" ").slice(0, 100) : null;
 
+  const modelTokens = tokens.filter((token) => /\d/.test(token));
+  const brandLikeTokens = tokens.filter(
+    (token) => !modelTokens.includes(token) && /^[a-z]{3,}$/i.test(token)
+  );
+  const productTypeTokens = tokens.filter(
+    (token) =>
+      !modelTokens.includes(token) &&
+      !brandLikeTokens.includes(token) &&
+      token.length >= 3
+  );
+
+  const broadParts =
+    modelTokens.length > 0
+      ? [
+          ...brandLikeTokens.slice(0, 1),
+          ...modelTokens.slice(0, 2),
+          ...productTypeTokens.slice(0, 1),
+        ]
+      : [...brandLikeTokens.slice(0, 2), ...productTypeTokens.slice(0, 1)];
+  const broad =
+    broadParts.length >= 2 ? broadParts.join(" ").slice(0, 100) : null;
+
   return {
     primary,
     strict: strict && strict !== primary ? strict : null,
+    broad: broad && broad !== primary && broad !== strict ? broad : null,
     tokens,
     strongTokens,
     tokenSet: new Set(tokens),
@@ -729,6 +753,10 @@ function buildQueryList(plan: SearchPlan, includeStrict: boolean) {
 
   if (includeStrict && plan.strict) {
     queries.push(plan.strict);
+  }
+
+  if (includeStrict && plan.broad) {
+    queries.push(plan.broad);
   }
 
   return Array.from(new Set(queries.map((query) => query.trim()).filter(Boolean)));
