@@ -29,7 +29,8 @@ const DEFAULT_POSTCODE = "2217";
 const ACTIVE_SEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const ACTIVE_SEARCH_CACHE_VERSION = "v4";
 const RESEARCH_BATCH_GROUP_SIZE = 5;
-const RESEARCH_BATCH_GROUP_COOLDOWN_MS = 2 * 60 * 1000;
+const RESEARCH_BATCH_API_COOLDOWN_MS = 2 * 60 * 1000;
+const RESEARCH_BATCH_SCRAPE_COOLDOWN_MS = 10 * 1000;
 const RESEARCH_RETENTION_MS = 24 * 60 * 60 * 1000;
 const RESEARCH_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_BATCH_QUERIES = 50;
@@ -1105,6 +1106,129 @@ async function scrapeSoldForQueries(
   return { results, succeeded, errors };
 }
 
+async function scrapeActiveListings(
+  query: string,
+  limit: number,
+  conditionFilter: EbayResearchConditionFilter
+): Promise<EbayResearchResult[]> {
+  const candidateLimit = Math.min(200, Math.max(limit * 4, 100));
+  const browser = await launchScraperBrowser();
+  const context = await browser.newContext({
+    locale: "en-AU",
+    viewport: { width: 1366, height: 900 },
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+  });
+
+  try {
+    const page = await context.newPage();
+    const url = new URL("https://www.ebay.com.au/sch/i.html");
+
+    url.searchParams.set("_nkw", query);
+    url.searchParams.set("LH_BIN", "1");
+    url.searchParams.set("_sop", "15");
+    const conditionFilterParam = getConditionFilterParam(conditionFilter);
+
+    if (conditionFilterParam) {
+      url.searchParams.set("LH_ItemCondition", conditionFilterParam);
+    }
+
+    await page.goto(url.toString(), {
+      waitUntil: "domcontentloaded",
+      timeout: 30000,
+    });
+    await page.waitForSelector(".s-item", { timeout: 15000 }).catch(() => null);
+
+    const rawResults = await page.$$eval(".s-item", (items) =>
+      items.map((item) => {
+        const getText = (selector: string) =>
+          item.querySelector(selector)?.textContent?.trim() ?? "";
+        const link = item.querySelector<HTMLAnchorElement>(".s-item__link");
+        const image = item.querySelector<HTMLImageElement>(".s-item__image img");
+
+        return {
+          title: getText(".s-item__title"),
+          url: link?.href ?? "",
+          imageUrl: image?.src || image?.getAttribute("data-src") || "",
+          price: getText(".s-item__price"),
+          shipping: getText(".s-item__shipping"),
+          seller: getText(".s-item__seller-info-text"),
+          condition: getText(".SECONDARY_INFO"),
+          location: getText(".s-item__location"),
+        };
+      })
+    );
+
+    const results = rawResults
+      .map((item): EbayResearchResult | null => {
+        const title = item.title.replace(/^New Listing/i, "").trim();
+
+        if (!title || title === "Shop on eBay" || !item.url) {
+          return null;
+        }
+
+        const itemPrice = parsePrice(item.price);
+        const shippingPrice =
+          /free/i.test(item.shipping) || item.shipping.trim() === ""
+            ? 0
+            : parsePrice(item.shipping);
+
+        if (itemPrice <= 0) {
+          return null;
+        }
+
+        return {
+          source: "ACTIVE",
+          itemId: extractEbayItemId(item.url),
+          title,
+          url: item.url,
+          imageUrl: item.imageUrl || null,
+          seller: item.seller || null,
+          condition: item.condition || null,
+          itemPrice: formatMoney(itemPrice),
+          shippingPrice: formatMoney(shippingPrice),
+          landedPrice: formatMoney(itemPrice + shippingPrice),
+          currency: "AUD",
+          location: item.location || null,
+        };
+      })
+      .filter((result): result is EbayResearchResult => result !== null);
+
+    const conditionFilteredResults =
+      conditionFilter === EbayResearchConditionFilter.ANY
+        ? results
+        : results.filter((result) =>
+            conditionMatchesFilter(result.condition, conditionFilter)
+          );
+
+    return dedupeAndSortResults(conditionFilteredResults, candidateLimit);
+  } finally {
+    await context.close().catch(() => undefined);
+    await browser.close().catch(() => undefined);
+  }
+}
+
+async function scrapeActiveForQueries(
+  queries: string[],
+  limit: number,
+  conditionFilter: EbayResearchConditionFilter
+): Promise<QuerySetResult> {
+  const results: EbayResearchResult[] = [];
+  const errors: string[] = [];
+  let succeeded = false;
+
+  for (const query of queries) {
+    try {
+      results.push(...(await scrapeActiveListings(query, limit, conditionFilter)));
+      succeeded = true;
+    } catch (error) {
+      errors.push(getErrorMessage(error));
+    }
+  }
+
+  return { results, succeeded, errors };
+}
+
 async function saveResearchSnapshot(
   jobId: string,
   activeResults: EbayResearchResult[],
@@ -1381,12 +1505,15 @@ async function refreshResearchBatchAndMaybeScheduleCooldown(batchId: string) {
     processedCount > 0 &&
     processedCount % RESEARCH_BATCH_GROUP_SIZE === 0
   ) {
+    const isFirstGroup = processedCount === RESEARCH_BATCH_GROUP_SIZE;
+    const cooldownMs = isFirstGroup
+      ? RESEARCH_BATCH_API_COOLDOWN_MS
+      : RESEARCH_BATCH_SCRAPE_COOLDOWN_MS;
+
     await prisma.ebayResearchBatch.update({
       where: { id: refreshedBatch.id },
       data: {
-        cooldownUntil: new Date(
-          Date.now() + RESEARCH_BATCH_GROUP_COOLDOWN_MS
-        ),
+        cooldownUntil: new Date(Date.now() + cooldownMs),
       },
     });
   }
@@ -1562,14 +1689,22 @@ async function runEbayResearchJobClaimed(jobId: string) {
   let activeSucceeded = !activeRequested;
   let soldSucceeded = !soldRequested;
 
+  const useScrapeForActive =
+    job.batchId !== null &&
+    job.batch !== null &&
+    job.batch.completed + job.batch.failed >= RESEARCH_BATCH_GROUP_SIZE;
+
+  const fetchOrScrapeActive = (
+    queries: string[],
+    limit: number,
+  ): Promise<QuerySetResult> =>
+    useScrapeForActive
+      ? scrapeActiveForQueries(queries, limit, conditionFilter)
+      : fetchActiveForQueries(job.storeId, queries, limit, conditionFilter);
+
   const [quickActive, quickSold] = await Promise.all([
     activeRequested
-      ? fetchActiveForQueries(
-          job.storeId,
-          quickQueries,
-          quickLimit,
-          conditionFilter
-        )
+      ? fetchOrScrapeActive(quickQueries, quickLimit)
       : Promise.resolve({ results: [], succeeded: true, errors: [] }),
     soldRequested
       ? scrapeSoldForQueries(quickQueries, quickLimit, conditionFilter)
@@ -1587,12 +1722,7 @@ async function runEbayResearchJobClaimed(jobId: string) {
 
   const [deepActive, deepSold] = await Promise.all([
     activeRequested
-      ? fetchActiveForQueries(
-          job.storeId,
-          deepQueries,
-          job.limit,
-          conditionFilter
-        )
+      ? fetchOrScrapeActive(deepQueries, job.limit)
       : Promise.resolve({ results: [], succeeded: true, errors: [] }),
     soldRequested
       ? scrapeSoldForQueries(deepQueries, job.limit, conditionFilter)

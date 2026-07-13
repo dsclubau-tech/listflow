@@ -93,3 +93,103 @@ test("resolveRequiredItemSpecifics blocks missing unsafe size guesses", () => {
   assert.equal(result.itemSpecifics.Size, undefined);
   assert.deepEqual(result.missingItemSpecifics, ["Size"]);
 });
+
+test("resolveRequiredItemSpecifics infers Compatible Brand from product Brand", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "BRITA MAXTRA PRO Limescale Expert Water Filter Cartridges",
+    categoryName: "Water Filter Cartridges",
+    brand: "BRITA",
+    itemSpecifics: {
+      Brand: "BRITA",
+      Model: "Maxtra Pro LS",
+    },
+    requiredItemSpecifics: [
+      { name: "Compatible Brand", values: ["BRITA", "Brita", "PUR", "Unbranded"] },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics["Compatible Brand"], "BRITA");
+  assert.deepEqual(result.missingItemSpecifics, []);
+  assert.equal(
+    result.decisions.find((d) => d.name === "Compatible Brand")?.source,
+    "amazon",
+  );
+});
+
+test("resolveRequiredItemSpecifics infers Compatible Model from Amazon item specifics", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "BRITA MAXTRA PRO Limescale Expert Water Filter Cartridges",
+    categoryName: "Water Filter Cartridges",
+    brand: "BRITA",
+    itemSpecifics: {
+      Brand: "BRITA",
+      "Compatible Model": "Maxtra Pro",
+    },
+    requiredItemSpecifics: [
+      { name: "Compatible Model", values: ["Maxtra", "Maxtra Pro", "Maxtra+", "Universal"] },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics["Compatible Model"], "Maxtra Pro");
+  assert.deepEqual(result.missingItemSpecifics, []);
+  assert.equal(
+    result.decisions.find((d) => d.name === "Compatible Model")?.source,
+    "user",
+  );
+});
+
+test("resolveRequiredItemSpecifics infers Compatible Model from product Model field", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "BRITA MAXTRA PRO Limescale Expert Water Filter Cartridges",
+    categoryName: "Water Filter Cartridges",
+    brand: "BRITA",
+    itemSpecifics: {
+      Brand: "BRITA",
+      Model: "Maxtra Pro LS",
+    },
+    requiredItemSpecifics: [
+      { name: "Compatible Model", values: ["Maxtra", "Maxtra Pro", "Maxtra+", "Universal"] },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics["Compatible Model"], "Maxtra");
+  assert.deepEqual(result.missingItemSpecifics, []);
+});
+
+test("resolveRequiredItemSpecifics infers Compatible Model from title", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "Replacement Filter for Dyson Pure Cool TP02",
+    categoryName: "Air Purifier Filters",
+    brand: "Dyson",
+    itemSpecifics: {
+      Brand: "Dyson",
+    },
+    requiredItemSpecifics: [
+      { name: "Compatible Model", values: ["Pure Cool TP02", "Pure Cool TP04", "Pure Hot+Cool"] },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics["Compatible Model"], "Pure Cool TP02");
+  assert.deepEqual(result.missingItemSpecifics, []);
+  assert.equal(
+    result.decisions.find((d) => d.name === "Compatible Model")?.source,
+    "title",
+  );
+});
+
+test("resolveRequiredItemSpecifics reports Compatible Model missing when no data matches", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "Generic Water Filter Cartridge",
+    categoryName: "Water Filter Cartridges",
+    brand: "Generic",
+    itemSpecifics: {
+      Brand: "Generic",
+    },
+    requiredItemSpecifics: [
+      { name: "Compatible Model", values: ["Maxtra", "Maxtra Pro", "Maxtra+"] },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics["Compatible Model"], undefined);
+  assert.deepEqual(result.missingItemSpecifics, ["Compatible Model"]);
+});
