@@ -63,6 +63,13 @@ type DescriptionTemplate = {
   storeId: string;
 };
 
+type SupportDataLoaded = {
+  storeId: string | null;
+  policies: boolean;
+  policyTemplates: boolean;
+  descriptionTemplates: boolean;
+};
+
 type BulkEditJobError = {
   productId: string;
   title: string;
@@ -143,6 +150,12 @@ const TITLE_MODE_OPTIONS: Array<{ value: TitleMode; label: string }> = [
 ];
 
 const LOCATION_OPTIONS = ["Australia", "United States", "United Kingdom"] as const;
+const EMPTY_SUPPORT_DATA_LOADED: SupportDataLoaded = {
+  storeId: null,
+  policies: false,
+  policyTemplates: false,
+  descriptionTemplates: false,
+};
 
 function makeItem(field: BulkEditField): BulkEditItem {
   const numericDefault =
@@ -245,6 +258,9 @@ export default function BulkEditModal({
   const [policies, setPolicies] = useState<Policies | null>(null);
   const [policyTemplates, setPolicyTemplates] = useState<PolicyTemplate[]>([]);
   const [descriptionTemplates, setDescriptionTemplates] = useState<DescriptionTemplate[]>([]);
+  const [supportDataLoaded, setSupportDataLoaded] = useState<SupportDataLoaded>(
+    EMPTY_SUPPORT_DATA_LOADED
+  );
   const [loadingPolicies, setLoadingPolicies] = useState(false);
   const [job, setJob] = useState<BulkEditJob | null>(null);
   const [skipped, setSkipped] = useState<BulkEditSkipped[]>([]);
@@ -259,6 +275,12 @@ export default function BulkEditModal({
     () => new Set(items.map((item) => item.field)),
     [items]
   );
+  const needsEbayPolicies =
+    selectedFields.has("shippingPolicyId") ||
+    selectedFields.has("returnPolicyId") ||
+    selectedFields.has("paymentPolicyId");
+  const needsPolicyTemplates = selectedFields.has("policyTemplateId");
+  const needsDescriptionTemplates = selectedFields.has("templateId");
   const filteredFields = useMemo(() => {
     const query = fieldSearch.trim().toLowerCase();
 
@@ -335,50 +357,128 @@ export default function BulkEditModal({
       setJob(null);
       setSkipped([]);
       setTerminalNotifiedJobId(null);
+      setPolicies(null);
+      setPolicyTemplates([]);
+      setDescriptionTemplates([]);
+      setSupportDataLoaded(EMPTY_SUPPORT_DATA_LOADED);
+      setLoadingPolicies(false);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    setPolicies(null);
+    setPolicyTemplates([]);
+    setDescriptionTemplates([]);
+    setSupportDataLoaded({
+      ...EMPTY_SUPPORT_DATA_LOADED,
+      storeId: selectedStoreId,
+    });
+  }, [open, selectedStoreId]);
 
   useEffect(() => {
     if (!open || !selectedStoreId) {
       return;
     }
 
+    const loadedForStore =
+      supportDataLoaded.storeId === selectedStoreId
+        ? supportDataLoaded
+        : EMPTY_SUPPORT_DATA_LOADED;
+    const shouldLoadPolicies = needsEbayPolicies && !loadedForStore.policies;
+    const shouldLoadPolicyTemplates =
+      needsPolicyTemplates && !loadedForStore.policyTemplates;
+    const shouldLoadDescriptionTemplates =
+      needsDescriptionTemplates && !loadedForStore.descriptionTemplates;
+
+    if (
+      !shouldLoadPolicies &&
+      !shouldLoadPolicyTemplates &&
+      !shouldLoadDescriptionTemplates
+    ) {
+      return;
+    }
+
     let cancelled = false;
 
-    async function loadPolicies() {
+    async function loadSupportData() {
       setLoadingPolicies(true);
+
       try {
         const [policyResponse, templateResponse, descriptionTemplateResponse] =
           await Promise.all([
-            fetch(`/api/policies?store=${encodeURIComponent(selectedStoreId)}`, {
-              cache: "no-store",
-            }),
-            fetch(`/api/policy-templates?storeId=${encodeURIComponent(selectedStoreId)}`, {
-              cache: "no-store",
-            }),
-            fetch("/api/templates", {
-              cache: "no-store",
-            }),
+            shouldLoadPolicies
+              ? fetch(`/api/policies?store=${encodeURIComponent(selectedStoreId)}`, {
+                  cache: "no-store",
+                })
+              : Promise.resolve(null),
+            shouldLoadPolicyTemplates
+              ? fetch(`/api/policy-templates?storeId=${encodeURIComponent(selectedStoreId)}`, {
+                  cache: "no-store",
+                })
+              : Promise.resolve(null),
+            shouldLoadDescriptionTemplates
+              ? fetch("/api/templates", {
+                  cache: "no-store",
+                })
+              : Promise.resolve(null),
           ]);
 
-        if (!cancelled && policyResponse.ok) {
+        if (cancelled) {
+          return;
+        }
+
+        const loaded = {
+          policies: false,
+          policyTemplates: false,
+          descriptionTemplates: false,
+        };
+
+        if (policyResponse?.ok) {
           setPolicies((await policyResponse.json()) as Policies);
+          loaded.policies = true;
         }
 
-        if (!cancelled && templateResponse.ok) {
+        if (templateResponse?.ok) {
           setPolicyTemplates((await templateResponse.json()) as PolicyTemplate[]);
+          loaded.policyTemplates = true;
         }
 
-        if (!cancelled && descriptionTemplateResponse.ok) {
+        if (descriptionTemplateResponse?.ok) {
           setDescriptionTemplates(
             (await descriptionTemplateResponse.json()) as DescriptionTemplate[]
           );
+          loaded.descriptionTemplates = true;
+        }
+
+        if (
+          loaded.policies ||
+          loaded.policyTemplates ||
+          loaded.descriptionTemplates
+        ) {
+          setSupportDataLoaded((current) => {
+            const base =
+              current.storeId === selectedStoreId
+                ? current
+                : { ...EMPTY_SUPPORT_DATA_LOADED, storeId: selectedStoreId };
+
+            return {
+              storeId: selectedStoreId,
+              policies: base.policies || loaded.policies,
+              policyTemplates: base.policyTemplates || loaded.policyTemplates,
+              descriptionTemplates:
+                base.descriptionTemplates || loaded.descriptionTemplates,
+            };
+          });
         }
       } catch {
         if (!cancelled) {
-          setPolicies(null);
-          setPolicyTemplates([]);
-          setDescriptionTemplates([]);
+          if (shouldLoadPolicies) setPolicies(null);
+          if (shouldLoadPolicyTemplates) setPolicyTemplates([]);
+          if (shouldLoadDescriptionTemplates) setDescriptionTemplates([]);
         }
       } finally {
         if (!cancelled) {
@@ -387,12 +487,19 @@ export default function BulkEditModal({
       }
     }
 
-    void loadPolicies();
+    void loadSupportData();
 
     return () => {
       cancelled = true;
     };
-  }, [open, selectedStoreId]);
+  }, [
+    needsDescriptionTemplates,
+    needsEbayPolicies,
+    needsPolicyTemplates,
+    open,
+    selectedStoreId,
+    supportDataLoaded,
+  ]);
 
   useEffect(() => {
     if (!job || !isActiveJob(job)) {
@@ -522,7 +629,6 @@ export default function BulkEditModal({
       setJob(data.job);
       setSkipped(data.skipped ?? []);
       onToast(data.message || "Bulk edit queued.", "success");
-      router.refresh();
     } catch (error) {
       onToast(error instanceof Error ? error.message : "Bulk edit failed.", "error");
     } finally {

@@ -44,6 +44,7 @@ const CURRENT_RESEARCH_BATCH_STATUSES = new Set([
 ]);
 const ACTIVE_RESEARCH_BATCH_STATUSES = new Set(["QUEUED", "RUNNING", "PAUSING"]);
 const PRICE_CHECK_JOB_STORAGE_KEY = "listflow.products.activePriceCheckJobId";
+const ACTIVE_JOB_ROUTE_REFRESH_MS = 5_000;
 type ActionCenterFilter =
   | "pendingReviews"
   | "failedChecks"
@@ -516,7 +517,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
 
     const interval = window.setInterval(() => {
       router.refresh();
-    }, 2000);
+    }, ACTIVE_JOB_ROUTE_REFRESH_MS);
 
     return () => window.clearInterval(interval);
   }, [hasActiveJobs, router]);

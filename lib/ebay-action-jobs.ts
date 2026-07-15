@@ -57,6 +57,12 @@ type ProductFailure = {
   error: string;
 };
 
+type ProgressUpdate = {
+  productId: string;
+  succeeded: boolean;
+  failure: ProductFailure | null;
+};
+
 type EbayActionJobRecord = {
   id: string;
   storeId: string;
@@ -225,26 +231,73 @@ function buildInventoryReviseBatchItem(
   };
 }
 
-async function applySuccessfulBulkEditRevision(input: {
+type SuccessfulBulkEditRevisionInput = {
   product: Pick<BulkEditRevisionProduct, "id" | "status" | "quantity">;
   overrideStartPrice?: number;
   quantityChanged: boolean;
-}) {
-  await prisma.product.update({
-    where: { id: input.product.id },
-    data: {
-      status: getBulkEditQuantityStatus({
-        quantityChanged: input.quantityChanged,
-        quantity: input.product.quantity,
-        currentStatus: input.product.status,
+};
+
+function getSuccessfulBulkEditRevisionData(input: SuccessfulBulkEditRevisionInput) {
+  return {
+    status: getBulkEditQuantityStatus({
+      quantityChanged: input.quantityChanged,
+      quantity: input.product.quantity,
+      currentStatus: input.product.status,
+    }),
+    errorMessage: null,
+    priceCheckError: null,
+    ...(input.overrideStartPrice !== undefined
+      ? { price: input.overrideStartPrice }
+      : {}),
+  };
+}
+
+async function applySuccessfulBulkEditRevisions(
+  inputs: SuccessfulBulkEditRevisionInput[],
+) {
+  const groupedStatusOnlyUpdates = new Map<ProductStatus, string[]>();
+  const priceUpdates: SuccessfulBulkEditRevisionInput[] = [];
+
+  for (const input of inputs) {
+    if (input.overrideStartPrice !== undefined) {
+      priceUpdates.push(input);
+      continue;
+    }
+
+    const status = getBulkEditQuantityStatus({
+      quantityChanged: input.quantityChanged,
+      quantity: input.product.quantity,
+      currentStatus: input.product.status,
+    });
+    const ids = groupedStatusOnlyUpdates.get(status) ?? [];
+    ids.push(input.product.id);
+    groupedStatusOnlyUpdates.set(status, ids);
+  }
+
+  await Promise.all([
+    ...Array.from(groupedStatusOnlyUpdates, ([status, ids]) =>
+      prisma.product.updateMany({
+        where: { id: { in: ids } },
+        data: {
+          status,
+          errorMessage: null,
+          priceCheckError: null,
+        },
       }),
-      errorMessage: null,
-      priceCheckError: null,
-      ...(input.overrideStartPrice !== undefined
-        ? { price: input.overrideStartPrice }
-        : {}),
-    },
-  });
+    ),
+    ...priceUpdates.map((input) =>
+      prisma.product.update({
+        where: { id: input.product.id },
+        data: getSuccessfulBulkEditRevisionData(input),
+      }),
+    ),
+  ]);
+}
+
+async function applySuccessfulBulkEditRevision(
+  input: SuccessfulBulkEditRevisionInput,
+) {
+  await applySuccessfulBulkEditRevisions([input]);
 }
 
 function actionLabel(type: EbayActionJobType) {
@@ -738,21 +791,43 @@ async function markProgress(
   succeeded: boolean,
   failure: ProductFailure | null
 ) {
-  const completed = new Set(job.completedProductIds);
-  completed.add(productId);
-  const errors = normalizeErrors(job.errors);
+  await markProgressBatch(job, [{ productId, succeeded, failure }]);
+}
 
-  if (failure) {
-    errors.push(failure);
+async function markProgressBatch(
+  job: EbayActionJobRecord,
+  updates: ProgressUpdate[],
+) {
+  if (updates.length === 0) {
+    return;
+  }
+
+  const completed = new Set(job.completedProductIds);
+  const errors = normalizeErrors(job.errors);
+  let succeededCount = 0;
+  let failedCount = 0;
+
+  for (const update of updates) {
+    completed.add(update.productId);
+
+    if (update.failure) {
+      errors.push(update.failure);
+    }
+
+    if (update.succeeded) {
+      succeededCount += 1;
+    } else {
+      failedCount += 1;
+    }
   }
 
   const updated = await prisma.ebayActionJob.update({
     where: { id: job.id },
     data: {
       completedProductIds: { set: job.productIds.filter((id) => completed.has(id)) },
-      processed: Math.min(job.total, job.processed + 1),
-      succeeded: succeeded ? job.succeeded + 1 : job.succeeded,
-      failed: succeeded ? job.failed : job.failed + 1,
+      processed: Math.min(job.total, job.processed + updates.length),
+      succeeded: job.succeeded + succeededCount,
+      failed: job.failed + failedCount,
       errors: errors as unknown as Prisma.InputJsonValue,
     },
   });
@@ -1055,23 +1130,35 @@ async function fallbackInventoryReviseBatch(
     });
   }
 
+  const progressUpdates: ProgressUpdate[] = [];
+
   for (const item of batch) {
     try {
       const result = await processProduct(job, item.product.id);
-      await markProgress(job, item.product.id, result.ok, result.failure);
+      progressUpdates.push({
+        productId: item.product.id,
+        succeeded: result.ok,
+        failure: result.failure,
+      });
     } catch (fallbackError) {
       const message = fallbackError instanceof Error ? fallbackError.message : "Internal error";
       logger.error("ebay-action/jobs", "eBay action product failed", fallbackError, {
         jobId: job.id,
         productId: item.product.id,
       });
-      await markProgress(job, item.product.id, false, {
+      progressUpdates.push({
         productId: item.product.id,
-        title: item.product.title,
-        error: message,
+        succeeded: false,
+        failure: {
+          productId: item.product.id,
+          title: item.product.title,
+          error: message,
+        },
       });
     }
   }
+
+  await markProgressBatch(job, progressUpdates);
 }
 
 async function markInventoryReviseBatchFailure(
@@ -1079,43 +1166,62 @@ async function markInventoryReviseBatchFailure(
   batch: InventoryReviseBatchItem[],
   errorMessage: string,
 ) {
-  for (const item of batch) {
-    await prisma.product.update({
-      where: { id: item.product.id },
-      data: { errorMessage },
-    });
-    await markProgress(job, item.product.id, false, {
+  await prisma.product.updateMany({
+    where: { id: { in: batch.map((item) => item.product.id) } },
+    data: { errorMessage },
+  });
+  await markProgressBatch(
+    job,
+    batch.map((item) => ({
       productId: item.product.id,
-      title: item.product.title,
-      error: errorMessage,
-    });
-  }
+      succeeded: false,
+      failure: {
+        productId: item.product.id,
+        title: item.product.title,
+        error: errorMessage,
+      },
+    })),
+  );
 }
 
 async function markInventoryReviseBatchSuccess(
   job: EbayActionJobRecord,
   batch: InventoryReviseBatchItem[],
 ) {
-  for (const item of batch) {
-    try {
-      await applySuccessfulBulkEditRevision({
+  try {
+    await applySuccessfulBulkEditRevisions(
+      batch.map((item) => ({
         product: item.product,
         overrideStartPrice: item.overrideStartPrice,
         quantityChanged: item.quantityChanged,
-      });
-      await markProgress(job, item.product.id, true, null);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Internal error";
-      logger.error("ebay-action/jobs", "Bulk inventory local update failed", error, {
-        jobId: job.id,
+      })),
+    );
+    await markProgressBatch(
+      job,
+      batch.map((item) => ({
         productId: item.product.id,
-      });
-      await markProgress(job, item.product.id, false, {
+        succeeded: true,
+        failure: null,
+      })),
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Internal error";
+    logger.error("ebay-action/jobs", "Bulk inventory local update failed", error, {
+      jobId: job.id,
+      itemCount: batch.length,
+    });
+    await markProgressBatch(
+      job,
+      batch.map((item) => ({
         productId: item.product.id,
-        title: item.product.title,
-        error: message,
-      });
-    }
+        succeeded: false,
+        failure: {
+          productId: item.product.id,
+          title: item.product.title,
+          error: message,
+        },
+      })),
+    );
   }
 }
 
@@ -1185,15 +1291,20 @@ async function runBulkInventoryReviseJob(job: EbayActionJobRecord) {
   });
   const productById = new Map(products.map((product) => [product.id, product]));
   const batchItems: InventoryReviseBatchItem[] = [];
+  const preBatchProgressUpdates: ProgressUpdate[] = [];
 
   for (const productId of remainingIds) {
     const product = productById.get(productId);
 
     if (!product) {
-      await markProgress(job, productId, false, {
+      preBatchProgressUpdates.push({
         productId,
-        title: "(missing)",
-        error: "Product was not found",
+        succeeded: false,
+        failure: {
+          productId,
+          title: "(missing)",
+          error: "Product was not found",
+        },
       });
       continue;
     }
@@ -1203,10 +1314,14 @@ async function runBulkInventoryReviseJob(job: EbayActionJobRecord) {
         product.status !== ProductStatus.ON_HOLD) ||
       !product.ebayItemId
     ) {
-      await markProgress(job, product.id, false, {
+      preBatchProgressUpdates.push({
         productId: product.id,
-        title: product.title,
-        error: "Product is not imported/on hold or lacks an eBay Item ID",
+        succeeded: false,
+        failure: {
+          productId: product.id,
+          title: product.title,
+          error: "Product is not imported/on hold or lacks an eBay Item ID",
+        },
       });
       continue;
     }
@@ -1217,16 +1332,39 @@ async function runBulkInventoryReviseJob(job: EbayActionJobRecord) {
     );
 
     if (!batchItem) {
-      await applySuccessfulBulkEditRevision({
-        product,
-        quantityChanged,
-      });
-      await markProgress(job, product.id, true, null);
+      try {
+        await applySuccessfulBulkEditRevision({
+          product,
+          quantityChanged,
+        });
+        preBatchProgressUpdates.push({
+          productId: product.id,
+          succeeded: true,
+          failure: null,
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Internal error";
+        logger.error("ebay-action/jobs", "Bulk inventory local update failed", error, {
+          jobId: job.id,
+          productId: product.id,
+        });
+        preBatchProgressUpdates.push({
+          productId: product.id,
+          succeeded: false,
+          failure: {
+            productId: product.id,
+            title: product.title,
+            error: message,
+          },
+        });
+      }
       continue;
     }
 
     batchItems.push(batchItem);
   }
+
+  await markProgressBatch(job, preBatchProgressUpdates);
 
   if (batchItems.length === 0) {
     return;

@@ -141,6 +141,13 @@ async function persistEntryToDatabase(entry: LogEntry): Promise<void> {
     return;
   }
 
+  if (
+    entry.level === "EBAY_RESPONSE" &&
+    process.env.LISTFLOW_PERSIST_EBAY_RESPONSE_DB_LOGS !== "true"
+  ) {
+    return;
+  }
+
   try {
     const { prisma } = await import("@/lib/prisma");
     const metadata = sanitizeForLog({
@@ -193,7 +200,11 @@ async function persistEntryToDatabase(entry: LogEntry): Promise<void> {
 function persistEntry(entry: LogEntry): void {
   try {
     ensureLogDir();
-    fs.appendFileSync(LOG_FILE_PATH, `${JSON.stringify(entry)}\n`, "utf8");
+    void fs.promises
+      .appendFile(LOG_FILE_PATH, `${JSON.stringify(entry)}\n`, "utf8")
+      .catch(() => {
+        process.stderr.write(`[LOGGER ERROR] ${JSON.stringify(entry)}\n`);
+      });
   } catch {
     process.stderr.write(`[LOGGER ERROR] ${JSON.stringify(entry)}\n`);
   }
@@ -337,10 +348,16 @@ function createLogger(scope: LogScope = {}): LoggerApi {
       return log("ERROR", context, message, data, nextScope, error);
     },
     ebayResponse(context, message, rawXml, data, nextScope) {
+      const includeRawXml = process.env.LISTFLOW_LOG_EBAY_XML === "true";
+      const xmlMetadata = {
+        rawXmlLength: rawXml.length,
+        rawXmlLogged: includeRawXml,
+        ...(includeRawXml ? { rawXml } : {}),
+      };
       const payload =
         data && typeof data === "object" && !Array.isArray(data)
-          ? { ...data, rawXml }
-          : { rawXml, data };
+          ? { ...data, ...xmlMetadata }
+          : { ...xmlMetadata, data };
 
       return log("EBAY_RESPONSE", context, message, payload, nextScope);
     },

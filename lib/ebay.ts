@@ -224,11 +224,34 @@ async function recordStoreEbayBackoff(
   }
 }
 
+type CachedOAuthAccessToken = {
+  accessToken: string;
+  expiresAt: number;
+};
+
+const OAUTH_TOKEN_REFRESH_MARGIN_MS = 60_000;
+const DEFAULT_OAUTH_EXPIRES_IN_SECONDS = 7_200;
+const oauthAccessTokenCache = new Map<1 | 2 | 3, CachedOAuthAccessToken>();
+const pendingOAuthAccessTokenRequests = new Map<
+  1 | 2 | 3,
+  Promise<CachedOAuthAccessToken>
+>();
+
+function isCachedOAuthTokenUsable(
+  token: CachedOAuthAccessToken | undefined,
+): token is CachedOAuthAccessToken {
+  return Boolean(
+    token && token.expiresAt - OAUTH_TOKEN_REFRESH_MARGIN_MS > Date.now()
+  );
+}
+
 /**
  * Exchanges an OAuth Refresh Token for a short-lived Access Token.
  * Uses the eBay Identity API with client_credentials or refresh_token grant.
  */
-export async function getOAuthAccessToken(storeNumber: 1 | 2 | 3): Promise<string> {
+async function exchangeOAuthAccessToken(
+  storeNumber: 1 | 2 | 3
+): Promise<CachedOAuthAccessToken> {
   const creds = getStoreCredentials(storeNumber);
 
   if (!creds.refreshToken) {
@@ -278,7 +301,11 @@ export async function getOAuthAccessToken(storeNumber: 1 | 2 | 3): Promise<strin
     throw new Error(`eBay OAuth token exchange failed (${response.status}): ${text}`);
   }
 
-  const data = await response.json() as { access_token?: string; error_description?: string };
+  const data = (await response.json()) as {
+    access_token?: string;
+    expires_in?: number;
+    error_description?: string;
+  };
 
   if (!data.access_token) {
     logger.error("ebay/getOAuthAccessToken", "Token exchange returned no access_token", undefined, {
@@ -288,9 +315,57 @@ export async function getOAuthAccessToken(storeNumber: 1 | 2 | 3): Promise<strin
     throw new Error(`eBay OAuth returned no access_token: ${data.error_description ?? JSON.stringify(data)}`);
   }
 
-  logger.info("ebay/getOAuthAccessToken", "Token exchange succeeded", { storeNumber });
+  const expiresInSeconds =
+    typeof data.expires_in === "number" && Number.isFinite(data.expires_in)
+      ? data.expires_in
+      : DEFAULT_OAUTH_EXPIRES_IN_SECONDS;
 
-  return data.access_token;
+  logger.info("ebay/getOAuthAccessToken", "Token exchange succeeded", {
+    storeNumber,
+    expiresInSeconds,
+  });
+
+  return {
+    accessToken: data.access_token,
+    expiresAt: Date.now() + expiresInSeconds * 1000,
+  };
+}
+
+export async function getOAuthAccessToken(storeNumber: 1 | 2 | 3): Promise<string> {
+  const cached = oauthAccessTokenCache.get(storeNumber);
+  if (isCachedOAuthTokenUsable(cached)) {
+    return cached.accessToken;
+  }
+
+  const pending = pendingOAuthAccessTokenRequests.get(storeNumber);
+  if (pending) {
+    const token = await pending;
+    return token.accessToken;
+  }
+
+  const request = exchangeOAuthAccessToken(storeNumber);
+  pendingOAuthAccessTokenRequests.set(storeNumber, request);
+
+  try {
+    const token = await request;
+    oauthAccessTokenCache.set(storeNumber, token);
+    return token.accessToken;
+  } finally {
+    if (pendingOAuthAccessTokenRequests.get(storeNumber) === request) {
+      pendingOAuthAccessTokenRequests.delete(storeNumber);
+    }
+  }
+}
+
+export function clearOAuthAccessTokenCache(storeNumber?: 1 | 2 | 3) {
+  if (storeNumber) {
+    oauthAccessTokenCache.delete(storeNumber);
+    pendingOAuthAccessTokenRequests.delete(storeNumber);
+    return;
+  }
+
+  oauthAccessTokenCache.clear();
+  pendingOAuthAccessTokenRequests.clear();
 }
 
 type EbayPromotedRateStrategy = "FIXED" | "DYNAMIC" | "UNKNOWN";
@@ -357,6 +432,22 @@ export type EbayPromotedAdWriteResult = {
   adId: string | null;
   errorMessage: string | null;
 };
+
+type EbayBusinessPolicies = {
+  shipping: Array<{ profileId: string; profileName: string }>;
+  returns: Array<{ profileId: string; profileName: string }>;
+  payment: Array<{ profileId: string; profileName: string }>;
+};
+
+const EBAY_BUSINESS_POLICIES_CACHE_TTL_MS = 5 * 60_000;
+const ebayBusinessPoliciesCache = new Map<
+  1 | 2 | 3,
+  { expiresAt: number; policies: EbayBusinessPolicies }
+>();
+const pendingEbayBusinessPoliciesRequests = new Map<
+  1 | 2 | 3,
+  Promise<EbayBusinessPolicies>
+>();
 
 function parseBidPercentage(value: unknown) {
   if (value === null || value === undefined || value === "") {
@@ -1319,11 +1410,9 @@ export async function callEbayGetItem(
 /**
  * Fetches the seller's Business Policies (shipping, returns, payment) from eBay.
  */
-export async function getEbayBusinessPolicies(storeNumber: 1 | 2 | 3): Promise<{
-  shipping: Array<{ profileId: string; profileName: string }>;
-  returns: Array<{ profileId: string; profileName: string }>;
-  payment: Array<{ profileId: string; profileName: string }>;
-}> {
+async function fetchEbayBusinessPoliciesFromEbay(
+  storeNumber: 1 | 2 | 3
+): Promise<EbayBusinessPolicies> {
   const creds = getStoreCredentials(storeNumber);
   const accessToken = await getOAuthAccessToken(storeNumber);
 
@@ -1408,6 +1497,47 @@ export async function getEbayBusinessPolicies(storeNumber: 1 | 2 | 3): Promise<{
   }
 
   return { shipping, returns, payment };
+}
+
+export async function getEbayBusinessPolicies(
+  storeNumber: 1 | 2 | 3
+): Promise<EbayBusinessPolicies> {
+  const cached = ebayBusinessPoliciesCache.get(storeNumber);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.policies;
+  }
+
+  const pending = pendingEbayBusinessPoliciesRequests.get(storeNumber);
+  if (pending) {
+    return pending;
+  }
+
+  const request = fetchEbayBusinessPoliciesFromEbay(storeNumber);
+  pendingEbayBusinessPoliciesRequests.set(storeNumber, request);
+
+  try {
+    const policies = await request;
+    ebayBusinessPoliciesCache.set(storeNumber, {
+      policies,
+      expiresAt: Date.now() + EBAY_BUSINESS_POLICIES_CACHE_TTL_MS,
+    });
+    return policies;
+  } finally {
+    if (pendingEbayBusinessPoliciesRequests.get(storeNumber) === request) {
+      pendingEbayBusinessPoliciesRequests.delete(storeNumber);
+    }
+  }
+}
+
+export function clearEbayBusinessPoliciesCache(storeNumber?: 1 | 2 | 3) {
+  if (storeNumber) {
+    ebayBusinessPoliciesCache.delete(storeNumber);
+    pendingEbayBusinessPoliciesRequests.delete(storeNumber);
+    return;
+  }
+
+  ebayBusinessPoliciesCache.clear();
+  pendingEbayBusinessPoliciesRequests.clear();
 }
 
 /**
