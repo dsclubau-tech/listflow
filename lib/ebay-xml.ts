@@ -31,6 +31,15 @@ type ReviseItemOptions = {
   includeItemSpecifics?: boolean;
 };
 
+export type ReviseInventoryStatusInput = {
+  startPrice?: string | number;
+  quantity?: number;
+};
+
+export type ReviseInventoryStatusItemInput = ReviseInventoryStatusInput & {
+  ebayItemId: string;
+};
+
 /**
  * Escapes XML special characters in text content.
  */
@@ -468,10 +477,12 @@ export function buildReviseQuantityXML(ebayItemId: string, quantity: number): st
 </ReviseItemRequest>`;
 }
 
-export function buildReviseInventoryStatusXML(
-  ebayItemId: string,
-  input: { startPrice?: string | number; quantity?: number },
-): string {
+function buildInventoryStatusXml(input: ReviseInventoryStatusItemInput): string {
+  const ebayItemId = input.ebayItemId.trim();
+  if (!ebayItemId) {
+    throw new Error("Inventory revise item ID is required.");
+  }
+
   const numericStartPrice =
     input.startPrice === undefined ? null : Number(input.startPrice);
   if (
@@ -496,14 +507,42 @@ export function buildReviseInventoryStatusXML(
     throw new Error("Inventory revise requires a price or quantity.");
   }
 
+  return `  <InventoryStatus>
+    <ItemID>${escapeXml(ebayItemId)}</ItemID>
+${startPrice ? `    <StartPrice>${startPrice}</StartPrice>` : ""}
+${quantity !== null ? `    <Quantity>${quantity}</Quantity>` : ""}
+  </InventoryStatus>`;
+}
+
+export function buildReviseInventoryStatusXML(
+  ebayItemId: string,
+  input: ReviseInventoryStatusInput,
+): string;
+export function buildReviseInventoryStatusXML(
+  items: ReviseInventoryStatusItemInput[],
+): string;
+export function buildReviseInventoryStatusXML(
+  ebayItemIdOrItems: string | ReviseInventoryStatusItemInput[],
+  input?: ReviseInventoryStatusInput,
+): string {
+  const items = Array.isArray(ebayItemIdOrItems)
+    ? ebayItemIdOrItems
+    : [{ ebayItemId: ebayItemIdOrItems, ...(input ?? {}) }];
+
+  if (items.length === 0) {
+    throw new Error("Inventory revise requires at least one item.");
+  }
+
+  if (items.length > 4) {
+    throw new Error("Inventory revise supports up to 4 items per call.");
+  }
+
+  const inventoryStatusXml = items.map(buildInventoryStatusXml).join("\n");
+
   return `<?xml version="1.0" encoding="utf-8"?>
 <ReviseInventoryStatusRequest xmlns="urn:ebay:apis:eBLBaseComponents">
   <ErrorLanguage>en_US</ErrorLanguage>
   <WarningLevel>High</WarningLevel>
-  <InventoryStatus>
-    <ItemID>${escapeXml(ebayItemId)}</ItemID>
-${startPrice ? `    <StartPrice>${startPrice}</StartPrice>` : ""}
-${quantity !== null ? `    <Quantity>${quantity}</Quantity>` : ""}
-  </InventoryStatus>
+${inventoryStatusXml}
 </ReviseInventoryStatusRequest>`;
 }

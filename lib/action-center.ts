@@ -191,6 +191,7 @@ export interface ActionCenterEbayActionJob {
   startedAt: string | null;
   completedAt: string | null;
   dismissedAt: string | null;
+  queuePosition: number | null;
 }
 
 export interface ActionCenterData {

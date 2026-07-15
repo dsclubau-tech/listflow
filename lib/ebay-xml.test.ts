@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildAddItemXML, buildReviseItemXML } from "@/lib/ebay-xml";
+import {
+  buildAddItemXML,
+  buildReviseInventoryStatusXML,
+  buildReviseItemXML,
+} from "@/lib/ebay-xml";
 
 function buildTestProduct() {
   return {
@@ -114,4 +118,58 @@ test("buildReviseItemXML sends the edited eBay listing title", () => {
 
   assert.match(xml, new RegExp(`<Title>${editedTitle}<\\/Title>`));
   assert.doesNotMatch(xml, /<Title>MelodySusie/);
+});
+
+test("buildReviseInventoryStatusXML sends a single quantity of zero", () => {
+  const xml = buildReviseInventoryStatusXML("307056203187", { quantity: 0 });
+
+  assert.match(xml, /<ReviseInventoryStatusRequest/);
+  assert.match(xml, /<ItemID>307056203187<\/ItemID>/);
+  assert.match(xml, /<Quantity>0<\/Quantity>/);
+  assert.doesNotMatch(xml, /<StartPrice>/);
+});
+
+test("buildReviseInventoryStatusXML sends price-only inventory updates", () => {
+  const xml = buildReviseInventoryStatusXML("307056203187", {
+    startPrice: 18.5,
+  });
+
+  assert.match(xml, /<StartPrice>18\.50<\/StartPrice>/);
+  assert.doesNotMatch(xml, /<Quantity>/);
+});
+
+test("buildReviseInventoryStatusXML sends mixed multi-item inventory updates", () => {
+  const xml = buildReviseInventoryStatusXML([
+    { ebayItemId: "1001", quantity: 0 },
+    { ebayItemId: "1002", startPrice: "12.3" },
+    { ebayItemId: "1003", startPrice: 14, quantity: 7 },
+  ]);
+
+  assert.equal((xml.match(/<InventoryStatus>/g) ?? []).length, 3);
+  assert.match(
+    xml,
+    /<ItemID>1001<\/ItemID>\s*<Quantity>0<\/Quantity>/,
+  );
+  assert.match(
+    xml,
+    /<ItemID>1002<\/ItemID>\s*<StartPrice>12\.30<\/StartPrice>/,
+  );
+  assert.match(
+    xml,
+    /<ItemID>1003<\/ItemID>\s*<StartPrice>14\.00<\/StartPrice>\s*<Quantity>7<\/Quantity>/,
+  );
+});
+
+test("buildReviseInventoryStatusXML rejects more than four inventory updates", () => {
+  assert.throws(
+    () =>
+      buildReviseInventoryStatusXML([
+        { ebayItemId: "1001", quantity: 1 },
+        { ebayItemId: "1002", quantity: 1 },
+        { ebayItemId: "1003", quantity: 1 },
+        { ebayItemId: "1004", quantity: 1 },
+        { ebayItemId: "1005", quantity: 1 },
+      ]),
+    /up to 4 items/,
+  );
 });

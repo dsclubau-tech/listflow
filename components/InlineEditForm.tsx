@@ -279,6 +279,7 @@ function buildRegrabDraftUpdate(scraped: ScrapedProduct, fallbackAsin: string) {
   const inferredBrand = inferBrandItemSpecific({
     itemSpecifics: mergedSpecifics,
     brand: scraped.brand,
+    title: fullTitle,
   });
   if (inferredBrand) {
     mergedSpecifics.Brand = inferredBrand;
@@ -486,6 +487,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       const inferredBrand = inferBrandItemSpecific({
         itemSpecifics: specs,
         brand: specs.Brand,
+        title: product.fullTitle || product.title,
       });
       if (inferredBrand) {
         setBrand(inferredBrand);
@@ -505,7 +507,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       // Restore zipcode
       if (specs["_PostalCode"]) setDefaultZipcode(specs["_PostalCode"]);
     }
-  }, [product.itemSpecifics]);
+  }, [product.fullTitle, product.itemSpecifics, product.title]);
 
   const resolvedItemLocation = useMemo(
     () =>
@@ -610,6 +612,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
     const preparedBrand = inferBrandItemSpecific({
       itemSpecifics: getSpecificsObjectFromRows(preparedSpecifics.rows, brand),
       brand,
+      title,
     });
     if (preparedBrand && isPlaceholderBrand(brand)) {
       setBrand(preparedBrand);
@@ -1204,19 +1207,10 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
     const preparedBrand = inferBrandItemSpecific({
       itemSpecifics: getSpecificsObjectFromRows(preparedSpecifics.rows, brand),
       brand,
+      title,
     });
     if (preparedBrand && isPlaceholderBrand(brand)) {
       setBrand(preparedBrand);
-    }
-
-    if (preparedSpecifics.missingNames.length > 0) {
-      setActiveTab(DRAFT_ITEM_SPECIFICS_TAB_INDEX);
-      setSaveMessage({
-        title: "Import failed",
-        text: `Add ${preparedSpecifics.missingNames.join(", ")} before importing.`,
-        variant: "error",
-      });
-      return;
     }
 
     setIsImporting(true);

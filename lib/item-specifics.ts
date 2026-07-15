@@ -217,6 +217,7 @@ function isUnavailableBrandValue(value: string | null | undefined) {
 export function inferBrandItemSpecific(input: {
   itemSpecifics?: unknown;
   brand?: string | null;
+  title?: string | null;
   allowedValues?: string[];
 }) {
   const specifics = normalizeItemSpecifics(input.itemSpecifics);
@@ -236,6 +237,23 @@ export function inferBrandItemSpecific(input: {
     const matched = matchAllowedSpecificValue(candidate, input.allowedValues);
     if (matched && !isUnavailableBrandValue(matched)) {
       return matched;
+    }
+  }
+
+  // Title-based brand extraction: check if the first word(s) of the title
+  // match any of eBay's allowed brand values
+  if (input.title && input.allowedValues && input.allowedValues.length > 0) {
+    const titleWords = input.title.trim().split(/\s+/);
+    // Try first word, then first two words, then first three words
+    for (let count = 1; count <= Math.min(3, titleWords.length); count++) {
+      const titlePrefix = titleWords.slice(0, count).join(" ");
+      if (isUnavailableBrandValue(titlePrefix)) {
+        continue;
+      }
+      const matched = matchAllowedSpecificValue(titlePrefix, input.allowedValues);
+      if (matched && !isUnavailableBrandValue(matched)) {
+        return matched;
+      }
     }
   }
 

@@ -10,6 +10,7 @@ import {
   resolveRequiredItemSpecifics,
   type RequiredSpecificDecision,
 } from "@/lib/required-specific-resolver";
+import { getRequiredItemSpecificsForMissingNames } from "@/lib/upload-item-specifics";
 
 export type RequiredItemSpecific = {
   name: string;
@@ -47,7 +48,7 @@ export async function validateRequiredItemSpecifics(input: {
     inputType: aspect.inputType,
   }));
   const resolved = resolveRequiredItemSpecifics({
-    title: input.product.title,
+    title: input.product.fullTitle || input.product.title,
     categoryName: input.product.categoryName,
     description: input.product.description,
     brand: specifics.Brand,
@@ -65,10 +66,16 @@ export async function validateRequiredItemSpecifics(input: {
   };
 }
 
-export function buildMissingItemSpecificsResponse(message: string | null | undefined) {
+export function buildMissingItemSpecificsResponse(
+  message: string | null | undefined,
+  knownRequiredItemSpecifics: RequiredItemSpecific[] = [],
+) {
   const missingItemSpecifics = parseMissingItemSpecificNames(message);
   return {
     missingItemSpecifics,
-    requiredItemSpecifics: missingItemSpecifics.map((name) => ({ name })),
+    requiredItemSpecifics: getRequiredItemSpecificsForMissingNames(
+      missingItemSpecifics,
+      knownRequiredItemSpecifics,
+    ),
   };
 }

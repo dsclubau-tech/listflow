@@ -8,6 +8,10 @@ import AsinLink from "@/components/AsinLink";
 import Toast from "@/components/Toast";
 import { useTimedActionProgress } from "@/hooks/useTimedActionProgress";
 import { useToast } from "@/hooks/useToast";
+import {
+  getEbayActionQueuePositionText,
+  getEbayActionStatusLabel,
+} from "@/lib/ebay-action-queue";
 import type {
   ActionCenterData,
   ActionCenterProductSummary,
@@ -232,6 +236,23 @@ function actionJobLabel(type: string) {
   if (type === "BULK_EDIT_REVISE") return "Bulk edit listings";
   if (type === "MANAGE_PROMOTED_ADS") return "Manage promoted listings";
   return "eBay listing action";
+}
+
+function actionJobProgressLabel(job: ActionCenterEbayActionJob) {
+  return getEbayActionStatusLabel({
+    status: job.status,
+    queuePosition: job.queuePosition,
+  });
+}
+
+function actionJobDetail(job: ActionCenterEbayActionJob) {
+  const queueText = getEbayActionQueuePositionText({
+    status: job.status,
+    queuePosition: job.queuePosition,
+  });
+  const progressText = `${job.processed}/${job.total} processed, ${job.succeeded} succeeded, ${job.failed} failed`;
+
+  return queueText ? `${queueText}. ${progressText}` : progressText;
 }
 
 function statusClasses(status: string) {
@@ -1349,16 +1370,15 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                             <span
                               className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClasses(job.status)}`}
                             >
-                              {job.status}
+                              {actionJobProgressLabel(job)}
                             </span>
                           </div>
                           <div className="mt-1 text-xs text-gray-500">
-                            {job.processed}/{job.total} processed, {job.succeeded} succeeded,{" "}
-                            {job.failed} failed
+                            {actionJobDetail(job)}
                           </div>
                           <div className="mt-2 max-w-sm">
                             <ActionProgressBar
-                              label="Action progress"
+                              label={actionJobProgressLabel(job)}
                               percent={
                                 job.total > 0
                                   ? Math.min(100, Math.round((job.processed / job.total) * 100))
@@ -1672,12 +1692,11 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                             <span
                               className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClasses(job.status)}`}
                             >
-                              {job.status}
+                              {actionJobProgressLabel(job)}
                             </span>
                           </div>
                           <div className="mt-1 text-xs text-gray-500">
-                            {job.processed}/{job.total} processed, {job.succeeded} succeeded,{" "}
-                            {job.failed} failed
+                            {actionJobDetail(job)}
                           </div>
                         </div>
                         <Link

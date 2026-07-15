@@ -47,6 +47,18 @@ test("inferBrandItemSpecific preserves real user brand first", () => {
   );
 });
 
+test("inferBrandItemSpecific extracts brand from title when specifics are empty", () => {
+  assert.equal(
+    inferBrandItemSpecific({
+      brand: "Unbranded",
+      title: "AMVR RGB Charging Dock Compatible with Meta Quest 3",
+      itemSpecifics: {},
+      allowedValues: ["AMVR", "Oculus", "Meta", "Unbranded"],
+    }),
+    "AMVR"
+  );
+});
+
 test("inferTypeItemSpecific reads telephoto lens type from existing specifics", () => {
   assert.equal(
     inferTypeItemSpecific({

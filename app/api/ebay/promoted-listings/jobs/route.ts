@@ -18,9 +18,13 @@ import {
   getCurrentStoreSession,
   getInternalUserId,
 } from "@/lib/store-session";
+import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
 
 function getErrorStatus(error: unknown) {
-  return error instanceof Error && error.name === "JobConflictError" ? 409 : 400;
+  return error instanceof Error &&
+    (error.name === "WorkerOfflineError" || error.name === "JobConflictError")
+    ? 409
+    : 400;
 }
 
 export async function POST(request: Request) {
@@ -104,6 +108,7 @@ export async function POST(request: Request) {
   }
 
   try {
+    await assertWorkerOnlineForStore(storeSession.storeId);
     const userId = await getInternalUserId();
     const result = await createEbayActionJob({
       userId,

@@ -3,13 +3,16 @@ import { auth } from "@/auth";
 import { EbayActionJobType } from "@/app/generated/prisma/enums";
 import { invalidateJobCaches, invalidateProductCaches } from "@/lib/cache-tags";
 import { createEbayActionJob } from "@/lib/ebay-action-jobs";
-import { assertNoEbayLaneStartConflict } from "@/lib/job-coordination";
 import { createRequestLogger } from "@/lib/logger";
 import { applyBulkProductEdits } from "@/lib/product-bulk-edit";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
+import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
 
 function getErrorStatus(error: unknown) {
-  if (error instanceof Error && error.name === "JobConflictError") {
+  if (
+    error instanceof Error &&
+    (error.name === "JobConflictError" || error.name === "WorkerOfflineError")
+  ) {
     return 409;
   }
 
@@ -47,7 +50,7 @@ export async function POST(request: Request) {
   }
 
   try {
-    await assertNoEbayLaneStartConflict(storeSession.storeId, "write");
+    await assertWorkerOnlineForStore(storeSession.storeId);
 
     const editResult = await applyBulkProductEdits({
       storeId: storeSession.storeId,

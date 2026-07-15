@@ -230,4 +230,91 @@ test("resolveRequiredItemSpecifics matches Maxtra Pro candidate to For Brita Max
   assert.deepEqual(result.missingItemSpecifics, []);
 });
 
+test("resolveRequiredItemSpecifics resolves Stove Type Compatibility from Amazon specifics", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "5 Pcs Pots and Pans Set Non Stick, Ceramic Cookware",
+    categoryName: "Cookware Sets",
+    brand: "Generic",
+    itemSpecifics: {
+      "Heat Source": "Induction, Gas, Electric",
+      Material: "Ceramic",
+    },
+    requiredItemSpecifics: [
+      { name: "Stove Type Compatibility", values: ["Gas", "Electric", "Induction", "Ceramic", "Halogen"] },
+    ],
+  });
 
+  // Should match "Induction" from the Amazon "Heat Source" spec via generic fallback
+  assert.ok(
+    ["Gas", "Electric", "Induction"].includes(result.itemSpecifics["Stove Type Compatibility"] ?? ""),
+    `Expected one of Gas/Electric/Induction but got: ${result.itemSpecifics["Stove Type Compatibility"]}`
+  );
+  assert.deepEqual(result.missingItemSpecifics, []);
+});
+
+test("resolveRequiredItemSpecifics accepts Unbranded when it is the allowed brand fallback", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "Replacement Charging Dock Compatible with Meta Quest 3",
+    categoryName: "VR Accessories",
+    brand: "Unbranded",
+    itemSpecifics: { Brand: "Unbranded" },
+    requiredItemSpecifics: [
+      { name: "Brand", values: ["Unbranded"] },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics.Brand, "Unbranded");
+  assert.deepEqual(result.missingItemSpecifics, []);
+  assert.equal(
+    result.decisions.find((decision) => decision.name === "Brand")?.source,
+    "ebay_allowed_default",
+  );
+});
+
+test("resolveRequiredItemSpecifics leaves unmatched Stove Type Compatibility unresolved", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "5 Pcs Pots and Pans Set Non Stick, Ceramic Cookware",
+    categoryName: "Cookware Sets",
+    brand: "Generic",
+    itemSpecifics: {
+      Material: "Ceramic",
+    },
+    requiredItemSpecifics: [
+      { name: "Stove Type Compatibility", values: ["Gas", "Electric", "Induction"] },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics["Stove Type Compatibility"], undefined);
+  assert.deepEqual(result.missingItemSpecifics, ["Stove Type Compatibility"]);
+});
+
+test("resolveRequiredItemSpecifics resolves unknown aspect from title text", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "Stainless Steel Kitchen Knife Set with Wooden Block",
+    categoryName: "Kitchen Knife Sets",
+    brand: "Generic",
+    itemSpecifics: {},
+    requiredItemSpecifics: [
+      { name: "Handle Material", values: ["Wood", "Plastic", "Stainless Steel", "Bamboo"] },
+    ],
+  });
+
+  // "Wooden" in title contains "wood" substring, so "Wood" matches first
+  assert.equal(result.itemSpecifics["Handle Material"], "Wood");
+  assert.deepEqual(result.missingItemSpecifics, []);
+});
+
+test("resolveRequiredItemSpecifics resolves brand from title when Amazon brand is Unbranded", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "AMVR RGB Charging Dock Compatible with Meta Quest 3",
+    categoryName: "VR Accessories",
+    brand: "Unbranded",
+    itemSpecifics: {},
+    requiredItemSpecifics: [
+      { name: "Brand", values: ["AMVR", "Oculus", "Meta", "Unbranded"] },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics.Brand, "AMVR");
+  assert.deepEqual(result.missingItemSpecifics, []);
+});

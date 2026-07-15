@@ -15,6 +15,10 @@ import {
 } from "@/lib/ebay-required-specifics";
 import { getEbayCustomLabel } from "@/lib/sku";
 import { extractDuplicateListingItemId } from "@/lib/ebay-upload-reconciliation";
+import {
+  resolveMissingItemSpecificsForUploadRetry,
+  shouldBlockUploadForRequiredSpecificsPreflight,
+} from "@/lib/upload-item-specifics";
 
 function isTooManyItemSpecificsError(message: string | undefined) {
   return /too many item specifics|maximum.+item specifics/i.test(message ?? "");
@@ -233,7 +237,7 @@ export async function POST(request: Request) {
       });
     }
 
-    if (requiredSpecifics.missingItemSpecifics.length > 0) {
+    if (shouldBlockUploadForRequiredSpecificsPreflight(requiredSpecifics)) {
       const errorMessage = `Add ${requiredSpecifics.missingItemSpecifics.join(", ")} before importing.`;
 
       await prisma.product.update({
@@ -262,6 +266,13 @@ export async function POST(request: Request) {
         },
         { status: 422 },
       );
+    }
+
+    if (requiredSpecifics.missingItemSpecifics.length > 0) {
+      log.warn("upload/route", "Continuing upload with unresolved Taxonomy preflight specifics", {
+        productId,
+        missingItemSpecifics: requiredSpecifics.missingItemSpecifics,
+      });
     }
 
     const productWithResolvedDesc = {
@@ -293,7 +304,30 @@ export async function POST(request: Request) {
       customLabel,
       requiredItemSpecificNames,
     };
-    let xml = buildAddItemXML(productWithResolvedDesc, overrideStartPrice, addItemOptions);
+
+    async function sendAddItem(
+      productForXml: typeof productWithResolvedDesc,
+      options: typeof addItemOptions & { itemSpecificMaxCount?: number },
+    ) {
+      let xml = buildAddItemXML(productForXml, overrideStartPrice, options);
+      let result = await callEbayAddItem(xml, storeNumber);
+
+      if (!result.success && isTooManyItemSpecificsError(result.errorMessage)) {
+        log.warn("upload/route", "Retrying AddItem with reduced item specifics", {
+          productId,
+          storeNumber,
+          ebayError: result.errorMessage,
+        });
+
+        xml = buildAddItemXML(productForXml, overrideStartPrice, {
+          ...options,
+          itemSpecificMaxCount: 12,
+        });
+        result = await callEbayAddItem(xml, storeNumber);
+      }
+
+      return result;
+    }
 
     log.info("upload/route", "Sending AddItem request to eBay", {
       productId,
@@ -304,20 +338,51 @@ export async function POST(request: Request) {
       customLabel,
     });
 
-    let result = await callEbayAddItem(xml, storeNumber);
+    let result = await sendAddItem(productWithResolvedDesc, addItemOptions);
 
-    if (!result.success && isTooManyItemSpecificsError(result.errorMessage)) {
-      log.warn("upload/route", "Retrying AddItem with reduced item specifics", {
-        productId,
-        storeNumber,
-        ebayError: result.errorMessage,
-      });
+    if (!result.success) {
+      const initialMissingSpecificsResponse = buildMissingItemSpecificsResponse(
+        result.errorMessage,
+        requiredSpecifics.requiredItemSpecifics,
+      );
 
-      xml = buildAddItemXML(productWithResolvedDesc, overrideStartPrice, {
-        ...addItemOptions,
-        itemSpecificMaxCount: 12,
-      });
-      result = await callEbayAddItem(xml, storeNumber);
+      if (initialMissingSpecificsResponse.missingItemSpecifics.length > 0) {
+        const retrySpecifics = resolveMissingItemSpecificsForUploadRetry({
+          title: product.fullTitle || product.title,
+          categoryName: product.categoryName,
+          description: finalDescription,
+          brand: requiredSpecifics.itemSpecifics.Brand,
+          itemSpecifics: productWithResolvedDesc.itemSpecifics,
+          supplierDefaultItemSpecifics: supplierSettings?.defaultItemSpecifics,
+          missingItemSpecifics: initialMissingSpecificsResponse.missingItemSpecifics,
+          requiredItemSpecifics: requiredSpecifics.requiredItemSpecifics,
+        });
+
+        if (retrySpecifics.shouldRetry) {
+          log.info("upload/route", "Retrying AddItem after resolving eBay missing specifics", {
+            productId,
+            storeNumber,
+            decisions: retrySpecifics.decisions,
+            missingItemSpecifics: retrySpecifics.missingItemSpecifics,
+          });
+
+          await prisma.product.update({
+            where: { id: product.id },
+            data: { itemSpecifics: retrySpecifics.itemSpecifics },
+          });
+
+          productWithResolvedDesc.itemSpecifics = retrySpecifics.itemSpecifics;
+          result = await sendAddItem(productWithResolvedDesc, {
+            ...addItemOptions,
+            requiredItemSpecificNames: Array.from(
+              new Set([
+                ...addItemOptions.requiredItemSpecificNames,
+                ...retrySpecifics.requiredItemSpecifics.map((specific) => specific.name),
+              ]),
+            ),
+          });
+        }
+      }
     }
 
     if (result.success) {
@@ -393,7 +458,8 @@ export async function POST(request: Request) {
     }
 
     const missingSpecificsResponse = buildMissingItemSpecificsResponse(
-      result.errorMessage
+      result.errorMessage,
+      requiredSpecifics.requiredItemSpecifics,
     );
     const cleanErrorMessage =
       missingSpecificsResponse.missingItemSpecifics.length > 0

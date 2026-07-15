@@ -71,6 +71,34 @@ function isUnavailableBrandValue(value: string | null | undefined) {
   return !normalized || BRAND_UNAVAILABLE_VALUES.has(normalized);
 }
 
+function isAllowedSpecificValue(
+  value: string | null | undefined,
+  required: RequiredSpecificDefinition,
+) {
+  if (!value?.trim()) {
+    return false;
+  }
+
+  if (!required.values || required.values.length === 0) {
+    return true;
+  }
+
+  return required.values.some(
+    (allowed) => normalizeName(allowed) === normalizeName(value),
+  );
+}
+
+function isAllowedUnbrandedFallback(
+  value: string | null | undefined,
+  required: RequiredSpecificDefinition,
+) {
+  return (
+    normalizeName(required.name) === "brand" &&
+    normalizeName(value ?? "") === normalizeName(DEFAULT_BRAND) &&
+    isAllowedSpecificValue(value, required)
+  );
+}
+
 function readSpecificValue(specifics: ItemSpecificsRecord, name: string) {
   return readItemSpecificValue(specifics, [name]);
 }
@@ -140,6 +168,7 @@ function inferBrand(input: ResolveRequiredSpecificsInput, specifics: ItemSpecifi
   const inferred = inferBrandItemSpecific({
     itemSpecifics: specifics,
     brand: input.brand,
+    title: input.title,
     allowedValues: values,
   });
 
@@ -213,6 +242,7 @@ function inferCompatibleBrand(
     inferBrandItemSpecific({
       itemSpecifics: specifics,
       brand: input.brand,
+      title: input.title,
       allowedValues,
     }) ??
     readItemSpecificValue(specifics, ["Compatible Brand"]);
@@ -396,6 +426,39 @@ function inferRequiredSpecific(
     return inferCompatibleModel(input, specifics, required.values, text);
   }
 
+  // Generic fallback: try to match any allowed value from Amazon data or title/description
+  return inferGenericAspect(specifics, required.values, text);
+}
+
+function inferGenericAspect(
+  specifics: ItemSpecificsRecord,
+  allowedValues: string[] | undefined,
+  text: ReturnType<typeof buildSourceText>,
+) {
+  if (!allowedValues || allowedValues.length === 0) {
+    return { value: null, source: "missing" as const };
+  }
+
+  // 1. Check if any Amazon item specific value matches an allowed value
+  for (const [, specificValue] of Object.entries(specifics)) {
+    if (!specificValue?.trim()) {
+      continue;
+    }
+    const matched = matchAllowedSpecificValue(specificValue, allowedValues);
+    if (matched) {
+      return { value: matched, source: "amazon" as const };
+    }
+  }
+
+  // 2. Scan title + category + description for any allowed value substring
+  const searchText = text.all.toLowerCase().replace(/[()[\]{};:,.]+/g, " ");
+  for (const value of allowedValues) {
+    const normalizedValue = value.trim().toLowerCase();
+    if (normalizedValue.length >= 3 && searchText.includes(normalizedValue)) {
+      return { value, source: "title" as const };
+    }
+  }
+
   return { value: null, source: "missing" as const };
 }
 
@@ -410,13 +473,11 @@ export function resolveRequiredItemSpecifics(
 
   for (const required of input.requiredItemSpecifics) {
     const hasValue = hasUsableSpecificValue(specifics, required.name);
-    const existingValue = hasValue ? readSpecificValue(specifics, required.name) : null;
+    const existingValue = readSpecificValue(specifics, required.name);
     let isValueAllowed = true;
 
-    if (hasValue && existingValue && required.values && required.values.length > 0) {
-      isValueAllowed = required.values.some(
-        (allowed) => normalizeName(allowed) === normalizeName(existingValue)
-      );
+    if (hasValue && existingValue) {
+      isValueAllowed = isAllowedSpecificValue(existingValue, required);
     }
 
     if (hasValue && isValueAllowed) {
@@ -459,17 +520,16 @@ export function resolveRequiredItemSpecifics(
 
   const missingItemSpecifics = input.requiredItemSpecifics
     .filter((required) => {
-      const hasValue = hasUsableSpecificValue(specifics, required.name);
-      if (!hasValue) {
+      const val = readSpecificValue(specifics, required.name);
+      if (!val?.trim()) {
         return true;
       }
-      const val = readSpecificValue(specifics, required.name);
-      if (val && required.values && required.values.length > 0) {
-        return !required.values.some(
-          (allowed) => normalizeName(allowed) === normalizeName(val)
-        );
+
+      if (normalizeName(required.name) === "brand" && isUnavailableBrandValue(val)) {
+        return !isAllowedUnbrandedFallback(val, required);
       }
-      return false;
+
+      return !isAllowedSpecificValue(val, required);
     })
     .map((required) => required.name);
 

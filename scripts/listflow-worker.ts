@@ -202,11 +202,11 @@ async function heartbeat(storeIds = heartbeatStoreIds) {
 async function processStore(store: { id: string; name: string; loginId: string | null }) {
   const worker = getWorkerContext();
 
-  if (await modules.runNextPriceCheckJobForStore(store.id, worker)) {
+  if (await modules.runNextEbayActionJobForStore(store.id, worker)) {
     return true;
   }
 
-  if (await modules.runNextEbayActionJobForStore(store.id, worker)) {
+  if (await modules.runNextPriceCheckJobForStore(store.id, worker)) {
     return true;
   }
 
