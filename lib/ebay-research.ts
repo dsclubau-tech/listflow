@@ -22,12 +22,19 @@ import {
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { launchScraperBrowser } from "@/lib/scraper-browser";
+import {
+  buildSearchPlan,
+  isAccessoryOnlyMismatch,
+  normalizeSearchText,
+  scoreResultMatch,
+  type SearchPlan,
+} from "@/lib/ebay-research-scoring";
 
 const VALID_LIMITS = [10, 30] as const;
 const DEFAULT_RESEARCH_LIMIT = 30;
 const DEFAULT_POSTCODE = "2217";
 const ACTIVE_SEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const ACTIVE_SEARCH_CACHE_VERSION = "v4";
+const ACTIVE_SEARCH_CACHE_VERSION = "v5";
 const RESEARCH_BATCH_GROUP_SIZE = 5;
 const RESEARCH_BATCH_API_COOLDOWN_MS = 2 * 60 * 1000;
 const RESEARCH_BATCH_SCRAPE_COOLDOWN_MS = 10 * 1000;
@@ -120,15 +127,6 @@ type EbayResearchSummary = {
 
 type EbayResearchPhase = "QUICK" | "REFINING" | "COMPLETE";
 
-type SearchPlan = {
-  primary: string;
-  strict: string | null;
-  broad: string | null;
-  tokens: string[];
-  strongTokens: string[];
-  tokenSet: Set<string>;
-};
-
 type QuerySetResult = {
   results: EbayResearchResult[];
   succeeded: boolean;
@@ -167,30 +165,6 @@ const CONDITION_FILTER_IDS: Record<EbayResearchConditionFilter, number[]> = {
   ],
   [EbayResearchConditionFilter.PARTS_NOT_WORKING]: [7000],
 };
-
-const ACCESSORY_ONLY_SIGNALS = [
-  "anti slip",
-  "case",
-  "cover",
-  "covers",
-  "grip cap",
-  "joystick cap",
-  "parts only",
-  "pouch",
-  "protector",
-  "protective",
-  "protective cover",
-  "repair",
-  "replacement shell",
-  "screen protector",
-  "shockproof",
-  "silicone",
-  "skin",
-  "sleeve",
-  "spares",
-  "stand case",
-  "thumbstick cap",
-];
 
 const globalForEbayResearchJobs = globalThis as typeof globalThis & {
   listflowEbayResearchJobIds?: Set<string>;
@@ -398,37 +372,6 @@ function formatMoney(value: number) {
   return Number.isFinite(value) ? value.toFixed(2) : "0.00";
 }
 
-function normalizeSearchText(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/&/g, " and ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function textIncludesPhrase(text: string, phrase: string) {
-  return new RegExp(`\\b${phrase.replace(/\s+/g, "\\s+")}\\b`).test(text);
-}
-
-function isAccessoryOnlyMismatch(title: string, plan: SearchPlan) {
-  const normalizedTitle = normalizeSearchText(title);
-  const normalizedQuery = normalizeSearchText(plan.primary);
-  const titleHasAccessorySignal = ACCESSORY_ONLY_SIGNALS.some((signal) =>
-    textIncludesPhrase(normalizedTitle, signal)
-  );
-
-  if (!titleHasAccessorySignal) {
-    return false;
-  }
-
-  const queryRequestsAccessory = ACCESSORY_ONLY_SIGNALS.some((signal) =>
-    textIncludesPhrase(normalizedQuery, signal)
-  );
-
-  return !queryRequestsAccessory;
-}
-
 function conditionMatchesFilter(
   condition: string | null | undefined,
   filter: EbayResearchConditionFilter
@@ -483,148 +426,6 @@ function conditionMatchesFilter(
 
 function normalizeTitleKey(value: string) {
   return normalizeSearchText(value).split(" ").slice(0, 12).join(" ");
-}
-
-function buildSearchPlan(rawQuery: string): SearchPlan {
-  const cleaned = rawQuery
-    .replace(
-      /\b(brand\s+new|free\s+(postage|shipping|delivery)|fast\s+(postage|shipping|delivery)|australia\s+stock|au\s+stock|local\s+stock|in\s+stock|buy\s+it\s+now|genuine|hot\s+sale)\b/gi,
-      " "
-    )
-    .replace(/\s+/g, " ")
-    .trim();
-  const primary = (cleaned || rawQuery).slice(0, 100).trim();
-  const normalized = normalizeSearchText(primary);
-  const weakTokens = new Set([
-    "and",
-    "the",
-    "for",
-    "with",
-    "from",
-    "new",
-    "buy",
-    "item",
-    "product",
-    "sale",
-  ]);
-  const tokens = normalized
-    .split(" ")
-    .filter(
-      (token) => (token.length >= 2 || /^\d+$/.test(token)) && !weakTokens.has(token)
-    );
-  const strongTokens = tokens.filter(
-    (token) => /\d/.test(token) || token.length >= 7
-  );
-  const strictTokens = [
-    ...strongTokens.slice(0, 4),
-    ...tokens.filter((token) => !strongTokens.includes(token)).slice(0, 2),
-  ];
-  const strict =
-    strictTokens.length >= 2 ? strictTokens.join(" ").slice(0, 100) : null;
-
-  const modelTokens = tokens.filter((token) => /\d/.test(token));
-  const brandLikeTokens = tokens.filter(
-    (token) => !modelTokens.includes(token) && /^[a-z]{3,}$/i.test(token)
-  );
-  const productTypeTokens = tokens.filter(
-    (token) =>
-      !modelTokens.includes(token) &&
-      !brandLikeTokens.includes(token) &&
-      token.length >= 3
-  );
-
-  const broadParts =
-    modelTokens.length > 0
-      ? [
-          ...brandLikeTokens.slice(0, 1),
-          ...modelTokens.slice(0, 2),
-          ...productTypeTokens.slice(0, 1),
-        ]
-      : [...brandLikeTokens.slice(0, 2), ...productTypeTokens.slice(0, 1)];
-  const broad =
-    broadParts.length >= 2 ? broadParts.join(" ").slice(0, 100) : null;
-
-  return {
-    primary,
-    strict: strict && strict !== primary ? strict : null,
-    broad: broad && broad !== primary && broad !== strict ? broad : null,
-    tokens,
-    strongTokens,
-    tokenSet: new Set(tokens),
-  };
-}
-
-function scoreResultMatch(result: EbayResearchResult, plan: SearchPlan) {
-  const title = normalizeSearchText(result.title);
-  const titleTokenSet = new Set(title.split(" ").filter(Boolean));
-
-  if (!title || plan.tokens.length === 0) {
-    return 50;
-  }
-
-  if (isAccessoryOnlyMismatch(result.title, plan)) {
-    return 0;
-  }
-
-  let score = 0;
-  let matched = 0;
-  const titleMatchesSearchToken = (token: string) =>
-    token.length <= 2 || /\d/.test(token)
-      ? titleTokenSet.has(token)
-      : title.includes(token);
-
-  for (const token of plan.tokens) {
-    if (titleMatchesSearchToken(token)) {
-      matched += 1;
-      score += plan.strongTokens.includes(token) ? 12 : 5;
-    }
-  }
-
-  score += Math.round((matched / plan.tokens.length) * 45);
-
-  if (
-    plan.strongTokens.length > 0 &&
-    plan.strongTokens.every((token) => titleMatchesSearchToken(token))
-  ) {
-    score += 25;
-  }
-
-  const primaryText = normalizeSearchText(plan.primary);
-  if (primaryText && title.includes(primaryText)) {
-    score += 20;
-  }
-
-  const unrelatedSignals = [
-    "manual",
-    "empty box",
-    "box only",
-    "parts only",
-    "for parts",
-    "spares",
-    "repair",
-    "case",
-    "cover",
-    "skin",
-    "sticker",
-    "cable",
-    "charger",
-    "mount",
-    "bracket",
-    "remote",
-  ];
-
-  for (const signal of unrelatedSignals) {
-    const signalTokens = signal.split(" ");
-    const queryContainsSignal = signalTokens.some((token) =>
-      plan.tokenSet.has(token)
-    );
-
-    if (!queryContainsSignal && title.includes(signal)) {
-      score -= signal.includes(" ") ? 35 : 16;
-    }
-  }
-
-  return Math.max(0, Math.min(100, score));
 }
 
 function buildSummary(results: EbayResearchResult[]): EbayResearchSummary {
@@ -702,12 +503,11 @@ function dedupeAndSortResults(
     seenTitlePrice.add(titlePriceKey);
     deduped.push({
       ...result,
-      matchScore:
-        typeof result.matchScore === "number"
+      matchScore: plan
+        ? scoreResultMatch(result, plan)
+        : typeof result.matchScore === "number"
           ? result.matchScore
-          : plan
-            ? scoreResultMatch(result, plan)
-            : undefined,
+          : undefined,
     });
   }
 
@@ -1624,6 +1424,21 @@ export function serializeEbayResearchJob(
 ) {
   const includeResults = options.includeResults ?? true;
   const batchStatus = job.batch?.status ?? null;
+  const resultPlan = includeResults ? buildSearchPlan(job.query) : null;
+  const activeResults =
+    includeResults && resultPlan
+      ? dedupeAndSortResults(asJsonResults(job.activeResults), job.limit, resultPlan)
+      : [];
+  const soldResults =
+    includeResults && resultPlan
+      ? dedupeAndSortResults(asJsonResults(job.soldResults), job.limit, resultPlan)
+      : [];
+  const activeSummary = includeResults
+    ? buildSummary(activeResults)
+    : asJsonSummary(job.activeSummary);
+  const soldSummary = includeResults
+    ? buildSummary(soldResults)
+    : asJsonSummary(job.soldSummary);
 
   return {
     id: job.id,
@@ -1640,12 +1455,12 @@ export function serializeEbayResearchJob(
     conditionFilter: job.conditionFilter,
     query: job.query,
     limit: job.limit,
-    activeCount: job.activeCount,
-    soldCount: job.soldCount,
-    activeSummary: asJsonSummary(job.activeSummary),
-    soldSummary: asJsonSummary(job.soldSummary),
-    activeResults: includeResults ? asJsonResults(job.activeResults) : [],
-    soldResults: includeResults ? asJsonResults(job.soldResults) : [],
+    activeCount: includeResults ? activeResults.length : job.activeCount,
+    soldCount: includeResults ? soldResults.length : job.soldCount,
+    activeSummary,
+    soldSummary,
+    activeResults,
+    soldResults,
     warningMessage: job.warningMessage,
     errorMessage: job.errorMessage,
     createdAt: job.createdAt.toISOString(),
