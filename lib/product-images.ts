@@ -2,6 +2,8 @@ const AMAZON_IMAGE_SIZE_SUFFIX = /\._[^/.]+_\.(jpg|jpeg|png|webp|gif)$/i;
 const BAD_IMAGE_URL_PATTERN =
   /play-button|play_icon|spinner|loading|transparent|pixel|grey-pixel|sprite|video/i;
 
+export const MAX_EBAY_PICTURES = 24;
+
 function extractFirstUrl(value: string) {
   const match = value.match(/https?:\/\/[^\s"'<>\\]+/i);
   return match?.[0] ?? "";
@@ -63,7 +65,7 @@ export function normalizeProductImageUrl(
 
 export function dedupeProductImages(
   images: unknown[],
-  maxImages = 12,
+  maxImages = MAX_EBAY_PICTURES,
 ) {
   const seen = new Set<string>();
   const result: string[] = [];

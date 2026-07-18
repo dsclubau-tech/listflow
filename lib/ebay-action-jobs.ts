@@ -45,6 +45,12 @@ import { prisma } from "@/lib/prisma";
 import { invalidateJobCaches, invalidateProductCaches } from "@/lib/cache-tags";
 import { resolveDescriptionTemplate } from "@/lib/template-resolver";
 import { deleteProductFromListflow } from "@/lib/product-removal";
+import { uploadProductToEbay } from "@/lib/ebay-upload";
+import { createEbayImageFromUrl } from "@/lib/ebay-media";
+import {
+  getConfiguredPublicImageBaseUrl,
+  prepareEbayPictureUrls,
+} from "@/lib/ebay-image-urls";
 
 const ACTIVE_ACTION_JOB_STATUSES: EbayActionJobStatus[] = [
   EbayActionJobStatus.QUEUED,
@@ -65,6 +71,7 @@ type ProgressUpdate = {
 
 type EbayActionJobRecord = {
   id: string;
+  userId: string;
   storeId: string;
   type: EbayActionJobType;
   status: EbayActionJobStatus;
@@ -301,6 +308,8 @@ async function applySuccessfulBulkEditRevision(
 }
 
 function actionLabel(type: EbayActionJobType) {
+  if (type === EbayActionJobType.UPLOAD_LISTING) return "Upload listings";
+  if (type === EbayActionJobType.REVISE_LISTING) return "Update eBay listing";
   if (type === EbayActionJobType.HOLD) return "Put listings on hold";
   if (type === EbayActionJobType.RESUME) return "Resume listings";
   if (type === EbayActionJobType.BULK_EDIT_REVISE) return "Bulk edit listings";
@@ -851,6 +860,130 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       ok: false,
       failure: { productId, title: "(missing)", error: "Product was not found" },
     };
+  }
+
+  if (job.type === EbayActionJobType.UPLOAD_LISTING) {
+    const result = await uploadProductToEbay({
+      productId,
+      storeId: job.storeId,
+      userId: job.userId,
+      log: logger,
+    });
+
+    return result.ok
+      ? { ok: true, failure: null }
+      : {
+          ok: false,
+          failure: {
+            productId,
+            title: result.productTitle || product.title,
+            error: result.body.error || "Upload failed.",
+          },
+        };
+  }
+
+  if (job.type === EbayActionJobType.REVISE_LISTING) {
+    if (product.status !== ProductStatus.IMPORTED || !product.ebayItemId) {
+      return {
+        ok: false,
+        failure: {
+          productId,
+          title: product.title,
+          error: "Product is not currently listed on eBay",
+        },
+      };
+    }
+
+    try {
+      const policySelection = await resolveProductPolicySelection(
+        product.storeId,
+        {
+          shippingPolicyId: product.shippingPolicyId,
+          returnPolicyId: product.returnPolicyId,
+          paymentPolicyId: product.paymentPolicyId,
+        },
+        product.policyTemplateId,
+      );
+      const productWithPolicies = {
+        ...product,
+        shippingPolicyId: policySelection.shippingPolicyId,
+        returnPolicyId: policySelection.returnPolicyId,
+        paymentPolicyId: policySelection.paymentPolicyId,
+        policyTemplateId: policySelection.policyTemplateId,
+      };
+      const finalDescription = await resolveDescriptionTemplate(productWithPolicies);
+      const overrideStartPrice = getPrimarySellPrice(product);
+      const storeNumber = await getStoreNumber(product.storeId);
+      const preparedImages = await prepareEbayPictureUrls({
+        images: product.images,
+        publicImageBaseUrl: getConfiguredPublicImageBaseUrl(),
+        stageExternalImage: (sourceUrl) =>
+          createEbayImageFromUrl({
+            sourceUrl,
+            storeId: product.storeId,
+            storeNumber,
+          }),
+      });
+      const result = await callEbayReviseItem(
+        buildReviseItemXML(
+          {
+            ...productWithPolicies,
+            description: finalDescription,
+            images: preparedImages,
+          },
+          overrideStartPrice,
+          { includePictures: true, includeItemSpecifics: true },
+        ),
+        storeNumber,
+      );
+
+      if (!result.success) {
+        const errorMessage = result.errorMessage || "eBay listing update failed";
+        await prisma.product.update({
+          where: { id: product.id },
+          data: { errorMessage },
+        });
+        return {
+          ok: false,
+          failure: { productId, title: product.title, error: errorMessage },
+        };
+      }
+
+      await prisma.product.update({
+        where: { id: product.id },
+        data: {
+          images: preparedImages,
+          status: ProductStatus.IMPORTED,
+          errorMessage: null,
+          shippingPolicyId: policySelection.shippingPolicyId,
+          returnPolicyId: policySelection.returnPolicyId,
+          paymentPolicyId: policySelection.paymentPolicyId,
+          policyTemplateId: policySelection.policyTemplateId,
+          ...(overrideStartPrice !== undefined
+            ? { price: overrideStartPrice }
+            : {}),
+        },
+      });
+
+      logger.info("ebay-action/jobs", "eBay listing revision succeeded", {
+        jobId: job.id,
+        productId,
+        ebayItemId: product.ebayItemId,
+        imageCount: preparedImages.length,
+      });
+      return { ok: true, failure: null };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "eBay listing update failed";
+      await prisma.product.update({
+        where: { id: product.id },
+        data: { errorMessage },
+      });
+      return {
+        ok: false,
+        failure: { productId, title: product.title, error: errorMessage },
+      };
+    }
   }
 
   if (job.type === EbayActionJobType.HOLD) {

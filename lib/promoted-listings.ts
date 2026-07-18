@@ -1,6 +1,51 @@
 export const MIN_PROMOTED_AD_RATE = 2;
 export const MAX_PROMOTED_AD_RATE = 100;
 export const MAX_PROMOTED_LISTING_JOB_SIZE = 2000;
+export const PROMOTED_LISTING_JOB_MIGRATION_NAME =
+  "20260712120000_add_manage_promoted_ads_action";
+export const PROMOTED_LISTING_JOB_ENUM_NOT_READY_MESSAGE = `Promotion jobs are not ready. Apply database migration ${PROMOTED_LISTING_JOB_MIGRATION_NAME}.`;
+
+function getErrorText(error: unknown): string {
+  if (error instanceof Error) {
+    const causeText =
+      "cause" in error && error.cause ? ` ${getErrorText(error.cause)}` : "";
+    return `${error.name} ${error.message}${causeText}`;
+  }
+
+  if (typeof error === "string") {
+    return error;
+  }
+
+  if (error && typeof error === "object") {
+    return Object.values(error as Record<string, unknown>)
+      .map((value) => (typeof value === "string" ? value : ""))
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  return "";
+}
+
+export function isPromotedListingJobEnumNotReadyError(error: unknown) {
+  const text = getErrorText(error);
+
+  return (
+    text.includes("EbayActionJobType") &&
+    text.includes("MANAGE_PROMOTED_ADS") &&
+    /enum|invalid input value|invalid value/i.test(text)
+  );
+}
+
+export function getPromotedListingJobQueueError(error: unknown) {
+  if (!isPromotedListingJobEnumNotReadyError(error)) {
+    return null;
+  }
+
+  return {
+    status: 503,
+    message: PROMOTED_LISTING_JOB_ENUM_NOT_READY_MESSAGE,
+  };
+}
 
 export function normalizePromotedAdRate(value: unknown) {
   const rate = Number(value);

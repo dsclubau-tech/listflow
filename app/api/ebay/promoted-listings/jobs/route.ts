@@ -9,6 +9,7 @@ import { createEbayActionJob } from "@/lib/ebay-action-jobs";
 import { createRequestLogger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import {
+  getPromotedListingJobQueueError,
   MAX_PROMOTED_LISTING_JOB_SIZE,
   normalizePromotedAdRate,
   normalizePromotedCampaignInput,
@@ -143,13 +144,18 @@ export async function POST(request: Request) {
       { status: 202 },
     );
   } catch (error) {
+    const queueError = getPromotedListingJobQueueError(error);
     const message =
-      error instanceof Error ? error.message : "Failed to queue promotion changes.";
+      queueError?.message ??
+      (error instanceof Error ? error.message : "Failed to queue promotion changes.");
     log.error(
       "ebay/promoted-listings/jobs",
       "Failed to queue promoted listing job",
       error,
     );
-    return NextResponse.json({ error: message }, { status: getErrorStatus(error) });
+    return NextResponse.json(
+      { error: message },
+      { status: queueError?.status ?? getErrorStatus(error) },
+    );
   }
 }

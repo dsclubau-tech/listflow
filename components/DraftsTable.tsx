@@ -280,15 +280,6 @@ function getPriceTrackingState(product: SerializedProductRow) {
   const variantCount = product._count?.variants ?? 0;
   const lastHistory = product.priceHistory?.[0] ?? null;
 
-  if (product.priceCheckError) {
-    return {
-      label: "Check failed",
-      badgeClass: "bg-red-100 text-red-700",
-      priceHistoryId: null,
-      detail: product.priceCheckError,
-    };
-  }
-
   if (!product.asin || variantCount === 0) {
     return {
       label: "Not tracked",
@@ -297,6 +288,15 @@ function getPriceTrackingState(product: SerializedProductRow) {
       detail: !product.asin
         ? "Add an Amazon ASIN to track this listing."
         : "Add at least one variant to enable price tracking.",
+    };
+  }
+
+  if (product.priceCheckError) {
+    return {
+      label: "Check failed",
+      badgeClass: "bg-red-100 text-red-700",
+      priceHistoryId: null,
+      detail: product.priceCheckError,
     };
   }
 
@@ -393,6 +393,7 @@ export default function DraftsTable({
   onDraftImported,
 }: DraftsTableProps) {
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [queuedUploadIds, setQueuedUploadIds] = useState<string[]>([]);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [endingId, setEndingId] = useState<string | null>(null);
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
@@ -402,8 +403,6 @@ export default function DraftsTable({
   const [isBulkPriceChecking, setIsBulkPriceChecking] = useState(false);
   const [reviewingPriceHistoryId, setReviewingPriceHistoryId] =
     useState<string | null>(null);
-  const [bulkProgress, setBulkProgress] = useState(0);
-  const [bulkTotal, setBulkTotal] = useState(0);
   const [isBulkApplying, setIsBulkApplying] = useState(false);
   const [isBulkDismissing, setIsBulkDismissing] = useState(false);
   const [isBulkResuming, setIsBulkResuming] = useState(false);
@@ -430,6 +429,32 @@ export default function DraftsTable({
   useEffect(() => {
     onSelectionChange?.(selectedIds);
   }, [onSelectionChange, selectedIds]);
+
+  useEffect(() => {
+    if (queuedUploadIds.length === 0) {
+      return;
+    }
+
+    setQueuedUploadIds((current) =>
+      current.filter((id) =>
+        products.some(
+          (product) => product.id === id && product.status === "DRAFT"
+        )
+      )
+    );
+  }, [products, queuedUploadIds.length]);
+
+  useEffect(() => {
+    if (queuedUploadIds.length === 0) {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      router.refresh();
+    }, 5000);
+
+    return () => window.clearInterval(interval);
+  }, [queuedUploadIds.length, router]);
 
   useEffect(() => {
     if (!autoExpandProductId) {
@@ -569,18 +594,20 @@ export default function DraftsTable({
       const res = await fetch("/api/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productId }),
+        body: JSON.stringify({ productId, background: true }),
       });
       const data = (await res.json().catch(() => ({}))) as {
         error?: string;
+        message?: string;
         missingItemSpecifics?: string[];
       };
 
       if (res.ok) {
-        onToast("Product imported to eBay successfully!", "success");
-        onDraftImported?.(productId);
+        setQueuedUploadIds((current) =>
+          current.includes(productId) ? current : [...current, productId]
+        );
+        onToast(data.message || "Upload queued. Track it in Action Center.", "success");
         setSelectedIds((prev) => prev.filter((id) => id !== productId));
-        setExpandedProductId((current) => (current === productId ? null : current));
         router.refresh();
       } else {
         if (hasMissingItemSpecifics(data)) {
@@ -1310,70 +1337,65 @@ export default function DraftsTable({
     }
 
     setBulkImporting(true);
-    setBulkProgress(0);
-    setBulkTotal(selected.length);
 
-    let succeeded = 0;
-    let failed = 0;
     let skippedAmazon = 0;
-    const successfulImportIds: string[] = [];
-    const failureMessages: string[] = [];
+    const uploadProductIds: string[] = [];
 
-    for (let i = 0; i < selected.length; i += 1) {
-      const product = selected[i];
+    for (const product of selected) {
       const plainText = product.description.replace(/<[^>]*>/g, "");
 
       if (/amazon/i.test(plainText)) {
         skippedAmazon += 1;
-        failed += 1;
-        setBulkProgress(i + 1);
         continue;
       }
 
-      try {
-        const res = await fetch("/api/upload", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ productId: product.id }),
-        });
+      uploadProductIds.push(product.id);
+    }
 
-        if (res.ok) {
-          succeeded += 1;
-          successfulImportIds.push(product.id);
-        } else {
-          const data = (await res.json().catch(() => ({}))) as {
-            error?: string;
-            missingItemSpecifics?: string[];
-          };
-          failed += 1;
-          failureMessages.push(
-            `${product.title}: ${data.error || "Import failed."}`
-          );
-          if (hasMissingItemSpecifics(data)) {
-            setExpandedProductId(product.id);
-          }
-        }
-      } catch {
-        failed += 1;
-        failureMessages.push(`${product.title}: Network error.`);
+    if (uploadProductIds.length === 0) {
+      setBulkImporting(false);
+      onToast(
+        skippedAmazon > 0
+          ? `${skippedAmazon} product(s) skipped - description contains 'Amazon'. Edit and retry.`
+          : "No selected drafts are ready to upload.",
+        "error"
+      );
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/upload", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ productIds: uploadProductIds, background: true }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        message?: string;
+        job?: { total?: number };
+      };
+
+      if (!res.ok) {
+        onToast(data.error || "Failed to queue selected drafts.", "error");
+        router.refresh();
+        return;
       }
 
-      setBulkProgress(i + 1);
+      setQueuedUploadIds((current) =>
+        Array.from(new Set([...current, ...uploadProductIds]))
+      );
+      setSelectedIds([]);
+      onToast(
+        data.message ||
+          `Queued ${data.job?.total ?? uploadProductIds.length} listing(s) to upload.`,
+        "success"
+      );
+      router.refresh();
+    } catch {
+      onToast("Network error while queueing selected drafts.", "error");
+    } finally {
+      setBulkImporting(false);
     }
-
-    router.refresh();
-    for (const productId of successfulImportIds) {
-      onDraftImported?.(productId);
-    }
-    setSelectedIds([]);
-    setBulkImporting(false);
-
-    onToast(
-      failureMessages.length > 0
-        ? `Import complete - ${succeeded} succeeded, ${failed} failed. ${failureMessages[0]}`
-        : `Import complete - ${succeeded} succeeded, ${failed} failed`,
-      succeeded > 0 ? "success" : "error"
-    );
 
     if (skippedAmazon > 0) {
       onToast(
@@ -1535,6 +1557,7 @@ export default function DraftsTable({
               const isExpanded = expandedProductId === product.id;
               const isSelected = selectedIds.includes(product.id);
               const isSelectable = selectableIdSet.has(product.id);
+              const isUploadQueued = queuedUploadIds.includes(product.id);
               const isFailedDraft =
                 isDraftsView && product.status === "FAILED";
               const trackingState = isProductsView
@@ -1789,7 +1812,14 @@ export default function DraftsTable({
                               <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                               <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                             </svg>
-                            Uploading...
+                            Queueing...
+                          </button>
+                        ) : isUploadQueued && isDraftsView && product.status !== "IMPORTED" ? (
+                          <button
+                            disabled
+                            className="bg-gray-400 text-white text-sm px-3 py-1 rounded"
+                          >
+                            Queued
                           </button>
                         ) : product.status === "FAILED" && isDraftsView ? (
                           <button
@@ -2090,10 +2120,10 @@ export default function DraftsTable({
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                       </svg>
-                      Importing {bulkProgress}/{bulkTotal}...
+                      Queueing...
                     </>
                   ) : (
-                    "Import Selected"
+                    "Queue Selected"
                   )}
                 </button>
                 <button

@@ -1,13 +1,19 @@
 import { auth } from "@/auth";
+import { EbayActionJobType } from "@/app/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
-import { buildReviseItemXML } from "@/lib/ebay-xml";
-import { callEbayReviseItem, getStoreNumber } from "@/lib/ebay";
-import { resolveDescriptionTemplate } from "@/lib/template-resolver";
+import { createEbayActionJob } from "@/lib/ebay-action-jobs";
 import { createRequestLogger } from "@/lib/logger";
-import { getCurrentStoreSession } from "@/lib/store-session";
-import { policyIdsMatch, resolveProductPolicySelection } from "@/lib/policy-defaults";
-import { invalidateProductCaches } from "@/lib/cache-tags";
+import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
+import { invalidateJobCaches } from "@/lib/cache-tags";
+import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
+
+function getErrorStatus(error: unknown) {
+  return error instanceof Error &&
+    (error.name === "WorkerOfflineError" || error.name === "JobConflictError")
+    ? 409
+    : 500;
+}
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -55,131 +61,43 @@ export async function POST(request: Request) {
   }
 
   try {
-    const storeNumber = await getStoreNumber(product.storeId);
-    const policySelection = await resolveProductPolicySelection(
-      product.storeId,
-      {
-        shippingPolicyId: product.shippingPolicyId,
-        returnPolicyId: product.returnPolicyId,
-        paymentPolicyId: product.paymentPolicyId,
-      },
-      product.policyTemplateId,
-    );
-    const productWithPolicies = {
-      ...product,
-      shippingPolicyId: policySelection.shippingPolicyId,
-      returnPolicyId: policySelection.returnPolicyId,
-      paymentPolicyId: policySelection.paymentPolicyId,
-      policyTemplateId: policySelection.policyTemplateId,
-    };
-
-    if (!policyIdsMatch(product, productWithPolicies)) {
-      await prisma.product.update({
-        where: { id: product.id },
-        data: {
-          shippingPolicyId: policySelection.shippingPolicyId,
-          returnPolicyId: policySelection.returnPolicyId,
-          paymentPolicyId: policySelection.paymentPolicyId,
-          policyTemplateId: policySelection.policyTemplateId,
-        },
-      });
-    }
-
-    const finalDescription = await resolveDescriptionTemplate(productWithPolicies);
-    const productWithResolvedDesc = { ...productWithPolicies, description: finalDescription };
-
-    // Fetch variants so we can use the primary variant's sellPrice as the
-    // eBay listing price instead of the potentially stale product.price.
-    const variants = await prisma.variant.findMany({
-      where: { productId: product.id },
-      orderBy: { createdAt: "asc" },
+    await assertWorkerOnlineForStore(storeSession.storeId);
+    const userId = await getInternalUserId();
+    const result = await createEbayActionJob({
+      userId,
+      storeId: storeSession.storeId,
+      type: EbayActionJobType.REVISE_LISTING,
+      productIds: [product.id],
+      metadata: { kind: "revise-listing", includePictures: true },
     });
 
-    const primarySellPrice = variants.length > 0
-      ? Number(variants[0].sellPrice)
-      : null;
-
-    // If we have a valid variant sell price, use it as the eBay StartPrice
-    // and sync product.price to keep them consistent.
-    const overrideStartPrice =
-      primarySellPrice !== null && Number.isFinite(primarySellPrice) && primarySellPrice > 0
-        ? primarySellPrice
-        : undefined;
-
-    if (overrideStartPrice !== undefined) {
-      await prisma.product.update({
-        where: { id: productId },
-        data: { price: overrideStartPrice },
-      });
-    }
-
-    const xml = buildReviseItemXML(productWithResolvedDesc, overrideStartPrice);
-
-    log.info("revise/route", "Sending ReviseItem request to eBay", {
+    invalidateJobCaches(storeSession.storeId);
+    log.info("revise/route", "Queued eBay listing revision", {
       productId,
       ebayItemId: product.ebayItemId,
-      storeNumber,
-      startPrice: overrideStartPrice ?? Number(product.price),
+      jobId: result.job.id,
     });
 
-    const result = await callEbayReviseItem(xml, storeNumber);
-
-    if (result.success) {
-      await prisma.product.update({
-        where: { id: productId },
-        data: {
-          status: "IMPORTED",
-          errorMessage: null,
-        },
-      });
-
-      log.info("revise/route", "eBay ReviseItem succeeded", {
-        productId,
-        ebayItemId: product.ebayItemId,
-      });
-      invalidateProductCaches(storeSession.storeId);
-      return NextResponse.json({ success: true });
-    }
-
-    await prisma.product.update({
-      where: { id: productId },
-      data: {
-        errorMessage: result.errorMessage || "Revise failed",
-      },
-    });
-
-    log.error("revise/route", "eBay ReviseItem failed", undefined, {
-      productId,
-      ebayError: result.errorMessage,
-    });
-    invalidateProductCaches(storeSession.storeId);
     return NextResponse.json(
-      { success: false, error: result.errorMessage },
-      { status: 422 },
+      {
+        success: result.queued,
+        ...result,
+        total: result.job.total,
+        message: result.queued
+          ? "eBay update queued. Track it in Action Center."
+          : "No product selected.",
+      },
+      { status: result.queued ? 202 : 200 },
     );
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
-
-    await prisma.product.update({
-      where: { id: productId },
-      data: {
-        errorMessage: message,
-      },
-    });
-
-    log.error("revise/route", "Unhandled error in revise route", error, {
+    const message =
+      error instanceof Error ? error.message : "Failed to queue eBay update.";
+    log.error("revise/route", "Failed to queue eBay listing revision", error, {
       productId,
     });
-    invalidateProductCaches(storeSession.storeId);
-    const isValidationError =
-      message.includes("Policy") ||
-      message.includes("Category") ||
-      message.includes("Price") ||
-      message.includes("Quantity");
-
     return NextResponse.json(
       { success: false, error: message },
-      { status: isValidationError ? 422 : 500 },
+      { status: getErrorStatus(error) },
     );
   }
 }

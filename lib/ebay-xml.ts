@@ -6,7 +6,10 @@ import {
   type ItemSpecificsRecord,
 } from "@/lib/item-specifics";
 import { resolveEbayLocationMetadata } from "@/lib/ebay-location";
-import { dedupeProductImages } from "@/lib/product-images";
+import {
+  MAX_EBAY_PICTURES,
+  dedupeProductImages,
+} from "@/lib/product-images";
 import { toEbayListingTitle } from "@/lib/product-title";
 
 type ProductWithStore = Product & { store: Store };
@@ -29,6 +32,7 @@ type ReviseItemOptions = {
   includeSellerProfiles?: boolean;
   includeLocation?: boolean;
   includeItemSpecifics?: boolean;
+  includePictures?: boolean;
 };
 
 export type ReviseInventoryStatusInput = {
@@ -152,10 +156,20 @@ function getDispatchTimeMax(specifics: ProductSpecifics | null) {
 }
 
 function buildPictureDetailsXml(images: string[]): string {
-  const pictureUrls = dedupeProductImages(images)
-    .slice(0, 12)
+  const normalizedImages = dedupeProductImages(images, Number.MAX_SAFE_INTEGER);
+  if (normalizedImages.length > MAX_EBAY_PICTURES) {
+    throw new Error(
+      `eBay supports up to ${MAX_EBAY_PICTURES} listing images.`,
+    );
+  }
+
+  const pictureUrls = normalizedImages
     .map((url) => `      <PictureURL>${escapeXml(url)}</PictureURL>`)
     .join("\n");
+
+  if (!pictureUrls) {
+    throw new Error("At least one valid image URL is required before sending the listing to eBay.");
+  }
 
   return `    <PictureDetails>\n${pictureUrls}\n    </PictureDetails>`;
 }
@@ -308,6 +322,8 @@ export function buildGetSellerListXML(page: number): string {
     "SellingStatus",
     "Variations",
     "ListingType",
+    "ListingDetails",
+    "StartTime",
     "SellerProfiles",
     "EndTime",
   ]
@@ -342,6 +358,10 @@ export function buildGetSellerListIdsXML(page: number): string {
     "ReturnedItemCountActual",
     "ItemID",
     "ListingType",
+    "SKU",
+    "Variations",
+    "ListingDetails",
+    "StartTime",
   ]
     .map((selector) => `  <OutputSelector>${selector}</OutputSelector>`)
     .join("\n");
@@ -353,6 +373,7 @@ export function buildGetSellerListIdsXML(page: number): string {
   <GranularityLevel>Fine</GranularityLevel>
   <EndTimeFrom>${now.toISOString()}</EndTimeFrom>
   <EndTimeTo>${endTimeTo.toISOString()}</EndTimeTo>
+  <IncludeVariations>true</IncludeVariations>
   <Pagination>
     <EntriesPerPage>200</EntriesPerPage>
     <PageNumber>${Math.max(1, Math.floor(page))}</PageNumber>
@@ -379,6 +400,8 @@ export function buildGetItemXML(itemId: string): string {
     "SellingStatus",
     "Variations",
     "ListingType",
+    "ListingDetails",
+    "StartTime",
     "SellerProfiles",
     "EndTime",
   ]
@@ -425,12 +448,16 @@ export function buildReviseItemXML(
   const includeSellerProfiles = options.includeSellerProfiles ?? true;
   const includeLocation = options.includeLocation ?? true;
   const includeItemSpecifics = options.includeItemSpecifics ?? false;
+  const includePictures = options.includePictures ?? false;
   const quantity = includeQuantity
     ? getValidatedQuantity(product, options.quantityOverride)
     : null;
   const sellerProfilesXml = includeSellerProfiles ? buildSellerProfilesXml(product) : "";
   const itemSpecificsXml = includeItemSpecifics
     ? buildItemSpecificsXml(product, specifics)
+    : "";
+  const pictureDetailsXml = includePictures
+    ? buildPictureDetailsXml(product.images)
     : "";
 
   // Use the override price (from the primary variant's sellPrice) when available,
@@ -460,6 +487,7 @@ ${quantity !== null ? `    <Quantity>${quantity}</Quantity>` : ""}
 ${sellerProfilesXml}
 ${includeLocation ? `    <Location>${escapeXml(location)}</Location>
     <PostalCode>${escapeXml(postalCode)}</PostalCode>` : ""}
+${pictureDetailsXml}
 ${itemSpecificsXml}
   </Item>
 </ReviseItemRequest>`;

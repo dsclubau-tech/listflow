@@ -1,5 +1,11 @@
 import { auth } from "@/auth";
 import { createEbayImportJob } from "@/lib/ebay-import-jobs";
+import {
+  EbayImportSelectionError,
+  normalizeEbayImportSortDirection,
+  normalizeEbayImportSortField,
+  normalizeEbayImportSkuList,
+} from "@/lib/ebay-import-selection";
 import { resolveEbayImportStore } from "@/lib/ebay-import-store";
 import { createRequestLogger } from "@/lib/logger";
 import { NextResponse } from "next/server";
@@ -38,8 +44,24 @@ export async function POST(request: Request) {
     body && typeof body === "object" && "quantity" in body
       ? Number((body as { quantity?: unknown }).quantity)
       : 0;
+  const skuList = normalizeEbayImportSkuList(
+    body && typeof body === "object" && "skuList" in body
+      ? (body as { skuList?: unknown }).skuList
+      : undefined,
+  );
+  const sortField = normalizeEbayImportSortField(
+    body && typeof body === "object" && "sortField" in body
+      ? (body as { sortField?: unknown }).sortField
+      : undefined,
+  );
+  const sortDirection = normalizeEbayImportSortDirection(
+    body && typeof body === "object" && "sortDirection" in body
+      ? (body as { sortDirection?: unknown }).sortDirection
+      : undefined,
+  );
+  const skuMode = skuList.length > 0;
 
-  if (!Number.isFinite(quantity) || quantity < 1) {
+  if (!skuMode && (!Number.isFinite(quantity) || quantity < 1)) {
     return NextResponse.json(
       { error: "quantity must be at least 1" },
       { status: 400 },
@@ -59,7 +81,10 @@ export async function POST(request: Request) {
       userId,
       storeId: storeSession.storeId,
       storeNumber: context.storeNumber,
-      quantity,
+      quantity: Number.isFinite(quantity) && quantity > 0 ? quantity : 1,
+      skuList,
+      sortField,
+      sortDirection,
     });
 
     invalidateJobCaches(storeSession.storeId);
@@ -69,15 +94,16 @@ export async function POST(request: Request) {
     log.error("ebay-import/jobs/POST", "Failed to start eBay import job", error, {
       storeId,
     });
+    const status = error instanceof EbayImportSelectionError
+      ? 422
+      : error instanceof Error &&
+          (error.name === "WorkerOfflineError" || error.name === "JobConflictError")
+        ? 409
+        : 400;
+
     return NextResponse.json(
       { error: getErrorMessage(error) },
-      {
-        status:
-          error instanceof Error &&
-          (error.name === "WorkerOfflineError" || error.name === "JobConflictError")
-            ? 409
-            : 400,
-      }
+      { status },
     );
   }
 }

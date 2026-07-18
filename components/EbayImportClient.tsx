@@ -4,6 +4,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import ActionProgressBar from "@/components/ActionProgressBar";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { normalizeEbayImportSkuList } from "@/lib/ebay-import-selection";
+import {
+  MAX_BULK_ASIN_MAPPINGS,
+  parseBulkAsinMappingText,
+  type BulkAsinMappingIssue,
+  type BulkAsinUpdate,
+} from "@/lib/bulk-asin-link";
 
 interface EbayImportClientProps {
   stores: Array<{ id: string; name: string }>;
@@ -39,6 +46,17 @@ interface ImportResult {
   failed: number;
   rateLimited: boolean;
   errors: Array<{ itemId: string; title: string; error: string }>;
+  metadata?: ImportJobMetadata;
+}
+
+interface ImportJobMetadata {
+  mode?: "QUANTITY" | "SKU";
+  skuList?: string[];
+  unmatchedSkus?: string[];
+  matchedSkuCount?: number;
+  selectedListingCount?: number;
+  sortField?: "START_DATE";
+  sortDirection?: "ASC" | "DESC";
 }
 
 type ModalState = "confirm" | "importing" | "complete";
@@ -72,6 +90,7 @@ interface ImportJob {
   canPause: boolean;
   canResume: boolean;
   canCancel: boolean;
+  metadata?: ImportJobMetadata;
   rateLimited: boolean;
   errors: Array<{ itemId: string; title: string; error: string }>;
   errorMessage: string | null;
@@ -88,6 +107,14 @@ interface StoredImportJob {
   storeId: string;
 }
 
+interface BulkAsinLinkResult {
+  updated: number;
+  matched: BulkAsinUpdate[];
+  invalid: BulkAsinMappingIssue[];
+  unmatched: string[];
+  ambiguous: string[];
+}
+
 const IMPORT_JOB_STORAGE_KEY = "listflow:ebay-import:active-job";
 
 function getErrorMessage(error: unknown) {
@@ -96,6 +123,14 @@ function getErrorMessage(error: unknown) {
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat("en-AU").format(value);
+}
+
+function formatStartDateOrder(direction: "ASC" | "DESC") {
+  return direction === "ASC" ? "Oldest first" : "Newest first";
+}
+
+function normalizeJobSortDirection(metadata?: ImportJobMetadata) {
+  return metadata?.sortDirection === "ASC" ? "ASC" : "DESC";
 }
 
 function isActiveImportJob(job: ImportJob | null) {
@@ -154,8 +189,12 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
   const [statsError, setStatsError] = useState<string | null>(null);
   const [quantity, setQuantity] = useState("100");
   const [quantityNotice, setQuantityNotice] = useState<string | null>(null);
+  const [skuText, setSkuText] = useState("");
+  const [sortDirection, setSortDirection] = useState<"ASC" | "DESC">("DESC");
   const [modalState, setModalState] = useState<ModalState | null>(null);
   const [pendingQuantity, setPendingQuantity] = useState(100);
+  const [pendingSkuList, setPendingSkuList] = useState<string[]>([]);
+  const [pendingSortDirection, setPendingSortDirection] = useState<"ASC" | "DESC">("DESC");
   const [importing, setImporting] = useState(false);
   const [activeJob, setActiveJob] = useState<ImportJob | null>(null);
   const [lastJobStatus, setLastJobStatus] = useState<ImportJobStatus | null>(null);
@@ -166,11 +205,22 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
   const [result, setResult] = useState<ImportResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showErrors, setShowErrors] = useState(false);
+  const [asinLinkOpen, setAsinLinkOpen] = useState(false);
+  const [asinMappingText, setAsinMappingText] = useState("");
+  const [asinLinking, setAsinLinking] = useState(false);
+  const [asinLinkError, setAsinLinkError] = useState<string | null>(null);
+  const [asinLinkResult, setAsinLinkResult] = useState<BulkAsinLinkResult | null>(null);
 
   const selectedStoreRecord = stores.find((store) => store.id === selectedStore);
   const activeJobId = activeJob?.id ?? null;
   const activeJobStatus = activeJob?.status ?? null;
   const activeImportRunning = activeJobStatus === "QUEUED" || activeJobStatus === "RUNNING";
+  const parsedSkuList = useMemo(() => normalizeEbayImportSkuList(skuText), [skuText]);
+  const parsedAsinMappings = useMemo(
+    () => parseBulkAsinMappingText(asinMappingText),
+    [asinMappingText],
+  );
+  const skuMode = parsedSkuList.length > 0;
   const parsedQuantity = Number.parseInt(quantity, 10);
   const quantityValue =
     Number.isFinite(parsedQuantity) && parsedQuantity >= 0 ? parsedQuantity : 0;
@@ -188,9 +238,9 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
     statsLoading ||
     !stats ||
     stats.remaining === 0 ||
-    quantity.trim() === "" ||
-    quantityValue < 1 ||
-    quantityValue > stats.remaining;
+    (skuMode
+      ? parsedSkuList.length < 1
+      : quantity.trim() === "" || quantityValue < 1 || quantityValue > stats.remaining);
   const statsMessage = useMemo(() => {
     if (!selectedStore) {
       return "Select a store to load eBay listing stats.";
@@ -290,11 +340,33 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
   }
 
   function openConfirmation(amount = quantityValue) {
-    if (!stats || amount < 1 || amount > stats.remaining || importing || activeImportRunning) {
+    if (!stats || importing || activeImportRunning) {
+      return;
+    }
+
+    if (skuMode) {
+      if (parsedSkuList.length < 1 || stats.remaining < 1) {
+        return;
+      }
+
+      setPendingQuantity(parsedSkuList.length);
+      setPendingSkuList(parsedSkuList);
+      setPendingSortDirection(sortDirection);
+      setProgress(null);
+      setResult(null);
+      setError(null);
+      setShowErrors(false);
+      setModalState("confirm");
+      return;
+    }
+
+    if (amount < 1 || amount > stats.remaining) {
       return;
     }
 
     setPendingQuantity(amount);
+    setPendingSkuList([]);
+    setPendingSortDirection(sortDirection);
     setProgress(null);
     setResult(null);
     setError(null);
@@ -303,13 +375,85 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
   }
 
   function handleImportAllRemaining() {
-    if (!stats || stats.remaining < 1 || importing || activeImportRunning) {
+    if (!stats || stats.remaining < 1 || importing || activeImportRunning || skuMode) {
       return;
     }
 
     setQuantity(String(stats.remaining));
     setQuantityNotice(null);
     openConfirmation(stats.remaining);
+  }
+
+  function openAsinLinker() {
+    setAsinLinkError(null);
+    setAsinLinkResult(null);
+    setAsinLinkOpen(true);
+  }
+
+  function closeAsinLinker() {
+    if (asinLinking) {
+      return;
+    }
+
+    setAsinLinkOpen(false);
+    setAsinMappingText("");
+    setAsinLinkError(null);
+    setAsinLinkResult(null);
+  }
+
+  async function linkAmazonAsins() {
+    if (
+      asinLinking ||
+      !selectedStore ||
+      parsedAsinMappings.mappings.length === 0 ||
+      parsedAsinMappings.invalid.length > 0
+    ) {
+      return;
+    }
+
+    if (parsedAsinMappings.mappings.length > MAX_BULK_ASIN_MAPPINGS) {
+      setAsinLinkError(
+        `A maximum of ${MAX_BULK_ASIN_MAPPINGS} ASIN mappings can be linked at once.`,
+      );
+      return;
+    }
+
+    setAsinLinking(true);
+    setAsinLinkError(null);
+    setAsinLinkResult(null);
+
+    try {
+      const response = await fetch("/api/products/bulk-link-asins", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          storeId: selectedStore,
+          mappings: parsedAsinMappings.mappings,
+        }),
+      });
+      const data = (await response.json().catch(() => ({}))) as
+        | BulkAsinLinkResult
+        | { error?: string; invalid?: BulkAsinMappingIssue[] };
+
+      if (!response.ok) {
+        const invalid = "invalid" in data && Array.isArray(data.invalid) ? data.invalid : [];
+        const detail = invalid[0]?.reason;
+        throw new Error(
+          ("error" in data && data.error) || detail || "Failed to link Amazon ASINs",
+        );
+      }
+
+      const nextResult = data as BulkAsinLinkResult;
+      setAsinLinkResult(nextResult);
+
+      if (nextResult.updated > 0) {
+        router.refresh();
+      }
+    } catch (caughtError) {
+      setAsinLinkError(getErrorMessage(caughtError));
+    } finally {
+      setAsinLinking(false);
+    }
   }
 
   async function removeStaleProducts() {
@@ -359,9 +503,12 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
 
   const applyImportJob = useCallback(
     (job: ImportJob) => {
+      const jobSortDirection = normalizeJobSortDirection(job.metadata);
       setLastJobStatus(job.status);
       setActiveJob(job);
       setPendingQuantity(job.quantity);
+      setPendingSkuList(job.metadata?.skuList ?? []);
+      setPendingSortDirection(jobSortDirection);
 
       if (isActiveImportJob(job)) {
         writeStoredImportJob(job);
@@ -401,6 +548,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
           failed: job.failed,
           rateLimited: job.rateLimited,
           errors: job.errors,
+          metadata: job.metadata,
         });
       }
 
@@ -428,7 +576,14 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
   }, []);
 
   async function startImport() {
-    if (!selectedStore || importing || activeImportRunning || pendingQuantity < 1) {
+    const pendingSkuMode = pendingSkuList.length > 0;
+
+    if (
+      !selectedStore ||
+      importing ||
+      activeImportRunning ||
+      (!pendingSkuMode && pendingQuantity < 1)
+    ) {
       return;
     }
 
@@ -437,7 +592,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
     setModalState("importing");
     setProgress({
       processed: 0,
-      total: pendingQuantity,
+      total: pendingSkuMode ? pendingSkuList.length : pendingQuantity,
       created: 0,
       skipped: 0,
       failed: 0,
@@ -450,7 +605,13 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
       const response = await fetch("/api/ebay-import/jobs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ storeId: selectedStore, quantity: pendingQuantity }),
+        body: JSON.stringify({
+          storeId: selectedStore,
+          quantity: pendingSkuMode ? 1 : pendingQuantity,
+          skuList: pendingSkuList,
+          sortField: "START_DATE",
+          sortDirection: pendingSortDirection,
+        }),
       });
       const data = (await response.json().catch(() => ({}))) as {
         job?: ImportJob;
@@ -614,6 +775,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
     setResult(null);
     setError(null);
     setShowErrors(false);
+    setPendingSkuList([]);
     void loadStats();
   }
 
@@ -624,7 +786,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
       </div>
 
       <section className="rounded-lg border border-gray-200 bg-white p-6">
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px] lg:items-end">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px_220px] lg:items-end">
           <div>
             <label htmlFor="store" className="block text-sm font-medium text-gray-700">
               Store
@@ -649,6 +811,22 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
           </div>
 
           <div>
+            <label htmlFor="startDateOrder" className="block text-sm font-medium text-gray-700">
+              Start date order
+            </label>
+            <select
+              id="startDateOrder"
+              value={sortDirection}
+              onChange={(event) => setSortDirection(event.target.value === "ASC" ? "ASC" : "DESC")}
+              disabled={importing || activeImportRunning || statsLoading || !stats}
+              className="mt-2 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
+            >
+              <option value="DESC">Newest first</option>
+              <option value="ASC">Oldest first</option>
+            </select>
+          </div>
+
+          <div>
             <label htmlFor="quantity" className="block text-sm font-medium text-gray-700">
               Quantity
             </label>
@@ -659,10 +837,25 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
               max={stats?.remaining ?? undefined}
               value={quantity}
               onChange={(event) => handleQuantityChange(event.target.value)}
-              disabled={importing || activeImportRunning || statsLoading || !stats}
+              disabled={importing || activeImportRunning || statsLoading || !stats || skuMode}
               className="mt-2 w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
             />
           </div>
+        </div>
+
+        <div className="mt-4">
+          <label htmlFor="skuList" className="block text-sm font-medium text-gray-700">
+            SKU / custom label import
+          </label>
+          <textarea
+            id="skuList"
+            value={skuText}
+            onChange={(event) => setSkuText(event.target.value)}
+            disabled={importing || activeImportRunning || statsLoading || !stats}
+            rows={5}
+            placeholder="Paste SKUs or custom labels, one per line"
+            className="mt-2 w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
+          />
         </div>
 
         <div
@@ -677,7 +870,9 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
         </div>
 
         <div className="mt-2 text-xs text-gray-500">
-          {quantityNotice || "Duplicates are skipped automatically"}
+          {skuMode
+            ? `${formatNumber(parsedSkuList.length)} unique SKU/custom label value${parsedSkuList.length === 1 ? "" : "s"} ready. Quantity is ignored in SKU mode.`
+            : quantityNotice || "Duplicates are skipped automatically"}
         </div>
 
         {stats && stats.staleInListFlow > 0 && (
@@ -716,18 +911,134 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
             <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v12m0 0 4-4m-4 4-4-4m-3 8h14" />
             </svg>
-            Import Batch
+            {skuMode ? "Import Matching SKUs" : "Import Batch"}
           </button>
           <button
             type="button"
             onClick={handleImportAllRemaining}
-            disabled={importing || activeImportRunning || statsLoading || !stats || stats.remaining < 1}
+            disabled={importing || activeImportRunning || statsLoading || !stats || stats.remaining < 1 || skuMode}
             className="inline-flex items-center justify-center rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Import All Remaining
           </button>
+          <button
+            type="button"
+            onClick={openAsinLinker}
+            disabled={!selectedStore || importing || activeImportRunning}
+            className="inline-flex items-center justify-center rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            Link Amazon ASINs
+          </button>
         </div>
       </section>
+
+      {asinLinkOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/50 px-4 py-6">
+          <div className="max-h-full w-full max-w-2xl overflow-y-auto rounded-lg bg-white shadow-xl">
+            <div className="flex items-start justify-between border-b border-gray-200 px-6 py-4">
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900">Link Amazon ASINs</h2>
+                <p className="mt-1 text-sm text-gray-500">
+                  {selectedStoreRecord?.name ?? "Selected store"}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closeAsinLinker}
+                disabled={asinLinking}
+                className="rounded p-1 text-gray-400 transition-colors hover:text-gray-700 disabled:opacity-50"
+                aria-label="Close"
+              >
+                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18 18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+
+            <div className="p-6">
+              <label htmlFor="asinMappings" className="block text-sm font-medium text-gray-700">
+                eBay item ID or SKU, ASIN
+              </label>
+              <textarea
+                id="asinMappings"
+                value={asinMappingText}
+                onChange={(event) => {
+                  setAsinMappingText(event.target.value);
+                  setAsinLinkError(null);
+                  setAsinLinkResult(null);
+                }}
+                disabled={asinLinking}
+                rows={10}
+                placeholder={"307016023995, B0XXXXXXXX\nCUSTOM-SKU\tB0YYYYYYYY"}
+                className="mt-2 w-full rounded-md border border-gray-300 px-3 py-2 font-mono text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20 disabled:cursor-not-allowed disabled:bg-gray-100"
+              />
+
+              <div className="mt-2 text-xs text-gray-500">
+                {formatNumber(parsedAsinMappings.mappings.length)} mapping{parsedAsinMappings.mappings.length === 1 ? "" : "s"}
+              </div>
+
+              {parsedAsinMappings.invalid.length > 0 && (
+                <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  Line {parsedAsinMappings.invalid[0].line}: {parsedAsinMappings.invalid[0].reason}
+                </div>
+              )}
+
+              {asinLinkError && (
+                <div className="mt-4 rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+                  {asinLinkError}
+                </div>
+              )}
+
+              {asinLinkResult && (
+                <div className="mt-4 rounded-md border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-700">
+                  <p className="font-medium text-gray-900">
+                    Linked {formatNumber(asinLinkResult.updated)} product{asinLinkResult.updated === 1 ? "" : "s"}.
+                  </p>
+                  {asinLinkResult.invalid.length > 0 && (
+                    <p className="mt-1 text-red-700">
+                      Invalid: {asinLinkResult.invalid.map((item) => item.identifier || "blank").join(", ")}
+                    </p>
+                  )}
+                  {asinLinkResult.unmatched.length > 0 && (
+                    <p className="mt-1 text-amber-800">
+                      Unmatched: {asinLinkResult.unmatched.join(", ")}
+                    </p>
+                  )}
+                  {asinLinkResult.ambiguous.length > 0 && (
+                    <p className="mt-1 text-amber-800">
+                      Ambiguous: {asinLinkResult.ambiguous.join(", ")}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="mt-6 flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={closeAsinLinker}
+                  disabled={asinLinking}
+                  className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Close
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void linkAmazonAsins()}
+                  disabled={
+                    asinLinking ||
+                    parsedAsinMappings.mappings.length === 0 ||
+                    parsedAsinMappings.invalid.length > 0 ||
+                    parsedAsinMappings.mappings.length > MAX_BULK_ASIN_MAPPINGS
+                  }
+                  className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  {asinLinking ? "Linking..." : "Link ASINs"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {modalState && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/50 px-4 py-6">
@@ -743,12 +1054,28 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
                     </dd>
                   </div>
                   <div>
-                    <dt className="font-medium text-gray-500">Quantity</dt>
+                    <dt className="font-medium text-gray-500">Mode</dt>
+                    <dd className="mt-1 text-gray-900">
+                      {pendingSkuList.length > 0 ? "SKU / custom label" : "Quantity"}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="font-medium text-gray-500">
+                      {pendingSkuList.length > 0 ? "Unique SKUs" : "Quantity"}
+                    </dt>
                     <dd className="mt-1 text-gray-900">{formatNumber(pendingQuantity)}</dd>
+                  </div>
+                  <div>
+                    <dt className="font-medium text-gray-500">Start date order</dt>
+                    <dd className="mt-1 text-gray-900">
+                      {formatStartDateOrder(pendingSortDirection)}
+                    </dd>
                   </div>
                 </dl>
                 <p className="mt-4 text-sm text-gray-600">
-                  Products already in ListFlow will be skipped automatically.
+                  {pendingSkuList.length > 0
+                    ? "Only active, not-yet-imported listings with exact matching listing or variation SKUs will be imported."
+                    : "Products already in ListFlow will be skipped automatically."}
                 </p>
                 <div className="mt-6 flex justify-end gap-3">
                   <button
@@ -886,6 +1213,18 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
                     {result.rateLimited && (
                       <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
                         eBay rate limit was reached. Saved products are intact; retry later to continue.
+                      </div>
+                    )}
+
+                    {result.metadata?.mode === "SKU" && (
+                      <div className="mt-4 rounded-md border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+                        SKU import matched {formatNumber(result.metadata.selectedListingCount ?? result.requested)} listing{(result.metadata.selectedListingCount ?? result.requested) === 1 ? "" : "s"} from {formatNumber(result.metadata.skuList?.length ?? 0)} unique SKU/custom label value{(result.metadata.skuList?.length ?? 0) === 1 ? "" : "s"}.
+                        {(result.metadata.unmatchedSkus?.length ?? 0) > 0 && (
+                          <span className="block mt-1 text-blue-800">
+                            Unmatched: {result.metadata.unmatchedSkus?.slice(0, 8).join(", ")}
+                            {(result.metadata.unmatchedSkus?.length ?? 0) > 8 ? "..." : ""}
+                          </span>
+                        )}
                       </div>
                     )}
 

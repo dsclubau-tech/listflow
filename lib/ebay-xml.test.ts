@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildAddItemXML,
+  buildGetSellerListIdsXML,
   buildReviseInventoryStatusXML,
   buildReviseItemXML,
 } from "@/lib/ebay-xml";
@@ -120,6 +121,59 @@ test("buildReviseItemXML sends the edited eBay listing title", () => {
   assert.doesNotMatch(xml, /<Title>MelodySusie/);
 });
 
+test("buildReviseItemXML omits pictures unless explicitly requested", () => {
+  const product = {
+    ...buildTestProduct(),
+    ebayItemId: "307056203187",
+  } as Parameters<typeof buildReviseItemXML>[0];
+
+  assert.doesNotMatch(buildReviseItemXML(product), /<PictureDetails>/);
+});
+
+test("buildReviseItemXML sends the complete ordered picture replacement", () => {
+  const product = {
+    ...buildTestProduct(),
+    ebayItemId: "307056203187",
+    images: [
+      "https://i.ebayimg.com/images/g/main/s-l1600.jpg?ignored=1",
+      "https://i.ebayimg.com/images/g/second&copy/s-l1600.jpg",
+      "https://i.ebayimg.com/images/g/main/s-l1600.jpg",
+    ],
+  } as Parameters<typeof buildReviseItemXML>[0];
+
+  const xml = buildReviseItemXML(product, undefined, {
+    includePictures: true,
+  });
+  const pictureUrls = Array.from(
+    xml.matchAll(/<PictureURL>(.*?)<\/PictureURL>/g),
+    (match) => match[1],
+  );
+
+  assert.deepEqual(pictureUrls, [
+    "https://i.ebayimg.com/images/g/main/s-l1600.jpg",
+    "https://i.ebayimg.com/images/g/second&amp;copy/s-l1600.jpg",
+  ]);
+});
+
+test("buildReviseItemXML rejects more than 24 listing pictures", () => {
+  const product = {
+    ...buildTestProduct(),
+    ebayItemId: "307056203187",
+    images: Array.from(
+      { length: 25 },
+      (_, index) => `https://i.ebayimg.com/images/g/${index}/s-l1600.jpg`,
+    ),
+  } as Parameters<typeof buildReviseItemXML>[0];
+
+  assert.throws(
+    () =>
+      buildReviseItemXML(product, undefined, {
+        includePictures: true,
+      }),
+    /up to 24 listing images/,
+  );
+});
+
 test("buildReviseInventoryStatusXML sends a single quantity of zero", () => {
   const xml = buildReviseInventoryStatusXML("307056203187", { quantity: 0 });
 
@@ -172,4 +226,15 @@ test("buildReviseInventoryStatusXML rejects more than four inventory updates", (
       ]),
     /up to 4 items/,
   );
+});
+
+test("buildGetSellerListIdsXML requests SKU, variation SKU, and listing start time", () => {
+  const xml = buildGetSellerListIdsXML(1);
+
+  assert.match(xml, /<DetailLevel>ReturnSummary<\/DetailLevel>/);
+  assert.match(xml, /<IncludeVariations>true<\/IncludeVariations>/);
+  assert.match(xml, /<OutputSelector>SKU<\/OutputSelector>/);
+  assert.match(xml, /<OutputSelector>Variations<\/OutputSelector>/);
+  assert.match(xml, /<OutputSelector>ListingDetails<\/OutputSelector>/);
+  assert.match(xml, /<OutputSelector>StartTime<\/OutputSelector>/);
 });

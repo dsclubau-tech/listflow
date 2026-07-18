@@ -11,9 +11,13 @@ import { isValidAsin, normalizeAsin } from "@/lib/price-check-eligibility";
 import { ProductStatus } from "@/app/generated/prisma/enums";
 import { applyEbayLocationMetadata } from "@/lib/ebay-location";
 import { isAmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
-import { dedupeProductImages } from "@/lib/product-images";
+import {
+  MAX_EBAY_PICTURES,
+  dedupeProductImages,
+} from "@/lib/product-images";
 import { normalizeFullProductTitle, toEbayListingTitle } from "@/lib/product-title";
 import { deleteProductFromListflow } from "@/lib/product-removal";
+import { preserveEbayListingAsin } from "@/lib/ebay-listing-asin";
 
 const SUPPLIER_NAME = "Amazon AU";
 
@@ -223,9 +227,25 @@ export async function PATCH(
     }
 
     data.asin = normalizedAsin;
+
+    if (normalizedAsin && normalizedAsin !== product.asin) {
+      data.priceCheckError = null;
+      data.lastPriceCheck = null;
+    }
   }
 
   if (data.images !== undefined) {
+    const allNormalizedImages = Array.isArray(data.images)
+      ? dedupeProductImages(data.images, Number.MAX_SAFE_INTEGER)
+      : [];
+
+    if (allNormalizedImages.length > MAX_EBAY_PICTURES) {
+      return NextResponse.json(
+        { error: `eBay supports up to ${MAX_EBAY_PICTURES} listing images` },
+        { status: 400 },
+      );
+    }
+
     const normalizedImages = Array.isArray(data.images)
       ? dedupeProductImages(data.images)
       : [];
@@ -378,10 +398,31 @@ export async function PATCH(
       removedKeywords = [...removedKeywordSet];
     }
 
-    const updated = await prisma.product.update({
-      where: { id },
-      data,
-      include: { store: true, createdBy: true },
+    const updated = await prisma.$transaction(async (tx) => {
+      const updatedProduct = await tx.product.update({
+        where: { id },
+        data,
+        include: { store: true, createdBy: true },
+      });
+
+      if (data.asin !== undefined && updatedProduct.ebayItemId) {
+        if (updatedProduct.asin) {
+          await preserveEbayListingAsin(tx, {
+            storeId: storeSession.storeId,
+            ebayItemId: updatedProduct.ebayItemId,
+            asin: updatedProduct.asin,
+          });
+        } else {
+          await tx.ebayListingAsin.deleteMany({
+            where: {
+              storeId: storeSession.storeId,
+              ebayItemId: updatedProduct.ebayItemId,
+            },
+          });
+        }
+      }
+
+      return updatedProduct;
     });
 
     invalidateProductCaches(storeSession.storeId);

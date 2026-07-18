@@ -12,6 +12,17 @@ import {
   buildGetSellerListXML,
   buildGetSellerListIdsXML,
 } from "@/lib/ebay-xml";
+import {
+  normalizeEbayImportSortDirection,
+  normalizeEbayImportSkuList,
+  selectEbayListingsForImport,
+  type EbayImportSelectionMetadata,
+  type EbayImportSortDirection,
+  type EbayImportSortField,
+  type EbayListingSummary,
+} from "@/lib/ebay-import-selection";
+import { resolveImportedListingAsin } from "@/lib/ebay-import-asin";
+import { preserveEbayListingAsin } from "@/lib/ebay-listing-asin";
 import { logger } from "@/lib/logger";
 import { invalidateProductCaches } from "@/lib/cache-tags";
 import {
@@ -26,6 +37,10 @@ export interface EbayImportOptions {
   storeNumber: 1 | 2 | 3;
   userId: string;
   quantity: number;
+  skuList?: string[];
+  sortField?: EbayImportSortField;
+  sortDirection?: EbayImportSortDirection;
+  selectionMetadata?: EbayImportSelectionMetadata;
   selectedListingIds?: string[];
   completedListingIds?: string[];
   initialCreated?: number;
@@ -54,6 +69,7 @@ export interface ImportSelection {
   alreadyImported: number;
   remainingBeforeImport: number;
   selectedListingIds: string[];
+  metadata: EbayImportSelectionMetadata;
 }
 
 export type ImportStopReason = "PAUSED" | "CANCELLED";
@@ -80,13 +96,14 @@ export interface EbayImportResult {
   errors: Array<{ itemId: string; title: string; error: string }>;
   selectedListingIds: string[];
   completedListingIds: string[];
+  metadata: EbayImportSelectionMetadata;
   stopReason: ImportStopReason | null;
 }
 
 type EbayNode = Record<string, unknown>;
 
 interface SellerListIdPage {
-  itemIds: string[];
+  listings: EbayListingSummary[];
   totalPages: number;
   hasMoreItems: boolean;
 }
@@ -122,7 +139,6 @@ const parser = new XMLParser({
   trimValues: true,
 });
 
-const ASIN_PATTERN = /\bB0[A-Z0-9]{8}\b/i;
 const IMPORT_STATS_CACHE_TTL_MS = 10 * 60 * 1000;
 
 function delay(ms: number) {
@@ -197,66 +213,19 @@ function getItemDescription(item: EbayNode) {
   return toText(getPath(item, "Description")).trim();
 }
 
-function extractAsinFromText(value: string) {
-  const match = value.toUpperCase().match(ASIN_PATTERN);
-  return match ? match[0] : null;
-}
-
-function extractAsinFromSpecifics(specifics: Record<string, string>) {
-  const preferredKeys = new Set([
-    "asin",
-    "amazonasin",
-    "amazonitemid",
-    "amazonitemnumber",
-  ]);
-
-  for (const [key, value] of Object.entries(specifics)) {
-    const normalizedKey = key.toLowerCase().replace(/[^a-z0-9]/g, "");
-
-    if (preferredKeys.has(normalizedKey)) {
-      const asin = extractAsinFromText(value);
-
-      if (asin) {
-        return asin;
-      }
-    }
-  }
-
-  for (const value of Object.values(specifics)) {
-    const asin = extractAsinFromText(value);
-
-    if (asin) {
-      return asin;
-    }
-  }
-
-  return null;
-}
-
-function extractAsin(item: EbayNode, specifics: Record<string, string>): string | null {
-  const itemAsin = extractAsinFromText(getString(item, "SKU"));
-
-  if (itemAsin) {
-    return itemAsin;
-  }
-
+function extractAsin(
+  item: EbayNode,
+  specifics: Record<string, string>,
+  persistedAsin?: string | null,
+): string | null {
   const variations = asArray(getPath(item, "Variations", "Variation")).filter(isNode);
 
-  for (const variation of variations) {
-    const variationAsin = extractAsinFromText(getString(variation, "SKU"));
-
-    if (variationAsin) {
-      return variationAsin;
-    }
-  }
-
-  const specificsAsin = extractAsinFromSpecifics(specifics);
-
-  if (specificsAsin) {
-    return specificsAsin;
-  }
-
-  return extractAsinFromText(toText(getPath(item, "Description")));
+  return resolveImportedListingAsin({
+    listingSku: getString(item, "SKU"),
+    variationSkus: variations.map((variation) => getString(variation, "SKU")),
+    itemSpecifics: specifics,
+    persistedAsin,
+  });
 }
 
 function toNumber(value: unknown): number | null {
@@ -277,6 +246,95 @@ function toInteger(value: unknown): number | null {
 
 function uniqueStrings(values: string[]) {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
+}
+
+function getListingSkus(item: EbayNode) {
+  const skus = [getString(item, "SKU")];
+  const variations = asArray(getPath(item, "Variations", "Variation")).filter(isNode);
+
+  for (const variation of variations) {
+    skus.push(getString(variation, "SKU"));
+  }
+
+  return uniqueStrings(skus);
+}
+
+function getListingStartTime(item: EbayNode) {
+  return (
+    getString(item, "ListingDetails", "StartTime") ||
+    getString(item, "StartTime") ||
+    null
+  );
+}
+
+function mapListingSummary(item: EbayNode): EbayListingSummary | null {
+  const itemId = getString(item, "ItemID");
+
+  if (!itemId) {
+    return null;
+  }
+
+  return {
+    itemId,
+    skus: getListingSkus(item),
+    startTime: getListingStartTime(item),
+  };
+}
+
+function getListingIdsFromSummaries(summaries: EbayListingSummary[]) {
+  return uniqueStrings(summaries.map((summary) => summary.itemId));
+}
+
+function normalizeCachedListingSummaries(
+  value: Prisma.JsonValue | null | undefined,
+  fallbackListingIds: string[] = [],
+) {
+  if (!Array.isArray(value)) {
+    return fallbackListingIds.map((itemId) => ({
+      itemId,
+      skus: [],
+      startTime: null,
+    }));
+  }
+
+  const summaries = value
+    .map((entry) => {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        return null;
+      }
+
+      const source = entry as Record<string, unknown>;
+      const itemId = typeof source.itemId === "string" ? source.itemId.trim() : "";
+
+      if (!itemId) {
+        return null;
+      }
+
+      return {
+        itemId,
+        skus: normalizeEbayImportSkuList(source.skus),
+        startTime: typeof source.startTime === "string" && source.startTime.trim()
+          ? source.startTime.trim()
+          : null,
+      };
+    })
+    .filter((entry): entry is EbayListingSummary => Boolean(entry));
+
+  return summaries.length > 0
+    ? summaries
+    : fallbackListingIds.map((itemId) => ({
+        itemId,
+        skus: [],
+        startTime: null,
+      }));
+}
+
+function toListingSummariesJson(summaries: EbayListingSummary[]) {
+  return summaries.map((summary) => ({
+    itemId: summary.itemId,
+    skus: summary.skus,
+    startTime: summary.startTime,
+  })) as Prisma.InputJsonValue;
 }
 
 function getPictureUrls(source: unknown) {
@@ -487,6 +545,7 @@ function mapEbayItemToProduct(
   storeId: string,
   userId: string,
   policyDefaults: ResolvedPolicyDefaults,
+  persistedAsin?: string | null,
 ): Prisma.ProductCreateInput {
   const variants = mapVariations(item);
   const categoryId = getString(item, "PrimaryCategory", "CategoryID");
@@ -518,7 +577,7 @@ function mapEbayItemToProduct(
     status: ProductStatus.IMPORTED,
     ebayItemId: getString(item, "ItemID"),
     errorMessage: null,
-    asin: extractAsin(item, itemSpecifics),
+    asin: extractAsin(item, itemSpecifics, persistedAsin),
     amazonPrice: null,
     shippingPolicyId: policyIds.shippingPolicyId,
     returnPolicyId: policyIds.returnPolicyId,
@@ -587,13 +646,13 @@ async function fetchSellerListIdPage(
   }
 
   const pagination = getSellerListPagination(response, page);
-  const itemIds = asArray(getPath(response, "ItemArray", "Item"))
+  const listings = asArray(getPath(response, "ItemArray", "Item"))
     .filter(isNode)
     .filter(isImportableListing)
-    .map((item) => getString(item, "ItemID"))
-    .filter(Boolean);
+    .map(mapListingSummary)
+    .filter((summary): summary is EbayListingSummary => Boolean(summary));
 
-  return { itemIds, ...pagination };
+  return { listings, ...pagination };
 }
 
 async function fetchSellerListDetailPage(
@@ -664,15 +723,20 @@ function isImportableListing(item: EbayNode) {
   return listingType === "FixedPriceItem" || listingType === "StoresFixedPrice";
 }
 
-async function fetchAllEbayListingIds(storeNumber: 1 | 2 | 3) {
-  const itemIds: string[] = [];
+async function fetchAllEbayListingSummaries(storeNumber: 1 | 2 | 3) {
+  const listingsById = new Map<string, EbayListingSummary>();
   let page = 1;
   let totalPages = 1;
 
   do {
     const response = await fetchSellerListIdPage(storeNumber, page);
     totalPages = response.totalPages;
-    itemIds.push(...response.itemIds);
+
+    for (const listing of response.listings) {
+      if (!listingsById.has(listing.itemId)) {
+        listingsById.set(listing.itemId, listing);
+      }
+    }
 
     if (page < totalPages) {
       await delay(250);
@@ -681,10 +745,10 @@ async function fetchAllEbayListingIds(storeNumber: 1 | 2 | 3) {
     page += 1;
   } while (page <= totalPages);
 
-  return uniqueStrings(itemIds);
+  return Array.from(listingsById.values());
 }
 
-async function getCachedEbayListingIds(
+async function getCachedEbayListingSummaries(
   storeId: string,
   storeNumber: 1 | 2 | 3,
   options: { forceRefresh?: boolean } = {},
@@ -693,23 +757,35 @@ async function getCachedEbayListingIds(
     where: { storeId },
     select: {
       listingIds: true,
+      listingSummaries: true,
       fetchedAt: true,
     },
   });
   const now = Date.now();
+  const cachedSummaryArray = Array.isArray(cached?.listingSummaries)
+    ? cached.listingSummaries
+    : [];
+  const cachedSummaries = cached
+    ? normalizeCachedListingSummaries(cached.listingSummaries, cached.listingIds)
+    : [];
+  const cacheHasSummaryDetails =
+    cachedSummaryArray.length > 0 || (cached?.listingIds.length ?? 0) === 0;
 
   if (
     !options.forceRefresh &&
     cached &&
+    cacheHasSummaryDetails &&
     now - cached.fetchedAt.getTime() < IMPORT_STATS_CACHE_TTL_MS
   ) {
     return {
-      listingIds: cached.listingIds,
+      listingSummaries: cachedSummaries,
+      listingIds: getListingIdsFromSummaries(cachedSummaries),
       fetchedAt: cached.fetchedAt,
     };
   }
 
-  const listingIds = await fetchAllEbayListingIds(storeNumber);
+  const listingSummaries = await fetchAllEbayListingSummaries(storeNumber);
+  const listingIds = getListingIdsFromSummaries(listingSummaries);
   const fetchedAt = new Date(now);
 
   await prisma.ebayImportStatsCache.upsert({
@@ -718,16 +794,18 @@ async function getCachedEbayListingIds(
       storeId,
       activeListings: listingIds.length,
       listingIds,
+      listingSummaries: toListingSummariesJson(listingSummaries),
       fetchedAt,
     },
     update: {
       activeListings: listingIds.length,
       listingIds,
+      listingSummaries: toListingSummariesJson(listingSummaries),
       fetchedAt,
     },
   });
 
-  return { listingIds, fetchedAt };
+  return { listingSummaries, listingIds, fetchedAt };
 }
 
 export async function invalidateEbayImportStatsCache(storeId: string) {
@@ -758,12 +836,37 @@ async function getExistingEbayItemIds(storeId: string, itemIds: string[]) {
   );
 }
 
+export async function resolveEbayImportSelection(
+  options: Pick<
+    EbayImportOptions,
+    "storeId" | "storeNumber" | "quantity" | "skuList" | "sortField" | "sortDirection"
+  > & {
+    forceRefresh?: boolean;
+  },
+): Promise<ImportSelection> {
+  const { listingSummaries, listingIds } = await getCachedEbayListingSummaries(
+    options.storeId,
+    options.storeNumber,
+    { forceRefresh: options.forceRefresh },
+  );
+  const existingIds = await getExistingEbayItemIds(options.storeId, listingIds);
+
+  return selectEbayListingsForImport({
+    listingSummaries,
+    existingListingIds: existingIds,
+    quantity: options.quantity,
+    skuList: options.skuList,
+    sortField: options.sortField,
+    sortDirection: options.sortDirection,
+  });
+}
+
 export async function getEbayImportStats(
   options: Pick<EbayImportOptions, "storeId" | "storeNumber"> & {
     forceRefresh?: boolean;
   },
 ): Promise<EbayImportStats> {
-  const { listingIds, fetchedAt } = await getCachedEbayListingIds(
+  const { listingIds, fetchedAt } = await getCachedEbayListingSummaries(
     options.storeId,
     options.storeNumber,
     { forceRefresh: options.forceRefresh },
@@ -792,7 +895,7 @@ export async function getEbayImportStats(
 export async function removeStaleListFlowEbayProducts(
   options: Pick<EbayImportOptions, "storeId" | "storeNumber">,
 ) {
-  const { listingIds, fetchedAt } = await getCachedEbayListingIds(
+  const { listingIds, fetchedAt } = await getCachedEbayListingSummaries(
     options.storeId,
     options.storeNumber,
     { forceRefresh: true },
@@ -920,6 +1023,7 @@ async function importSingleItem(
   storeId: string,
   userId: string,
   policyDefaults: ResolvedPolicyDefaults,
+  persistedAsin?: string | null,
 ): Promise<boolean> {
   const itemId = getString(item, "ItemID");
 
@@ -941,8 +1045,22 @@ async function importSingleItem(
       return false;
     }
 
+    const productData = mapEbayItemToProduct(
+      item,
+      storeId,
+      userId,
+      policyDefaults,
+      persistedAsin,
+    );
+
     await tx.product.create({
-      data: mapEbayItemToProduct(item, storeId, userId, policyDefaults),
+      data: productData,
+    });
+
+    await preserveEbayListingAsin(tx, {
+      storeId,
+      ebayItemId: itemId,
+      asin: typeof productData.asin === "string" ? productData.asin : null,
     });
 
     return true;
@@ -959,37 +1077,74 @@ export async function importEbayListings(
     quantity: options.quantity,
   });
 
-  const { listingIds } = await getCachedEbayListingIds(
+  const suppliedSelectedIds = uniqueStrings(
+    options.selectedListingIds?.filter(Boolean) ?? [],
+  );
+  const { listingSummaries, listingIds } = await getCachedEbayListingSummaries(
     options.storeId,
     options.storeNumber,
-    { forceRefresh: true },
+    { forceRefresh: suppliedSelectedIds.length === 0 },
   );
   const existingIds = await getExistingEbayItemIds(options.storeId, listingIds);
   const remainingIds = listingIds.filter((itemId) => !existingIds.has(itemId));
-  const suppliedSelectedIds = options.selectedListingIds?.filter(Boolean) ?? [];
-  const selectedIds =
-    suppliedSelectedIds.length > 0
-      ? suppliedSelectedIds.filter((itemId) => listingIds.includes(itemId))
-      : remainingIds.slice(
-          0,
-          Math.min(Math.max(0, Math.floor(options.quantity)), remainingIds.length),
-        );
+  const computedSelection = selectEbayListingsForImport({
+    listingSummaries,
+    existingListingIds: existingIds,
+    quantity: options.quantity,
+    skuList: options.skuList,
+    sortField: options.sortField,
+    sortDirection: options.sortDirection,
+  });
+  const selectedIds = suppliedSelectedIds.length > 0
+    ? suppliedSelectedIds
+    : computedSelection.selectedListingIds;
+  const defaultMetadata: EbayImportSelectionMetadata = {
+    mode: normalizeEbayImportSkuList(options.skuList).length > 0
+      ? "SKU"
+      : "QUANTITY",
+    skuList: normalizeEbayImportSkuList(options.skuList),
+    unmatchedSkus: [],
+    matchedSkuCount: 0,
+    selectedListingCount: selectedIds.length,
+    sortField: "START_DATE" as const,
+    sortDirection: normalizeEbayImportSortDirection(options.sortDirection),
+  };
+  const selection = suppliedSelectedIds.length > 0
+    ? {
+        requested: selectedIds.length,
+        activeListings: listingIds.length,
+        alreadyImported: existingIds.size,
+        remainingBeforeImport: remainingIds.length,
+        selectedListingIds: selectedIds,
+        metadata: options.selectionMetadata ?? defaultMetadata,
+      }
+    : computedSelection;
   const selectedIdSet = new Set(selectedIds);
   const completedIds = new Set(
     (options.completedListingIds ?? []).filter((itemId) =>
       selectedIdSet.has(itemId),
     ),
   );
-  const requested = selectedIds.length;
+  const requested = selection.requested;
   const policyDefaults = await getStorePolicyDefaults(options.storeId);
+  const persistedListingAsins = await prisma.ebayListingAsin.findMany({
+    where: {
+      storeId: options.storeId,
+      ebayItemId: { in: selectedIds },
+    },
+    select: { ebayItemId: true, asin: true },
+  });
+  const persistedAsinByItemId = new Map(
+    persistedListingAsins.map((entry) => [entry.ebayItemId, entry.asin]),
+  );
   const remainingBeforeImport =
     options.previousRemainingBeforeImport && options.previousRemainingBeforeImport > 0
       ? options.previousRemainingBeforeImport
-      : remainingIds.length;
+      : selection.remainingBeforeImport;
   const result: EbayImportResult = {
     requested,
-    activeListings: listingIds.length,
-    alreadyImported: existingIds.size,
+    activeListings: selection.activeListings,
+    alreadyImported: selection.alreadyImported,
     remainingBeforeImport,
     remainingAfterImport: remainingBeforeImport,
     created: options.initialCreated ?? 0,
@@ -1000,6 +1155,7 @@ export async function importEbayListings(
     errors: options.initialErrors ?? [],
     selectedListingIds: selectedIds,
     completedListingIds: [...completedIds],
+    metadata: selection.metadata,
     stopReason: null,
   };
 
@@ -1009,6 +1165,7 @@ export async function importEbayListings(
     alreadyImported: result.alreadyImported,
     remainingBeforeImport: result.remainingBeforeImport,
     selectedListingIds: selectedIds,
+    metadata: result.metadata,
   });
 
   await options.onProgress?.({
@@ -1069,6 +1226,7 @@ export async function importEbayListings(
           options.storeId,
           options.userId,
           policyDefaults,
+          persistedAsinByItemId.get(itemId),
         );
 
         if (wasCreated) {

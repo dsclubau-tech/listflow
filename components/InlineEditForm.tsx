@@ -39,6 +39,7 @@ import {
   type AmazonPriceTrackingMode,
 } from "@/lib/amazon-price-tracking";
 import {
+  MAX_EBAY_PICTURES,
   dedupeProductImages,
   normalizeProductImageUrl,
 } from "@/lib/product-images";
@@ -337,7 +338,7 @@ const tabs = ["Product", "Description", "Variants", "Images", "Item Specificatio
 
 // ===== Component =====
 
-export default function InlineEditForm({ product, onImported }: InlineEditFormProps) {
+export default function InlineEditForm({ product }: InlineEditFormProps) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState(0);
 
@@ -1228,12 +1229,17 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       const res = await fetch("/api/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productId: product.id }),
+        body: JSON.stringify({ productId: product.id, background: true }),
       });
 
       if (res.ok) {
-        setSaveMessage({ text: "Imported", variant: "success" });
-        onImported?.(product.id);
+        const data = (await res.json().catch(() => ({}))) as {
+          message?: string;
+        };
+        setSaveMessage({
+          text: data.message || "Upload queued. Track it in Action Center.",
+          variant: "success",
+        });
         router.refresh();
       } else {
         const data = (await res.json().catch(() => ({}))) as {
@@ -1333,10 +1339,13 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       });
 
       if (res.ok) {
-        setSaveMessage({ text: "eBay listing updated", variant: "success" });
+        setSaveMessage({
+          text: "eBay update queued. Track it in Action Center.",
+          variant: "success",
+        });
         router.refresh();
       } else {
-        const data = await res.json();
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
         void reportClientError(
           "inline-edit/revise",
           "Product revise failed",
@@ -1352,8 +1361,10 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
           },
         );
         setSaveMessage({
-          title: "Update failed",
-          text: data.error || "Update failed",
+          title: "Saved locally",
+          text: data.error
+            ? `The eBay update was not queued: ${data.error}`
+            : "The eBay update could not be queued.",
           variant: "error",
         });
       }
@@ -1366,8 +1377,8 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
         { tags: ["revise"] },
       );
       setSaveMessage({
-        title: "Update failed",
-        text: "Network error during update",
+        title: "Saved locally",
+        text: "The eBay update was not queued because the request failed.",
         variant: "error",
       });
     } finally {
@@ -1510,6 +1521,20 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       setImageMessage({
         title: "Image not added",
         text: "Enter a valid direct image URL.",
+        variant: "error",
+      });
+      return false;
+    }
+
+    const alreadyExists = images.some(
+      (candidate) =>
+        normalizeProductImageUrl(candidate)?.toLowerCase() ===
+        normalized.toLowerCase(),
+    );
+    if (!alreadyExists && images.length >= MAX_EBAY_PICTURES) {
+      setImageMessage({
+        title: "Image not added",
+        text: `eBay supports up to ${MAX_EBAY_PICTURES} listing images.`,
         variant: "error",
       });
       return false;
@@ -2372,7 +2397,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
               })}
             </div>
             <p className="mt-3 text-sm text-gray-500">
-              {images.length} images
+              {images.length} / {MAX_EBAY_PICTURES} images
             </p>
           </div>
         )}

@@ -66,3 +66,12 @@ test("keeps manually uploaded ListFlow image URLs", () => {
     "https://listflow-pi.vercel.app/api/images/clx123abc",
   );
 });
+
+test("keeps up to 24 listing images by default", () => {
+  const images = Array.from(
+    { length: 30 },
+    (_, index) => `https://example.com/${index}.jpg`,
+  );
+
+  assert.equal(dedupeProductImages(images).length, 24);
+});

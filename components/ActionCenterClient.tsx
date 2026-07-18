@@ -231,6 +231,8 @@ function getCurrentJobCount(data: ActionCenterData) {
 }
 
 function actionJobLabel(type: string) {
+  if (type === "UPLOAD_LISTING") return "Upload listings";
+  if (type === "REVISE_LISTING") return "Update eBay listing";
   if (type === "HOLD") return "Put listings on hold";
   if (type === "RESUME") return "Resume listings";
   if (type === "END") return "End listings";

@@ -1,0 +1,5 @@
+ALTER TABLE "EbayImportStatsCache"
+ADD COLUMN IF NOT EXISTS "listingSummaries" JSONB NOT NULL DEFAULT '[]';
+
+ALTER TABLE "EbayImportJob"
+ADD COLUMN IF NOT EXISTS "metadata" JSONB NOT NULL DEFAULT '{}';

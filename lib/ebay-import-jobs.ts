@@ -4,11 +4,18 @@ import { EbayImportJobStatus } from "@/app/generated/prisma/enums";
 import type { Prisma } from "@/app/generated/prisma/client";
 import {
   importEbayListings,
+  resolveEbayImportSelection,
   type EbayImportResult,
   type ImportProgress,
   type ImportSelection,
   type ImportStopReason,
 } from "@/lib/ebay-import";
+import {
+  EbayImportSelectionError,
+  type EbayImportSelectionMetadata,
+  type EbayImportSortDirection,
+  type EbayImportSortField,
+} from "@/lib/ebay-import-selection";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { invalidateJobCaches } from "@/lib/cache-tags";
@@ -51,6 +58,7 @@ type EbayImportJobRecord = {
   failed: number;
   selectedListingIds: string[];
   completedListingIds: string[];
+  metadata: Prisma.JsonValue;
   rateLimited: boolean;
   errors: Prisma.JsonValue;
   errorMessage: string | null;
@@ -68,6 +76,9 @@ type CreateEbayImportJobInput = {
   storeId: string;
   storeNumber: 1 | 2 | 3;
   quantity: number;
+  skuList?: string[];
+  sortField?: EbayImportSortField;
+  sortDirection?: EbayImportSortDirection;
 };
 
 function getErrorMessage(error: unknown) {
@@ -95,6 +106,41 @@ function normalizeErrors(errors: Prisma.JsonValue) {
     .filter((entry): entry is { itemId: string; title: string; error: string } =>
       Boolean(entry),
     );
+}
+
+function normalizeMetadata(metadata: Prisma.JsonValue): Partial<EbayImportSelectionMetadata> {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return {};
+  }
+
+  const source = metadata as Record<string, unknown>;
+  const mode = source.mode === "SKU" || source.mode === "QUANTITY" ? source.mode : undefined;
+  const skuList = Array.isArray(source.skuList)
+    ? source.skuList.filter((sku): sku is string => typeof sku === "string")
+    : undefined;
+  const unmatchedSkus = Array.isArray(source.unmatchedSkus)
+    ? source.unmatchedSkus.filter((sku): sku is string => typeof sku === "string")
+    : undefined;
+  const sortDirection =
+    source.sortDirection === "ASC" || source.sortDirection === "DESC"
+      ? source.sortDirection
+      : undefined;
+  const matchedSkuCount =
+    typeof source.matchedSkuCount === "number" ? source.matchedSkuCount : undefined;
+  const selectedListingCount =
+    typeof source.selectedListingCount === "number"
+      ? source.selectedListingCount
+      : undefined;
+
+  return {
+    ...(mode ? { mode } : {}),
+    ...(skuList ? { skuList } : {}),
+    ...(unmatchedSkus ? { unmatchedSkus } : {}),
+    ...(matchedSkuCount !== undefined ? { matchedSkuCount } : {}),
+    ...(selectedListingCount !== undefined ? { selectedListingCount } : {}),
+    sortField: "START_DATE",
+    ...(sortDirection ? { sortDirection } : {}),
+  };
 }
 
 function getProgressPercent(job: Pick<EbayImportJobRecord, "processed" | "total" | "requested" | "quantity">) {
@@ -142,6 +188,7 @@ export function serializeEbayImportJob(job: EbayImportJobRecord) {
     failed: job.failed,
     selectedListingIds: job.selectedListingIds,
     completedListingIds: job.completedListingIds,
+    metadata: normalizeMetadata(job.metadata),
     progressPercent: getProgressPercent(job),
     canPause: canPauseImportJob(job.status),
     canResume: canResumeImportJob(job.status),
@@ -191,6 +238,7 @@ async function updateJobSelection(jobId: string, selection: ImportSelection) {
       remainingBeforeImport: selection.remainingBeforeImport,
       total: selection.selectedListingIds.length,
       selectedListingIds: selection.selectedListingIds,
+      metadata: selection.metadata as unknown as Prisma.InputJsonValue,
     },
   });
 }
@@ -225,6 +273,7 @@ function buildResultUpdate(result: EbayImportResult) {
     failed: result.failed,
     selectedListingIds: result.selectedListingIds,
     completedListingIds: result.completedListingIds,
+    metadata: result.metadata as unknown as Prisma.InputJsonValue,
     rateLimited: result.rateLimited,
     errors: result.errors,
   };
@@ -275,11 +324,15 @@ async function runEbayImportJobClaimed(jobId: string) {
   });
 
   try {
+    const storedMetadata = normalizeMetadata(job.metadata);
     const result = await importEbayListings({
       storeId: job.storeId,
       storeNumber: job.storeNumber as 1 | 2 | 3,
       userId: job.userId,
       quantity: job.quantity,
+      selectionMetadata: storedMetadata.mode
+        ? (storedMetadata as EbayImportSelectionMetadata)
+        : undefined,
       selectedListingIds: job.selectedListingIds,
       completedListingIds: job.completedListingIds,
       initialCreated: job.created,
@@ -371,12 +424,40 @@ export async function createEbayImportJob(input: CreateEbayImportJobInput) {
   }
 
   const quantity = Math.max(1, Math.floor(input.quantity));
+  const selection = await resolveEbayImportSelection({
+    storeId: input.storeId,
+    storeNumber: input.storeNumber,
+    quantity,
+    skuList: input.skuList,
+    sortField: input.sortField,
+    sortDirection: input.sortDirection,
+    forceRefresh: true,
+  });
+
+  if (selection.metadata.mode === "SKU" && selection.selectedListingIds.length === 0) {
+    throw new EbayImportSelectionError(
+      "No active, not-yet-imported eBay listings matched the supplied SKU/custom label values.",
+    );
+  }
+
+  const jobQuantity =
+    selection.metadata.mode === "SKU"
+      ? Math.max(1, selection.selectedListingIds.length)
+      : quantity;
   const job = await prisma.ebayImportJob.create({
     data: {
       userId: input.userId,
       storeId: input.storeId,
       storeNumber: input.storeNumber,
-      quantity,
+      quantity: jobQuantity,
+      requested: selection.requested,
+      activeListings: selection.activeListings,
+      alreadyImported: selection.alreadyImported,
+      remainingBeforeImport: selection.remainingBeforeImport,
+      remainingAfterImport: selection.remainingBeforeImport,
+      total: selection.selectedListingIds.length,
+      selectedListingIds: selection.selectedListingIds,
+      metadata: selection.metadata as unknown as Prisma.InputJsonValue,
     },
   });
 

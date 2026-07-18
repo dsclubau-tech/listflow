@@ -58,6 +58,7 @@ model Store {
   jobLeases            JobLease[]
   ebayRateLimitBuckets EbayRateLimitBucket[]
   appLogs              AppLog[]
+  ebayListingAsins     EbayListingAsin[]
 }
 
 model LoginAttempt {
@@ -166,6 +167,8 @@ enum EbayActionJobType {
   END
   BULK_EDIT_REVISE
   MANAGE_PROMOTED_ADS
+  UPLOAD_LISTING
+  REVISE_LISTING
 }
 
 enum PromotedAdStatus {
@@ -233,6 +236,20 @@ model Product {
   @@index([storeId, createdAt])
   @@index([storeId, updatedAt])
   @@index([createdById])
+}
+
+model EbayListingAsin {
+  id         String   @id @default(cuid())
+  storeId    String
+  ebayItemId String
+  asin       String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, ebayItemId])
+  @@index([storeId, asin])
 }
 
 model Variant {
@@ -362,6 +379,7 @@ model EbayImportStatsCache {
   storeId        String   @unique
   activeListings Int
   listingIds     String[] @default([])
+  listingSummaries Json   @default("[]")
   fetchedAt      DateTime @default(now())
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -390,6 +408,7 @@ model EbayImportJob {
   failed                Int                 @default(0)
   selectedListingIds    String[]            @default([])
   completedListingIds   String[]            @default([])
+  metadata              Json                @default("{}")
   rateLimited           Boolean             @default(false)
   errors                Json                @default("[]")
   errorMessage          String?             @db.Text

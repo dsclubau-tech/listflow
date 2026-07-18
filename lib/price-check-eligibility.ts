@@ -59,6 +59,16 @@ export function getPriceCheckVariantCount(product: PriceCheckCandidate) {
   return 0;
 }
 
+export function getPriceCheckPrerequisiteIssue(
+  product: PriceCheckCandidate,
+): Extract<PriceCheckIneligibilityReason, "missing-asin" | "missing-variants"> | null {
+  if (!normalizeAsin(product.asin)) {
+    return "missing-asin";
+  }
+
+  return getPriceCheckVariantCount(product) <= 0 ? "missing-variants" : null;
+}
+
 export function getPriceCheckEligibility(
   product: PriceCheckCandidate
 ): PriceCheckEligibility {
@@ -70,21 +80,21 @@ export function getPriceCheckEligibility(
     };
   }
 
-  if (!normalizeAsin(product.asin)) {
+  const prerequisiteIssue = getPriceCheckPrerequisiteIssue(product);
+
+  if (prerequisiteIssue === "missing-asin") {
     return {
-      eligible: true,
-      reason: null,
-      message:
-        "Selected product has no Amazon ASIN, so the check will record a price-check error.",
+      eligible: false,
+      reason: "missing-asin",
+      message: "Selected product cannot be price checked because it has no Amazon ASIN.",
     };
   }
 
-  if (getPriceCheckVariantCount(product) <= 0) {
+  if (prerequisiteIssue === "missing-variants") {
     return {
-      eligible: true,
-      reason: null,
-      message:
-        "Selected product has no variants, so the check will record a price-check error.",
+      eligible: false,
+      reason: "missing-variants",
+      message: "Selected product cannot be price checked because it has no variants.",
     };
   }
 

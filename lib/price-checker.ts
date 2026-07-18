@@ -13,6 +13,7 @@ import {
   normalizeAmazonPriceTrackingMode,
   type AmazonPriceTrackingMode,
 } from "@/lib/amazon-price-tracking";
+import { getPriceCheckPrerequisiteIssue } from "@/lib/price-check-eligibility";
 
 const PRICE_TOLERANCE = 0.01;
 const MIN_SAFE_PRODUCT_DELAY_MS = 1000;
@@ -365,25 +366,27 @@ export async function runPriceCheck(
 
       const checkedAt = new Date();
 
-      if (!product.asin || product.variants.length === 0) {
-        const priceCheckError = !product.asin
-          ? "Missing Amazon ASIN. Add an Amazon ASIN before checking this product's price."
-          : "No variants found. Add at least one variant before checking this product's price.";
+      const prerequisiteIssue = getPriceCheckPrerequisiteIssue(product);
 
-        result.failed += 1;
+      if (prerequisiteIssue || !product.asin) {
+        const skipReason = prerequisiteIssue === "missing-variants"
+          ? "No variants found"
+          : "Missing Amazon ASIN";
+
+        result.skipped += 1;
 
         await prisma.product.update({
           where: { id: product.id },
           data: {
-            lastPriceCheck: checkedAt,
-            priceCheckError,
+            lastPriceCheck: null,
+            priceCheckError: null,
           },
         });
 
-        logger.warn("price-checker/run", "Price check cannot run for product", {
+        logger.info("price-checker/run", "Price check skipped for untracked product", {
           productId: product.id,
           asin: product.asin,
-          errorMessage: priceCheckError,
+          reason: skipReason,
         });
 
         await reportProductComplete(product.id);

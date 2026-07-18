@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import DraftsTable from "@/components/DraftsTable";
 import AddProductModal from "@/components/AddProductModal";
-import type { ScrapedProduct } from "@/components/AddProductModal";
+import type { AddProductMode, ScrapedProduct } from "@/components/AddProductModal";
 import Toast from "@/components/Toast";
 import { useToast } from "@/hooks/useToast";
 import type { SerializedProductRow } from "@/types/product-row";
@@ -16,6 +16,8 @@ interface DashboardClientProps {
 
 export default function DashboardClient({ products }: DashboardClientProps) {
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [addProductMode, setAddProductMode] =
+    useState<AddProductMode>("normal");
   const [autoExpandProductId, setAutoExpandProductId] = useState<string | null>(null);
   const router = useRouter();
   const { toast, showToast, hideToast } = useToast();
@@ -28,6 +30,11 @@ export default function DashboardClient({ products }: DashboardClientProps) {
     router.refresh();
   };
 
+  function openAddProduct(mode: AddProductMode) {
+    setAddProductMode(mode);
+    setIsModalOpen(true);
+  }
+
   return (
     <>
       {/* Header */}
@@ -38,12 +45,20 @@ export default function DashboardClient({ products }: DashboardClientProps) {
             ({products.length} products)
           </span>
         </div>
-        <button
-          onClick={() => setIsModalOpen(true)}
-          className="px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-md hover:bg-gray-700 transition-colors"
-        >
-          + Add Product
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => openAddProduct("normal")}
+            className="px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-md hover:bg-gray-700 transition-colors"
+          >
+            + Normal Upload
+          </button>
+          <button
+            onClick={() => openAddProduct("advanced")}
+            className="px-4 py-2 border border-gray-300 bg-white text-gray-800 text-sm font-medium rounded-md hover:bg-gray-50 transition-colors"
+          >
+            Advanced Upload
+          </button>
+        </div>
       </div>
 
       {/* Drafts Table */}
@@ -56,8 +71,13 @@ export default function DashboardClient({ products }: DashboardClientProps) {
       {/* URL Input Modal */}
       <AddProductModal
         isOpen={isModalOpen}
+        mode={addProductMode}
         onClose={() => setIsModalOpen(false)}
         onScraped={handleScraped}
+        onBackgroundStarted={() =>
+          showToast("Normal upload started in the background.", "success")
+        }
+        onBackgroundFailed={(message) => showToast(message, "error")}
       />
 
       {/* Toast notification */}

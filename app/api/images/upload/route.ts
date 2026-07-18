@@ -2,6 +2,10 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 import { NextResponse } from "next/server";
+import {
+  buildPublicUploadedImageUrl,
+  getConfiguredPublicImageBaseUrl,
+} from "@/lib/ebay-image-urls";
 
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024;
 const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/gif"]);
@@ -55,6 +59,16 @@ export async function POST(request: Request) {
     );
   }
 
+  if (!getConfiguredPublicImageBaseUrl()) {
+    return NextResponse.json(
+      {
+        error:
+          "Image uploads require LISTFLOW_PUBLIC_IMAGE_BASE_URL to be a public HTTPS URL.",
+      },
+      { status: 503 },
+    );
+  }
+
   const data = Buffer.from(await file.arrayBuffer());
   const userId = await getInternalUserId();
   const image = await prisma.uploadedImage.create({
@@ -72,6 +86,6 @@ export async function POST(request: Request) {
   });
 
   return NextResponse.json({
-    url: new URL(`/api/images/${image.id}`, request.url).toString(),
+    url: buildPublicUploadedImageUrl(image.id),
   });
 }

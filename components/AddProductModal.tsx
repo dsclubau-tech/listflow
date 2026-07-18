@@ -12,8 +12,11 @@ import { useState } from "react";
 
 interface AddProductModalProps {
   isOpen: boolean;
+  mode?: AddProductMode;
   onClose: () => void;
   onScraped: (data: ScrapedProduct) => void | Promise<void>;
+  onBackgroundStarted?: () => void;
+  onBackgroundFailed?: (message: string) => void;
 }
 
 export interface ScrapedProduct {
@@ -54,6 +57,8 @@ type ScrapeResponseBody = Partial<ScrapedProduct> & {
   error?: string;
 };
 
+export type AddProductMode = "normal" | "advanced";
+
 function getFallbackScrapeError(response: Response, bodyText: string) {
   const trimmed = bodyText.trim();
 
@@ -90,8 +95,11 @@ async function readScrapeResponse(response: Response) {
 
 export default function AddProductModal({
   isOpen,
+  mode = "normal",
   onClose,
   onScraped,
+  onBackgroundStarted,
+  onBackgroundFailed,
 }: AddProductModalProps) {
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
@@ -113,8 +121,13 @@ export default function AddProductModal({
   const dealChoice = scrapedProduct?.priceChoices?.deal ?? null;
   const selectedChoice =
     selectedMode === "DEAL" ? dealChoice : regularChoice;
+  const isAdvancedMode = mode === "advanced";
 
   async function handleImport() {
+    if (!isAdvancedMode) {
+      return handleNormalBackgroundImport();
+    }
+
     setError("");
     setScrapedProduct(null);
 
@@ -174,6 +187,73 @@ export default function AddProductModal({
     }
   }
 
+  async function handleNormalBackgroundImport() {
+    setError("");
+    setScrapedProduct(null);
+
+    const validationError = getAddProductUrlValidationError(url);
+    if (validationError) {
+      setError(validationError);
+      return;
+    }
+
+    const importUrl = url.trim();
+    setUrl("");
+    setSelectedMode(DEFAULT_AMAZON_PRICE_TRACKING_MODE);
+    onBackgroundStarted?.();
+    onClose();
+
+    try {
+      const res = await fetch("/api/scrape", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: importUrl }),
+        signal: AbortSignal.timeout(45000),
+      });
+
+      const data = await readScrapeResponse(res);
+
+      if (!res.ok) {
+        onBackgroundFailed?.(data.error || "Scraping failed. Please try again.");
+        return;
+      }
+
+      if (!data.title || !Array.isArray(data.images) || !data.asin) {
+        onBackgroundFailed?.(
+          "Amazon scraping returned an incomplete product. Please try again.",
+        );
+        return;
+      }
+
+      const scraped = data as ScrapedProduct;
+      const regular = scraped.priceChoices?.regular ?? null;
+
+      if (!regular) {
+        onBackgroundFailed?.(
+          "Regular Amazon price was not available. Use Advanced Upload to choose another available price.",
+        );
+        return;
+      }
+
+      await onScraped({
+        ...scraped,
+        price: regular.price,
+        amazonPriceTrackingMode: "REGULAR",
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      onBackgroundFailed?.(
+        error instanceof DOMException && error.name === "TimeoutError"
+          ? "Amazon is taking too long to respond. No draft was created."
+          : /unexpected token|not valid json/i.test(message)
+            ? "The server returned an unexpected response while importing. Please try again after redeploying the latest ListFlow fix."
+            : message
+              ? message
+              : "Request timed out or failed. Please try again.",
+      );
+    }
+  }
+
   async function handleCreateDraft() {
     if (!scrapedProduct) {
       return;
@@ -228,10 +308,12 @@ export default function AddProductModal({
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
         <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6">
           <h2 className="text-lg font-semibold text-gray-900 mb-1">
-            Add Product
+            {isAdvancedMode ? "Advanced Upload" : "Normal Upload"}
           </h2>
           <p className="text-sm text-gray-500 mb-6">
-            Paste an Amazon AU product URL to import
+            {isAdvancedMode
+              ? "Choose which Amazon price ListFlow should track."
+              : "Tracks the regular Amazon price and creates the draft in the background."}
           </p>
 
           <input
@@ -256,7 +338,7 @@ export default function AddProductModal({
             }}
           />
 
-          {scrapedProduct && (
+          {isAdvancedMode && scrapedProduct && (
             <div className="mt-5 rounded-md border border-gray-200 bg-gray-50 p-4">
               <div className="mb-3">
                 <p className="text-sm font-medium text-gray-900 line-clamp-2">

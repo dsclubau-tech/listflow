@@ -35,6 +35,7 @@ Required production values:
 - `DIRECT_URL`
 - `AUTH_SECRET`
 - `NEXTAUTH_URL=http://localhost:3000`
+- `LISTFLOW_PUBLIC_IMAGE_BASE_URL=https://your-listflow-domain.example` (required for uploaded listing images)
 - `AUTH_TRUST_HOST=true`
 - `CRON_SECRET`
 - eBay developer credentials and store tokens

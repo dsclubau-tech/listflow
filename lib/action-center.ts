@@ -135,6 +135,15 @@ export interface ActionCenterEbayImportJob {
   canPause: boolean;
   canResume: boolean;
   canCancel: boolean;
+  metadata?: {
+    mode?: "QUANTITY" | "SKU";
+    skuList?: string[];
+    unmatchedSkus?: string[];
+    matchedSkuCount?: number;
+    selectedListingCount?: number;
+    sortField?: "START_DATE";
+    sortDirection?: "ASC" | "DESC";
+  };
   rateLimited: boolean;
   errorMessage: string | null;
   createdAt: string;
