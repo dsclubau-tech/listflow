@@ -1,11 +1,13 @@
 import { Prisma } from "@/app/generated/prisma/client";
-import { PriceCheckFailureCode } from "@/app/generated/prisma/enums";
+import {
+  PriceCheckFailureCode,
+  ProductStatus,
+} from "@/app/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { scrapeAmazonPrice } from "@/lib/amazon-scraper";
 import { calculateSellPrice } from "@/lib/variant-pricing";
-import { buildReviseItemXML } from "@/lib/ebay-xml";
-import { callEbayReviseItem, getStoreNumber } from "@/lib/ebay";
-import { resolveDescriptionTemplate } from "@/lib/template-resolver";
+import { buildReviseInventoryStatusXML } from "@/lib/ebay-xml";
+import { callEbayReviseInventoryStatus, getStoreNumber } from "@/lib/ebay";
 import { logger } from "@/lib/logger";
 import { invalidatePriceCaches } from "@/lib/cache-tags";
 import {
@@ -162,16 +164,15 @@ export async function reviseProductPrice(
   }
 
   const storeNumber = await getStoreNumber(product.storeId);
-  const finalDescription = await resolveDescriptionTemplate(product);
-  const xml = buildReviseItemXML(
-    {
-      ...product,
-      description: finalDescription,
-    },
-    overrideStartPrice,
-  );
+  const startPrice = overrideStartPrice ?? decimalToNumber(product.price);
 
-  return callEbayReviseItem(xml, storeNumber);
+  if (startPrice === null) {
+    throw new Error("Product is missing a valid eBay price.");
+  }
+
+  const xml = buildReviseInventoryStatusXML(product.ebayItemId, { startPrice });
+
+  return callEbayReviseInventoryStatus(xml, storeNumber);
 }
 
 function getSimulatedPrice(
@@ -236,7 +237,9 @@ export async function runPriceCheck(
   const requestedOrder = new Map(normalizedIds.map((id, index) => [id, index]));
   const productsFromDb = await prisma.product.findMany({
     where: {
-      status: "IMPORTED",
+      status: {
+        in: [ProductStatus.IMPORTED, ProductStatus.ON_HOLD],
+      },
       ...(options.storeId ? { storeId: options.storeId } : {}),
       ...(restrictToIds ? { id: { in: normalizedIds } } : {}),
     },

@@ -37,7 +37,7 @@ export async function getCachedPriceTrackerPageData(
     prisma.product.count({
       where: {
         storeId,
-        status: "IMPORTED",
+        status: { in: ["IMPORTED", "ON_HOLD"] },
         asin: { not: null },
         variants: { some: {} },
       },
@@ -57,7 +57,7 @@ export async function getCachedPriceTrackerPageData(
     prisma.product.findMany({
       where: {
         storeId,
-        status: "IMPORTED",
+        status: { in: ["IMPORTED", "ON_HOLD"] },
         asin: { not: null },
         variants: { some: {} },
         priceCheckError: { not: null },
@@ -74,7 +74,7 @@ export async function getCachedPriceTrackerPageData(
     prisma.product.findFirst({
       where: {
         storeId,
-        status: "IMPORTED",
+        status: { in: ["IMPORTED", "ON_HOLD"] },
         asin: { not: null },
         variants: { some: {} },
         lastPriceCheck: { not: null },
@@ -106,7 +106,7 @@ export async function getCachedPriceTrackerPageData(
     prisma.product.findMany({
       where: {
         storeId,
-        status: "IMPORTED",
+        status: { in: ["IMPORTED", "ON_HOLD"] },
         asin: { not: null },
         variants: { some: {} },
       },

@@ -21,7 +21,7 @@ export async function GET(request: Request) {
     const products = await prisma.product.findMany({
       where: {
         storeId: storeSession.storeId,
-        status: "IMPORTED",
+        status: { in: ["IMPORTED", "ON_HOLD"] },
         asin: { not: null },
         variants: { some: {} },
       },

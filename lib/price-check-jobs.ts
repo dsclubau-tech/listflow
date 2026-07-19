@@ -378,7 +378,9 @@ async function resolvePriceCheckSelection(storeId: string, productIds: string[])
   const products = await prisma.product.findMany({
     where: {
       storeId,
-      status: ProductStatus.IMPORTED,
+      status: {
+        in: [ProductStatus.IMPORTED, ProductStatus.ON_HOLD],
+      },
       asin: { not: null },
     },
     select: {

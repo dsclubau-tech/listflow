@@ -6,6 +6,7 @@ import { reviseProductPrice } from "@/lib/price-checker";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { invalidatePriceCaches } from "@/lib/cache-tags";
+import { isPriceCheckTrackableStatus } from "@/lib/price-check-eligibility";
 
 const EBAY_MIN_PRICE = 1.0;
 
@@ -130,9 +131,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Product not found" }, { status: 404 });
   }
 
-  if (product.status !== "IMPORTED") {
+  if (!isPriceCheckTrackableStatus(product.status)) {
     return NextResponse.json(
-      { error: "Only imported products can have price changes applied" },
+      { error: "Only imported or on-hold products can have price changes applied" },
       { status: 400 }
     );
   }

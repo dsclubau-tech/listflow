@@ -48,6 +48,21 @@ test("missing variants are ineligible", () => {
   assert.equal(getPriceCheckEligibility(product).reason, "missing-variants");
 });
 
+test("on-hold products remain eligible for price checks", () => {
+  const product = {
+    id: "on-hold",
+    status: "ON_HOLD",
+    asin: "B0FBZZPQQG",
+    _count: { variants: 1 },
+  };
+
+  assert.deepEqual(getPriceCheckEligibility(product), {
+    eligible: true,
+    reason: null,
+    message: null,
+  });
+});
+
 test("mixed selection checks tracked products and reports skipped reasons", () => {
   const products = [
     {

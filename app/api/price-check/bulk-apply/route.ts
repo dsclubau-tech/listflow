@@ -6,6 +6,7 @@ import { reviseProductPrice } from "@/lib/price-checker";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { invalidatePriceCaches } from "@/lib/cache-tags";
+import { isPriceCheckTrackableStatus } from "@/lib/price-check-eligibility";
 
 const EBAY_MIN_PRICE = 1.0;
 
@@ -129,7 +130,7 @@ export async function POST(request: Request) {
         continue;
       }
 
-      if (product.status !== "IMPORTED") {
+      if (!isPriceCheckTrackableStatus(product.status)) {
         skipped += 1;
         continue;
       }

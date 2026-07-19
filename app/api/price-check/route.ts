@@ -106,7 +106,7 @@ export async function POST(request: Request) {
       where: {
         asin: { in: asins },
         storeId: storeSession.storeId,
-        status: "IMPORTED",
+        status: { in: ["IMPORTED", "ON_HOLD"] },
       },
       select: {
         id: true,

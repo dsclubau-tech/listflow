@@ -5,6 +5,7 @@ import { runPriceCheck } from "@/lib/price-checker";
 import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { invalidatePriceCaches } from "@/lib/cache-tags";
+import { isPriceCheckTrackableStatus } from "@/lib/price-check-eligibility";
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
@@ -75,9 +76,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Product not found" }, { status: 404 });
   }
 
-  if (product.status !== "IMPORTED" || !product.asin) {
+  if (!isPriceCheckTrackableStatus(product.status) || !product.asin) {
     return NextResponse.json(
-      { error: "Product must be imported and have an ASIN" },
+      { error: "Product must be imported or on hold and have an ASIN" },
       { status: 400 }
     );
   }

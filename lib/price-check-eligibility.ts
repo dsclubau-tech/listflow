@@ -47,6 +47,10 @@ export function isValidAsin(value: unknown) {
   return Boolean(normalized && ASIN_PATTERN.test(normalized));
 }
 
+export function isPriceCheckTrackableStatus(status: unknown) {
+  return status === "IMPORTED" || status === "ON_HOLD";
+}
+
 export function getPriceCheckVariantCount(product: PriceCheckCandidate) {
   if (typeof product._count?.variants === "number") {
     return product._count.variants;
@@ -72,11 +76,12 @@ export function getPriceCheckPrerequisiteIssue(
 export function getPriceCheckEligibility(
   product: PriceCheckCandidate
 ): PriceCheckEligibility {
-  if (product.status !== "IMPORTED") {
+  if (!isPriceCheckTrackableStatus(product.status)) {
     return {
       eligible: false,
       reason: "not-imported",
-      message: "Selected product cannot be price checked because it is not imported.",
+      message:
+        "Selected product cannot be price checked because it is neither imported nor on hold.",
     };
   }
 
@@ -125,7 +130,11 @@ function formatReasonCounts(
         )
       : null,
     reasonCounts["not-imported"] > 0
-      ? pluralize(reasonCounts["not-imported"], "not imported product")
+      ? pluralize(
+          reasonCounts["not-imported"],
+          "product that is neither imported nor on hold",
+          "products that are neither imported nor on hold",
+        )
       : null,
   ].filter(Boolean);
 
