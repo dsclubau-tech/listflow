@@ -3,6 +3,11 @@ import "server-only";
 import bcrypt from "bcryptjs";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { cacheLife, cacheTag } from "next/cache";
+import {
+  LISTFLOW_FRESH_CACHE_LIFE,
+  storeCacheTag,
+} from "@/lib/cache-tags";
 
 const INTERNAL_USER_EMAIL = "store-session@listflow.local";
 const INTERNAL_USER_NAME = "Store Session";
@@ -13,6 +18,22 @@ export type CurrentStoreSession = {
   storeLoginId: string;
 };
 
+async function getCachedStoreIdentity(storeId: string) {
+  "use cache";
+
+  cacheLife(LISTFLOW_FRESH_CACHE_LIFE);
+  cacheTag(storeCacheTag(storeId));
+
+  return prisma.store.findUnique({
+    where: { id: storeId },
+    select: {
+      name: true,
+      loginId: true,
+      isActive: true,
+    },
+  });
+}
+
 export async function getCurrentStoreSession(): Promise<CurrentStoreSession | null> {
   const session = await auth();
   const storeId = session?.user?.storeId;
@@ -21,10 +42,20 @@ export async function getCurrentStoreSession(): Promise<CurrentStoreSession | nu
     return null;
   }
 
+  const store = await getCachedStoreIdentity(storeId);
+
+  if (!store?.isActive) {
+    return null;
+  }
+
   return {
     storeId,
-    storeName: session.user.storeName || session.user.name || "Store",
-    storeLoginId: session.user.storeLoginId || session.user.email || storeId,
+    storeName: store.name,
+    storeLoginId:
+      store.loginId ||
+      session.user.storeLoginId ||
+      session.user.email ||
+      storeId,
   };
 }
 

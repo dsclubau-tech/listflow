@@ -43,6 +43,10 @@ import {
   dedupeProductImages,
   normalizeProductImageUrl,
 } from "@/lib/product-images";
+import {
+  getEffectiveListingQuantity,
+  getStoredQuantityAfterEdit,
+} from "@/lib/action-center-metrics";
 import { uploadProductImageFile } from "@/lib/client-product-image-upload";
 import {
   applyTitleCase,
@@ -241,14 +245,6 @@ function findVeroMatch(title: string): string | null {
   return null;
 }
 
-// ----- Store number helper -----
-
-function storeNameToNumber(name: string): 1 | 2 | 3 {
-  if (name === "Store 1") return 1;
-  if (name === "Store 2") return 2;
-  return 3;
-}
-
 function splitErrorMessage(message: string): string[] {
   const parts = message
     .split(";")
@@ -376,7 +372,9 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
   const [brand, setBrand] = useState("");
   const [condition, setCondition] = useState(product.condition);
   const [price, setPrice] = useState(product.price.toString());
-  const [quantity, setQuantity] = useState(product.quantity.toString());
+  const [quantity, setQuantity] = useState(
+    getEffectiveListingQuantity(product.status, product.quantity).toString(),
+  );
   const [promotedAdPercent, setPromotedAdPercent] = useState(
     String(product.promotedAdPercent ?? 0)
   );
@@ -624,8 +622,8 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
   const fetchPolicies = useCallback(async () => {
     setPoliciesLoading(true);
     try {
-      const storeNum = storeNameToNumber(product.store.name);
-      const res = await fetch(`/api/policies?store=${storeNum}`);
+      const storeId = product.store.id;
+      const res = await fetch(`/api/policies?store=${encodeURIComponent(storeId)}`);
       if (res.ok) {
         const data = await res.json();
         setPolicies(data);
@@ -634,7 +632,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
           "inline-edit/policies",
           "Failed to fetch policies",
           undefined,
-          { status: res.status, productId: product.id, storeNum },
+          { status: res.status, productId: product.id, storeId },
           {
             requestId: res.headers.get("x-request-id") ?? undefined,
             tags: ["policies"],
@@ -652,7 +650,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
     } finally {
       setPoliciesLoading(false);
     }
-  }, [product.id, product.store.name]);
+  }, [product.id, product.store.id]);
 
   useEffect(() => {
     fetchPolicies();
@@ -1049,9 +1047,14 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
     specificsObj["_PostalCode"] = locationMetadata.postalCode;
 
     const parsedQuantity = Number.parseInt(quantity, 10);
-    const normalizedQuantity = Number.isFinite(parsedQuantity)
+    const displayedQuantity = Number.isFinite(parsedQuantity)
       ? Math.max(0, parsedQuantity)
-      : 1;
+      : 0;
+    const normalizedQuantity = getStoredQuantityAfterEdit(
+      product.status,
+      displayedQuantity,
+      product.quantity,
+    );
 
     const body: Record<string, unknown> = {
       title: toEbayListingTitle(title),
@@ -1869,11 +1872,10 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
                       setCatLoading(true);
                       setShowCatDropdown(false);
                       try {
-                        const storeNum = storeNameToNumber(product.store.name);
                         const res = await fetch("/api/suggest-category", {
                           method: "POST",
                           headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ title: title.trim(), storeNumber: storeNum }),
+                          body: JSON.stringify({ title: title.trim() }),
                         });
                         if (res.ok) {
                           const data = await res.json();
@@ -2137,11 +2139,17 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
               <label className="block text-sm font-medium text-gray-700 mb-1">Quantity</label>
               <input
                 type="number"
-                min="1"
+                min="0"
                 value={quantity}
                 onChange={(e) => setQuantity(e.target.value)}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
               />
+              {isOnHold && (
+                <p className="mt-1 text-xs text-amber-700">
+                  The live eBay quantity is 0. A positive value sets the quantity
+                  to restore when this listing is resumed.
+                </p>
+              )}
             </div>
 
             {/* Local promoted ad reference */}

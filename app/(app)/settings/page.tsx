@@ -7,8 +7,10 @@ import KeywordsTab from "@/components/settings/KeywordsTab";
 import DangerZoneTab from "@/components/settings/DangerZoneTab";
 import SecurityTab from "@/components/settings/SecurityTab";
 import DiagnosticsTab from "@/components/settings/DiagnosticsTab";
+import StoreProfileTab from "@/components/settings/StoreProfileTab";
 
 const tabs = [
+  "Store Profile",
   "Supplier Settings",
   "Templates",
   "Keywords",
@@ -19,7 +21,7 @@ const tabs = [
 type Tab = (typeof tabs)[number];
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<Tab>("Supplier Settings");
+  const [activeTab, setActiveTab] = useState<Tab>("Store Profile");
 
   return (
     <div className="p-8">
@@ -45,6 +47,7 @@ export default function SettingsPage() {
       </div>
 
       {/* Tab content */}
+      {activeTab === "Store Profile" && <StoreProfileTab />}
       {activeTab === "Supplier Settings" && <SupplierSettingsTab />}
       {activeTab === "Templates" && <TemplatesTab />}
       {activeTab === "Keywords" && <KeywordsTab />}

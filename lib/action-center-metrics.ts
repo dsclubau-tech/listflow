@@ -55,3 +55,20 @@ export function getEffectiveListingQuantity(
 ) {
   return status === "ON_HOLD" ? 0 : savedQuantity;
 }
+
+export function getStoredQuantityAfterEdit(
+  status: string,
+  displayedQuantity: number,
+  savedResumeQuantity: number,
+) {
+  const normalizedDisplayedQuantity = Math.max(
+    0,
+    Math.floor(displayedQuantity),
+  );
+
+  if (status === "ON_HOLD" && normalizedDisplayedQuantity === 0) {
+    return Math.max(0, Math.floor(savedResumeQuantity));
+  }
+
+  return normalizedDisplayedQuantity;
+}

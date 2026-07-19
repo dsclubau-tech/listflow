@@ -10,6 +10,10 @@ import {
   calculateTotalFees,
 } from "@/lib/variant-pricing";
 import { dedupeProductImages } from "@/lib/product-images";
+import {
+  getEffectiveListingQuantity,
+  getStoredQuantityAfterEdit,
+} from "@/lib/action-center-metrics";
 import type { VariantPayload, VariantRecord } from "@/types/variant";
 
 interface EditVariantModalProps {
@@ -104,6 +108,7 @@ function buildFormState(props: {
   defaultQuantity: number;
   defaultImages: string[];
   defaultSku: string | null;
+  isProductOnHold: boolean;
   pricingDefaults?: SupplierPricingDefaults | null;
 }): VariantFormState {
   const {
@@ -112,6 +117,7 @@ function buildFormState(props: {
     defaultQuantity,
     defaultImages,
     defaultSku,
+    isProductOnHold,
     pricingDefaults,
   } = props;
 
@@ -127,7 +133,12 @@ function buildFormState(props: {
       profitFixed: String(variant.profitFixed),
       promotedAdPercent: String(variant.promotedAdPercent ?? 0),
       sellPrice: variant.sellPrice,
-      quantity: String(variant.quantity),
+      quantity: String(
+        getEffectiveListingQuantity(
+          isProductOnHold ? "ON_HOLD" : "IMPORTED",
+          variant.quantity,
+        ),
+      ),
       status: variant.status,
       automation: variant.automation || "",
       includeShipping: variant.includeShipping,
@@ -151,7 +162,12 @@ function buildFormState(props: {
     profitFixed: String(pricingDefaults?.profitFixed ?? 0),
     promotedAdPercent: "0",
     sellPrice: toMoneyString(defaultBuyPrice),
-    quantity: String(defaultQuantity),
+    quantity: String(
+      getEffectiveListingQuantity(
+        isProductOnHold ? "ON_HOLD" : "IMPORTED",
+        defaultQuantity,
+      ),
+    ),
     status: defaultQuantity > 0 ? "IN_STOCK" : "OUT_OF_STOCK",
     automation: "",
     includeShipping: true,
@@ -182,6 +198,7 @@ export default function EditVariantModal({
       defaultQuantity,
       defaultImages,
       defaultSku,
+      isProductOnHold,
     })
   );
   const [isSaving, setIsSaving] = useState(false);
@@ -208,10 +225,19 @@ export default function EditVariantModal({
         defaultQuantity,
         defaultImages,
         defaultSku,
+        isProductOnHold,
         pricingDefaults: pricingDefaultsRef.current,
       })
     );
-  }, [defaultBuyPrice, defaultImages, defaultQuantity, defaultSku, isOpen, variant]);
+  }, [
+    defaultBuyPrice,
+    defaultImages,
+    defaultQuantity,
+    defaultSku,
+    isOpen,
+    isProductOnHold,
+    variant,
+  ]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -405,6 +431,11 @@ export default function EditVariantModal({
     }
 
     const normalizedQuantity = Math.max(0, Math.floor(toNumber(form.quantity)));
+    const storedQuantity = getStoredQuantityAfterEdit(
+      isProductOnHold ? "ON_HOLD" : "IMPORTED",
+      normalizedQuantity,
+      variant?.quantity ?? defaultQuantity,
+    );
     const payload: VariantPayload = {
       sku: form.sku.trim() || null,
       title: form.title.trim(),
@@ -416,7 +447,7 @@ export default function EditVariantModal({
       profitFixed: toNumber(form.profitFixed),
       promotedAdPercent: Math.min(100, Math.max(0, toNumber(form.promotedAdPercent))),
       sellPrice: toNumber(form.sellPrice),
-      quantity: normalizedQuantity,
+      quantity: storedQuantity,
       status:
         isProductOnHold && normalizedQuantity > 0 ? "IN_STOCK" : form.status,
       automation: form.automation.trim() || null,

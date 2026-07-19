@@ -4,6 +4,7 @@ import {
   calculatePendingReviewMetrics,
   getEffectiveListingQuantity,
   getLatestPendingReviewHistory,
+  getStoredQuantityAfterEdit,
 } from "@/lib/action-center-metrics";
 
 test("pending review change uses the absolute Amazon buy-price difference", () => {
@@ -124,4 +125,7 @@ test("latest pending review history is selected by detection time", () => {
 test("on-hold quantity is displayed as zero without changing resume quantity", () => {
   assert.equal(getEffectiveListingQuantity("ON_HOLD", 1), 0);
   assert.equal(getEffectiveListingQuantity("IMPORTED", 1), 1);
+  assert.equal(getStoredQuantityAfterEdit("ON_HOLD", 0, 1), 1);
+  assert.equal(getStoredQuantityAfterEdit("ON_HOLD", 4, 1), 4);
+  assert.equal(getStoredQuantityAfterEdit("IMPORTED", 0, 1), 0);
 });

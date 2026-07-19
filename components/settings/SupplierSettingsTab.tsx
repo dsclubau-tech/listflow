@@ -204,7 +204,7 @@ export default function SupplierSettingsTab() {
         {/* Store selector */}
         <div className="mb-6">
           <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
-            Select Store
+            eBay account
           </label>
           <select
             value={selectedStore}
@@ -212,9 +212,9 @@ export default function SupplierSettingsTab() {
             disabled
             className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-gray-50 text-gray-600 focus:outline-none"
           >
-            <option value="1">Store 1</option>
-            <option value="2">Store 2</option>
-            <option value="3">Store 3</option>
+            <option value="1">eBay account 1</option>
+            <option value="2">eBay account 2</option>
+            <option value="3">eBay account 3</option>
           </select>
         </div>
 

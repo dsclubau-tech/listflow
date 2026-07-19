@@ -11,6 +11,9 @@ import { XMLParser } from "fast-xml-parser";
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
 import {
+  resolveEbayStoreNumber,
+} from "@/lib/store-profile";
+import {
   isEbayRateLimitError,
   recordEbayRateLimitBackoff,
   waitForEbayRateLimit,
@@ -147,31 +150,38 @@ function formatEbayApiErrors(errors: unknown, fallback?: unknown) {
 }
 
 /**
- * Gets the static eBay token for a specific store from environment variables.
- */
-export function getEbayToken(storeName: string): string {
-  if (storeName === "Store 1") return process.env.EBAY_STORE1_TOKEN || "";
-  if (storeName === "Store 2") return process.env.EBAY_STORE2_TOKEN || "";
-  if (storeName === "Store 3") return process.env.EBAY_STORE3_TOKEN || "";
-  return "";
-}
-
-/**
- * Maps a database store ID (CUID) to a store number (1, 2, or 3).
- * Fetches the store name from the database and extracts the number.
+ * Maps a database store ID (CUID) to its configured eBay account number.
+ * Store.name is user-editable, so it must never be the primary identity.
  */
 export async function getStoreNumber(storeId: string): Promise<1 | 2 | 3> {
-  const store = await prisma.store.findUnique({ where: { id: storeId } });
+  const store = await prisma.store.findUnique({
+    where: { id: storeId },
+    select: {
+      name: true,
+      loginId: true,
+      supplierSettings: {
+        where: { supplierName: "Amazon AU" },
+        take: 1,
+        select: { storeNumber: true },
+      },
+    },
+  });
 
   if (!store) {
     throw new Error(`Store not found: ${storeId}`);
   }
 
-  if (store.name === "Store 1") return 1;
-  if (store.name === "Store 2") return 2;
-  if (store.name === "Store 3") return 3;
+  const storeNumber = resolveEbayStoreNumber({
+    configuredStoreNumber: store.supplierSettings[0]?.storeNumber,
+    loginId: store.loginId,
+    name: store.name,
+  });
 
-  throw new Error(`Unknown store name: ${store.name}`);
+  if (storeNumber) {
+    return storeNumber;
+  }
+
+  throw new Error(`eBay account is not configured for store: ${storeId}`);
 }
 
 /**
@@ -193,8 +203,27 @@ export function getStoreCredentials(storeNumber: 1 | 2 | 3) {
 }
 
 async function getStoreIdForStoreNumber(storeNumber: 1 | 2 | 3) {
+  const settings = await prisma.supplierSettings.findFirst({
+    where: {
+      supplierName: "Amazon AU",
+      storeId: { not: null },
+      storeNumber,
+    },
+    select: { storeId: true },
+  });
+
+  if (settings?.storeId) {
+    return settings.storeId;
+  }
+
   const store = await prisma.store.findFirst({
-    where: { name: `Store ${storeNumber}` },
+    where: {
+      OR: [
+        { name: `Store ${storeNumber}` },
+        { loginId: `store-${storeNumber}` },
+        { loginId: `store${storeNumber}` },
+      ],
+    },
     select: { id: true },
   });
 
