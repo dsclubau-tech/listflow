@@ -8,6 +8,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useTransition,
 } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
@@ -25,6 +26,10 @@ import {
   PRODUCT_ADVANCED_FILTERS,
   type ProductAdvancedFilterId,
 } from "@/lib/product-filter-definitions";
+import {
+  buildProductFilterUrl,
+  type ProductQuickFilter,
+} from "@/lib/product-filter-navigation";
 import type { SerializedProductRow } from "@/types/product-row";
 
 interface ProductsPageClientProps {
@@ -33,7 +38,7 @@ interface ProductsPageClientProps {
   page: number;
   pageSize: number;
   importedFilter: "today" | null;
-  productFilter: ProductFilter;
+  productFilter: ProductQuickFilter;
   hasAdvancedFilters: boolean;
   supplierOptions: Array<{ id: string; name: string }>;
 }
@@ -52,7 +57,6 @@ type PriceCheckJobStatus =
   | "COMPLETED"
   | "FAILED";
 type PriceCheckJobScope = "SELECTED" | "ALL";
-type ProductFilter = "all" | "needs-changing-price" | "failed-on-hold";
 type EbayAdsSyncProgress = {
   type?: "progress" | "done" | "error";
   phase: string;
@@ -82,7 +86,10 @@ function getPromotedListingsJobSummary(job: PromotedListingsJob) {
   return `${job.succeeded} listing${job.succeeded === 1 ? "" : "s"} updated, ${job.failed} failed.`;
 }
 
-const PRODUCT_FILTER_OPTIONS: Array<{ value: ProductFilter; label: string }> = [
+const PRODUCT_FILTER_OPTIONS: Array<{
+  value: ProductQuickFilter;
+  label: string;
+}> = [
   { value: "all", label: "All" },
   { value: "needs-changing-price", label: "Needs changing price" },
   { value: "failed-on-hold", label: "Failed / On hold" },
@@ -387,6 +394,9 @@ export default function ProductsPageClient({
   const [promotedListingsJob, setPromotedListingsJob] =
     useState<PromotedListingsJob | null>(null);
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
+  const [pendingProductFilter, setPendingProductFilter] =
+    useState<ProductQuickFilter | null>(null);
+  const [isProductFilterPending, startProductFilterTransition] = useTransition();
   const [searchDraft, setSearchDraft] = useState(searchQuery);
   const [searchSuggestions, setSearchSuggestions] = useState<
     ProductSearchSuggestion[]
@@ -404,10 +414,13 @@ export default function ProductsPageClient({
   const notifiedPromotionJobIds = useRef<Set<string>>(new Set());
   const searchContainerRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
+  const filterMenuRef = useRef<HTMLDivElement | null>(null);
+  const filterMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const { toast, showToast, hideToast } = useToast();
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const isPriceCheckJobActive = isActivePriceCheckJob(priceCheckJob);
   const isPromotionJobActive = isActivePromotedListingsJob(promotedListingsJob);
+  const displayedProductFilter = pendingProductFilter ?? productFilter;
   const selectedPriceCheckSummary = useMemo(
     () => getSelectedPriceCheckSummary(products, selectedProductIds),
     [products, selectedProductIds]
@@ -518,6 +531,47 @@ export default function ProductsPageClient({
     document.addEventListener("mousedown", closeSearchSuggestions);
     return () => document.removeEventListener("mousedown", closeSearchSuggestions);
   }, []);
+
+  useEffect(() => {
+    if (!isFilterMenuOpen) {
+      return;
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      if (
+        filterMenuRef.current &&
+        !filterMenuRef.current.contains(event.target as Node)
+      ) {
+        setIsFilterMenuOpen(false);
+      }
+    }
+
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsFilterMenuOpen(false);
+        filterMenuButtonRef.current?.focus();
+      }
+    }
+
+    document.addEventListener("pointerdown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isFilterMenuOpen]);
+
+  useEffect(() => {
+    for (const option of PRODUCT_FILTER_OPTIONS) {
+      router.prefetch(
+        buildProductFilterUrl(pathname, searchParamsString, option.value)
+      );
+    }
+  }, [pathname, router, searchParamsString]);
+
+  useEffect(() => {
+    setPendingProductFilter(null);
+  }, [productFilter, searchParamsString]);
 
   useEffect(() => {
     setAdvancedFilterDraft(appliedAdvancedFilterDraft);
@@ -894,7 +948,7 @@ export default function ProductsPageClient({
       options?: {
         search?: string;
         advancedDraft?: AdvancedFilterDraft;
-        productFilterOverride?: ProductFilter;
+        productFilterOverride?: ProductQuickFilter;
         productId?: string | null;
       }
     ) => {
@@ -1014,17 +1068,18 @@ export default function ProductsPageClient({
     navigateProductsPage(nextPage);
   }
 
-  function handleProductFilterChange(nextFilter: ProductFilter) {
-    const params = new URLSearchParams(searchParams.toString());
-    params.set("page", "1");
-
-    if (nextFilter === "all") {
-      params.delete("filter");
-    } else {
-      params.set("filter", nextFilter);
+  function handleProductFilterChange(nextFilter: ProductQuickFilter) {
+    if (nextFilter === productFilter || isProductFilterPending) {
+      return;
     }
 
-    router.push(`${pathname}?${params.toString()}`);
+    setPendingProductFilter(nextFilter);
+    setIsFilterMenuOpen(false);
+    startProductFilterTransition(() => {
+      router.push(
+        buildProductFilterUrl(pathname, searchParamsString, nextFilter)
+      );
+    });
   }
 
   function getSelectOptions(filterId: ProductAdvancedFilterId) {
@@ -1606,6 +1661,7 @@ export default function ProductsPageClient({
               />
             </div>
             <button
+              ref={filterMenuButtonRef}
               type="button"
               onClick={() => setIsPromotedListingsOpen(true)}
               className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
@@ -1780,10 +1836,12 @@ export default function ProductsPageClient({
               Search
             </button>
           </form>
-          <div className="relative">
+          <div ref={filterMenuRef} className="relative">
             <button
               type="button"
               onClick={() => setIsFilterMenuOpen((open) => !open)}
+              aria-haspopup="menu"
+              aria-expanded={isFilterMenuOpen}
               className="inline-flex items-center gap-2 rounded-md border border-amber-200 bg-white px-3 py-2 text-sm font-semibold text-gray-700 shadow-sm transition-colors hover:bg-amber-50"
             >
               <svg
@@ -1803,7 +1861,10 @@ export default function ProductsPageClient({
               Add Filter
             </button>
             {isFilterMenuOpen && (
-              <div className="absolute left-0 top-full z-20 mt-2 w-52 overflow-hidden rounded-md border border-gray-200 bg-white py-2 shadow-lg">
+              <div
+                role="menu"
+                className="absolute left-0 top-full z-20 mt-2 w-52 overflow-hidden rounded-md border border-gray-200 bg-white py-2 shadow-lg"
+              >
                 {PRODUCT_ADVANCED_FILTERS.map((filter) => {
                   const active = isAdvancedFilterActive(filter.id);
                   const disabled = !filter.enabled || active;
@@ -1812,6 +1873,7 @@ export default function ProductsPageClient({
                     <button
                       key={filter.id}
                       type="button"
+                      role="menuitem"
                       disabled={disabled}
                       onClick={() => handleAddAdvancedFilter(filter.id)}
                       title={!filter.enabled ? "No matching product field yet" : undefined}
@@ -1832,7 +1894,9 @@ export default function ProductsPageClient({
           </div>
           <div className="inline-flex overflow-hidden rounded-md border border-gray-300 bg-white shadow-sm">
             {PRODUCT_FILTER_OPTIONS.map((option) => {
-              const selected = option.value === productFilter;
+              const selected = option.value === displayedProductFilter;
+              const loading =
+                isProductFilterPending && option.value === pendingProductFilter;
 
               return (
                 <button
@@ -1840,12 +1904,19 @@ export default function ProductsPageClient({
                   type="button"
                   onClick={() => handleProductFilterChange(option.value)}
                   aria-pressed={selected}
+                  disabled={isProductFilterPending}
                   className={`border-r border-gray-300 px-3 py-2 text-sm font-medium transition-colors last:border-r-0 ${
                     selected
                       ? "bg-gray-900 text-white"
                       : "text-gray-700 hover:bg-gray-50"
-                  }`}
+                  } disabled:cursor-wait disabled:opacity-80`}
                 >
+                  {loading && (
+                    <span
+                      className="mr-1.5 inline-block h-3 w-3 animate-spin rounded-full border-2 border-white/50 border-t-white align-[-1px]"
+                      aria-hidden="true"
+                    />
+                  )}
                   {option.label}
                 </button>
               );

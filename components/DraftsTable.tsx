@@ -1,7 +1,15 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
-import { Fragment, type MouseEvent, useEffect, useMemo, useState } from "react";
+import {
+  Fragment,
+  type MouseEvent,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useRouter } from "next/navigation";
 import AsinLink from "@/components/AsinLink";
 import { hasMissingItemSpecifics } from "@/components/draft-upload-response";
@@ -397,6 +405,16 @@ export default function DraftsTable({
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [endingId, setEndingId] = useState<string | null>(null);
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
+  const [productDetails, setProductDetails] = useState<
+    Record<string, SerializedProductRow>
+  >({});
+  const [loadingProductDetailIds, setLoadingProductDetailIds] = useState<
+    string[]
+  >([]);
+  const [productDetailErrors, setProductDetailErrors] = useState<
+    Record<string, string>
+  >({});
+  const productDetailRequests = useRef<Map<string, Promise<void>>>(new Map());
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkImporting, setBulkImporting] = useState(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
@@ -425,6 +443,70 @@ export default function DraftsTable({
   const isDraftsView = view === "drafts";
   const isProductsView = view === "products";
   const hasSelectionColumn = isDraftsView || isProductsView;
+
+  const hasCurrentProductDetails = useCallback(
+    (productId: string) => {
+      const summary = products.find((product) => product.id === productId);
+      const details = productDetails[productId];
+      return Boolean(
+        summary && details && summary.updatedAt === details.updatedAt
+      );
+    },
+    [productDetails, products]
+  );
+
+  const loadProductDetails = useCallback(async (productId: string) => {
+    const activeRequest = productDetailRequests.current.get(productId);
+    if (activeRequest) {
+      return activeRequest;
+    }
+
+    const request = (async () => {
+      setLoadingProductDetailIds((current) =>
+        current.includes(productId) ? current : [...current, productId]
+      );
+      setProductDetailErrors((current) => {
+        const next = { ...current };
+        delete next[productId];
+        return next;
+      });
+
+      try {
+        const response = await fetch(`/api/products/${encodeURIComponent(productId)}`, {
+          cache: "no-store",
+        });
+        const data = (await response.json().catch(() => ({}))) as
+          | SerializedProductRow
+          | { error?: string };
+
+        if (!response.ok || !("id" in data)) {
+          throw new Error(
+            "error" in data && data.error
+              ? data.error
+              : "Failed to load product details."
+          );
+        }
+
+        setProductDetails((current) => ({ ...current, [productId]: data }));
+      } catch (error) {
+        setProductDetailErrors((current) => ({
+          ...current,
+          [productId]:
+            error instanceof Error
+              ? error.message
+              : "Failed to load product details.",
+        }));
+      } finally {
+        setLoadingProductDetailIds((current) =>
+          current.filter((id) => id !== productId)
+        );
+        productDetailRequests.current.delete(productId);
+      }
+    })();
+
+    productDetailRequests.current.set(productId, request);
+    return request;
+  }, []);
 
   useEffect(() => {
     onSelectionChange?.(selectedIds);
@@ -463,8 +545,32 @@ export default function DraftsTable({
 
     if (products.some((product) => product.id === autoExpandProductId)) {
       setExpandedProductId(autoExpandProductId);
+      if (isProductsView && !hasCurrentProductDetails(autoExpandProductId)) {
+        void loadProductDetails(autoExpandProductId);
+      }
     }
-  }, [autoExpandProductId, products]);
+  }, [
+    autoExpandProductId,
+    hasCurrentProductDetails,
+    isProductsView,
+    loadProductDetails,
+    products,
+  ]);
+
+  useEffect(() => {
+    if (
+      isProductsView &&
+      expandedProductId &&
+      !hasCurrentProductDetails(expandedProductId)
+    ) {
+      void loadProductDetails(expandedProductId);
+    }
+  }, [
+    expandedProductId,
+    hasCurrentProductDetails,
+    isProductsView,
+    loadProductDetails,
+  ]);
 
   useEffect(() => {
     if (!contextMenu) {
@@ -515,7 +621,15 @@ export default function DraftsTable({
   }
 
   function toggleExpand(productId: string) {
-    setExpandedProductId((prev) => (prev === productId ? null : productId));
+    if (expandedProductId === productId) {
+      setExpandedProductId(null);
+      return;
+    }
+
+    setExpandedProductId(productId);
+    if (isProductsView && !hasCurrentProductDetails(productId)) {
+      void loadProductDetails(productId);
+    }
   }
 
   function getFocusedProductUrl(productId: string) {
@@ -1555,6 +1669,12 @@ export default function DraftsTable({
           <tbody>
             {products.map((product) => {
               const isExpanded = expandedProductId === product.id;
+              const expandedProduct = isProductsView
+                ? productDetails[product.id] ?? null
+                : product;
+              const isLoadingProductDetails =
+                loadingProductDetailIds.includes(product.id);
+              const productDetailError = productDetailErrors[product.id] ?? null;
               const isSelected = selectedIds.includes(product.id);
               const isSelectable = selectableIdSet.has(product.id);
               const isUploadQueued = queuedUploadIds.includes(product.id);
@@ -1916,11 +2036,39 @@ export default function DraftsTable({
                               : undefined
                           }
                         >
-                          <InlineEditForm
-                            product={product as never}
-                            onCollapse={() => setExpandedProductId(null)}
-                            onImported={onDraftImported}
-                          />
+                          {expandedProduct ? (
+                            <InlineEditForm
+                              product={expandedProduct as never}
+                              onCollapse={() => setExpandedProductId(null)}
+                              onImported={onDraftImported}
+                            />
+                          ) : productDetailError ? (
+                            <div className="flex min-h-28 items-center justify-between gap-4 border-t border-red-100 bg-red-50 px-6 py-5">
+                              <p className="text-sm text-red-700">
+                                {productDetailError}
+                              </p>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  void loadProductDetails(product.id);
+                                }}
+                                className="rounded-md border border-red-300 bg-white px-3 py-2 text-sm font-semibold text-red-700 transition-colors hover:bg-red-100"
+                              >
+                                Retry
+                              </button>
+                            </div>
+                          ) : (
+                            <div
+                              className="flex min-h-28 items-center justify-center border-t border-gray-100 bg-gray-50 px-6 py-5 text-sm text-gray-500"
+                              aria-live="polite"
+                            >
+                              <span className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-gray-300 border-t-gray-700" />
+                              {isLoadingProductDetails
+                                ? "Loading product details..."
+                                : "Preparing product details..."}
+                            </div>
+                          )}
                         </div>
                       </td>
                     </tr>

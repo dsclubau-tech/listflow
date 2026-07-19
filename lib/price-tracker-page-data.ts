@@ -7,6 +7,7 @@ import {
   priceTrackerCacheTag,
   productsCacheTag,
 } from "@/lib/cache-tags";
+import { calculatePendingReviewMetrics } from "@/lib/action-center-metrics";
 import { prisma } from "@/lib/prisma";
 
 export async function getCachedPriceTrackerPageData(
@@ -93,12 +94,16 @@ export async function getCachedPriceTrackerPageData(
             title: true,
             asin: true,
             ebayItemId: true,
+            promotedAdStatus: true,
+            promotedAdPercent: true,
           },
         },
         variant: {
           select: {
             id: true,
             title: true,
+            feesPercent: true,
+            feesFixed: true,
           },
         },
       },
@@ -156,16 +161,30 @@ export async function getCachedPriceTrackerPageData(
       failedChecks: failedProducts.length,
       lastRunAt: lastRun?.lastPriceCheck?.toISOString() ?? null,
     },
-    history: recentChanges.map((item) => ({
-      ...item,
-      previousPrice: item.previousPrice.toString(),
-      newPrice: item.newPrice.toString(),
-      previousSellPrice: item.previousSellPrice.toString(),
-      newSellPrice: item.newSellPrice.toString(),
-      source: item.source,
-      appliedAt: item.appliedAt?.toISOString() ?? null,
-      createdAt: item.createdAt.toISOString(),
-    })),
+    history: recentChanges.map((item) => {
+      const metrics = calculatePendingReviewMetrics({
+        previousBuyPrice: Number(item.previousPrice),
+        newBuyPrice: Number(item.newPrice),
+        newSellPrice: Number(item.newSellPrice),
+        feesPercent: item.variant?.feesPercent ?? null,
+        feesFixed: item.variant?.feesFixed ?? null,
+        promotedAdStatus: item.product.promotedAdStatus,
+        promotedAdPercent: item.product.promotedAdPercent,
+      });
+
+      return {
+        ...item,
+        previousPrice: item.previousPrice.toString(),
+        newPrice: item.newPrice.toString(),
+        previousSellPrice: item.previousSellPrice.toString(),
+        newSellPrice: item.newSellPrice.toString(),
+        changeAmount: metrics.changeAmount.toFixed(2),
+        profit: metrics.profit === null ? null : metrics.profit.toFixed(2),
+        source: item.source,
+        appliedAt: item.appliedAt?.toISOString() ?? null,
+        createdAt: item.createdAt.toISOString(),
+      };
+    }),
     trackedProducts: trackedProducts.map((product) => ({
       id: product.id,
       title: product.title,

@@ -21,6 +21,53 @@ import { preserveEbayListingAsin } from "@/lib/ebay-listing-asin";
 
 const SUPPLIER_NAME = "Amazon AU";
 
+export async function GET(
+  request: Request,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const session = await auth();
+  const storeSession = await getCurrentStoreSession();
+  const { id } = await params;
+  const log = createRequestLogger(
+    request,
+    storeSession ? { storeId: storeSession.storeId } : {},
+  );
+
+  if (!session?.user || !storeSession) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  try {
+    const product = await prisma.product.findFirst({
+      where: { id, storeId: storeSession.storeId },
+      include: {
+        store: { select: { id: true, name: true } },
+        createdBy: { select: { id: true, name: true } },
+      },
+    });
+
+    if (!product) {
+      return NextResponse.json({ error: "Product not found" }, { status: 404 });
+    }
+
+    return NextResponse.json({
+      ...product,
+      price: product.price.toString(),
+      amazonPrice: product.amazonPrice?.toString() ?? null,
+      lastPriceCheck: product.lastPriceCheck?.toISOString() ?? null,
+      promotedAdSyncedAt: product.promotedAdSyncedAt?.toISOString() ?? null,
+      createdAt: product.createdAt.toISOString(),
+      updatedAt: product.updatedAt.toISOString(),
+    });
+  } catch (error) {
+    log.error("api/products/GET", "Failed to load product details", error, { id });
+    return NextResponse.json(
+      { error: "Failed to load product details" },
+      { status: 500 },
+    );
+  }
+}
+
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },

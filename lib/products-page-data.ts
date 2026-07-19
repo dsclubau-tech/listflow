@@ -40,9 +40,39 @@ export interface ProductsPageData {
   supplierOptions: Array<{ id: string; name: string }>;
 }
 
-const productRowInclude = {
-  store: true,
-  createdBy: true,
+const productRowSelect = {
+  id: true,
+  title: true,
+  price: true,
+  quantity: true,
+  images: true,
+  status: true,
+  ebayItemId: true,
+  errorMessage: true,
+  asin: true,
+  amazonPrice: true,
+  amazonPriceTrackingMode: true,
+  amazonStockLeft: true,
+  promotedAdPercent: true,
+  promotedAdStatus: true,
+  promotedAdCampaignId: true,
+  promotedAdCampaignName: true,
+  promotedAdRateStrategy: true,
+  promotedAdSyncedAt: true,
+  lastPriceCheck: true,
+  priceCheckError: true,
+  priceCheckFailureCode: true,
+  internalNote: true,
+  storeId: true,
+  createdById: true,
+  createdAt: true,
+  updatedAt: true,
+  store: {
+    select: { id: true, name: true },
+  },
+  createdBy: {
+    select: { id: true, name: true },
+  },
   variants: {
     orderBy: { createdAt: "asc" },
     select: {
@@ -75,10 +105,10 @@ const productRowInclude = {
       variants: true,
     },
   },
-} satisfies Prisma.ProductInclude;
+} satisfies Prisma.ProductSelect;
 
 type ProductRowPayload = Prisma.ProductGetPayload<{
-  include: typeof productRowInclude;
+  select: typeof productRowSelect;
 }>;
 
 const profitCandidateSelect = {
@@ -97,47 +127,35 @@ const profitCandidateSelect = {
 } satisfies Prisma.ProductSelect;
 
 function serializeProducts(products: ProductRowPayload[]): SerializedProductRow[] {
-  return products.map(({ uploadLogs, ...product }) => ({
-    ...product,
-    price: product.price.toString(),
-    amazonPrice: product.amazonPrice?.toString() ?? null,
-    lastPriceCheck: product.lastPriceCheck?.toISOString() ?? null,
-    promotedAdSyncedAt: product.promotedAdSyncedAt?.toISOString() ?? null,
-    createdAt: product.createdAt.toISOString(),
-    updatedAt: product.updatedAt.toISOString(),
-    uploadedAt: uploadLogs[0]?.createdAt.toISOString() ?? null,
-    variants: product.variants.map((variant) => ({
-      ...variant,
-      buyPrice: variant.buyPrice.toString(),
-      sellPrice: variant.sellPrice.toString(),
-    })),
-    priceHistory: product.priceHistory.map((entry) => ({
-      ...entry,
-      previousPrice: entry.previousPrice.toString(),
-      newPrice: entry.newPrice.toString(),
-      previousSellPrice: entry.previousSellPrice.toString(),
-      newSellPrice: entry.newSellPrice.toString(),
-      appliedAt: entry.appliedAt?.toISOString() ?? null,
-      createdAt: entry.createdAt.toISOString(),
-    })),
-    store: {
-      ...product.store,
-      createdAt: product.store.createdAt.toISOString(),
-      updatedAt: product.store.updatedAt.toISOString(),
-    },
-    createdBy: {
-      ...product.createdBy,
-      createdAt: product.createdBy.createdAt.toISOString(),
-      updatedAt: product.createdBy.updatedAt.toISOString(),
-    },
-  }));
-}
-
-async function getSupplierOptions(storeId: string) {
-  return prisma.store.findMany({
-    where: { id: storeId },
-    select: { id: true, name: true },
-  });
+  // Editor-only fields are loaded from the product detail endpoint on expansion.
+  return products.map(({ uploadLogs, ...product }) =>
+    ({
+      ...product,
+      price: product.price.toString(),
+      amazonPrice: product.amazonPrice?.toString() ?? null,
+      lastPriceCheck: product.lastPriceCheck?.toISOString() ?? null,
+      promotedAdSyncedAt: product.promotedAdSyncedAt?.toISOString() ?? null,
+      createdAt: product.createdAt.toISOString(),
+      updatedAt: product.updatedAt.toISOString(),
+      uploadedAt: uploadLogs[0]?.createdAt.toISOString() ?? null,
+      variants: product.variants.map((variant) => ({
+        ...variant,
+        buyPrice: variant.buyPrice.toString(),
+        sellPrice: variant.sellPrice.toString(),
+      })),
+      priceHistory: product.priceHistory.map((entry) => ({
+        ...entry,
+        previousPrice: entry.previousPrice.toString(),
+        newPrice: entry.newPrice.toString(),
+        previousSellPrice: entry.previousSellPrice.toString(),
+        newSellPrice: entry.newSellPrice.toString(),
+        appliedAt: entry.appliedAt?.toISOString() ?? null,
+        createdAt: entry.createdAt.toISOString(),
+      })),
+      store: product.store,
+      createdBy: product.createdBy,
+    }) as unknown as SerializedProductRow,
+  );
 }
 
 function getPage(totalCount: number, query: NormalizedProductsQuery) {
@@ -169,7 +187,7 @@ async function getProductRowsByIds(storeId: string, ids: string[]) {
 
   const products = await prisma.product.findMany({
     where: { storeId, id: { in: ids } },
-    include: productRowInclude,
+    select: productRowSelect,
   });
   const order = new Map(ids.map((id, index) => [id, index]));
 
@@ -180,6 +198,7 @@ async function getProductRowsByIds(storeId: string, ids: string[]) {
 
 export async function getCachedProductsPageData(
   storeId: string,
+  storeName: string,
   query: NormalizedProductsQuery
 ): Promise<ProductsPageData> {
   "use cache";
@@ -192,15 +211,12 @@ export async function getCachedProductsPageData(
   );
 
   const where = buildProductsWhere(storeId, query);
-  const supplierOptionsPromise = getSupplierOptions(storeId);
+  const supplierOptions = [{ id: storeId, name: storeName }];
 
   if (hasProfitRangeFilter(query)) {
     // Profit is computed from variant pricing, so filter every matching
     // inventory row first, then paginate the filtered IDs.
-    const [filteredIds, supplierOptions] = await Promise.all([
-      getProfitFilteredProductIds(where, query),
-      supplierOptionsPromise,
-    ]);
+    const filteredIds = await getProfitFilteredProductIds(where, query);
     const totalCount = filteredIds.length;
     const page = getPage(totalCount, query);
     const pageIds = filteredIds.slice(
@@ -221,18 +237,28 @@ export async function getCachedProductsPageData(
     };
   }
 
-  const [totalCount, supplierOptions] = await Promise.all([
+  const requestedPage = query.requestedPage;
+  const [totalCount, requestedProducts] = await Promise.all([
     prisma.product.count({ where }),
-    supplierOptionsPromise,
+    prisma.product.findMany({
+      where,
+      orderBy: { createdAt: "desc" },
+      skip: (requestedPage - 1) * query.pageSize,
+      take: query.pageSize,
+      select: productRowSelect,
+    }),
   ]);
   const page = getPage(totalCount, query);
-  const products = await prisma.product.findMany({
-    where,
-    orderBy: { createdAt: "desc" },
-    skip: (page - 1) * query.pageSize,
-    take: query.pageSize,
-    include: productRowInclude,
-  });
+  const products =
+    page === requestedPage
+      ? requestedProducts
+      : await prisma.product.findMany({
+          where,
+          orderBy: { createdAt: "desc" },
+          skip: (page - 1) * query.pageSize,
+          take: query.pageSize,
+          select: productRowSelect,
+        });
 
   return {
     products: serializeProducts(products),

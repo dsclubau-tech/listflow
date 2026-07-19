@@ -9,6 +9,10 @@ import {
   getAmazonPriceTrackingLabel,
   type AmazonPriceTrackingMode,
 } from "@/lib/amazon-price-tracking";
+import {
+  compareAbsolutePriceChanges,
+  getPriceChangeDirection,
+} from "@/lib/price-history-view";
 
 interface PriceTrackerSummary {
   trackedCount: number;
@@ -25,7 +29,8 @@ interface PriceTrackerHistoryItem {
   newPrice: string;
   previousSellPrice: string;
   newSellPrice: string;
-  changePercent: number;
+  changeAmount: string;
+  profit: string | null;
   ebayRevised: boolean;
   errorMessage: string | null;
   source: "LIVE" | "SIMULATED";
@@ -112,6 +117,18 @@ function formatMoney(value: string | number) {
   const parsed = Number(value);
   const amount = Number.isFinite(parsed) ? parsed : 0;
   return `A$${amount.toFixed(2)}`;
+}
+
+function formatSignedMoney(value: string | number) {
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed) || parsed === 0) {
+    return "A$0.00";
+  }
+
+  return parsed > 0
+    ? `+A$${parsed.toFixed(2)}`
+    : `-A$${Math.abs(parsed).toFixed(2)}`;
 }
 
 function formatMoneyInput(value: string | number | null) {
@@ -493,19 +510,26 @@ export default function PriceTrackerClient({
         return true;
       }
 
-      const isUp = Number(item.changePercent) > 0;
-      return directionFilter === "up" ? isUp : !isUp;
+      return getPriceChangeDirection(item.changeAmount) === directionFilter;
     });
 
     const items = [...directionFiltered];
 
     items.sort((left, right) => {
       if (sortBy === "largest") {
-        return Math.abs(right.changePercent) - Math.abs(left.changePercent);
+        return compareAbsolutePriceChanges(
+          left.changeAmount,
+          right.changeAmount,
+          "largest",
+        );
       }
 
       if (sortBy === "smallest") {
-        return Math.abs(left.changePercent) - Math.abs(right.changePercent);
+        return compareAbsolutePriceChanges(
+          left.changeAmount,
+          right.changeAmount,
+          "smallest",
+        );
       }
 
       return (
@@ -1696,14 +1720,15 @@ export default function PriceTrackerClient({
         </select>
       </div>
 
-      <div className="overflow-hidden rounded-2xl border border-gray-200 bg-white">
-        <table className="w-full">
+      <div className="overflow-x-auto rounded-md border border-gray-200 bg-white">
+        <table className="min-w-[1040px] w-full">
           <thead>
             <tr className="border-b bg-gray-50 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
               <th className="px-4 py-3">Product</th>
               <th className="px-4 py-3">Amazon</th>
               <th className="px-4 py-3">eBay</th>
-              <th className="px-4 py-3">% Change</th>
+              <th className="px-4 py-3">Change</th>
+              <th className="px-4 py-3">Profit</th>
               <th className="px-4 py-3">Status</th>
               <th className="px-4 py-3">Time</th>
             </tr>
@@ -1712,7 +1737,7 @@ export default function PriceTrackerClient({
             {filteredHistory.length === 0 ? (
               <tr>
                 <td
-                  colSpan={6}
+                  colSpan={7}
                   className="px-4 py-10 text-center text-sm text-gray-500"
                 >
                   No price history matches the current filters.
@@ -1720,7 +1745,9 @@ export default function PriceTrackerClient({
               </tr>
             ) : (
               filteredHistory.map((item) => {
-                const priceWentUp = item.changePercent > 0;
+                const changeDirection = getPriceChangeDirection(item.changeAmount);
+                const priceWentUp = changeDirection === "up";
+                const priceWentDown = changeDirection === "down";
                 const sourceLabel = item.source === "SIMULATED" ? "SIM" : "LIVE";
                 const sourceClasses =
                   item.source === "SIMULATED"
@@ -1733,7 +1760,11 @@ export default function PriceTrackerClient({
                   <tr
                     key={item.id}
                     className={`border-b last:border-b-0 ${
-                      priceWentUp ? "bg-red-50/40" : "bg-emerald-50/40"
+                      priceWentUp
+                        ? "bg-red-50/40"
+                        : priceWentDown
+                          ? "bg-emerald-50/40"
+                          : "bg-white"
                     }`}
                   >
                     <td className="px-4 py-3 align-top">
@@ -1809,11 +1840,25 @@ export default function PriceTrackerClient({
                     </td>
                     <td
                       className={`px-4 py-3 text-sm font-medium ${
-                        priceWentUp ? "text-red-700" : "text-emerald-700"
+                        priceWentUp
+                          ? "text-red-700"
+                          : priceWentDown
+                            ? "text-emerald-700"
+                            : "text-gray-700"
                       }`}
                     >
-                      {priceWentUp ? "+" : ""}
-                      {item.changePercent.toFixed(2)}%
+                      {formatSignedMoney(item.changeAmount)}
+                    </td>
+                    <td
+                      className={`px-4 py-3 text-sm font-medium ${
+                        item.profit === null
+                          ? "text-gray-400"
+                          : Number(item.profit) < 0
+                            ? "text-red-700"
+                            : "text-emerald-700"
+                      }`}
+                    >
+                      {item.profit === null ? "-" : formatMoney(item.profit)}
                     </td>
                     <td className="px-4 py-3">
                       <span

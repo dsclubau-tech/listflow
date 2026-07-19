@@ -92,8 +92,34 @@ const JOB_PANEL_FILTERS: Array<{ id: JobPanelFilter; label: string }> = [
 ];
 
 function formatMoney(value: string | number | null) {
+  if (value === null) {
+    return "-";
+  }
+
   const parsed = Number(value);
   return Number.isFinite(parsed) ? `A$${parsed.toFixed(2)}` : "-";
+}
+
+function formatSignedMoney(value: string | number | null) {
+  if (value === null) {
+    return "-";
+  }
+
+  const parsed = Number(value);
+
+  if (!Number.isFinite(parsed)) {
+    return "-";
+  }
+
+  if (parsed > 0) {
+    return `+A$${parsed.toFixed(2)}`;
+  }
+
+  if (parsed < 0) {
+    return `-A$${Math.abs(parsed).toFixed(2)}`;
+  }
+
+  return "A$0.00";
 }
 
 function formatDateTime(value: string | null) {
@@ -921,20 +947,22 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                 {runningAction === "bulk-dismiss" ? "Dismissing..." : "Dismiss visible"}
               </ActionButton>
             </SectionHeader>
-            <table className="w-full text-left">
+            <div className="overflow-x-auto">
+            <table className="min-w-[980px] w-full text-left">
               <thead className="bg-gray-50 text-xs font-medium uppercase tracking-wide text-gray-500">
                 <tr>
                   <th className="px-4 py-3">Product</th>
                   <th className="px-4 py-3">Buy Price</th>
                   <th className="px-4 py-3">Sell Price</th>
                   <th className="px-4 py-3">Change</th>
+                  <th className="px-4 py-3">Profit</th>
                   <th className="px-4 py-3">Detected</th>
                   <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {data.queues.pendingReviews.length === 0 ? (
-                  <EmptyRow colSpan={6} message="No pending price reviews." />
+                  <EmptyRow colSpan={7} message="No pending price reviews." />
                 ) : (
                   data.queues.pendingReviews.map((item) => (
                     <tr key={item.product.id}>
@@ -956,11 +984,25 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                       </td>
                       <td
                         className={`px-4 py-3 text-sm font-medium ${
-                          item.changePercent >= 0 ? "text-red-700" : "text-emerald-700"
+                          Number(item.changeAmount) > 0
+                            ? "text-red-700"
+                            : Number(item.changeAmount) < 0
+                              ? "text-emerald-700"
+                              : "text-gray-700"
                         }`}
                       >
-                        {item.changePercent >= 0 ? "+" : ""}
-                        {item.changePercent.toFixed(2)}%
+                        {formatSignedMoney(item.changeAmount)}
+                      </td>
+                      <td
+                        className={`px-4 py-3 text-sm font-medium ${
+                          item.profit === null
+                            ? "text-gray-500"
+                            : Number(item.profit) < 0
+                              ? "text-red-700"
+                              : "text-emerald-700"
+                        }`}
+                      >
+                        {formatMoney(item.profit)}
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-500">
                         {formatDateTime(item.createdAt)}
@@ -989,6 +1031,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                 )}
               </tbody>
             </table>
+            </div>
           </section>
         )}
 

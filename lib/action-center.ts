@@ -21,6 +21,11 @@ import { getCurrentEbayActionJobs } from "@/lib/ebay-action-jobs";
 import { getCurrentEbayResearchBatches } from "@/lib/ebay-research";
 import { serializePriceCheckJob } from "@/lib/price-check-jobs";
 import {
+  calculatePendingReviewMetrics,
+  getEffectiveListingQuantity,
+  getLatestPendingReviewHistory,
+} from "@/lib/action-center-metrics";
+import {
   getOfflineWorkerStatus,
   getWorkerStatusesForStore,
   type SerializedWorkerStatus,
@@ -78,7 +83,8 @@ export interface PendingReviewActionItem {
   newPrice: string;
   previousSellPrice: string;
   newSellPrice: string;
-  changePercent: number;
+  changeAmount: string;
+  profit: string | null;
   createdAt: string;
 }
 
@@ -318,6 +324,14 @@ async function getCachedActionCenterQueues(
                 title: true,
                 asin: true,
                 ebayItemId: true,
+                promotedAdStatus: true,
+                promotedAdPercent: true,
+              },
+            },
+            variant: {
+              select: {
+                feesPercent: true,
+                feesFixed: true,
               },
             },
           },
@@ -376,6 +390,7 @@ async function getCachedActionCenterQueues(
       title: true,
       asin: true,
       ebayItemId: true,
+      status: true,
       quantity: true,
       priceCheckError: true,
     },
@@ -393,13 +408,21 @@ async function getCachedActionCenterQueues(
   const pendingReviews = visiblePendingProductIds
     .map((productId) => {
       const histories = visiblePendingByProduct.get(productId) ?? [];
-      const latest = histories.sort(
-        (left, right) => right.createdAt.getTime() - left.createdAt.getTime()
-      )[0];
+      const latest = getLatestPendingReviewHistory(histories);
 
       if (!latest) {
         return null;
       }
+
+      const metrics = calculatePendingReviewMetrics({
+        previousBuyPrice: Number(latest.previousPrice),
+        newBuyPrice: Number(latest.newPrice),
+        newSellPrice: Number(latest.newSellPrice),
+        feesPercent: latest.variant?.feesPercent ?? null,
+        feesFixed: latest.variant?.feesFixed ?? null,
+        promotedAdStatus: latest.product.promotedAdStatus,
+        promotedAdPercent: latest.product.promotedAdPercent,
+      });
 
       return {
         product: serializeProduct(latest.product),
@@ -409,7 +432,8 @@ async function getCachedActionCenterQueues(
         newPrice: money(latest.newPrice) ?? "0.00",
         previousSellPrice: money(latest.previousSellPrice) ?? "0.00",
         newSellPrice: money(latest.newSellPrice) ?? "0.00",
-        changePercent: latest.changePercent,
+        changeAmount: metrics.changeAmount.toFixed(2),
+        profit: metrics.profit === null ? null : metrics.profit.toFixed(2),
         createdAt: latest.createdAt.toISOString(),
       };
     })
@@ -435,7 +459,7 @@ async function getCachedActionCenterQueues(
       })),
       onHold: onHoldProducts.map((product) => ({
         product: serializeProduct(product),
-        quantity: product.quantity,
+        quantity: getEffectiveListingQuantity(product.status, product.quantity),
         priceCheckError: product.priceCheckError,
       })),
     },

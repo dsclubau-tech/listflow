@@ -26,6 +26,7 @@ export default async function ProductsPage({
   try {
     data = await getCachedProductsPageData(
       storeSession.storeId,
+      storeSession.storeName,
       normalizeProductsQuery(params),
     );
   } catch (error) {

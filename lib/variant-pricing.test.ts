@@ -91,7 +91,8 @@ test("calculateNetProfit derives actual margin after buy price and fees", () => 
       sellPrice: 140,
       feesPercent: 10,
       feesFixed: 2,
+      promotedAdPercent: 5,
     }),
-    24
+    17
   );
 });
