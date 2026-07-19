@@ -6,6 +6,7 @@ import {
   getAmazonTechnicalPageMessage,
   getPriceCheckFailureCode,
   isAutoHoldPriceCheckFailureCode,
+  isVerifiedAmazonProductPage,
   isPriceCheckAutoHoldMetadata,
   selectPriceCheckAutoHoldProductIds,
 } from "@/lib/price-check-failures";
@@ -45,6 +46,52 @@ test("Amazon challenge and temporary error pages are technical", () => {
       bodyText: "Example product details",
     }),
     null,
+  );
+});
+
+test("Amazon not-found pages are technical", () => {
+  assert.match(
+    getAmazonTechnicalPageMessage({
+      title: "Page Not Found",
+      url: "https://www.amazon.com.au/dp/B000000000",
+      bodyText: "The Web address you've entered is not a functioning page.",
+    }) ?? "",
+    /temporary error page/i,
+  );
+});
+
+test("verifies an Amazon product page from the requested ASIN in its URL", () => {
+  assert.equal(
+    isVerifiedAmazonProductPage({
+      expectedAsin: "B0G64ZJ5MQ",
+      url: "https://www.amazon.com.au/dp/B0G64ZJ5MQ?th=1",
+    }),
+    true,
+  );
+  assert.equal(
+    isVerifiedAmazonProductPage({
+      expectedAsin: "B0G64ZJ5MQ",
+      url: "https://www.amazon.com.au/product-title/dp/B0G64ZJ5MQ/ref=abc",
+    }),
+    true,
+  );
+});
+
+test("does not verify the wrong Amazon product or a non-Amazon URL", () => {
+  assert.equal(
+    isVerifiedAmazonProductPage({
+      expectedAsin: "B0G64ZJ5MQ",
+      url: "https://www.amazon.com.au/dp/B000000000",
+      pageAsins: ["B000000000"],
+    }),
+    false,
+  );
+  assert.equal(
+    isVerifiedAmazonProductPage({
+      expectedAsin: "B0G64ZJ5MQ",
+      url: "https://example.com/dp/B0G64ZJ5MQ",
+    }),
+    false,
   );
 });
 

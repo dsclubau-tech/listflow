@@ -16,9 +16,29 @@ const AMAZON_TECHNICAL_PAGE_PATTERNS = [
   /validatecaptcha/i,
   /enter the characters you see/i,
   /automated access/i,
+  /page not found/i,
+  /not a functioning page/i,
   /sorry[, ]+something went wrong/i,
   /service unavailable/i,
 ];
+
+function amazonUrlContainsAsin(url: string, asin: string) {
+  try {
+    const parsed = new URL(url);
+    const host = parsed.hostname.toLowerCase();
+
+    if (host !== "amazon.com.au" && !host.endsWith(".amazon.com.au")) {
+      return false;
+    }
+
+    const escapedAsin = asin.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`/(?:dp|gp/product)/${escapedAsin}(?:[/?]|$)`, "i").test(
+      parsed.pathname,
+    );
+  } catch {
+    return false;
+  }
+}
 
 export class PriceCheckFailure extends Error {
   readonly code: PriceCheckFailureCode;
@@ -52,6 +72,31 @@ export function getAmazonTechnicalPageMessage(input: {
   return AMAZON_TECHNICAL_PAGE_PATTERNS.some((pattern) => pattern.test(combined))
     ? "Amazon returned a challenge or temporary error page instead of a product page."
     : null;
+}
+
+export function isVerifiedAmazonProductPage(input: {
+  expectedAsin: string;
+  url: string;
+  canonicalUrl?: string | null;
+  pageAsins?: Array<string | null | undefined>;
+}) {
+  const expectedAsin = input.expectedAsin.trim().toUpperCase();
+
+  if (!expectedAsin) {
+    return false;
+  }
+
+  if (
+    amazonUrlContainsAsin(input.url, expectedAsin) ||
+    (input.canonicalUrl &&
+      amazonUrlContainsAsin(input.canonicalUrl, expectedAsin))
+  ) {
+    return true;
+  }
+
+  return (input.pageAsins ?? []).some(
+    (asin) => asin?.trim().toUpperCase() === expectedAsin,
+  );
 }
 
 export function isPriceCheckAutoHoldMetadata(metadata: unknown) {

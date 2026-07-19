@@ -13,6 +13,7 @@ import { PriceCheckFailureCode } from "@/app/generated/prisma/enums";
 import {
   PriceCheckFailure,
   getAmazonTechnicalPageMessage,
+  isVerifiedAmazonProductPage,
 } from "@/lib/price-check-failures";
 
 export interface ScrapedProduct {
@@ -709,21 +710,25 @@ export async function scrapeAmazonPrice(
           return body.slice(0, 500);
         })
         .catch(() => "(could not read body)");
-      const productPageConfirmed = await page
-        .evaluate((expectedAsin) => {
-          const pageAsin = (
-            document.querySelector<HTMLInputElement>("#ASIN")?.value ??
-            document.querySelector<HTMLInputElement>("input[name='ASIN']")?.value ??
-            ""
-          )
-            .trim()
-            .toUpperCase();
-          const productTitle =
-            document.querySelector("#productTitle")?.textContent?.trim() ?? "";
-
-          return pageAsin === expectedAsin || productTitle.length > 0;
-        }, normalizedAsin)
-        .catch(() => false);
+      const productPageIdentifiers = await page
+        .evaluate(() => ({
+          canonicalUrl:
+            document.querySelector<HTMLLinkElement>("link[rel='canonical']")
+              ?.href ?? null,
+          pageAsins: [
+            document.querySelector<HTMLInputElement>("#ASIN")?.value,
+            document.querySelector<HTMLInputElement>("input[name='ASIN']")
+              ?.value,
+            document.querySelector<HTMLElement>("[data-asin]")?.dataset.asin,
+          ],
+        }))
+        .catch(() => ({ canonicalUrl: null, pageAsins: [] }));
+      const productPageConfirmed = isVerifiedAmazonProductPage({
+        expectedAsin: normalizedAsin,
+        url: pageUrl,
+        canonicalUrl: productPageIdentifiers.canonicalUrl,
+        pageAsins: productPageIdentifiers.pageAsins,
+      });
       const technicalPageMessage = getAmazonTechnicalPageMessage({
         title: pageTitle,
         url: pageUrl,
