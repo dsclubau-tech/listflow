@@ -97,6 +97,7 @@ export async function POST(request: Request) {
           data: {
             asin: update.asin,
             priceCheckError: null,
+            priceCheckFailureCode: null,
             lastPriceCheck: null,
           },
         });

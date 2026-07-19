@@ -207,6 +207,7 @@ export async function POST(request: Request) {
       data: {
         price: primaryHistory!.newSellPrice,
         priceCheckError: null,
+        priceCheckFailureCode: null,
       },
     });
 
@@ -307,7 +308,7 @@ export async function POST(request: Request) {
 
     await tx.product.update({
       where: { id: product.id },
-      data: { priceCheckError: null },
+      data: { priceCheckError: null, priceCheckFailureCode: null },
     });
   });
 

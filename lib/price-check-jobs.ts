@@ -8,7 +8,10 @@ import {
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
 import { invalidateJobCaches } from "@/lib/cache-tags";
-import { getSelectedPriceCheckSummary } from "@/lib/price-check-eligibility";
+import {
+  getSelectedPriceCheckSummary,
+  isValidAsin,
+} from "@/lib/price-check-eligibility";
 import {
   assertNoPriceCheckStartConflict,
   getPriceCheckLeaseInput,
@@ -21,6 +24,7 @@ import {
   type PriceCheckProgress,
   type PriceCheckResult,
 } from "@/lib/price-checker";
+import { finalizePriceCheckAutoHoldForJob } from "@/lib/price-check-auto-hold";
 
 const ACTIVE_JOB_STATUSES: PriceCheckJobStatus[] = [
   PriceCheckJobStatus.QUEUED,
@@ -48,6 +52,8 @@ type PriceCheckJobRecord = {
   startedAt: Date | null;
   completedAt: Date | null;
   dismissedAt: Date | null;
+  autoHoldActionJobId: string | null;
+  autoHoldQueued: number;
 };
 
 type CreateJobInput = {
@@ -175,12 +181,30 @@ export function serializePriceCheckJob(job: PriceCheckJobRecord) {
     canResume: canResumePriceCheckJob(job),
     reason: job.reason,
     errorMessage: job.errorMessage,
+    autoHoldActionJobId: job.autoHoldActionJobId,
+    autoHoldQueued: job.autoHoldQueued,
     createdAt: job.createdAt.toISOString(),
     updatedAt: job.updatedAt.toISOString(),
     startedAt: job.startedAt?.toISOString() ?? null,
     completedAt: job.completedAt?.toISOString() ?? null,
     dismissedAt: job.dismissedAt?.toISOString() ?? null,
   };
+}
+
+async function finalizeAutoHoldsSafely(jobId: string) {
+  try {
+    const result = await finalizePriceCheckAutoHoldForJob(jobId);
+    return { ...result, errorMessage: null as string | null };
+  } catch (error) {
+    const errorMessage = getErrorMessage(error);
+    logger.error(
+      "price-check/jobs",
+      "Failed to queue automatic holds after price check",
+      error,
+      { jobId },
+    );
+    return { actionJobId: null, queued: 0, errorMessage };
+  }
 }
 
 async function resolveJobCheckpoint(job: PriceCheckJobRecord): Promise<JobCheckpoint> {
@@ -359,11 +383,14 @@ async function resolvePriceCheckSelection(storeId: string, productIds: string[])
     },
     select: {
       id: true,
+      asin: true,
       _count: { select: { variants: true } },
     },
     orderBy: { updatedAt: "desc" },
   });
-  const eligible = products.filter((product) => product._count.variants > 0);
+  const eligible = products.filter(
+    (product) => isValidAsin(product.asin) && product._count.variants > 0,
+  );
 
   return {
     productIds: eligible.map((product) => product.id),
@@ -402,6 +429,7 @@ async function markPriceCheckJobCancelled(
   jobId: string,
   result?: PriceCheckResult
 ) {
+  const autoHold = await finalizeAutoHoldsSafely(jobId);
   const job = await prisma.priceCheckJob.update({
     where: { id: jobId },
     data: {
@@ -415,7 +443,9 @@ async function markPriceCheckJobCancelled(
             skipped: result.skipped,
           }
         : {}),
-      reason: "Price check cancelled.",
+      reason: autoHold.errorMessage
+        ? `Price check cancelled. Automatic holds could not be queued: ${autoHold.errorMessage}`
+        : "Price check cancelled.",
       errorMessage: null,
       completedAt: new Date(),
     },
@@ -442,6 +472,7 @@ async function runPriceCheckJobClaimed(jobId: string) {
   await persistCheckpoint(job, checkpoint);
 
   if (job.productIds.length === 0 || checkpoint.productIdsToCheck.length === 0) {
+    const autoHold = await finalizeAutoHoldsSafely(job.id);
     const completedJob = await prisma.priceCheckJob.update({
       where: { id: job.id },
       data: {
@@ -450,9 +481,11 @@ async function runPriceCheckJobClaimed(jobId: string) {
         checked: checkpoint.baseCounters.checked,
         completedAt: new Date(),
         reason:
-          job.productIds.length === 0
-            ? job.reason ?? "No eligible tracked products found."
-          : "No remaining products to check.",
+          autoHold.errorMessage
+            ? `Automatic holds could not be queued: ${autoHold.errorMessage}`
+            : job.productIds.length === 0
+              ? job.reason ?? "No eligible tracked products found."
+              : "No remaining products to check.",
       },
     });
     invalidatePriceCheckJobCaches(completedJob);
@@ -510,6 +543,7 @@ async function runPriceCheckJobClaimed(jobId: string) {
       return;
     }
 
+    const autoHold = await finalizeAutoHoldsSafely(job.id);
     const completedJob = await prisma.priceCheckJob.update({
       where: { id: job.id },
       data: {
@@ -520,7 +554,10 @@ async function runPriceCheckJobClaimed(jobId: string) {
         pendingReview: aggregateResult.pendingReview,
         failed: aggregateResult.failed,
         skipped: aggregateResult.skipped,
-        reason: aggregateResult.reason ?? null,
+        reason:
+          autoHold.errorMessage
+            ? `Automatic holds could not be queued: ${autoHold.errorMessage}`
+            : aggregateResult.reason ?? null,
         completedAt: new Date(),
       },
     });
@@ -543,11 +580,14 @@ async function runPriceCheckJobClaimed(jobId: string) {
       return;
     }
 
+    const autoHold = await finalizeAutoHoldsSafely(job.id);
     const failedJob = await prisma.priceCheckJob.update({
       where: { id: job.id },
       data: {
         status: PriceCheckJobStatus.FAILED,
-        errorMessage,
+        errorMessage: autoHold.errorMessage
+          ? `${errorMessage} Automatic holds could not be queued: ${autoHold.errorMessage}`
+          : errorMessage,
         completedAt: new Date(),
       },
     });

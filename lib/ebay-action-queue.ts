@@ -52,3 +52,26 @@ export function getEbayActionQueuePositionText(input: {
 
   return `Queue position ${input.queuePosition}`;
 }
+
+export function getEbayActionJobLabel(input: {
+  type: string;
+  metadata?: unknown;
+}) {
+  if (
+    input.metadata &&
+    typeof input.metadata === "object" &&
+    !Array.isArray(input.metadata) &&
+    (input.metadata as Record<string, unknown>).kind === "price-check-auto-hold"
+  ) {
+    return "Auto hold after failed price check";
+  }
+
+  if (input.type === "UPLOAD_LISTING") return "Upload listings";
+  if (input.type === "REVISE_LISTING") return "Update eBay listing";
+  if (input.type === "HOLD") return "Put listings on hold";
+  if (input.type === "RESUME") return "Resume listings";
+  if (input.type === "END") return "End listings";
+  if (input.type === "BULK_EDIT_REVISE") return "Bulk edit listings";
+  if (input.type === "MANAGE_PROMOTED_ADS") return "Manage promoted listings";
+  return "eBay listing action";
+}

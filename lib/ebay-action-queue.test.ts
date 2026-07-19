@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   getEbayActionQueuePositionText,
   getEbayActionQueuePositions,
+  getEbayActionJobLabel,
   getEbayActionStatusLabel,
 } from "@/lib/ebay-action-queue";
 
@@ -53,5 +54,19 @@ test("getEbayActionQueuePositionText only describes active eBay actions", () => 
   assert.equal(
     getEbayActionQueuePositionText({ status: "COMPLETED", queuePosition: null }),
     null,
+  );
+});
+
+test("automatic price-check holds have a distinct action label", () => {
+  assert.equal(
+    getEbayActionJobLabel({
+      type: "HOLD",
+      metadata: { kind: "price-check-auto-hold" },
+    }),
+    "Auto hold after failed price check",
+  );
+  assert.equal(
+    getEbayActionJobLabel({ type: "HOLD", metadata: {} }),
+    "Put listings on hold",
   );
 });

@@ -96,6 +96,7 @@ export async function POST(request: Request) {
         amazonPrice: simulatedPrice,
         lastPriceCheck: new Date(),
         priceCheckError: null,
+        priceCheckFailureCode: null,
       },
     });
 

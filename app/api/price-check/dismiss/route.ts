@@ -120,7 +120,7 @@ export async function POST(request: Request) {
 
     await tx.product.update({
       where: { id: target.productId },
-      data: { priceCheckError: null },
+      data: { priceCheckError: null, priceCheckFailureCode: null },
     });
   });
 

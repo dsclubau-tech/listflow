@@ -72,7 +72,7 @@ export async function POST(request: Request) {
 
     await tx.product.updateMany({
       where: { id: { in: affectedProductIds }, storeId: storeSession.storeId },
-      data: { priceCheckError: null },
+      data: { priceCheckError: null, priceCheckFailureCode: null },
     });
   });
 

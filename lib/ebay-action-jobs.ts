@@ -51,6 +51,10 @@ import {
   getConfiguredPublicImageBaseUrl,
   prepareEbayPictureUrls,
 } from "@/lib/ebay-image-urls";
+import {
+  isAutoHoldPriceCheckFailureCode,
+  isPriceCheckAutoHoldMetadata,
+} from "@/lib/price-check-failures";
 
 const ACTIVE_ACTION_JOB_STATUSES: EbayActionJobStatus[] = [
   EbayActionJobStatus.QUEUED,
@@ -253,6 +257,7 @@ function getSuccessfulBulkEditRevisionData(input: SuccessfulBulkEditRevisionInpu
     }),
     errorMessage: null,
     priceCheckError: null,
+    priceCheckFailureCode: null,
     ...(input.overrideStartPrice !== undefined
       ? { price: input.overrideStartPrice }
       : {}),
@@ -289,6 +294,7 @@ async function applySuccessfulBulkEditRevisions(
           status,
           errorMessage: null,
           priceCheckError: null,
+          priceCheckFailureCode: null,
         },
       }),
     ),
@@ -845,6 +851,9 @@ async function markProgressBatch(
 }
 
 async function processProduct(job: EbayActionJobRecord, productId: string) {
+  const automaticPriceCheckHold =
+    job.type === EbayActionJobType.HOLD &&
+    isPriceCheckAutoHoldMetadata(job.metadata);
   const product = await prisma.product.findFirst({
     where: { id: productId, storeId: job.storeId },
     include: {
@@ -856,6 +865,10 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
   });
 
   if (!product) {
+    if (automaticPriceCheckHold) {
+      return { ok: true, failure: null };
+    }
+
     return {
       ok: false,
       failure: { productId, title: "(missing)", error: "Product was not found" },
@@ -987,6 +1000,15 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
   }
 
   if (job.type === EbayActionJobType.HOLD) {
+    if (
+      automaticPriceCheckHold &&
+      (product.status !== ProductStatus.IMPORTED ||
+        !product.priceCheckError ||
+        !isAutoHoldPriceCheckFailureCode(product.priceCheckFailureCode))
+    ) {
+      return { ok: true, failure: null };
+    }
+
     if (product.status !== ProductStatus.IMPORTED || !product.ebayItemId) {
       return {
         ok: false,
@@ -1017,7 +1039,12 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
 
     await prisma.product.update({
       where: { id: product.id },
-      data: { status: ProductStatus.ON_HOLD, priceCheckError: null },
+      data: {
+        status: ProductStatus.ON_HOLD,
+        ...(automaticPriceCheckHold
+          ? {}
+          : { priceCheckError: null, priceCheckFailureCode: null }),
+      },
     });
     return { ok: true, failure: null };
   }

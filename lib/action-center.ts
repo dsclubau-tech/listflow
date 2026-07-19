@@ -96,6 +96,7 @@ export interface LowStockActionItem {
 export interface OnHoldActionItem {
   product: ActionCenterProductSummary;
   quantity: number;
+  priceCheckError: string | null;
 }
 
 export interface ActionCenterPriceCheckJob {
@@ -117,6 +118,8 @@ export interface ActionCenterPriceCheckJob {
   startedAt: string | null;
   completedAt: string | null;
   dismissedAt: string | null;
+  autoHoldActionJobId: string | null;
+  autoHoldQueued: number;
 }
 
 export interface ActionCenterEbayImportJob {
@@ -374,6 +377,7 @@ async function getCachedActionCenterQueues(
       asin: true,
       ebayItemId: true,
       quantity: true,
+      priceCheckError: true,
     },
   });
   const onHoldCount = await prisma.product.count({ where: onHoldWhere });
@@ -432,6 +436,7 @@ async function getCachedActionCenterQueues(
       onHold: onHoldProducts.map((product) => ({
         product: serializeProduct(product),
         quantity: product.quantity,
+        priceCheckError: product.priceCheckError,
       })),
     },
   };

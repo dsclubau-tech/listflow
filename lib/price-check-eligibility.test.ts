@@ -18,8 +18,21 @@ test("missing ASIN is ineligible instead of becoming a failed check", () => {
   assert.deepEqual(getPriceCheckEligibility(product), {
     eligible: false,
     reason: "missing-asin",
-    message: "Selected product cannot be price checked because it has no Amazon ASIN.",
+    message:
+      "Selected product cannot be price checked because its Amazon ASIN is missing or invalid.",
   });
+});
+
+test("invalid ASIN is skipped as an unmet prerequisite", () => {
+  const product = {
+    id: "invalid-asin",
+    status: "IMPORTED",
+    asin: "NOT-AN-ASIN",
+    _count: { variants: 1 },
+  };
+
+  assert.equal(getPriceCheckPrerequisiteIssue(product), "missing-asin");
+  assert.equal(getPriceCheckEligibility(product).eligible, false);
 });
 
 test("missing variants are ineligible", () => {

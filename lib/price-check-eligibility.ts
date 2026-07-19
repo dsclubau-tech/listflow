@@ -62,7 +62,7 @@ export function getPriceCheckVariantCount(product: PriceCheckCandidate) {
 export function getPriceCheckPrerequisiteIssue(
   product: PriceCheckCandidate,
 ): Extract<PriceCheckIneligibilityReason, "missing-asin" | "missing-variants"> | null {
-  if (!normalizeAsin(product.asin)) {
+  if (!isValidAsin(product.asin)) {
     return "missing-asin";
   }
 
@@ -86,7 +86,8 @@ export function getPriceCheckEligibility(
     return {
       eligible: false,
       reason: "missing-asin",
-      message: "Selected product cannot be price checked because it has no Amazon ASIN.",
+      message:
+        "Selected product cannot be price checked because its Amazon ASIN is missing or invalid.",
     };
   }
 

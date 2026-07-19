@@ -94,6 +94,14 @@ enum AmazonPriceTrackingMode {
   DEAL
 }
 
+enum PriceCheckFailureCode {
+  AMAZON_OUT_OF_STOCK
+  AMAZON_PRICE_UNAVAILABLE
+  MISSING_BASELINE
+  UNSAFE_PRICE_CHANGE
+  TECHNICAL_ERROR
+}
+
 enum PriceCheckJobStatus {
   QUEUED
   RUNNING
@@ -210,6 +218,7 @@ model Product {
   promotedAdSyncedAt DateTime?
   lastPriceCheck DateTime?
   priceCheckError String?     @db.Text
+  priceCheckFailureCode PriceCheckFailureCode?
   internalNote    String?     @db.Text
   shippingPolicyId String?
   returnPolicyId   String?
@@ -326,6 +335,8 @@ model PriceCheckJob {
   startedAt     DateTime?
   completedAt   DateTime?
   dismissedAt   DateTime?
+  autoHoldActionJobId String?
+  autoHoldQueued Int                 @default(0)
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
   store Store? @relation(fields: [storeId], references: [id], onDelete: Cascade)
@@ -711,6 +722,7 @@ model SupplierSettings {
   maxShippingDays       Int      @default(25)
   primeOnly             Boolean  @default(true)
   priceTrackingEnabled  Boolean  @default(false)
+  autoHoldOnPriceCheckFailure Boolean @default(true)
   priceCheckHour        Int      @default(6)
   scrapePostcode        String   @default("2217")
 

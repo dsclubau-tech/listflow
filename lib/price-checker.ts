@@ -1,4 +1,5 @@
 import { Prisma } from "@/app/generated/prisma/client";
+import { PriceCheckFailureCode } from "@/app/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { scrapeAmazonPrice } from "@/lib/amazon-scraper";
 import { calculateSellPrice } from "@/lib/variant-pricing";
@@ -14,6 +15,7 @@ import {
   type AmazonPriceTrackingMode,
 } from "@/lib/amazon-price-tracking";
 import { getPriceCheckPrerequisiteIssue } from "@/lib/price-check-eligibility";
+import { getPriceCheckFailureCode } from "@/lib/price-check-failures";
 
 const PRICE_TOLERANCE = 0.01;
 const MIN_SAFE_PRODUCT_DELAY_MS = 1000;
@@ -50,6 +52,13 @@ export interface PriceCheckResult {
 
 export type PriceCheckProgress = PriceCheckResult & { total: number };
 
+export type PriceCheckProductFailure = {
+  productId: string;
+  code: PriceCheckFailureCode;
+  message: string;
+  checkedAt: Date;
+};
+
 interface RunPriceCheckOptions {
   storeId?: string;
   productIds?: string[];
@@ -59,6 +68,9 @@ interface RunPriceCheckOptions {
   onProductComplete?: (
     productId: string,
     progress: PriceCheckProgress
+  ) => void | Promise<void>;
+  onProductFailure?: (
+    failure: PriceCheckProductFailure,
   ) => void | Promise<void>;
   shouldCancel?: () => boolean | Promise<boolean>;
 }
@@ -284,6 +296,31 @@ export async function runPriceCheck(
       });
     }
   };
+  const recordProductFailure = async (input: PriceCheckProductFailure) => {
+    await prisma.product.update({
+      where: { id: input.productId },
+      data: {
+        lastPriceCheck: input.checkedAt,
+        priceCheckError: input.message,
+        priceCheckFailureCode: input.code,
+      },
+    });
+    result.failed += 1;
+
+    if (!options.onProductFailure) {
+      return;
+    }
+
+    try {
+      await options.onProductFailure(input);
+    } catch (error) {
+      logger.warn("price-checker/run", "Price check failure callback failed", {
+        productId: input.productId,
+        failureCode: input.code,
+        errorMessage: getErrorMessage(error),
+      });
+    }
+  };
   const checkCancelled = async () => {
     if (!options.shouldCancel) {
       return false;
@@ -380,6 +417,7 @@ export async function runPriceCheck(
           data: {
             lastPriceCheck: null,
             priceCheckError: null,
+            priceCheckFailureCode: null,
           },
         });
 
@@ -422,15 +460,11 @@ export async function runPriceCheck(
         const amazonStockUpdate = getAmazonStockUpdate(scrapedAmazonStockLeft);
 
         if (currentAmazonPrice === null) {
-          result.failed += 1;
-
-          await prisma.product.update({
-            where: { id: product.id },
-            data: {
-              lastPriceCheck: checkedAt,
-              priceCheckError:
-                getAmazonPriceUnavailableMessage(priceTrackingMode),
-            },
+          await recordProductFailure({
+            productId: product.id,
+            code: PriceCheckFailureCode.AMAZON_PRICE_UNAVAILABLE,
+            message: getAmazonPriceUnavailableMessage(priceTrackingMode),
+            checkedAt,
           });
 
           logger.warn("price-checker/run", "Amazon price unavailable", {
@@ -466,6 +500,7 @@ export async function runPriceCheck(
                 ...amazonStockUpdate,
                 lastPriceCheck: checkedAt,
                 priceCheckError: null,
+                priceCheckFailureCode: null,
               },
             });
 
@@ -489,14 +524,11 @@ export async function runPriceCheck(
         }
 
         if (!previousAmazonPrice || previousAmazonPrice <= 0) {
-          result.failed += 1;
-
-          await prisma.product.update({
-            where: { id: product.id },
-            data: {
-              lastPriceCheck: checkedAt,
-              priceCheckError: "Tracked product has no baseline Amazon buy price.",
-            },
+          await recordProductFailure({
+            productId: product.id,
+            code: PriceCheckFailureCode.MISSING_BASELINE,
+            message: "Tracked product has no baseline Amazon buy price.",
+            checkedAt,
           });
 
           logger.warn("price-checker/run", "Missing baseline Amazon price", {
@@ -533,6 +565,7 @@ export async function runPriceCheck(
                 ...amazonStockUpdate,
                 lastPriceCheck: checkedAt,
                 priceCheckError: null,
+                priceCheckFailureCode: null,
               },
             });
 
@@ -609,6 +642,7 @@ export async function runPriceCheck(
                 ...amazonStockUpdate,
                 lastPriceCheck: checkedAt,
                 priceCheckError: null,
+                priceCheckFailureCode: null,
               },
             });
 
@@ -656,18 +690,16 @@ export async function runPriceCheck(
         // in either direction, stop and flag it. A $999 product doesn't drop
         // to $5 overnight through normal market movement.
         if (Math.abs(changePercent) > MAX_CHANGE_PERCENT) {
-          result.failed += 1;
-
-          await prisma.product.update({
-            where: { id: product.id },
-            data: {
-              lastPriceCheck: checkedAt,
-              priceCheckError:
-                `Price change of ${changePercent.toFixed(1)}% exceeds the ` +
-                `${MAX_CHANGE_PERCENT}% safety limit. Amazon price went from ` +
-                `A$${previousAmazonPrice.toFixed(2)} to A$${currentAmazonPrice.toFixed(2)}. ` +
-                `Manual review required.`,
-            },
+          const message =
+            `Price change of ${changePercent.toFixed(1)}% exceeds the ` +
+            `${MAX_CHANGE_PERCENT}% safety limit. Amazon price went from ` +
+            `A$${previousAmazonPrice.toFixed(2)} to A$${currentAmazonPrice.toFixed(2)}. ` +
+            `Manual review required.`;
+          await recordProductFailure({
+            productId: product.id,
+            code: PriceCheckFailureCode.UNSAFE_PRICE_CHANGE,
+            message,
+            checkedAt,
           });
 
           logger.warn("price-checker/run", "Guard 1: price change exceeds threshold", {
@@ -759,6 +791,7 @@ export async function runPriceCheck(
               ...amazonStockUpdate,
               lastPriceCheck: checkedAt,
               priceCheckError: null,
+              priceCheckFailureCode: null,
             },
           });
 
@@ -794,21 +827,20 @@ export async function runPriceCheck(
           priceTrackingMode,
         });
       } catch (error) {
-        result.failed += 1;
-
         const message = getErrorMessage(error);
+        const code = getPriceCheckFailureCode(error);
 
-        await prisma.product.update({
-          where: { id: product.id },
-          data: {
-            lastPriceCheck: checkedAt,
-            priceCheckError: message,
-          },
+        await recordProductFailure({
+          productId: product.id,
+          code,
+          message,
+          checkedAt,
         });
 
         logger.error("price-checker/run", "Price check failed", error, {
           productId: product.id,
           asin: product.asin,
+          failureCode: code,
         });
       }
 

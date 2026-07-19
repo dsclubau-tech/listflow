@@ -54,6 +54,8 @@ async function getOrCreateStoreSupplierSettings(storeId: string) {
       maxShippingDays: globalSettings?.maxShippingDays ?? 25,
       primeOnly: globalSettings?.primeOnly ?? true,
       priceTrackingEnabled: globalSettings?.priceTrackingEnabled ?? false,
+      autoHoldOnPriceCheckFailure:
+        globalSettings?.autoHoldOnPriceCheckFailure ?? true,
       priceCheckHour: globalSettings?.priceCheckHour ?? 6,
       scrapePostcode: globalSettings?.scrapePostcode ?? "2217",
       storeNumber,
@@ -116,6 +118,7 @@ export async function PATCH(request: Request) {
     "maxShippingDays",
     "primeOnly",
     "priceTrackingEnabled",
+    "autoHoldOnPriceCheckFailure",
     "priceCheckHour",
     "scrapePostcode",
     "defaultItemSpecifics",

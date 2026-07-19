@@ -3,8 +3,39 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { runPriceCheck } from "@/lib/price-checker";
 import { createRequestLogger } from "@/lib/logger";
-import { getSelectedPriceCheckSummary } from "@/lib/price-check-eligibility";
-import { getCurrentStoreSession } from "@/lib/store-session";
+import {
+  getSelectedPriceCheckSummary,
+  isValidAsin,
+} from "@/lib/price-check-eligibility";
+import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
+import { queuePriceCheckAutoHoldForRun } from "@/lib/price-check-auto-hold";
+
+async function runPriceCheckWithAutoHold(input: {
+  userId: string;
+  storeId: string;
+  productIds?: string[];
+  all?: boolean;
+}) {
+  const failedSince = new Date();
+  const result = await runPriceCheck({
+    storeId: input.storeId,
+    ...(input.productIds ? { productIds: input.productIds } : {}),
+    ignoreSchedule: true,
+  });
+  const autoHold = await queuePriceCheckAutoHoldForRun({
+    userId: input.userId,
+    storeId: input.storeId,
+    productIds: input.productIds ?? [],
+    failedSince,
+    all: input.all,
+  });
+
+  return {
+    ...result,
+    autoHoldQueued: autoHold.queued,
+    autoHoldActionJobId: autoHold.actionJobId,
+  };
+}
 
 export async function POST(request: Request) {
   const session = await auth();
@@ -67,6 +98,7 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
+  const userId = await getInternalUserId();
 
   // ── Bulk ASIN flow ────────────────────────────────────────────────────
   if (asins.length > 0) {
@@ -85,7 +117,9 @@ export async function POST(request: Request) {
     });
 
     // Only include products that have at least one variant
-    const eligible = products.filter((p) => p._count.variants > 0);
+    const eligible = products.filter(
+      (product) => isValidAsin(product.asin) && product._count.variants > 0,
+    );
     const matchedAsins = new Set(eligible.map((p) => p.asin!));
     const unmatched = asins.filter((a) => !matchedAsins.has(a));
 
@@ -105,10 +139,10 @@ export async function POST(request: Request) {
     }
 
     try {
-      const result = await runPriceCheck({
+      const result = await runPriceCheckWithAutoHold({
+        userId,
         storeId: storeSession.storeId,
         productIds: eligible.map((p) => p.id),
-        ignoreSchedule: true,
       });
 
       log.info("price-check/route", "Bulk ASIN price check completed", {
@@ -188,10 +222,10 @@ export async function POST(request: Request) {
     }
 
     try {
-      const result = await runPriceCheck({
+      const result = await runPriceCheckWithAutoHold({
+        userId,
         storeId: storeSession.storeId,
         productIds: eligible.map((product) => product.id),
-        ignoreSchedule: true,
       });
 
       log.info("price-check/route", "Targeted product price check completed", {
@@ -224,9 +258,10 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await runPriceCheck({
+    const result = await runPriceCheckWithAutoHold({
+      userId,
       storeId: storeSession.storeId,
-      ignoreSchedule: true,
+      all: true,
     });
 
     log.info("price-check/route", "Manual price check completed", {

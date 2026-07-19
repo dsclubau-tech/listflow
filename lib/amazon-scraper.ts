@@ -9,6 +9,11 @@ import {
 } from "@/lib/amazon-price-tracking";
 import { dedupeProductImages } from "@/lib/product-images";
 import { toEbayListingTitle } from "@/lib/product-title";
+import { PriceCheckFailureCode } from "@/app/generated/prisma/enums";
+import {
+  PriceCheckFailure,
+  getAmazonTechnicalPageMessage,
+} from "@/lib/price-check-failures";
 
 export interface ScrapedProduct {
   title: string;
@@ -652,7 +657,8 @@ export async function scrapeAmazonPrice(
         );
       }
 
-      throw new Error(
+      throw new PriceCheckFailure(
+        PriceCheckFailureCode.AMAZON_OUT_OF_STOCK,
         `Product ${normalizedAsin} is temporarily out of stock on Amazon — no price available.`
       );
     }
@@ -703,6 +709,36 @@ export async function scrapeAmazonPrice(
           return body.slice(0, 500);
         })
         .catch(() => "(could not read body)");
+      const productPageConfirmed = await page
+        .evaluate((expectedAsin) => {
+          const pageAsin = (
+            document.querySelector<HTMLInputElement>("#ASIN")?.value ??
+            document.querySelector<HTMLInputElement>("input[name='ASIN']")?.value ??
+            ""
+          )
+            .trim()
+            .toUpperCase();
+          const productTitle =
+            document.querySelector("#productTitle")?.textContent?.trim() ?? "";
+
+          return pageAsin === expectedAsin || productTitle.length > 0;
+        }, normalizedAsin)
+        .catch(() => false);
+      const technicalPageMessage = getAmazonTechnicalPageMessage({
+        title: pageTitle,
+        url: pageUrl,
+        bodyText: bodySnippet,
+      });
+
+      if (technicalPageMessage || !productPageConfirmed) {
+        throw new PriceCheckFailure(
+          PriceCheckFailureCode.TECHNICAL_ERROR,
+          `${
+            technicalPageMessage ??
+            "Amazon did not return a verifiable product page, so the missing price was not treated as a product failure."
+          } ASIN: ${normalizedAsin}.`,
+        );
+      }
 
       console.warn(
         `[scrapeAmazonPrice] Price not found for ASIN ${normalizedAsin}.\n` +

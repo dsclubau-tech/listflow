@@ -9,6 +9,7 @@ import Toast from "@/components/Toast";
 import { useTimedActionProgress } from "@/hooks/useTimedActionProgress";
 import { useToast } from "@/hooks/useToast";
 import {
+  getEbayActionJobLabel,
   getEbayActionQueuePositionText,
   getEbayActionStatusLabel,
 } from "@/lib/ebay-action-queue";
@@ -230,15 +231,8 @@ function getCurrentJobCount(data: ActionCenterData) {
   );
 }
 
-function actionJobLabel(type: string) {
-  if (type === "UPLOAD_LISTING") return "Upload listings";
-  if (type === "REVISE_LISTING") return "Update eBay listing";
-  if (type === "HOLD") return "Put listings on hold";
-  if (type === "RESUME") return "Resume listings";
-  if (type === "END") return "End listings";
-  if (type === "BULK_EDIT_REVISE") return "Bulk edit listings";
-  if (type === "MANAGE_PROMOTED_ADS") return "Manage promoted listings";
-  return "eBay listing action";
+function actionJobLabel(job: ActionCenterEbayActionJob) {
+  return getEbayActionJobLabel(job);
 }
 
 function actionJobProgressLabel(job: ActionCenterEbayActionJob) {
@@ -1137,6 +1131,11 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                     <td className="px-4 py-3 align-top">
                       <div className="font-medium text-gray-900">{item.product.title}</div>
                       <ProductLinks product={item.product} />
+                      {item.priceCheckError && (
+                        <div className="mt-1 max-w-xl text-xs text-red-700">
+                          Held automatically: {item.priceCheckError}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-700">{item.quantity}</td>
                     <td className="px-4 py-3">
@@ -1226,6 +1225,9 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                           <div className="mt-1 text-xs text-gray-500">
                             {job.checked}/{job.total} checked, {job.pendingReview} pending,{" "}
                             {job.failed} failed
+                            {job.autoHoldQueued > 0
+                              ? `, ${job.autoHoldQueued} auto-hold queued`
+                              : ""}
                             {isResumablePriceJob(job) ? `, ${job.remaining} remaining` : ""}
                           </div>
                           <div className="mt-2 max-w-sm">
@@ -1368,7 +1370,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                         <div>
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="text-sm font-medium text-gray-900">
-                              {actionJobLabel(job.type)}
+                              {actionJobLabel(job)}
                             </span>
                             <span
                               className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClasses(job.status)}`}
@@ -1619,6 +1621,9 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                           <div className="mt-1 text-xs text-gray-500">
                             {job.checked}/{job.total} checked, {job.pendingReview} pending,{" "}
                             {job.failed} failed
+                            {job.autoHoldQueued > 0
+                              ? `, ${job.autoHoldQueued} auto-hold queued`
+                              : ""}
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
@@ -1690,7 +1695,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                         <div>
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="text-sm font-medium text-gray-900">
-                              {actionJobLabel(job.type)}
+                              {actionJobLabel(job)}
                             </span>
                             <span
                               className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClasses(job.status)}`}
@@ -1796,6 +1801,9 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                           <div className="mt-1 text-xs text-gray-500">
                             Dismissed {formatDateTime(job.dismissedAt)} - {job.checked}/{job.total} checked,{" "}
                             {job.pendingReview} pending, {job.failed} failed
+                            {job.autoHoldQueued > 0
+                              ? `, ${job.autoHoldQueued} auto-hold queued`
+                              : ""}
                           </div>
                         </div>
                         <Link

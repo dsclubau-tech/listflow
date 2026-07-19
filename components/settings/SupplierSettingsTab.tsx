@@ -28,6 +28,7 @@ interface SupplierSettingsData {
   maxShippingDays: number;
   primeOnly: boolean;
   priceTrackingEnabled: boolean;
+  autoHoldOnPriceCheckFailure: boolean;
   priceCheckHour: number;
   scrapePostcode: string;
   storeNumber: number;
@@ -162,6 +163,7 @@ export default function SupplierSettingsTab() {
           maxShippingDays: settings.maxShippingDays,
           primeOnly: settings.primeOnly,
           priceTrackingEnabled: settings.priceTrackingEnabled,
+          autoHoldOnPriceCheckFailure: settings.autoHoldOnPriceCheckFailure,
           priceCheckHour: settings.priceCheckHour,
           scrapePostcode: settings.scrapePostcode,
           storeNumber: parseInt(selectedStore),
@@ -677,6 +679,24 @@ export default function SupplierSettingsTab() {
                   <ToggleSwitch
                     checked={settings.priceTrackingEnabled}
                     onChange={(value) => updateField("priceTrackingEnabled", value)}
+                  />
+                </div>
+
+                <div className="mt-4 flex items-start justify-between gap-4 border-t border-gray-200 pt-4">
+                  <div>
+                    <p className="text-sm font-medium text-gray-800">
+                      Put failed products on hold automatically
+                    </p>
+                    <p className="mt-1 text-xs leading-5 text-gray-500">
+                      Confirmed Amazon price, stock, baseline, and safety-limit failures
+                      queue an eBay hold. Temporary technical failures do not.
+                    </p>
+                  </div>
+                  <ToggleSwitch
+                    checked={settings.autoHoldOnPriceCheckFailure}
+                    onChange={(value) =>
+                      updateField("autoHoldOnPriceCheckFailure", value)
+                    }
                   />
                 </div>
 
