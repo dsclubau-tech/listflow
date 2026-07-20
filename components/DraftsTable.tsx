@@ -1591,7 +1591,7 @@ export default function DraftsTable({
     );
   }
 
-  const columnCount = isProductsView ? 13 : 8;
+  const columnCount = isProductsView ? 12 : 8;
 
   return (
     <>
@@ -1603,7 +1603,7 @@ export default function DraftsTable({
 
       <div className="max-w-full overflow-hidden rounded-lg border border-gray-200 bg-white">
         <div className="relative max-w-full overflow-x-auto">
-          <table className={isProductsView ? "w-full min-w-[1480px] table-fixed" : "w-full"}>
+          <table className={isProductsView ? "w-full min-w-[1390px] table-fixed" : "w-full"}>
           {isProductsView && (
             <colgroup>
               <col className="w-[34px]" />
@@ -1613,7 +1613,6 @@ export default function DraftsTable({
               <col className="w-[150px]" />
               <col className="w-[124px]" />
               <col className="w-[132px]" />
-              <col className="w-[86px]" />
               <col className="w-[92px]" />
               <col className="w-[94px]" />
               <col className="w-[230px]" />
@@ -1644,7 +1643,9 @@ export default function DraftsTable({
                   <th className="px-3 py-3 text-left">Item ID</th>
                 </>
               )}
-              <th className="px-3 py-3 text-left">Store</th>
+              {!isProductsView && (
+                <th className="px-3 py-3 text-left">Store</th>
+              )}
               <th className="px-3 py-3 text-left">
                 {isProductsView ? "Uploaded" : "Created by"}
               </th>
@@ -1787,15 +1788,17 @@ export default function DraftsTable({
                       </>
                     )}
 
-                    <td className="px-3 py-3">
-                      <span
-                        className={`inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                          getStoreBadgeClass(product.store.id, product.store.name)
-                        }`}
-                      >
-                        {product.store.name}
-                      </span>
-                    </td>
+                    {!isProductsView && (
+                      <td className="px-3 py-3">
+                        <span
+                          className={`inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                            getStoreBadgeClass(product.store.id, product.store.name)
+                          }`}
+                        >
+                          {product.store.name}
+                        </span>
+                      </td>
+                    )}
 
                     <td className="px-3 py-3">
                       <span className="whitespace-nowrap text-sm text-gray-500">
