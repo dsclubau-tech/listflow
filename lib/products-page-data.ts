@@ -5,7 +5,6 @@ import { cacheLife, cacheTag } from "next/cache";
 import {
   draftsCacheTag,
   LISTFLOW_FRESH_CACHE_LIFE,
-  priceTrackerCacheTag,
   productsCacheTag,
 } from "@/lib/cache-tags";
 import {
@@ -206,8 +205,7 @@ export async function getCachedProductsPageData(
   cacheLife(LISTFLOW_FRESH_CACHE_LIFE);
   cacheTag(
     productsCacheTag(storeId),
-    draftsCacheTag(storeId),
-    priceTrackerCacheTag(storeId)
+    draftsCacheTag(storeId)
   );
 
   const where = buildProductsWhere(storeId, query);

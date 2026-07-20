@@ -1,8 +1,18 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { EbayActionJobType } from "@/app/generated/prisma/enums";
-import { createEbayActionJob } from "@/lib/ebay-action-jobs";
+import {
+  createEbayActionJob,
+  getCurrentEbayActionJobs,
+} from "@/lib/ebay-action-jobs";
 import { createRequestLogger } from "@/lib/logger";
+import {
+  getLowStockProductWhere,
+  isLowStockHoldJobMetadata,
+  LOW_STOCK_HOLD_JOB_KIND,
+  LOW_STOCK_THRESHOLD,
+} from "@/lib/low-stock-products";
+import { prisma } from "@/lib/prisma";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
 import { invalidateJobCaches } from "@/lib/cache-tags";
@@ -29,16 +39,58 @@ export async function POST(request: Request) {
 
   const body = (await request.json().catch(() => ({}))) as {
     productIds?: unknown[];
+    allLowStock?: unknown;
   };
 
   try {
+    if (body.allLowStock === true) {
+      const currentLowStockHoldJob = (await getCurrentEbayActionJobs(
+        storeSession.storeId
+      )).find(
+        (job) =>
+          job.type === EbayActionJobType.HOLD &&
+          (job.status === "QUEUED" || job.status === "RUNNING") &&
+          isLowStockHoldJobMetadata(job.metadata)
+      );
+
+      if (currentLowStockHoldJob) {
+        return NextResponse.json({
+          job: currentLowStockHoldJob,
+          total: currentLowStockHoldJob.total,
+          queued: false,
+          reused: true,
+          held: 0,
+          failed: 0,
+          failures: [],
+          message: "A low-stock hold job is already queued or running.",
+        });
+      }
+    }
+
     await assertWorkerOnlineForStore(storeSession.storeId);
     const userId = await getInternalUserId();
+    const lowStockProducts =
+      body.allLowStock === true
+        ? await prisma.product.findMany({
+            where: getLowStockProductWhere(storeSession.storeId),
+            select: { id: true },
+            orderBy: [{ amazonStockLeft: "asc" }, { title: "asc" }],
+          })
+        : null;
+    const productIds = lowStockProducts
+      ? lowStockProducts.map((product) => product.id)
+      : body.productIds ?? [];
     const result = await createEbayActionJob({
       userId,
       storeId: storeSession.storeId,
       type: EbayActionJobType.HOLD,
-      productIds: body.productIds ?? [],
+      productIds,
+      metadata: lowStockProducts
+        ? {
+            kind: LOW_STOCK_HOLD_JOB_KIND,
+            threshold: LOW_STOCK_THRESHOLD,
+          }
+        : undefined,
     });
 
     invalidateJobCaches(storeSession.storeId);
@@ -52,7 +104,9 @@ export async function POST(request: Request) {
         failures: [],
         message: result.queued
           ? `Queued ${result.job.total} listing(s) to put on hold.`
-          : "No products selected.",
+          : lowStockProducts
+            ? "No low-stock products to put on hold."
+            : "No products selected.",
       },
       { status: result.queued ? 202 : 200 }
     );

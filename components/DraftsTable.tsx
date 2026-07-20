@@ -12,6 +12,7 @@ import {
 } from "react";
 import { useRouter } from "next/navigation";
 import AsinLink from "@/components/AsinLink";
+import ActionProgressBar from "@/components/ActionProgressBar";
 import { hasMissingItemSpecifics } from "@/components/draft-upload-response";
 import InlineEditForm from "@/components/InlineEditForm";
 import {
@@ -40,6 +41,36 @@ interface DraftsTableProps {
   isPromotionJobActive?: boolean;
   onBulkEditSelected?: (productIds: string[]) => void;
   onDraftImported?: (productId: string) => void;
+}
+
+type UploadJobError = {
+  productId: string;
+  title: string;
+  error: string;
+};
+
+type UploadJob = {
+  id: string;
+  type: string;
+  status: string;
+  productIds: string[];
+  completedProductIds: string[];
+  total: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  errors: UploadJobError[];
+  queuePosition: number | null;
+};
+
+function isActiveUploadJob(job: UploadJob) {
+  return job.status === "QUEUED" || job.status === "RUNNING";
+}
+
+function getUploadJobPercent(job: UploadJob) {
+  return job.total > 0
+    ? Math.min(100, Math.round((job.processed / job.total) * 100))
+    : 0;
 }
 
 const statusBadgeLabels: Record<string, string> = {
@@ -401,7 +432,7 @@ export default function DraftsTable({
   onDraftImported,
 }: DraftsTableProps) {
   const [loadingId, setLoadingId] = useState<string | null>(null);
-  const [queuedUploadIds, setQueuedUploadIds] = useState<string[]>([]);
+  const [uploadJobs, setUploadJobs] = useState<UploadJob[]>([]);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [endingId, setEndingId] = useState<string | null>(null);
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
@@ -438,11 +469,30 @@ export default function DraftsTable({
     x: number;
     y: number;
   } | null>(null);
+  const previousActiveUploadJobIds = useRef<Set<string>>(new Set());
+  const didInitializeUploadJobs = useRef(false);
   const router = useRouter();
 
   const isDraftsView = view === "drafts";
   const isProductsView = view === "products";
   const hasSelectionColumn = isDraftsView || isProductsView;
+  const activeUploadJobs = useMemo(
+    () => uploadJobs.filter(isActiveUploadJob),
+    [uploadJobs],
+  );
+  const uploadJobByProductId = useMemo(() => {
+    const jobsByProductId = new Map<string, UploadJob>();
+
+    for (const job of activeUploadJobs) {
+      for (const productId of job.productIds) {
+        if (!jobsByProductId.has(productId)) {
+          jobsByProductId.set(productId, job);
+        }
+      }
+    }
+
+    return jobsByProductId;
+  }, [activeUploadJobs]);
 
   const hasCurrentProductDetails = useCallback(
     (productId: string) => {
@@ -512,31 +562,81 @@ export default function DraftsTable({
     onSelectionChange?.(selectedIds);
   }, [onSelectionChange, selectedIds]);
 
+  const loadUploadJobs = useCallback(async () => {
+    try {
+      const response = await fetch("/api/upload/jobs/current", {
+        cache: "no-store",
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        jobs?: UploadJob[];
+      };
+
+      if (response.ok && Array.isArray(data.jobs)) {
+        setUploadJobs(data.jobs);
+      }
+    } catch {
+      // Draft editing remains available if progress polling is temporarily unavailable.
+    }
+  }, []);
+
   useEffect(() => {
-    if (queuedUploadIds.length === 0) {
+    if (!isDraftsView) {
       return;
     }
 
-    setQueuedUploadIds((current) =>
-      current.filter((id) =>
-        products.some(
-          (product) => product.id === id && product.status === "DRAFT"
-        )
-      )
-    );
-  }, [products, queuedUploadIds.length]);
+    void loadUploadJobs();
+  }, [isDraftsView, loadUploadJobs]);
 
   useEffect(() => {
-    if (queuedUploadIds.length === 0) {
+    if (!isDraftsView || activeUploadJobs.length === 0) {
       return;
     }
 
     const interval = window.setInterval(() => {
+      void loadUploadJobs();
       router.refresh();
-    }, 5000);
+    }, 3000);
 
     return () => window.clearInterval(interval);
-  }, [queuedUploadIds.length, router]);
+  }, [activeUploadJobs.length, isDraftsView, loadUploadJobs, router]);
+
+  useEffect(() => {
+    const currentActiveIds = new Set(activeUploadJobs.map((job) => job.id));
+
+    if (!didInitializeUploadJobs.current) {
+      previousActiveUploadJobIds.current = currentActiveIds;
+      didInitializeUploadJobs.current = true;
+      return;
+    }
+
+    for (const previousJobId of previousActiveUploadJobIds.current) {
+      if (currentActiveIds.has(previousJobId)) {
+        continue;
+      }
+
+      const completedJob = uploadJobs.find((job) => job.id === previousJobId);
+      if (!completedJob || isActiveUploadJob(completedJob)) {
+        continue;
+      }
+
+      if (completedJob.failed > 0) {
+        const firstError = completedJob.errors[0]?.error;
+        onToast(
+          firstError
+            ? `eBay upload finished with ${completedJob.failed} failure(s): ${firstError}`
+            : `eBay upload finished with ${completedJob.failed} failure(s).`,
+          "error",
+        );
+      } else {
+        onToast(
+          `Successfully uploaded ${completedJob.succeeded} listing(s) to eBay.`,
+          "success",
+        );
+      }
+    }
+
+    previousActiveUploadJobIds.current = currentActiveIds;
+  }, [activeUploadJobs, onToast, uploadJobs]);
 
   useEffect(() => {
     if (!autoExpandProductId) {
@@ -714,12 +814,16 @@ export default function DraftsTable({
         error?: string;
         message?: string;
         missingItemSpecifics?: string[];
+        job?: UploadJob;
       };
 
       if (res.ok) {
-        setQueuedUploadIds((current) =>
-          current.includes(productId) ? current : [...current, productId]
-        );
+        if (data.job) {
+          setUploadJobs((current) => [
+            data.job as UploadJob,
+            ...current.filter((job) => job.id !== data.job?.id),
+          ]);
+        }
         onToast(data.message || "Upload queued. Track it in Action Center.", "success");
         setSelectedIds((prev) => prev.filter((id) => id !== productId));
         router.refresh();
@@ -1486,7 +1590,7 @@ export default function DraftsTable({
       const data = (await res.json().catch(() => ({}))) as {
         error?: string;
         message?: string;
-        job?: { total?: number };
+        job?: UploadJob;
       };
 
       if (!res.ok) {
@@ -1495,9 +1599,12 @@ export default function DraftsTable({
         return;
       }
 
-      setQueuedUploadIds((current) =>
-        Array.from(new Set([...current, ...uploadProductIds]))
-      );
+      if (data.job) {
+        setUploadJobs((current) => [
+          data.job as UploadJob,
+          ...current.filter((job) => job.id !== data.job?.id),
+        ]);
+      }
       setSelectedIds([]);
       onToast(
         data.message ||
@@ -1595,6 +1702,35 @@ export default function DraftsTable({
 
   return (
     <>
+      {isDraftsView && activeUploadJobs.length > 0 && (
+        <div className="mb-4 space-y-3" aria-live="polite">
+          {activeUploadJobs.map((job) => {
+            const indeterminate = job.total === 1 && job.processed === 0;
+            const statusLabel =
+              job.status === "QUEUED" ? "Queued for eBay" : "Uploading to eBay";
+            const queueDetail =
+              job.status === "QUEUED" && job.queuePosition
+                ? `Queue position ${job.queuePosition}. `
+                : "";
+
+            return (
+              <div
+                key={job.id}
+                className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3"
+              >
+                <ActionProgressBar
+                  label={statusLabel}
+                  percent={getUploadJobPercent(job)}
+                  indeterminate={indeterminate || job.status === "QUEUED"}
+                  tone="blue"
+                  detail={`${queueDetail}${job.processed}/${job.total} processed, ${job.succeeded} succeeded, ${job.failed} failed.`}
+                />
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {selectedIds.length > 0 && (
         <p className="text-sm text-gray-500 mb-2">
           {selectedIds.length} selected
@@ -1678,7 +1814,8 @@ export default function DraftsTable({
               const productDetailError = productDetailErrors[product.id] ?? null;
               const isSelected = selectedIds.includes(product.id);
               const isSelectable = selectableIdSet.has(product.id);
-              const isUploadQueued = queuedUploadIds.includes(product.id);
+              const uploadJob = uploadJobByProductId.get(product.id) ?? null;
+              const isUploadQueued = Boolean(uploadJob);
               const isFailedDraft =
                 isDraftsView && product.status === "FAILED";
               const trackingState = isProductsView
@@ -1937,13 +2074,34 @@ export default function DraftsTable({
                             </svg>
                             Queueing...
                           </button>
-                        ) : isUploadQueued && isDraftsView && product.status !== "IMPORTED" ? (
-                          <button
-                            disabled
-                            className="bg-gray-400 text-white text-sm px-3 py-1 rounded"
-                          >
-                            Queued
-                          </button>
+                        ) : isUploadQueued && uploadJob && isDraftsView && product.status !== "IMPORTED" ? (
+                          <div className="w-44">
+                            <ActionProgressBar
+                              label={
+                                uploadJob.completedProductIds.includes(product.id)
+                                  ? "Processed"
+                                  : uploadJob.status === "QUEUED"
+                                    ? "Queued"
+                                    : "Uploading"
+                              }
+                              percent={
+                                uploadJob.completedProductIds.includes(product.id)
+                                  ? 100
+                                  : 0
+                              }
+                              indeterminate={
+                                !uploadJob.completedProductIds.includes(product.id)
+                              }
+                              tone={
+                                uploadJob.errors.some(
+                                  (error) => error.productId === product.id,
+                                )
+                                  ? "red"
+                                  : "blue"
+                              }
+                              compact
+                            />
+                          </div>
                         ) : product.status === "FAILED" && isDraftsView ? (
                           <button
                             onClick={() => handleImport(product.id)}

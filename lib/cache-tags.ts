@@ -12,7 +12,6 @@ export type ListflowCacheScope =
   | "store"
   | "products"
   | "drafts"
-  | "priceTracker"
   | "actionCenter"
   | "jobs";
 
@@ -32,10 +31,6 @@ export function draftsCacheTag(storeId: string) {
   return listflowTag("drafts", storeId);
 }
 
-export function priceTrackerCacheTag(storeId: string) {
-  return listflowTag("priceTracker", storeId);
-}
-
 export function actionCenterCacheTag(storeId: string) {
   return listflowTag("actionCenter", storeId);
 }
@@ -52,8 +47,6 @@ function tagForScope(scope: ListflowCacheScope, storeId: string) {
       return productsCacheTag(storeId);
     case "drafts":
       return draftsCacheTag(storeId);
-    case "priceTracker":
-      return priceTrackerCacheTag(storeId);
     case "actionCenter":
       return actionCenterCacheTag(storeId);
     case "jobs":
@@ -83,7 +76,6 @@ export function invalidateProductCaches(storeId: string) {
   invalidateStoreCaches(storeId, [
     "products",
     "drafts",
-    "priceTracker",
     "actionCenter",
   ]);
 }
@@ -93,7 +85,7 @@ export function invalidateDraftCaches(storeId: string) {
 }
 
 export function invalidatePriceCaches(storeId: string) {
-  invalidateStoreCaches(storeId, ["priceTracker", "products", "actionCenter"]);
+  invalidateStoreCaches(storeId, ["products", "actionCenter"]);
 }
 
 export function invalidateJobCaches(storeId: string) {
@@ -105,7 +97,6 @@ export function invalidateAllStoreCaches(storeId: string) {
     "store",
     "products",
     "drafts",
-    "priceTracker",
     "actionCenter",
     "jobs",
   ]);

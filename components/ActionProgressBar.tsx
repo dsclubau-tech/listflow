@@ -6,6 +6,7 @@ interface ActionProgressBarProps {
   detail?: string;
   tone?: ProgressTone;
   compact?: boolean;
+  indeterminate?: boolean;
 }
 
 const toneClasses: Record<ProgressTone, string> = {
@@ -23,6 +24,7 @@ export default function ActionProgressBar({
   detail,
   tone = "orange",
   compact = false,
+  indeterminate = false,
 }: ActionProgressBarProps) {
   const normalizedPercent = Math.min(100, Math.max(0, Math.round(percent)));
   const heightClass = compact ? "h-1.5" : "h-2";
@@ -31,9 +33,11 @@ export default function ActionProgressBar({
     <div className={compact ? "min-w-[160px]" : "w-full"} aria-live="polite">
       <div className="mb-1 flex items-center justify-between gap-3 text-xs">
         <span className="truncate font-medium text-gray-700">{label}</span>
-        <span className="shrink-0 font-medium text-gray-500">
-          {normalizedPercent}%
-        </span>
+        {!indeterminate && (
+          <span className="shrink-0 font-medium text-gray-500">
+            {normalizedPercent}%
+          </span>
+        )}
       </div>
       <div
         className={`${heightClass} overflow-hidden rounded-full bg-gray-100`}
@@ -41,12 +45,18 @@ export default function ActionProgressBar({
         aria-label={label}
         aria-valuemin={0}
         aria-valuemax={100}
-        aria-valuenow={normalizedPercent}
+        aria-valuenow={indeterminate ? undefined : normalizedPercent}
       >
-        <div
-          className={`h-full rounded-full ${toneClasses[tone]} transition-all duration-300`}
-          style={{ width: `${normalizedPercent}%` }}
-        />
+        {indeterminate ? (
+          <div
+            className={`h-full w-full rounded-full ${toneClasses[tone]} animate-pulse`}
+          />
+        ) : (
+          <div
+            className={`h-full rounded-full ${toneClasses[tone]} transition-all duration-300`}
+            style={{ width: `${normalizedPercent}%` }}
+          />
+        )}
       </div>
       {detail && !compact && (
         <p className="mt-1 truncate text-xs text-gray-500">{detail}</p>

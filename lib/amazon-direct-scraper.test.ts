@@ -49,6 +49,7 @@ function amazonProductHtml(input: {
   pageWidePrice?: string | null;
   postcode?: string | null;
   imageScript?: string | null;
+  descriptionHtml?: string | null;
 }) {
   const deliveryLocation = input.postcode
     ? `<div id="glow-ingress-line1">Deliver to RK</div><div id="glow-ingress-line2">Kogarah ${input.postcode}</div>`
@@ -86,6 +87,12 @@ function amazonProductHtml(input: {
         ${input.imageScript ?? ""}
         ${pageWide}
         ${buybox}
+        ${
+          input.descriptionHtml ??
+          `<div id="feature-bullets"><ul><li><span>${
+            input.title ?? "Reliable selected-product details"
+          }</span></li></ul></div>`
+        }
       </body>
     </html>
   `;
@@ -130,6 +137,27 @@ test("extractAmazonProductTitle reads meta content when text title is missing", 
   assert.equal(
     extractAmazonProductTitle($),
     "SoundPEATS Air5 Pro Cancelling Earbuds"
+  );
+});
+
+test("Amazon URL variants resolve to the same normalized ASIN", async () => {
+  const { extractAmazonAsinFromValue } = await loadAmazonDirectScraper();
+
+  assert.equal(
+    extractAmazonAsinFromValue("https://www.amazon.com.au/dp/b0test1234?tag=example"),
+    "B0TEST1234",
+  );
+  assert.equal(
+    extractAmazonAsinFromValue(
+      "https://www.amazon.com.au/gp/product/B0TEST1234/ref=something",
+    ),
+    "B0TEST1234",
+  );
+  assert.equal(
+    extractAmazonAsinFromValue(
+      "https://www.amazon.com.au/example/product?asin=B0TEST1234",
+    ),
+    "B0TEST1234",
   );
 });
 
@@ -198,6 +226,110 @@ test("scrapeAmazonProductDirect keeps full Amazon title separately from eBay lis
   assert.equal(product.title.length <= 80, true);
   assert.notEqual(product.title, product.fullTitle);
   assert.match(product.description, /Superhero String Launcher Toy/);
+});
+
+test("renderAmazonDescription keeps About bullets then Product Description A+ content and stops before Product Information", async () => {
+  const { renderAmazonDescription } = await loadAmazonDirectScraper();
+  const $ = load(`
+    <div id="feature-bullets">
+      <ul>
+        <li><span><strong>VA panel</strong> Deep blacks and bright areas.</span></li>
+        <li class="aok-hidden"><span>Hidden bullet</span></li>
+      </ul>
+      <a>See more product details</a>
+    </div>
+    <div id="productDescription"><p>Standard product description.</p></div>
+    <div id="aplus_feature_div">
+      <div id="aplus">
+        <div class="aplus-module">
+          <h3>Office Monitor</h3>
+          <img
+            src="https://m.media-amazon.com/images/I/monitor-small._AC_SX300_.jpg"
+            data-a-hires="https://m.media-amazon.com/images/I/monitor-large._AC_SL1500_.jpg"
+            alt="Office monitor"
+          />
+          <p>Capturing every detail.</p>
+          <img
+            srcset="https://m.media-amazon.com/images/I/detail-small._AC_SX300_.jpg 300w, https://m.media-amazon.com/images/I/detail-large._AC_SL1500_.jpg 1500w"
+            alt="Monitor details"
+          />
+        </div>
+      </div>
+    </div>
+    <section id="productDetails"><h2>Product information</h2><p>Must not be copied.</p></section>
+    <section id="reviewsMedley"><p>Customer review text.</p></section>
+  `);
+
+  const description = renderAmazonDescription($);
+  const aboutIndex = description.indexOf("About this item");
+  const bulletIndex = description.indexOf("<strong>VA panel</strong>");
+  const productDescriptionIndex = description.indexOf("Product Description");
+  const standardIndex = description.indexOf("Standard product description.");
+  const headingIndex = description.indexOf("Office Monitor");
+  const firstImageIndex = description.indexOf("monitor-large.jpg");
+  const aplusTextIndex = description.indexOf("Capturing every detail.");
+  const secondImageIndex = description.indexOf("detail-large.jpg");
+
+  assert.equal(aboutIndex >= 0, true);
+  assert.equal(aboutIndex < bulletIndex, true);
+  assert.equal(bulletIndex < productDescriptionIndex, true);
+  assert.equal(productDescriptionIndex < standardIndex, true);
+  assert.equal(standardIndex < headingIndex, true);
+  assert.equal(headingIndex < firstImageIndex, true);
+  assert.equal(firstImageIndex < aplusTextIndex, true);
+  assert.equal(aplusTextIndex < secondImageIndex, true);
+  assert.doesNotMatch(description, /Hidden bullet|See more product details/);
+  assert.doesNotMatch(description, /Product information|Must not be copied|Customer review/);
+});
+
+test("renderAmazonDescription imports whichever requested Amazon section is available", async () => {
+  const { renderAmazonDescription } = await loadAmazonDirectScraper();
+  const aboutOnly = renderAmazonDescription(
+    load('<div id="feature-bullets"><ul><li>Only bullet</li></ul></div>'),
+  );
+  const descriptionOnly = renderAmazonDescription(
+    load('<div id="aplus"><p>Only A+ description</p></div>'),
+  );
+
+  assert.match(aboutOnly, /About this item/);
+  assert.doesNotMatch(aboutOnly, /Product Description/);
+  assert.match(descriptionOnly, /Product Description/);
+  assert.doesNotMatch(descriptionOnly, /About this item/);
+  assert.equal(renderAmazonDescription(load("<main>No source sections</main>")), "");
+});
+
+test("scrapeAmazonProductDirect creates no draft data when both requested description sections are missing", async (t) => {
+  const { scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
+
+  installFetchMock(t, [
+    {
+      body: amazonProductHtml({
+        buyboxPrice: "$129.99",
+        descriptionHtml: "",
+      }),
+    },
+    { body: '{"isValidAddress":1}' },
+    {
+      body: amazonProductHtml({
+        buyboxPrice: "$129.99",
+        postcode: "2217",
+        descriptionHtml: "",
+      }),
+    },
+  ]);
+
+  await assert.rejects(
+    scrapeAmazonProductDirect("https://www.amazon.com.au/dp/B0TEST1234", {
+      postcode: "2217",
+    }),
+    (error) => {
+      assert.equal(
+        (error as { code?: string }).code,
+        "AMAZON_DESCRIPTION_MISSING",
+      );
+      return true;
+    },
+  );
 });
 
 test("scrapeAmazonProductDirect reads original Amazon color images and skips video thumbnails", async (t) => {
@@ -377,7 +509,7 @@ test("scrapeAmazonProductDirect fails when only page-wide prices exist after pos
     (error) => {
       assert.equal(error instanceof AmazonDirectScrapeError, true);
       assert.equal(
-        (error as AmazonDirectScrapeError).code,
+        (error as { code: string }).code,
         "AMAZON_BUYBOX_PRICE_MISSING"
       );
       return true;

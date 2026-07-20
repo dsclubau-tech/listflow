@@ -13,6 +13,7 @@ import {
   getEbayActionQueuePositionText,
   getEbayActionStatusLabel,
 } from "@/lib/ebay-action-queue";
+import { isLowStockHoldJobMetadata } from "@/lib/low-stock-products";
 import type {
   ActionCenterData,
   ActionCenterProductSummary,
@@ -376,7 +377,7 @@ function SectionHeader({
 }: {
   title: string;
   count: number;
-  viewAllHref: string;
+  viewAllHref?: string;
   children?: React.ReactNode;
 }) {
   return (
@@ -389,9 +390,14 @@ function SectionHeader({
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {children}
-        <Link href={viewAllHref} className="text-xs font-medium text-gray-600 hover:text-gray-900">
-          View all
-        </Link>
+        {viewAllHref && (
+          <Link
+            href={viewAllHref}
+            className="text-xs font-medium text-gray-600 hover:text-gray-900"
+          >
+            View all
+          </Link>
+        )}
       </div>
     </div>
   );
@@ -480,6 +486,13 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
   const currentActionJobs = useMemo(
     () => data.jobs.ebayActions.filter((job) => !job.dismissedAt && isActiveActionJob(job)),
     [data.jobs.ebayActions]
+  );
+  const hasActiveLowStockHoldJob = useMemo(
+    () =>
+      currentActionJobs.some(
+        (job) => job.type === "HOLD" && isLowStockHoldJobMetadata(job.metadata)
+      ),
+    [currentActionJobs]
   );
   const currentResearchBatches = useMemo(
     () => data.jobs.ebayResearchBatches.filter(isCurrentResearchBatch),
@@ -656,6 +669,27 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
       );
       if (result.message) return result.message;
       return `Put ${result.held ?? 0} product(s) on hold. ${result.failed ?? 0} failed.`;
+    });
+  }
+
+  function holdAllLowStockProducts() {
+    const confirmed = window.confirm(
+      `Put all ${data.summary.lowStock} low-stock product(s) on hold? This sets their eBay listing quantity to 0 and hides them from eBay search results.`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    void runAction("hold-all-low-stock", async () => {
+      const result = await postJson<{
+        total?: number;
+        message?: string;
+      }>("/api/products/bulk-hold", { allLowStock: true });
+      return (
+        result.message ??
+        `Queued ${result.total ?? 0} low-stock product(s) to put on hold.`
+      );
     });
   }
 
@@ -1107,7 +1141,24 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
             title="Low Amazon Stock"
             count={data.summary.lowStock}
             viewAllHref="/products?stockMonitoring=low-stock"
-          />
+          >
+            <ActionButton
+              onClick={holdAllLowStockProducts}
+              disabled={
+                workerOffline ||
+                hasActiveLowStockHoldJob ||
+                data.summary.lowStock === 0 ||
+                runningAction === "hold-all-low-stock"
+              }
+              tone="primary"
+            >
+              {runningAction === "hold-all-low-stock"
+                ? "Queueing..."
+                : hasActiveLowStockHoldJob
+                  ? "Hold queued"
+                : `Hold all (${data.summary.lowStock})`}
+            </ActionButton>
+          </SectionHeader>
           <table className="w-full text-left">
             <thead className="bg-gray-50 text-xs font-medium uppercase tracking-wide text-gray-500">
               <tr>
@@ -1212,7 +1263,6 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
             <SectionHeader
               title="Jobs"
               count={getCurrentJobCount(data)}
-              viewAllHref="/price-tracker"
             />
             <div className="border-b border-gray-200 px-4 py-3">
               <div className="inline-flex overflow-hidden rounded-md border border-gray-300 bg-white">

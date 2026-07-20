@@ -12,12 +12,25 @@ import {
   normalizeFullProductTitle,
   toEbayListingTitle,
 } from "@/lib/product-title";
+import type { ExistingProductConflict } from "@/types/product-duplicate";
 
 type DraftCreateResponse = {
   id?: string;
   removedKeywords?: string[];
   error?: string;
+  code?: string;
+  existing?: ExistingProductConflict;
 };
+
+export class DuplicateDraftError extends Error {
+  readonly existing: ExistingProductConflict;
+
+  constructor(message: string, existing: ExistingProductConflict) {
+    super(message);
+    this.name = "DuplicateDraftError";
+    this.existing = existing;
+  }
+}
 
 function getDraftCreateFallbackError(response: Response, bodyText: string) {
   const trimmed = bodyText.trim();
@@ -147,6 +160,13 @@ export async function createDraftFromScrapedProduct(data: ScrapedProduct) {
   const body = await readDraftCreateResponse(response);
 
   if (!response.ok || !body.id) {
+    if (body.code === "DUPLICATE_ASIN" && body.existing) {
+      throw new DuplicateDraftError(
+        body.error || "This Amazon product already exists.",
+        body.existing,
+      );
+    }
+
     throw new Error(body.error || "Failed to save imported product as a draft.");
   }
 

@@ -889,17 +889,86 @@ function withInferredItemSpecifics(
 }
 
 type DescriptionBlock =
-  | { type: "heading"; text: string }
-  | { type: "paragraph"; text: string }
+  | { type: "heading"; html: string }
+  | { type: "paragraph"; html: string }
   | { type: "list"; items: string[] }
   | { type: "image"; src: string; alt: string };
 
-function collectListItems($: CheerioAPI, root: CheerioSelection) {
-  return root
-    .find("li")
-    .map((_, item) => normalizeText($(item).text()))
-    .get()
-    .filter((item) => item && !/^make sure this fits/i.test(item));
+const DESCRIPTION_INLINE_TAGS = new Set(["b", "strong", "i", "em", "br"]);
+const DESCRIPTION_HIDDEN_SELECTOR =
+  "[hidden], [aria-hidden='true'], .aok-hidden, .a-hidden, .celwidget[style*='display: none']";
+
+function isHiddenDescriptionElement(element: CheerioSelection) {
+  if (element.closest(DESCRIPTION_HIDDEN_SELECTOR).length > 0) {
+    return true;
+  }
+
+  const style = element.attr("style")?.toLowerCase() ?? "";
+  return /display\s*:\s*none|visibility\s*:\s*hidden/.test(style);
+}
+
+function sanitizeDescriptionInlineHtml(
+  $: CheerioAPI,
+  element: CheerioSelection,
+) {
+  const clone = element.clone();
+  clone.find("script, style, noscript, button, input, form, svg").remove();
+  clone.find("a").each((_, link) => {
+    const linkSelection = $(link);
+    if (
+      /^(see more product details|report an issue|learn more)$/i.test(
+        normalizeText(linkSelection.text()),
+      )
+    ) {
+      linkSelection.remove();
+    }
+  });
+
+  clone.find("*").each((_, child) => {
+    const childSelection = $(child);
+    const tagName = childSelection.prop("tagName")?.toLowerCase() ?? "";
+
+    if (!DESCRIPTION_INLINE_TAGS.has(tagName)) {
+      childSelection.replaceWith(childSelection.contents());
+      return;
+    }
+
+    for (const attribute of Object.keys(child.attribs ?? {})) {
+      childSelection.removeAttr(attribute);
+    }
+  });
+
+  return (clone.html() ?? "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*<br\s*\/?\s*>\s*/gi, "<br>")
+    .trim();
+}
+
+function getLargestSrcsetUrl(value: string | undefined) {
+  if (!value) {
+    return "";
+  }
+
+  return value
+    .split(",")
+    .map((entry) => {
+      const [url, descriptor = "0"] = entry.trim().split(/\s+/);
+      const size = Number.parseFloat(descriptor);
+      return { url, size: Number.isFinite(size) ? size : 0 };
+    })
+    .filter((entry) => entry.url)
+    .sort((left, right) => right.size - left.size)[0]?.url ?? "";
+}
+
+function getDescriptionImageSource(image: CheerioSelection) {
+  return (
+    image.attr("data-a-hires") ||
+    image.attr("data-old-hires") ||
+    image.attr("data-src") ||
+    getLargestSrcsetUrl(image.attr("srcset") || image.attr("data-srcset")) ||
+    image.attr("src") ||
+    ""
+  );
 }
 
 function collectDescriptionBlocks($: CheerioAPI) {
@@ -907,92 +976,190 @@ function collectDescriptionBlocks($: CheerioAPI) {
   const seenText = new Set<string>();
   const seenImages = new Set<string>();
 
-  function pushText(type: "heading" | "paragraph", text: string) {
-    const normalized = normalizeText(text);
+  function pushText(
+    type: "heading" | "paragraph",
+    element: CheerioSelection,
+  ) {
+    if (isHiddenDescriptionElement(element)) {
+      return;
+    }
+
+    const normalized = normalizeText(element.text());
     const key = `${type}:${normalized.toLowerCase()}`;
-    if (!normalized || seenText.has(key)) {
+    if (
+      !normalized ||
+      /^(product description|see more product details|report an issue)$/i.test(
+        normalized,
+      ) ||
+      seenText.has(key)
+    ) {
       return;
     }
     seenText.add(key);
-    blocks.push({ type, text: normalized });
+    blocks.push({
+      type,
+      html: sanitizeDescriptionInlineHtml($, element) || escapeHtml(normalized),
+    });
   }
 
-  function pushList(items: string[]) {
-    const normalized = Array.from(new Set(items.map(normalizeText).filter(Boolean)));
+  function pushList(items: CheerioSelection[]) {
+    const normalized: string[] = [];
+    const seenItems = new Set<string>();
+
+    for (const item of items) {
+      if (isHiddenDescriptionElement(item)) {
+        continue;
+      }
+
+      const text = normalizeText(item.text());
+      const key = text.toLowerCase();
+      if (!text || /^make sure this fits/i.test(text) || seenItems.has(key)) {
+        continue;
+      }
+
+      seenItems.add(key);
+      normalized.push(
+        sanitizeDescriptionInlineHtml($, item) || escapeHtml(text),
+      );
+    }
+
     if (normalized.length > 0) {
       blocks.push({ type: "list", items: normalized });
     }
   }
 
-  function pushImage(src: string | null | undefined, alt: string | null | undefined) {
-    const image = normalizeImageUrl(normalizeText(src));
-    if (!image || seenImages.has(image)) {
+  function pushImage(image: CheerioSelection) {
+    if (isHiddenDescriptionElement(image)) {
       return;
     }
-    seenImages.add(image);
-    blocks.push({ type: "image", src: image, alt: normalizeText(alt) });
+
+    const src = getDescriptionImageSource(image);
+    const normalizedImage = normalizeImageUrl(normalizeText(src));
+    if (
+      !normalizedImage ||
+      !/amazon|ssl-images/i.test(normalizedImage) ||
+      seenImages.has(normalizedImage) ||
+      /play-button|spinner|loading|transparent|pixel/i.test(normalizedImage)
+    ) {
+      return;
+    }
+    seenImages.add(normalizedImage);
+    blocks.push({
+      type: "image",
+      src: normalizedImage,
+      alt: normalizeText(image.attr("alt")),
+    });
   }
 
-  const featureItems = collectListItems($, $("#feature-bullets"));
-  if (featureItems.length > 0) {
-    pushText("heading", "About this item");
-    pushList(featureItems);
+  const featureItems = $("#feature-bullets li")
+    .toArray()
+    .map((item) => $(item));
+  const visibleFeatureItems = featureItems.filter(
+    (item) =>
+      !isHiddenDescriptionElement(item) &&
+      !/^make sure this fits/i.test(normalizeText(item.text())),
+  );
+  if (visibleFeatureItems.length > 0) {
+    blocks.push({ type: "heading", html: "About this item" });
+    pushList(visibleFeatureItems);
   }
 
-  $("#productDescription p, #productDescription span").each((_, item) => {
-    pushText("paragraph", $(item).text());
-  });
-
-  $("#aplus h1, #aplus h2, #aplus h3, #aplus_feature_div h1, #aplus_feature_div h2, #aplus_feature_div h3").each(
-    (_, item) => {
-      pushText("heading", $(item).text());
-    }
+  const productDescriptionRoot = $("#productDescription").first();
+  const embeddedAplusRoot = $("#aplus").first();
+  const aplusRoot = embeddedAplusRoot.find(
+    "h1, h2, h3, h4, h5, h6, p, li, img, .a-size-base, .aplus-description",
+  ).length
+    ? embeddedAplusRoot
+    : $("#aplus_feature_div").first();
+  const descriptionCandidates: Array<{
+    root: CheerioSelection;
+    rootSelector: string;
+    selector: string;
+  }> = [
+    {
+      root: productDescriptionRoot,
+      rootSelector: "#productDescription",
+      selector: "h1, h2, h3, h4, h5, h6, p, li, img, span",
+    },
+    {
+      root: aplusRoot,
+      rootSelector: aplusRoot.is("#aplus") ? "#aplus" : "#aplus_feature_div",
+      selector:
+        "h1, h2, h3, h4, h5, h6, p, li, img, .a-size-base, .aplus-description",
+    },
+  ];
+  const hasProductDescription = descriptionCandidates.some(
+    ({ root, selector }) =>
+      root.length > 0 &&
+      root.find(selector).toArray().some((item) => {
+        const candidate = $(item);
+        return (
+          !isHiddenDescriptionElement(candidate) &&
+          (candidate.is("img") || Boolean(normalizeText(candidate.text())))
+        );
+      }),
   );
 
-  $("#aplus p, #aplus .a-size-base, #aplus_feature_div p, #aplus_feature_div .a-size-base").each(
-    (_, item) => {
-      pushText("paragraph", $(item).text());
-    }
-  );
+  if (hasProductDescription) {
+    blocks.push({ type: "heading", html: "Product Description" });
 
-  $("#aplus img, #aplus_feature_div img").each((_, image) => {
-    pushImage(
-      $(image).attr("data-src") || $(image).attr("src"),
-      $(image).attr("alt")
-    );
-  });
+    for (const { root, rootSelector, selector } of descriptionCandidates) {
+      if (!root.length) {
+        continue;
+      }
+
+      root.find(selector).each((_, item) => {
+        const candidate = $(item);
+
+        if (
+          candidate.parentsUntil(rootSelector).is("p, li, h1, h2, h3, h4, h5, h6") ||
+          candidate.is(".a-size-base, .aplus-description") &&
+            candidate.find("p, li, h1, h2, h3, h4, h5, h6").length > 0
+        ) {
+          return;
+        }
+
+        if (candidate.is("img")) {
+          pushImage(candidate);
+        } else if (candidate.is("li")) {
+          pushList([candidate]);
+        } else if (candidate.is("h1, h2, h3, h4, h5, h6")) {
+          pushText("heading", candidate);
+        } else {
+          pushText("paragraph", candidate);
+        }
+      });
+    }
+  }
 
   return blocks;
 }
 
-function renderDescription($: CheerioAPI, title: string) {
+export function renderAmazonDescription($: CheerioAPI) {
   const blocks = collectDescriptionBlocks($);
 
   if (blocks.length === 0) {
-    blocks.push({ type: "heading", text: title });
+    return "";
   }
 
   const rendered = blocks
-    .map((block) => {
+    .map((block, index) => {
       if (block.type === "heading") {
-        return `<div style="margin:16px 0 10px;font-size:22px;font-weight:700;line-height:1.35;color:#ef3b2d;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${escapeHtml(
-          block.text
-        )}</div>`;
+        const sectionHeading =
+          block.html === "About this item" || block.html === "Product Description";
+        const color = block.html === "About this item" ? "#ef3b2d" : "#111";
+        return `<div style="margin:${index === 0 ? "0" : "20px"} 0 10px;font-size:${sectionHeading ? "22px" : "20px"};font-weight:700;line-height:1.35;color:${color};white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${block.html}</div>`;
       }
 
       if (block.type === "paragraph") {
-        return `<div style="margin:0 0 14px;font-size:16px;line-height:1.75;color:#333;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${escapeHtml(
-          block.text
-        )}</div>`;
+        return `<div style="margin:0 0 14px;font-size:16px;line-height:1.75;color:#333;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${block.html}</div>`;
       }
 
       if (block.type === "list") {
         return `<div style="margin:0 0 16px;">${block.items
           .map(
             (item) =>
-              `<div style="margin:0 0 8px;padding-left:18px;text-indent:-18px;font-size:16px;line-height:1.8;color:#333;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">&#8226; ${escapeHtml(
-                item
-              )}</div>`
+              `<div style="margin:0 0 8px;padding-left:18px;text-indent:-18px;font-size:16px;line-height:1.8;color:#333;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">&#8226; ${item}</div>`
           )
           .join("")}</div>`;
       }
@@ -1031,7 +1198,7 @@ function parseProductHtml(html: string, canonicalUrl: string): ScrapedProduct {
 
   const asin = extractAsin($, canonicalUrl, html);
   const images = extractImages($, html);
-  const description = renderDescription($, fullTitle);
+  const description = renderAmazonDescription($);
   const rawItemSpecifics = extractItemSpecifics($);
   const category = extractCategory($);
   const variantName = extractVariantName($);
@@ -1228,6 +1395,14 @@ export async function scrapeAmazonProductDirect(
   product.variantName = localizedProduct.variantName ?? product.variantName;
   product.asin = localizedProduct.asin || product.asin;
   product.brand = localizedProduct.brand || product.brand;
+
+  if (!product.description && !options.allowMetadataOnly) {
+    throw new AmazonDirectScrapeError(
+      "Amazon did not provide About this item or Product Description content. No draft was created.",
+      422,
+      "AMAZON_DESCRIPTION_MISSING",
+    );
+  }
 
   const priceStartedAt = Date.now();
   const priceChoices = extractLocalizedBuyboxPriceChoices(

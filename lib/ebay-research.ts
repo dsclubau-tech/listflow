@@ -6,6 +6,10 @@ import {
   EbayResearchJobStatus,
   EbayResearchMode,
 } from "@/app/generated/prisma/enums";
+import {
+  getResumedEbayResearchBatchStatus,
+  isEbayResearchBatchResumable,
+} from "@/lib/ebay-research-batch-state";
 import type { Prisma } from "@/app/generated/prisma/client";
 import { EBAY_API_BASE_URL, getOAuthAccessToken, getStoreNumber } from "@/lib/ebay";
 import {
@@ -1099,7 +1103,7 @@ function canPauseBatch(batch: EbayResearchBatchRecord) {
 }
 
 function canResumeBatch(batch: EbayResearchBatchRecord) {
-  return batch.status === EbayResearchBatchStatus.PAUSED;
+  return isEbayResearchBatchResumable(batch.status);
 }
 
 function serializeEbayResearchBatch(batch: EbayResearchBatchRecord) {
@@ -1985,11 +1989,15 @@ export async function resumeEbayResearchBatch(batchId: string, storeId: string) 
     excludeResearchBatchId: batch.id,
   });
 
+  const resumedBatchStatus = getResumedEbayResearchBatchStatus(
+    batch.jobs.map((job) => job.status)
+  );
+
   await prisma.$transaction([
     prisma.ebayResearchBatch.update({
       where: { id: batch.id },
       data: {
-        status: EbayResearchBatchStatus.QUEUED,
+        status: resumedBatchStatus,
         pausedAt: null,
         cooldownUntil: null,
         expiresAt: null,
@@ -1998,11 +2006,16 @@ export async function resumeEbayResearchBatch(batchId: string, storeId: string) 
     prisma.ebayResearchJob.updateMany({
       where: {
         batchId: batch.id,
-        status: {
-          in: [EbayResearchJobStatus.PAUSED, EbayResearchJobStatus.PAUSING],
-        },
+        status: EbayResearchJobStatus.PAUSED,
       },
       data: { status: EbayResearchJobStatus.QUEUED, expiresAt: null },
+    }),
+    prisma.ebayResearchJob.updateMany({
+      where: {
+        batchId: batch.id,
+        status: EbayResearchJobStatus.PAUSING,
+      },
+      data: { status: EbayResearchJobStatus.RUNNING, expiresAt: null },
     }),
   ]);
 

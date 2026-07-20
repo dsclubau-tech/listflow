@@ -12,6 +12,13 @@ import { applyEbayLocationMetadata } from "@/lib/ebay-location";
 import { normalizeAmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
 import { dedupeProductImages } from "@/lib/product-images";
 import { normalizeFullProductTitle, toEbayListingTitle } from "@/lib/product-title";
+import { Prisma } from "@/app/generated/prisma/client";
+import { isValidAsin, normalizeAsin } from "@/lib/price-check-eligibility";
+import {
+  DuplicateAmazonProductError,
+  findExistingAmazonProduct,
+  getDuplicateAmazonProductBody,
+} from "@/lib/product-duplicate";
 
 const SUPPLIER_NAME = "Amazon AU";
 
@@ -72,6 +79,7 @@ export async function POST(request: Request) {
   const normalizedImages = Array.isArray(images)
     ? dedupeProductImages(images)
     : [];
+  const normalizedAsin = normalizeAsin(asin);
 
   // Validate required fields
   if (!title?.trim()) {
@@ -127,6 +135,9 @@ export async function POST(request: Request) {
       { status: 400 }
     );
   }
+  if (normalizedAsin && !isValidAsin(normalizedAsin)) {
+    return NextResponse.json({ error: "ASIN must be 10 letters or numbers" }, { status: 400 });
+  }
 
   // Validate store exists
   const store = await prisma.store.findUnique({
@@ -135,6 +146,21 @@ export async function POST(request: Request) {
 
   if (!store) {
     return NextResponse.json({ error: "Store not found" }, { status: 400 });
+  }
+
+  if (normalizedAsin) {
+    const existingProduct = await findExistingAmazonProduct(
+      storeSession.storeId,
+      normalizedAsin,
+      prisma,
+    );
+
+    if (existingProduct) {
+      return NextResponse.json(
+        getDuplicateAmazonProductBody(existingProduct),
+        { status: 409 },
+      );
+    }
   }
 
   let policySelection;
@@ -227,37 +253,73 @@ export async function POST(request: Request) {
       postalCode: supplierSettings?.defaultZipcode ?? "3170",
     });
 
-    // Create product
-    const product = await prisma.product.create({
-      data: {
-        title: listingTitle,
-        fullTitle: filteredFullTitle || null,
-        description: filtered.description,
-        price: normalizedPrice,
-        quantity: normalizedQuantity,
-        category: normalizedCategory,
-        categoryName: categoryName || null,
-        condition: condition || "New",
-        images: normalizedImages,
-        itemSpecifics: resolvedItemSpecifics,
-        status: "DRAFT",
-        storeId: storeSession.storeId,
-        createdById,
-        asin: asin || null,
-        amazonPrice: asin ? normalizedPrice : null,
-        amazonPriceTrackingMode: normalizedAmazonPriceTrackingMode,
-        promotedAdPercent: normalizedPromotedAdPercent,
-        shippingPolicyId: policySelection.shippingPolicyId,
-        returnPolicyId: policySelection.returnPolicyId,
-        paymentPolicyId: policySelection.paymentPolicyId,
-        policyTemplateId: policySelection.policyTemplateId,
-        templateId: templateId || null,
-      },
-      include: {
-        store: true,
-        createdBy: true,
-      },
-    });
+    const createProduct = async () => {
+      const maxAttempts = 3;
+
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+          return await prisma.$transaction(
+            async (tx) => {
+              if (normalizedAsin) {
+                const existingProduct = await findExistingAmazonProduct(
+                  storeSession.storeId,
+                  normalizedAsin,
+                  tx,
+                );
+
+                if (existingProduct) {
+                  throw new DuplicateAmazonProductError(existingProduct);
+                }
+              }
+
+              return tx.product.create({
+                data: {
+                  title: listingTitle,
+                  fullTitle: filteredFullTitle || null,
+                  description: filtered.description,
+                  price: normalizedPrice,
+                  quantity: normalizedQuantity,
+                  category: normalizedCategory,
+                  categoryName: categoryName || null,
+                  condition: condition || "New",
+                  images: normalizedImages,
+                  itemSpecifics: resolvedItemSpecifics,
+                  status: "DRAFT",
+                  storeId: storeSession.storeId,
+                  createdById,
+                  asin: normalizedAsin,
+                  amazonPrice: normalizedAsin ? normalizedPrice : null,
+                  amazonPriceTrackingMode: normalizedAmazonPriceTrackingMode,
+                  promotedAdPercent: normalizedPromotedAdPercent,
+                  shippingPolicyId: policySelection.shippingPolicyId,
+                  returnPolicyId: policySelection.returnPolicyId,
+                  paymentPolicyId: policySelection.paymentPolicyId,
+                  policyTemplateId: policySelection.policyTemplateId,
+                  templateId: templateId || null,
+                },
+                include: {
+                  store: true,
+                  createdBy: true,
+                },
+              });
+            },
+            { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+          );
+        } catch (error) {
+          const isSerializationFailure =
+            error instanceof Prisma.PrismaClientKnownRequestError &&
+            error.code === "P2034";
+
+          if (!isSerializationFailure || attempt === maxAttempts) {
+            throw error;
+          }
+        }
+      }
+
+      throw new Error("Failed to create draft after concurrent updates.");
+    };
+
+    const product = await createProduct();
 
     invalidateDraftCaches(storeSession.storeId);
 
@@ -266,6 +328,13 @@ export async function POST(request: Request) {
       { status: 201 }
     );
   } catch (error) {
+    if (error instanceof DuplicateAmazonProductError) {
+      return NextResponse.json(
+        getDuplicateAmazonProductBody(error.existing),
+        { status: 409 },
+      );
+    }
+
     console.error("[api/products] Failed to create draft", error);
     return NextResponse.json(
       { error: "Failed to save imported product as a draft." },

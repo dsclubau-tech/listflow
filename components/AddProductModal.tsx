@@ -9,14 +9,23 @@ import {
   type AmazonPriceTrackingMode,
 } from "@/lib/amazon-price-tracking";
 import { useState } from "react";
+import { DuplicateDraftError } from "@/components/draft-autosave";
+import type { ExistingProductConflict } from "@/types/product-duplicate";
 
 interface AddProductModalProps {
   isOpen: boolean;
   mode?: AddProductMode;
   onClose: () => void;
-  onScraped: (data: ScrapedProduct) => void | Promise<void>;
-  onBackgroundStarted?: () => void;
-  onBackgroundFailed?: (message: string) => void;
+  onScraped: (
+    data: ScrapedProduct,
+    context: { background: boolean },
+  ) => void | Promise<void>;
+  onBackgroundStarted?: (url: string) => void;
+  onBackgroundFailed?: (
+    message: string,
+    existing?: ExistingProductConflict,
+  ) => void;
+  onOpenExisting?: (existing: ExistingProductConflict) => void;
 }
 
 export interface ScrapedProduct {
@@ -55,6 +64,8 @@ export interface ScrapedProduct {
 
 type ScrapeResponseBody = Partial<ScrapedProduct> & {
   error?: string;
+  code?: string;
+  existing?: ExistingProductConflict;
 };
 
 export type AddProductMode = "normal" | "advanced";
@@ -100,6 +111,7 @@ export default function AddProductModal({
   onScraped,
   onBackgroundStarted,
   onBackgroundFailed,
+  onOpenExisting,
 }: AddProductModalProps) {
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
@@ -107,6 +119,8 @@ export default function AddProductModal({
   const [scrapedProduct, setScrapedProduct] = useState<ScrapedProduct | null>(
     null
   );
+  const [duplicateProduct, setDuplicateProduct] =
+    useState<ExistingProductConflict | null>(null);
   const [selectedMode, setSelectedMode] =
     useState<AmazonPriceTrackingMode>(DEFAULT_AMAZON_PRICE_TRACKING_MODE);
   const importProgress = useTimedActionProgress(isLoading, {
@@ -130,6 +144,7 @@ export default function AddProductModal({
 
     setError("");
     setScrapedProduct(null);
+    setDuplicateProduct(null);
 
     const validationError = getAddProductUrlValidationError(url);
     if (validationError) {
@@ -169,6 +184,11 @@ export default function AddProductModal({
         setSelectedMode(hasRegular ? "REGULAR" : "DEAL");
         setScrapedProduct(scraped);
       } else {
+        setDuplicateProduct(
+          data.code === "DUPLICATE_ASIN" && data.existing
+            ? data.existing
+            : null,
+        );
         setError(data.error || "Scraping failed. Please try again.");
       }
     } catch (error) {
@@ -190,6 +210,7 @@ export default function AddProductModal({
   async function handleNormalBackgroundImport() {
     setError("");
     setScrapedProduct(null);
+    setDuplicateProduct(null);
 
     const validationError = getAddProductUrlValidationError(url);
     if (validationError) {
@@ -200,7 +221,7 @@ export default function AddProductModal({
     const importUrl = url.trim();
     setUrl("");
     setSelectedMode(DEFAULT_AMAZON_PRICE_TRACKING_MODE);
-    onBackgroundStarted?.();
+    onBackgroundStarted?.(importUrl);
     onClose();
 
     try {
@@ -214,7 +235,10 @@ export default function AddProductModal({
       const data = await readScrapeResponse(res);
 
       if (!res.ok) {
-        onBackgroundFailed?.(data.error || "Scraping failed. Please try again.");
+        onBackgroundFailed?.(
+          data.error || "Scraping failed. Please try again.",
+          data.code === "DUPLICATE_ASIN" ? data.existing : undefined,
+        );
         return;
       }
 
@@ -235,11 +259,14 @@ export default function AddProductModal({
         return;
       }
 
-      await onScraped({
-        ...scraped,
-        price: regular.price,
-        amazonPriceTrackingMode: "REGULAR",
-      });
+      await onScraped(
+        {
+          ...scraped,
+          price: regular.price,
+          amazonPriceTrackingMode: "REGULAR",
+        },
+        { background: true },
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
       onBackgroundFailed?.(
@@ -250,6 +277,7 @@ export default function AddProductModal({
             : message
               ? message
               : "Request timed out or failed. Please try again.",
+        error instanceof DuplicateDraftError ? error.existing : undefined,
       );
     }
   }
@@ -271,15 +299,21 @@ export default function AddProductModal({
     setIsLoading(true);
 
     try {
-      await onScraped({
-        ...scrapedProduct,
-        price: choice.price,
-        amazonPriceTrackingMode: selectedMode,
-      });
+      await onScraped(
+        {
+          ...scrapedProduct,
+          price: choice.price,
+          amazonPriceTrackingMode: selectedMode,
+        },
+        { background: false },
+      );
       setUrl("");
       setScrapedProduct(null);
       setSelectedMode(DEFAULT_AMAZON_PRICE_TRACKING_MODE);
     } catch (error) {
+      setDuplicateProduct(
+        error instanceof DuplicateDraftError ? error.existing : null,
+      );
       setError(error instanceof Error ? error.message : "Failed to create draft.");
     } finally {
       setIsLoading(false);
@@ -291,6 +325,7 @@ export default function AddProductModal({
       setUrl("");
       setError("");
       setScrapedProduct(null);
+      setDuplicateProduct(null);
       setSelectedMode(DEFAULT_AMAZON_PRICE_TRACKING_MODE);
       onClose();
     }
@@ -322,6 +357,7 @@ export default function AddProductModal({
             onChange={(e) => {
               setUrl(e.target.value);
               setScrapedProduct(null);
+              setDuplicateProduct(null);
               setError("");
             }}
             placeholder="https://www.amazon.com.au/dp/..."
@@ -390,7 +426,18 @@ export default function AddProductModal({
           )}
 
           {error && (
-            <p className="mt-2 text-sm text-red-600">{error}</p>
+            <div className="mt-2 text-sm text-red-600">
+              <p>{error}</p>
+              {duplicateProduct && onOpenExisting && (
+                <button
+                  type="button"
+                  onClick={() => onOpenExisting(duplicateProduct)}
+                  className="mt-2 font-semibold underline underline-offset-2"
+                >
+                  Open existing product
+                </button>
+              )}
+            </div>
           )}
 
           <div className="flex items-center gap-3 mt-6">
@@ -399,8 +446,8 @@ export default function AddProductModal({
                 <ActionProgressBar
                   label={
                     scrapedProduct
-                      ? "Creating draft"
-                      : "Importing from Amazon"
+                      ? "Saving draft"
+                      : "Reading Amazon"
                   }
                   percent={importProgress}
                   detail={

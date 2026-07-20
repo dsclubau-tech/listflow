@@ -12,7 +12,6 @@ import { cacheLife, cacheTag } from "next/cache";
 import {
   actionCenterCacheTag,
   LISTFLOW_FRESH_CACHE_LIFE,
-  priceTrackerCacheTag,
   productsCacheTag,
 } from "@/lib/cache-tags";
 import { prisma } from "@/lib/prisma";
@@ -25,6 +24,7 @@ import {
   getEffectiveListingQuantity,
   getLatestPendingReviewHistory,
 } from "@/lib/action-center-metrics";
+import { getLowStockProductWhere } from "@/lib/low-stock-products";
 import {
   getOfflineWorkerStatus,
   getWorkerStatusesForStore,
@@ -285,7 +285,6 @@ async function getCachedActionCenterQueues(
   cacheTag(
     actionCenterCacheTag(storeId),
     productsCacheTag(storeId),
-    priceTrackerCacheTag(storeId),
   );
 
   const pendingGroups = await prisma.priceHistory.groupBy({
@@ -358,12 +357,7 @@ async function getCachedActionCenterQueues(
     },
   });
   const failedChecksCount = await prisma.product.count({ where: failedWhere });
-  const lowStockWhere = {
-    status: ProductStatus.IMPORTED,
-    storeId,
-    asin: { not: null },
-    amazonStockLeft: { not: null, lte: 3 },
-  } satisfies Prisma.ProductWhereInput;
+  const lowStockWhere = getLowStockProductWhere(storeId);
   const lowStockProducts = await prisma.product.findMany({
     where: lowStockWhere,
     orderBy: [{ amazonStockLeft: "asc" }, { title: "asc" }],

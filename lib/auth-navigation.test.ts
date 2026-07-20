@@ -40,5 +40,6 @@ test("isPrivateAppPath covers every ListFlow application page", () => {
 
   assert.equal(isPrivateAppPath("/login"), false);
   assert.equal(isPrivateAppPath("/api/auth/session"), false);
+  assert.equal(isPrivateAppPath("/price-tracker"), false);
   assert.equal(isPrivateAppPath("/products-public"), false);
 });

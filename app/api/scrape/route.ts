@@ -12,6 +12,11 @@ import { getCurrentStoreSession } from "@/lib/store-session";
 import { getStorePolicyDefaults } from "@/lib/policy-defaults";
 import { normalizeItemSpecifics } from "@/lib/item-specifics";
 import { isAmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
+import { extractAmazonAsinFromValue } from "@/lib/amazon-direct-scraper";
+import {
+  findExistingAmazonProduct,
+  getDuplicateAmazonProductBody,
+} from "@/lib/product-duplicate";
 
 export const maxDuration = 60;
 
@@ -76,6 +81,25 @@ export async function POST(request: Request) {
   log.info("scrape/route", "Scrape started", { url });
 
   try {
+    const requestedAsin = extractAmazonAsinFromValue(url);
+    const existingProduct = await findExistingAmazonProduct(
+      storeSession.storeId,
+      requestedAsin,
+      prisma,
+    );
+
+    if (existingProduct && !allowMetadataOnly) {
+      log.info("scrape/route", "Duplicate Amazon product rejected", {
+        asin: requestedAsin,
+        existingProductId: existingProduct.id,
+        existingStatus: existingProduct.status,
+      });
+      return NextResponse.json(
+        getDuplicateAmazonProductBody(existingProduct),
+        { status: 409 },
+      );
+    }
+
     const supplierSettings = await prisma.supplierSettings.findFirst({
       where: { supplierName: "Amazon AU", storeId: storeSession.storeId },
     });
