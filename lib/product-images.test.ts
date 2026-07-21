@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   dedupeProductImages,
   normalizeProductImageUrl,
+  removeKnownUndersizedEbayPictures,
 } from "@/lib/product-images";
 
 test("normalizes Amazon resized image URLs to one canonical URL", () => {
@@ -74,4 +75,31 @@ test("keeps up to 24 listing images by default", () => {
   );
 
   assert.equal(dedupeProductImages(images).length, 24);
+});
+
+test("removes known eBay pictures below the 500-pixel policy minimum", () => {
+  const large =
+    "https://i.ebayimg.com/00/s/MTUwMFgxNTAw/z/example/$_1.JPG?set_id=8800005007";
+  const minimum =
+    "https://i.ebayimg.com/00/s/NTAwWDQwMA==/z/example/$_1.JPG?set_id=8800005007";
+  const thumbnail =
+    "https://i.ebayimg.com/00/s/NDBYNDA=/z/example/$_1.JPG?set_id=8800005007";
+
+  assert.deepEqual(removeKnownUndersizedEbayPictures([large, minimum, thumbnail]), [
+    "https://i.ebayimg.com/00/s/MTUwMFgxNTAw/z/example/$_1.JPG",
+    "https://i.ebayimg.com/00/s/NTAwWDQwMA==/z/example/$_1.JPG",
+  ]);
+});
+
+test("keeps pictures whose dimensions are not encoded in an eBay URL", () => {
+  assert.deepEqual(
+    removeKnownUndersizedEbayPictures([
+      "https://i.ebayimg.com/images/g/example/s-l1600.jpg",
+      "https://example.com/product.jpg",
+    ]),
+    [
+      "https://i.ebayimg.com/images/g/example/s-l1600.jpg",
+      "https://example.com/product.jpg",
+    ],
+  );
 });

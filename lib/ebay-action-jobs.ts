@@ -13,6 +13,11 @@ import {
   buildReviseItemXML,
   buildReviseQuantityXML,
 } from "@/lib/ebay-xml";
+import { getEbayCustomLabel } from "@/lib/sku";
+import {
+  dedupeProductImages,
+  removeKnownUndersizedEbayPictures,
+} from "@/lib/product-images";
 import {
   callEbayEndItem,
   callEbayReviseInventoryStatus,
@@ -1102,6 +1107,103 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       };
     }
 
+    const bulkEditFields = getBulkEditFields(job);
+    const skuChanged = bulkEditFields.has("sku");
+    const customLabel = skuChanged
+      ? getEbayCustomLabel({
+          variantSku: product.variants[0]?.sku,
+          asin: product.asin,
+          automaticSkuFilling: true,
+        })
+      : null;
+
+    if (skuChanged && bulkEditFields.size === 1) {
+      if (!customLabel) {
+        return {
+          ok: false,
+          failure: {
+            productId,
+            title: product.title,
+            error: "A valid SKU or Amazon ASIN is required",
+          },
+        };
+      }
+
+      const storeNumber = await getStoreNumber(product.storeId);
+      let result = await callEbayReviseItem(
+        buildReviseItemXML(product, undefined, {
+          customLabel,
+          includeSku: true,
+          includeTitle: false,
+          includeDescription: false,
+          includeStartPrice: false,
+          includeDispatchTimeMax: false,
+          includeQuantity: false,
+          includeSellerProfiles: false,
+          includeLocation: false,
+        }),
+        storeNumber,
+      );
+
+      let revisedImages: string[] | null = null;
+      const originalImages = dedupeProductImages(product.images);
+      const compliantImages = removeKnownUndersizedEbayPictures(product.images);
+      const isPicturePolicyFailure =
+        !result.success &&
+        /picture policy|at least 500 pixels/i.test(result.errorMessage ?? "");
+
+      if (
+        isPicturePolicyFailure &&
+        compliantImages.length > 0 &&
+        compliantImages.length < originalImages.length
+      ) {
+        result = await callEbayReviseItem(
+          buildReviseItemXML(
+            { ...product, images: compliantImages },
+            undefined,
+            {
+              customLabel,
+              includeSku: true,
+              includeTitle: false,
+              includeDescription: false,
+              includeStartPrice: false,
+              includeDispatchTimeMax: false,
+              includeQuantity: false,
+              includeSellerProfiles: false,
+              includeLocation: false,
+              includePictures: true,
+            },
+          ),
+          storeNumber,
+        );
+
+        if (result.success) {
+          revisedImages = compliantImages;
+        }
+      }
+
+      if (!result.success) {
+        const errorMessage = result.errorMessage || "SKU update failed";
+        await prisma.product.update({
+          where: { id: product.id },
+          data: { errorMessage },
+        });
+        return {
+          ok: false,
+          failure: { productId, title: product.title, error: errorMessage },
+        };
+      }
+
+      await prisma.product.update({
+        where: { id: product.id },
+        data: {
+          errorMessage: null,
+          ...(revisedImages ? { images: revisedImages } : {}),
+        },
+      });
+      return { ok: true, failure: null };
+    }
+
     const policySelection = await resolveProductPolicySelection(
       product.storeId,
       {
@@ -1131,7 +1233,6 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       });
     }
 
-    const bulkEditFields = getBulkEditFields(job);
     const priceChanged =
       bulkEditFields.size === 0 || hasAnyField(bulkEditFields, BULK_EDIT_PRICE_FIELDS);
     const quantityChanged = bulkEditFields.has("quantity");
@@ -1190,6 +1291,8 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
           },
           priceChanged ? overrideStartPrice : undefined,
           {
+            customLabel,
+            includeSku: skuChanged,
             includeTitle: bulkEditFields.has("title"),
             includeDescription: descriptionChanged,
             includeStartPrice: priceChanged,

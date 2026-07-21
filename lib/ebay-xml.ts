@@ -24,6 +24,8 @@ type AddItemOptions = {
 
 type ReviseItemOptions = {
   quantityOverride?: number;
+  customLabel?: string | null;
+  includeSku?: boolean;
   includeTitle?: boolean;
   includeDescription?: boolean;
   includeStartPrice?: boolean;
@@ -441,6 +443,7 @@ export function buildReviseItemXML(
   const { location, postalCode } = getLocationMetadata(specifics);
   const dispatchTimeMax = getDispatchTimeMax(specifics);
   const includeTitle = options.includeTitle ?? true;
+  const includeSku = options.includeSku ?? false;
   const includeDescription = options.includeDescription ?? true;
   const includeStartPrice = options.includeStartPrice ?? true;
   const includeDispatchTimeMax = options.includeDispatchTimeMax ?? true;
@@ -459,6 +462,7 @@ export function buildReviseItemXML(
   const pictureDetailsXml = includePictures
     ? buildPictureDetailsXml(product.images)
     : "";
+  const skuXml = includeSku ? buildSkuXml(options.customLabel) : "";
 
   // Use the override price (from the primary variant's sellPrice) when available,
   // otherwise fall back to product.price for backwards compatibility.
@@ -479,6 +483,7 @@ export function buildReviseItemXML(
   <WarningLevel>High</WarningLevel>
   <Item>
     <ItemID>${escapeXml(product.ebayItemId)}</ItemID>
+${skuXml}
 ${includeTitle ? `    <Title>${escapeXml(toEbayListingTitle(product.title))}</Title>` : ""}
 ${includeDescription ? `    <Description><![CDATA[${product.description}]]></Description>` : ""}
 ${startPrice ? `    <StartPrice>${startPrice}</StartPrice>` : ""}

@@ -28,7 +28,7 @@ function buildTestProduct() {
     shippingPolicyId: "shipping-1",
     returnPolicyId: "return-1",
     paymentPolicyId: "payment-1",
-  } as Parameters<typeof buildAddItemXML>[0];
+  } as unknown as Parameters<typeof buildAddItemXML>[0];
 }
 
 test("buildAddItemXML sends custom label as eBay SKU", () => {
@@ -119,6 +119,39 @@ test("buildReviseItemXML sends the edited eBay listing title", () => {
 
   assert.match(xml, new RegExp(`<Title>${editedTitle}<\\/Title>`));
   assert.doesNotMatch(xml, /<Title>MelodySusie/);
+});
+
+test("buildReviseItemXML sends custom label when a SKU revision is requested", () => {
+  const product = {
+    ...buildTestProduct(),
+    ebayItemId: "307056203187",
+  } as Parameters<typeof buildReviseItemXML>[0];
+
+  const xml = buildReviseItemXML(product, undefined, {
+    includeSku: true,
+    customLabel: "B07VJ5LG19",
+    includeTitle: false,
+    includeDescription: false,
+    includeStartPrice: false,
+    includeDispatchTimeMax: false,
+    includeQuantity: false,
+    includeSellerProfiles: false,
+    includeLocation: false,
+  });
+
+  assert.match(xml, /<SKU>B07VJ5LG19<\/SKU>/);
+  assert.doesNotMatch(xml, /<Title>/);
+  assert.doesNotMatch(xml, /<StartPrice>/);
+  assert.doesNotMatch(xml, /<Quantity>/);
+});
+
+test("buildReviseItemXML omits SKU by default", () => {
+  const product = {
+    ...buildTestProduct(),
+    ebayItemId: "307056203187",
+  } as Parameters<typeof buildReviseItemXML>[0];
+
+  assert.doesNotMatch(buildReviseItemXML(product), /<SKU>/);
 });
 
 test("buildReviseItemXML omits pictures unless explicitly requested", () => {

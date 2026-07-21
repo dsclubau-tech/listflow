@@ -3,6 +3,7 @@ const BAD_IMAGE_URL_PATTERN =
   /play-button|play_icon|spinner|loading|transparent|pixel|grey-pixel|sprite|video/i;
 
 export const MAX_EBAY_PICTURES = 24;
+export const MIN_EBAY_PICTURE_LONGEST_SIDE = 500;
 
 function extractFirstUrl(value: string) {
   const match = value.match(/https?:\/\/[^\s"'<>\\]+/i);
@@ -90,4 +91,42 @@ export function dedupeProductImages(
   }
 
   return result;
+}
+
+function getEbayPictureDimensions(value: string) {
+  try {
+    const url = new URL(value);
+    if (!/(^|\.)ebayimg\.com$/i.test(url.hostname)) {
+      return null;
+    }
+
+    const encodedDimensions = url.pathname.match(/\/s\/([^/]+)\//i)?.[1];
+    if (!encodedDimensions) {
+      return null;
+    }
+
+    const decodedDimensions = atob(encodedDimensions);
+    const match = decodedDimensions.match(/^(\d+)x(\d+)$/i);
+    if (!match) {
+      return null;
+    }
+
+    return {
+      width: Number.parseInt(match[1], 10),
+      height: Number.parseInt(match[2], 10),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function removeKnownUndersizedEbayPictures(images: unknown[]) {
+  return dedupeProductImages(images).filter((image) => {
+    const dimensions = getEbayPictureDimensions(image);
+    return (
+      !dimensions ||
+      Math.max(dimensions.width, dimensions.height) >=
+        MIN_EBAY_PICTURE_LONGEST_SIDE
+    );
+  });
 }
