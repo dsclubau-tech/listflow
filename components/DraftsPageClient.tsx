@@ -13,6 +13,7 @@ import { removeImportedDraftProduct } from "@/lib/draft-products-state";
 import ActionProgressBar from "@/components/ActionProgressBar";
 import { useTimedActionProgress } from "@/hooks/useTimedActionProgress";
 import type { ExistingProductConflict } from "@/types/product-duplicate";
+import Button from "@/components/ui/Button";
 
 interface DraftsPageClientProps {
   products: SerializedProductRow[];
@@ -146,34 +147,56 @@ export default function DraftsPageClient({
 
   return (
     <>
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold text-gray-900">Drafts</h1>
-          <span className="text-sm text-gray-500">
-            ({products.length} products)
-          </span>
+      <section className="mb-6 overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-sm">
+        <div className="h-1 bg-gradient-to-r from-orange-500 via-amber-400 to-orange-300" />
+        <div className="flex flex-col gap-5 p-5 md:p-6 xl:flex-row xl:items-center xl:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-2xl font-bold tracking-tight text-gray-950">
+                Drafts
+              </h1>
+              <span className="inline-flex min-h-7 items-center rounded-full bg-orange-50 px-3 text-sm font-semibold text-orange-700 ring-1 ring-inset ring-orange-200">
+                {products.length} {products.length === 1 ? "product" : "products"}
+              </span>
+            </div>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-500">
+              Review Amazon product details, prepare listings, and follow each
+              eBay upload without leaving this page.
+            </p>
+          </div>
+          <div className="grid w-full gap-2 sm:grid-cols-2 xl:w-auto">
+            <Button
+              onClick={() => openAddProduct("normal")}
+              disabled={isBackgroundImportActive}
+              variant="primary"
+              size="md"
+              fullWidth
+              className="xl:min-w-40"
+              icon={
+                <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.5v15m7.5-7.5h-15" />
+                </svg>
+              }
+            >
+              Normal Upload
+            </Button>
+            <Button
+              onClick={() => openAddProduct("advanced")}
+              disabled={isBackgroundImportActive}
+              variant="secondary"
+              size="md"
+              fullWidth
+              className="xl:min-w-40"
+            >
+              Advanced Upload
+            </Button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => openAddProduct("normal")}
-            disabled={isBackgroundImportActive}
-            className="px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-md hover:bg-gray-700 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            + Normal Upload
-          </button>
-          <button
-            onClick={() => openAddProduct("advanced")}
-            disabled={isBackgroundImportActive}
-            className="px-4 py-2 border border-gray-300 bg-white text-gray-800 text-sm font-medium rounded-md hover:bg-gray-50 transition-colors disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Advanced Upload
-          </button>
-        </div>
-      </div>
+      </section>
 
       {backgroundImport && (
         <div
-          className={`mb-5 rounded-lg border px-4 py-3 ${
+          className={`mb-5 rounded-2xl border px-4 py-4 shadow-sm ${
             backgroundImport.status === "error"
               ? "border-red-200 bg-red-50"
               : backgroundImport.status === "success"
@@ -214,7 +237,7 @@ export default function DraftsPageClient({
             }
           />
           {backgroundImport.status === "error" && (
-            <div className="mt-3 flex items-center gap-3">
+            <div className="mt-3 flex flex-wrap items-center gap-3">
               {backgroundImport.existing ? (
                 <button
                   type="button"

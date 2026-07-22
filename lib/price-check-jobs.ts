@@ -13,7 +13,6 @@ import {
   isValidAsin,
 } from "@/lib/price-check-eligibility";
 import {
-  assertNoPriceCheckStartConflict,
   getPriceCheckLeaseInput,
   JobConflictError,
   withJobLeases,
@@ -673,13 +672,6 @@ export async function createPriceCheckJob(input: CreateJobInput) {
     requestedProductIds
   );
   const eligibleProductIds = selection.productIds;
-  if (eligibleProductIds.length > 0) {
-    await assertNoPriceCheckStartConflict({
-      storeId: input.storeId,
-      scope,
-      productIds: eligibleProductIds,
-    });
-  }
   const completedAt = eligibleProductIds.length === 0 ? new Date() : null;
   const reason =
     eligibleProductIds.length === 0
@@ -754,12 +746,6 @@ export async function resumePriceCheckJob(
       resumed: false,
     };
   }
-
-  await assertNoPriceCheckStartConflict({
-    storeId,
-    scope: sourceJob.scope,
-    productIds: eligibleProductIds,
-  });
 
   const resumedJob = await prisma.priceCheckJob.create({
     data: {

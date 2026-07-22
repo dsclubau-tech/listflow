@@ -156,6 +156,42 @@ function parsePositiveInt(raw: string | null): number | null {
   return value;
 }
 
+function cleanImageOnlyLists(html: string) {
+  if (typeof document === "undefined" || !html) {
+    return html;
+  }
+
+  const template = document.createElement("template");
+  template.innerHTML = html;
+
+  template.content.querySelectorAll("ol, ul").forEach((list) => {
+    const children = Array.from(list.children);
+    const items = children.filter((child): child is HTMLLIElement => child.tagName === "LI");
+
+    if (
+      items.length === 0 ||
+      items.length !== children.length ||
+      !items.every((item) => Boolean(item.querySelector("img")) && !(item.textContent || "").trim())
+    ) {
+      return;
+    }
+
+    const fragment = document.createDocumentFragment();
+    items.forEach((item) => {
+      item.querySelectorAll(".ql-ui").forEach((marker) => marker.remove());
+      Array.from(item.childNodes).forEach((node) => {
+        if (node instanceof HTMLBRElement) {
+          return;
+        }
+        fragment.appendChild(node);
+      });
+    });
+    list.replaceWith(fragment);
+  });
+
+  return template.innerHTML;
+}
+
 export default function RichTextEditor({
   value,
   onChange,
@@ -226,11 +262,9 @@ export default function RichTextEditor({
       // Matches a 1x1 table at the very end of the content containing only a <br> or whitespace
       const emptyTableRegex = /<table[^>]*>\s*<tbody[^>]*>\s*<tr[^>]*>\s*<td[^>]*>(?:<br\s*\/?>|\s*)<\/td>\s*<\/tr>\s*<\/tbody>\s*<\/table>\s*$/i;
 
-      if (emptyTableRegex.test(value)) {
-        const cleaned = value.replace(emptyTableRegex, "");
-        if (cleaned !== value) {
-          onChange(cleaned);
-        }
+      const cleaned = cleanImageOnlyLists(value.replace(emptyTableRegex, ""));
+      if (cleaned !== value) {
+        onChange(cleaned);
       }
     }
   }, [value, onChange]);

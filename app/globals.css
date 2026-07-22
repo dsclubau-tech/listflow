@@ -3,18 +3,39 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+  --font-listflow-sans: "Segoe UI", Arial, Helvetica, sans-serif;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
+  --font-sans: var(--font-listflow-sans);
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-sans), Arial, Helvetica, sans-serif;
+  font-family: var(--font-listflow-sans);
+}
+
+@keyframes listflow-progress-slide {
+  0% {
+    transform: translateX(-110%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+.listflow-progress-indeterminate {
+  animation: listflow-progress-slide 1.25s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .listflow-progress-indeterminate {
+    animation: none;
+    transform: none;
+  }
 }
 
 .listflow-rich-text .ql-container.ql-snow {
@@ -28,6 +49,18 @@ body {
 .listflow-rich-text .ql-editor {
   min-height: var(--listflow-quill-min-height, 18rem);
   font-size: 0.875rem;
+}
+
+.listflow-rich-text .ql-editor img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-right: auto;
+  margin-left: auto;
+}
+
+.listflow-rich-text .ql-editor p:has(> img:only-child) {
+  margin: 0;
 }
 
 .listflow-rich-text .ql-editor hr {
@@ -371,17 +404,26 @@ body {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 2px;
+  min-height: 3rem;
+  gap: 0.25rem;
 }
 
 [data-toolbar-variant="compact"] .ql-toolbar.ql-snow .ql-formats {
   margin: 0;
-  padding: 0 6px;
+  min-height: 2rem;
+  padding: 0 0.45rem;
   border-right: 1px solid #d6d6d6;
   display: inline-flex;
   align-items: center;
   gap: 3px;
   flex: 0 0 auto;
+}
+
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow .ql-formats > div,
+[data-toolbar-variant="compact"] .ql-toolbar.ql-snow .ql-formats > span {
+  display: inline-flex !important;
+  align-items: center;
+  min-height: 1.75rem;
 }
 
 [data-toolbar-variant="compact"] .ql-toolbar.ql-snow .ql-formats:last-child {

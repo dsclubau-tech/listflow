@@ -53,6 +53,9 @@ import {
   normalizeFullProductTitle,
   toEbayListingTitle,
 } from "@/lib/product-title";
+import Button from "@/components/ui/Button";
+import ActionProgressBar from "@/components/ActionProgressBar";
+import { useTimedActionProgress } from "@/hooks/useTimedActionProgress";
 
 // ----- Types -----
 
@@ -83,6 +86,20 @@ interface InlineEditFormProps {
   product: ProductWithRelations;
   onCollapse: () => void;
   onImported?: (productId: string) => void;
+}
+
+type InlineUploadJob = {
+  id: string;
+  status: string;
+  total: number;
+  processed: number;
+  succeeded: number;
+  failed: number;
+  errors?: Array<{ productId: string; error: string }>;
+};
+
+function isActiveInlineUploadJob(job: InlineUploadJob | null) {
+  return job?.status === "QUEUED" || job?.status === "RUNNING";
 }
 
 interface SaveMessage {
@@ -334,7 +351,7 @@ const tabs = ["Product", "Description", "Variants", "Images", "Item Specificatio
 
 // ===== Component =====
 
-export default function InlineEditForm({ product }: InlineEditFormProps) {
+export default function InlineEditForm({ product, onImported }: InlineEditFormProps) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState(0);
 
@@ -427,8 +444,73 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
   // Save state
   const [isSaving, setIsSaving] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [importPhase, setImportPhase] = useState<"saving" | "queueing" | null>(null);
+  const [inlineUploadJob, setInlineUploadJob] = useState<InlineUploadJob | null>(null);
   const [isRegrabbing, setIsRegrabbing] = useState(false);
   const [saveMessage, setSaveMessage] = useState<SaveMessage | null>(null);
+  const saveAndImportPercent = useTimedActionProgress(isImporting, {
+    initialPercent: 8,
+    maxWaitingPercent: 90,
+    stepPercent: 7,
+    intervalMs: 650,
+  });
+  const activeInlineUploadJobId = inlineUploadJob && isActiveInlineUploadJob(inlineUploadJob)
+    ? inlineUploadJob.id
+    : null;
+
+  useEffect(() => {
+    if (!activeInlineUploadJobId) {
+      return;
+    }
+
+    let cancelled = false;
+
+    async function refreshInlineUploadJob() {
+      try {
+        const response = await fetch("/api/upload/jobs/current", {
+          cache: "no-store",
+        });
+        const data = (await response.json().catch(() => ({}))) as {
+          jobs?: InlineUploadJob[];
+        };
+        const nextJob = data.jobs?.find((job) => job.id === activeInlineUploadJobId);
+
+        if (!cancelled && response.ok && nextJob) {
+          setInlineUploadJob(nextJob);
+
+          if (!isActiveInlineUploadJob(nextJob)) {
+            if (nextJob.failed > 0) {
+              setSaveMessage({
+                title: "Import failed",
+                text:
+                  nextJob.errors?.find((error) => error.productId === product.id)?.error ||
+                  "The eBay upload failed. You can retry from this draft.",
+                variant: "error",
+              });
+            } else {
+              setSaveMessage({
+                title: "Import complete",
+                text: "The listing was uploaded to eBay successfully.",
+                variant: "success",
+              });
+              onImported?.(product.id);
+            }
+            router.refresh();
+          }
+        }
+      } catch {
+        // Keep the editor usable; the next poll can restore persisted progress.
+      }
+    }
+
+    void refreshInlineUploadJob();
+    const intervalId = window.setInterval(refreshInlineUploadJob, 2000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [activeInlineUploadJobId, onImported, product.id, router]);
 
   useEffect(() => {
     setAsin(product.asin ?? "");
@@ -1218,6 +1300,8 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
     }
 
     setIsImporting(true);
+    setImportPhase("saving");
+    setInlineUploadJob(null);
 
     const saved = await handleSave({
       showSuccessMessage: false,
@@ -1225,10 +1309,12 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
     });
     if (!saved) {
       setIsImporting(false);
+      setImportPhase(null);
       return;
     }
 
     try {
+      setImportPhase("queueing");
       const res = await fetch("/api/upload", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1238,7 +1324,11 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       if (res.ok) {
         const data = (await res.json().catch(() => ({}))) as {
           message?: string;
+          job?: InlineUploadJob;
         };
+        if (data.job) {
+          setInlineUploadJob(data.job);
+        }
         setSaveMessage({
           text: data.message || "Upload queued. Track it in Action Center.",
           variant: "success",
@@ -1300,6 +1390,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       });
     } finally {
       setIsImporting(false);
+      setImportPhase(null);
     }
   }
 
@@ -1656,11 +1747,11 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
   const currentAsin = normalizeAsin(asin);
 
   return (
-    <div className="bg-gray-50 border-t border-gray-200">
+    <div className="border-t border-gray-200 bg-gray-50">
       {/* ===== Header bar ===== */}
-      <div className="flex flex-col gap-3 px-6 py-3 bg-white border-b border-gray-200 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex flex-col gap-4 border-b border-gray-200 bg-white px-4 py-4 md:px-6 xl:flex-row xl:items-center xl:justify-between">
         {/* Left side */}
-        <div className="flex items-center gap-3 min-w-0">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
           {thumbnail && (
             <img
               src={thumbnail}
@@ -1682,53 +1773,100 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
         </div>
 
         {/* Right side — buttons */}
-        <div className="flex flex-wrap items-center gap-2 flex-shrink-0">
+        <div className="grid w-full grid-cols-2 gap-2 sm:grid-cols-3 xl:flex xl:w-auto xl:flex-wrap xl:items-center">
           {currentAsin && (
-            <button
-              type="button"
+            <Button
               onClick={handleRegrab}
               disabled={isRegrabbing || isSaving || isImporting || isRevising}
-              className="px-3 py-1.5 border border-blue-300 text-blue-700 text-sm font-medium rounded-md hover:bg-blue-50 disabled:opacity-40 transition-colors"
+              pending={isRegrabbing}
+              pendingLabel="Regrabbing…"
+              variant="secondary"
+              fullWidth
+              className="border-blue-200 text-blue-700 hover:bg-blue-50"
               title="Re-fetch product details from Amazon. This can take 10-30 seconds."
             >
-              {isRegrabbing ? "Regrabbing..." : "Regrab"}
-            </button>
+              Regrab
+            </Button>
           )}
           {inlineSuccessMessage && (
-            <span className="text-sm font-medium text-green-600">
+            <span className="col-span-2 self-center text-sm font-medium text-green-600 sm:col-span-3 xl:order-last xl:col-span-1">
               {inlineSuccessMessage.text}
             </span>
           )}
-          <button
-            type="button"
+          <Button
             onClick={() => void handleSave()}
             disabled={isSaving || isImporting || isRevising || isRegrabbing}
-            className="px-4 py-1.5 border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 disabled:opacity-40 transition-colors"
+            pending={isSaving}
+            pendingLabel="Saving…"
+            variant="secondary"
+            fullWidth
           >
-            {isSaving ? "Saving..." : isListed ? "Save Locally" : "Save"}
-          </button>
+            {isListed ? "Save Locally" : "Save"}
+          </Button>
           {!isListed && (
-            <button
-              type="button"
+            <Button
               onClick={handleSaveAndImport}
               disabled={isSaving || isImporting || isRevising || isRegrabbing}
-              className="px-4 py-1.5 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-md disabled:opacity-40 transition-colors"
+              pending={isImporting}
+              pendingLabel="Importing…"
+              variant="primary"
+              fullWidth
+              className="border-orange-500 bg-orange-500 hover:border-orange-600 hover:bg-orange-600"
             >
-              {isImporting ? "Importing..." : "Save & Import"}
-            </button>
+              Save & Import
+            </Button>
           )}
           {isImported && (
-            <button
-              type="button"
+            <Button
               onClick={handleSaveAndUpdateEbay}
               disabled={isSaving || isImporting || isRevising || isRegrabbing}
-              className="px-4 py-1.5 bg-blue-500 hover:bg-blue-600 text-white text-sm font-medium rounded-md disabled:opacity-40 transition-colors"
+              pending={isRevising}
+              pendingLabel="Updating…"
+              variant="primary"
+              fullWidth
+              className="border-blue-600 bg-blue-600 hover:border-blue-700 hover:bg-blue-700"
             >
-              {isRevising ? "Updating..." : "Save & Update eBay"}
-            </button>
+              Save & Update eBay
+            </Button>
           )}
         </div>
       </div>
+
+      {(isImporting || inlineUploadJob) && (
+        <div className="border-b border-orange-100 bg-orange-50/70 px-4 py-3 md:px-6">
+          <ActionProgressBar
+            label={
+              isImporting
+                ? importPhase === "queueing"
+                  ? "Queueing eBay upload"
+                  : "Saving draft"
+                : inlineUploadJob?.status === "QUEUED"
+                  ? "Queued for eBay"
+                  : inlineUploadJob?.status === "RUNNING"
+                    ? "Uploading to eBay"
+                    : inlineUploadJob?.failed
+                      ? "eBay upload failed"
+                      : "eBay upload complete"
+            }
+            percent={
+              isImporting
+                ? saveAndImportPercent
+                : inlineUploadJob && inlineUploadJob.total > 0
+                  ? Math.round((inlineUploadJob.processed / inlineUploadJob.total) * 100)
+                  : 0
+            }
+            indeterminate={!isImporting && isActiveInlineUploadJob(inlineUploadJob)}
+            tone={inlineUploadJob?.failed ? "red" : inlineUploadJob?.status === "COMPLETED" ? "green" : "orange"}
+            detail={
+              isImporting
+                ? "Your changes are being saved before the listing is sent to the upload queue."
+                : inlineUploadJob
+                  ? `${inlineUploadJob.processed} of ${inlineUploadJob.total} processed${inlineUploadJob.failed ? `, ${inlineUploadJob.failed} failed` : ""}.`
+                  : undefined
+            }
+          />
+        </div>
+      )}
 
       {bannerMessage && (
         <div
@@ -1804,8 +1942,8 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       )}
 
       {/* ===== Tabs ===== */}
-      <div className="border-b border-gray-200 px-6">
-        <nav className="flex gap-6">
+      <div className="overflow-x-auto border-b border-gray-200 px-4 md:px-6">
+        <nav className="flex min-w-max gap-6" aria-label="Draft editor sections">
           {tabs.map((tab, i) => (
             <button
               key={tab}
@@ -1824,12 +1962,12 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
       </div>
 
       {/* ===== Tab Content ===== */}
-      <div className="p-6 pb-10">
+      <div className="p-4 pb-8 md:p-6 md:pb-10">
         {/* ===== Tab 1 — Product ===== */}
         {activeTab === 0 && (
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             {/* Title — full width */}
-            <div className="col-span-2">
+            <div className="col-span-full">
               <label className="block text-sm font-medium text-gray-700 mb-1">Title</label>
               <input
                 type="text"
@@ -1844,7 +1982,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
             </div>
 
             {/* Category — split into Name + ID */}
-            <div className="col-span-2 grid grid-cols-2 gap-3">
+            <div className="col-span-full grid grid-cols-1 gap-3 md:grid-cols-2">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Category Name</label>
                 <input
@@ -1896,7 +2034,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
             </div>
             {/* Suggestion Dropdown */}
             {showCatDropdown && (
-              <div className="col-span-2 bg-white border border-gray-200 rounded-md shadow-sm divide-y divide-gray-100 max-h-48 overflow-y-auto">
+              <div className="col-span-full max-h-48 overflow-y-auto rounded-md border border-gray-200 bg-white shadow-sm divide-y divide-gray-100">
                 {catSuggestions.length === 0 ? (
                   <p className="px-3 py-2 text-sm text-gray-500">No suggestions found — please enter the ID manually</p>
                 ) : (
@@ -1917,13 +2055,13 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
                 )}
               </div>
             )}
-            <p className="col-span-2 text-xs text-gray-400">
+            <p className="col-span-full text-xs text-gray-400">
               Not sure of the ID? Use the Re-suggest button or find it at{" "}
               <a href="https://www.ebay.com.au/sch/categories" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-600">ebay.com.au/sch/categories</a>
             </p>
 
             {/* Amazon ASIN */}
-            <div className="col-span-2">
+            <div className="col-span-full">
               <label className="block text-sm font-medium text-gray-700 mb-1">Amazon ASIN</label>
               <input
                 type="text"
@@ -2015,7 +2153,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Payment Policy</label>
               {policiesLoading ? (
-                <p className="text-sm text-gray-500 animate-pulse py-2">Loading policies…</p>
+                <div className="h-10 animate-pulse motion-reduce:animate-none rounded-lg bg-gray-200" role="status" aria-label="Loading payment policies" />
               ) : (
                 <select
                   value={paymentPolicyId}
@@ -2036,7 +2174,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Shipping Policy</label>
               {policiesLoading ? (
-                <p className="text-sm text-gray-500 animate-pulse py-2">Loading policies…</p>
+                <div className="h-10 animate-pulse motion-reduce:animate-none rounded-lg bg-gray-200" role="status" aria-label="Loading shipping policies" />
               ) : (
                 <select
                   value={shippingPolicyId}
@@ -2057,7 +2195,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Return Policy</label>
               {policiesLoading ? (
-                <p className="text-sm text-gray-500 animate-pulse py-2">Loading policies…</p>
+                <div className="h-10 animate-pulse motion-reduce:animate-none rounded-lg bg-gray-200" role="status" aria-label="Loading return policies" />
               ) : (
                 <select
                   value={returnPolicyId}
@@ -2193,12 +2331,12 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
                 Loading description from eBay...
               </div>
             )}
-            <div className="flex items-center gap-3 text-sm text-gray-600 mb-3">
-                <span className="text-sm text-gray-500">Selected Template:</span>
+            <div className="mb-3 grid gap-2 rounded-lg border border-gray-200 bg-white p-3 text-sm text-gray-600 sm:grid-cols-[auto_minmax(14rem,24rem)_auto] sm:items-center">
+                <span className="font-medium text-gray-600">Selected Template</span>
                 <select
                   value={selectedTemplateId}
                   onChange={(e) => setSelectedTemplateId(e.target.value)}
-                  className="border border-gray-300 rounded-md px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                  className="min-h-10 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
                 >
                   <option value="">— None —</option>
                   {templates.map((t) => (
@@ -2207,8 +2345,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
                     </option>
                   ))}
                 </select>
-                <span className="text-gray-300">|</span>
-                <Link href="/settings" className="text-orange-500 hover:text-orange-600 text-sm hover:underline">
+                <Link href="/settings" className="inline-flex min-h-10 items-center justify-center rounded-md border border-orange-200 px-3 text-sm font-medium text-orange-600 hover:bg-orange-50 hover:text-orange-700 sm:justify-self-start">
                   Edit Templates
                 </Link>
               </div>
@@ -2356,7 +2493,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
                 {imageMessage.text}
               </div>
             )}
-            <div className="grid grid-cols-7 gap-2">
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-7">
               {images.map((url, i) => {
                 const isMain = i === 0;
                 const isHovered = hoveredImage === i;
@@ -2364,7 +2501,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
                 return (
                   <div
                     key={i}
-                    className="relative"
+                    className="group relative"
                     onMouseEnter={() => setHoveredImage(i)}
                     onMouseLeave={() => setHoveredImage(null)}
                   >
@@ -2375,7 +2512,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
                     />
 
                     {isHovered && (
-                      <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center gap-2 z-20 rounded">
+                      <div className="absolute inset-0 z-20 hidden flex-col items-center justify-center gap-2 rounded bg-black/60 md:flex">
                         {!isMain && (
                           <button
                             type="button"
@@ -2395,9 +2532,28 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
                       </div>
                     )}
 
+                    <div className="absolute bottom-0 left-0 right-0 z-20 flex items-center justify-end gap-1 rounded-b bg-black/65 p-1.5 md:hidden">
+                      {!isMain && (
+                        <button
+                          type="button"
+                          onClick={() => setMainImage(url)}
+                          className="min-h-9 rounded-md px-2 text-xs font-semibold text-white hover:bg-white/15"
+                        >
+                          Set main
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removeImage(url)}
+                        className="min-h-9 rounded-md px-2 text-xs font-semibold text-white hover:bg-white/15"
+                      >
+                        Remove
+                      </button>
+                    </div>
+
                     {isMain && (
-                      <div className="absolute bottom-0 left-0 right-0 bg-orange-500 text-white text-xs text-center py-0.5 rounded-b">
-                        Main image
+                      <div className="absolute left-1.5 top-1.5 z-20 rounded-full bg-orange-500 px-2 py-0.5 text-xs font-semibold text-white shadow-sm">
+                        Main
                       </div>
                     )}
                   </div>
@@ -2413,7 +2569,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
         {/* ===== Tab 5 — Item Specifications ===== */}
         {activeTab === 4 && (
           <div>
-            <div className="flex items-center gap-3 px-3 py-2 border-b border-gray-200 text-xs font-medium text-gray-500 uppercase tracking-wide">
+            <div className="hidden items-center gap-3 border-b border-gray-200 px-3 py-2 text-xs font-medium uppercase tracking-wide text-gray-500 md:flex">
               <span className="flex-1">Name</span>
               <span className="flex-1">Value</span>
               <span className="w-10" />
@@ -2435,16 +2591,16 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
                 return (
                   <div
                     key={`${index}-${spec.key}`}
-                    className={`flex items-center gap-3 px-3 py-2 ${
+                    className={`flex flex-col items-stretch gap-2 px-3 py-3 md:flex-row md:items-center md:gap-3 md:py-2 ${
                       visibleIndex % 2 === 0 ? "bg-white" : "bg-gray-50"
                     } ${required && !spec.value.trim() ? "border-l-2 border-l-red-400" : ""}`}
                   >
-                    <div className="flex flex-1 items-center gap-2">
+                    <div className="flex w-full min-w-0 flex-1 items-center gap-2">
                       <input
                         type="text"
                         value={spec.key}
                         onChange={(e) => updateSpecific(index, "key", e.target.value)}
-                        className="min-w-0 flex-1 px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        className="min-w-0 flex-1 rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500 md:py-1.5"
                         placeholder="Name"
                       />
                       {required && (
@@ -2457,7 +2613,7 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
                       <select
                         value={spec.value}
                         onChange={(e) => updateSpecific(index, "value", e.target.value)}
-                        className="flex-1 px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        className="w-full flex-1 px-3 py-2 md:py-1.5 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
                       >
                         <option value="">Select {requiredSpecific?.name ?? "value"}</option>
                         {hasCustomValue && <option value={spec.value}>{spec.value}</option>}
@@ -2472,14 +2628,15 @@ export default function InlineEditForm({ product }: InlineEditFormProps) {
                         type="text"
                         value={spec.value}
                         onChange={(e) => updateSpecific(index, "value", e.target.value)}
-                        className="flex-1 px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        className="w-full flex-1 px-3 py-2 md:py-1.5 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
                         placeholder="Value"
                       />
                     )}
                     <button
                       type="button"
                       onClick={() => removeSpecific(index)}
-                      className="w-10 flex items-center justify-center text-red-400 hover:text-red-600 transition-colors"
+                      className="flex min-h-10 w-full items-center justify-center self-end rounded-md text-red-500 transition-colors hover:bg-red-50 hover:text-red-700 md:w-10"
+                      aria-label={`Remove ${spec.key || "item specification"}`}
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />

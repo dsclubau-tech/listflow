@@ -4,14 +4,13 @@ import { EbayImportJobStatus } from "@/app/generated/prisma/enums";
 import type { Prisma } from "@/app/generated/prisma/client";
 import {
   importEbayListings,
-  resolveEbayImportSelection,
   type EbayImportResult,
   type ImportProgress,
   type ImportSelection,
   type ImportStopReason,
 } from "@/lib/ebay-import";
 import {
-  EbayImportSelectionError,
+  buildQueuedEbayImportRequest,
   type EbayImportSelectionMetadata,
   type EbayImportSortDirection,
   type EbayImportSortField,
@@ -20,7 +19,6 @@ import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { invalidateJobCaches } from "@/lib/cache-tags";
 import {
-  assertNoEbayLaneStartConflict,
   getEbayReadLeaseInput,
   JobConflictError,
   withJobLeases,
@@ -213,7 +211,7 @@ async function findActiveEbayImportJob(storeId: string) {
       status: { in: [...BLOCKING_IMPORT_JOB_STATUSES] },
       dismissedAt: null,
     },
-    orderBy: { createdAt: "desc" },
+    orderBy: { createdAt: "asc" },
   });
 }
 
@@ -333,6 +331,9 @@ async function runEbayImportJobClaimed(jobId: string) {
       selectionMetadata: storedMetadata.mode
         ? (storedMetadata as EbayImportSelectionMetadata)
         : undefined,
+      skuList: storedMetadata.skuList,
+      sortField: storedMetadata.sortField,
+      sortDirection: storedMetadata.sortDirection,
       selectedListingIds: job.selectedListingIds,
       completedListingIds: job.completedListingIds,
       initialCreated: job.created,
@@ -415,49 +416,16 @@ export async function runEbayImportJob(jobId: string, worker?: WorkerContext) {
 }
 
 export async function createEbayImportJob(input: CreateEbayImportJobInput) {
-  await assertNoEbayLaneStartConflict(input.storeId, "read");
-
-  const activeJob = await findActiveEbayImportJob(input.storeId);
-
-  if (activeJob) {
-    return { job: serializeEbayImportJob(activeJob), reused: true };
-  }
-
-  const quantity = Math.max(1, Math.floor(input.quantity));
-  const selection = await resolveEbayImportSelection({
-    storeId: input.storeId,
-    storeNumber: input.storeNumber,
-    quantity,
-    skuList: input.skuList,
-    sortField: input.sortField,
-    sortDirection: input.sortDirection,
-    forceRefresh: true,
-  });
-
-  if (selection.metadata.mode === "SKU" && selection.selectedListingIds.length === 0) {
-    throw new EbayImportSelectionError(
-      "No active, not-yet-imported eBay listings matched the supplied SKU/custom label values.",
-    );
-  }
-
-  const jobQuantity =
-    selection.metadata.mode === "SKU"
-      ? Math.max(1, selection.selectedListingIds.length)
-      : quantity;
+  const queuedRequest = buildQueuedEbayImportRequest(input);
   const job = await prisma.ebayImportJob.create({
     data: {
       userId: input.userId,
       storeId: input.storeId,
       storeNumber: input.storeNumber,
-      quantity: jobQuantity,
-      requested: selection.requested,
-      activeListings: selection.activeListings,
-      alreadyImported: selection.alreadyImported,
-      remainingBeforeImport: selection.remainingBeforeImport,
-      remainingAfterImport: selection.remainingBeforeImport,
-      total: selection.selectedListingIds.length,
-      selectedListingIds: selection.selectedListingIds,
-      metadata: selection.metadata as unknown as Prisma.InputJsonValue,
+      quantity: queuedRequest.quantity,
+      requested: queuedRequest.requested,
+      total: queuedRequest.total,
+      metadata: queuedRequest.metadata as unknown as Prisma.InputJsonValue,
     },
   });
 

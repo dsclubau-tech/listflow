@@ -655,7 +655,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
       }
 
       if (result.reused) {
-        return "A price check is already running.";
+        return "Price check is queued.";
       }
 
       const total = result.job?.total ?? 0;
@@ -755,7 +755,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
       }
 
       if (result.reused) {
-        return "A price check is already running.";
+        return "Price check is queued.";
       }
 
       if (result.resumed && result.job) {
@@ -1663,8 +1663,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                 )}
                 {hasActivePriceJobs && (
                   <div className="bg-blue-50 px-4 py-3 text-sm text-blue-800">
-                    A product price check is already active. Full-store checks wait; selected
-                    checks can still start when the products do not overlap.
+                    A price check is in progress. New checks are accepted and added to the queue.
                   </div>
                 )}
                 <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
@@ -1680,7 +1679,6 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                     onClick={startAllProductsPriceCheck}
                     disabled={
                       workerOffline ||
-                      hasActivePriceJobs ||
                       runningAction === "start-all-products"
                     }
                     tone="primary"

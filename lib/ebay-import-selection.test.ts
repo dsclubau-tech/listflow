@@ -1,11 +1,43 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildQueuedEbayImportRequest,
   normalizeEbayImportSkuList,
   selectEbayListingsForImport,
   sortEbayListingSummariesForImport,
   type EbayListingSummary,
 } from "@/lib/ebay-import-selection";
+
+test("queued quantity imports preserve the request without accessing eBay", () => {
+  assert.deepEqual(buildQueuedEbayImportRequest({ quantity: 12 }), {
+    quantity: 12,
+    requested: 12,
+    total: 12,
+    metadata: {
+      mode: "QUANTITY",
+      skuList: [],
+      unmatchedSkus: [],
+      matchedSkuCount: 0,
+      selectedListingCount: 0,
+      sortField: "START_DATE",
+      sortDirection: "DESC",
+    },
+  });
+});
+
+test("queued SKU imports retain normalized SKUs for worker-time selection", () => {
+  const request = buildQueuedEbayImportRequest({
+    quantity: 1,
+    skuList: "ABC\nabc\nXYZ",
+    sortDirection: "ASC",
+  });
+
+  assert.equal(request.requested, 2);
+  assert.equal(request.total, 2);
+  assert.equal(request.metadata.mode, "SKU");
+  assert.deepEqual(request.metadata.skuList, ["ABC", "XYZ"]);
+  assert.equal(request.metadata.sortDirection, "ASC");
+});
 
 const listings: EbayListingSummary[] = [
   {

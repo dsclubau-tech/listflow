@@ -72,6 +72,28 @@ export function normalizeEbayImportSortDirection(
   return String(value ?? "").toUpperCase() === "ASC" ? "ASC" : "DESC";
 }
 
+export function buildQueuedEbayImportRequest(input: {
+  quantity: number;
+  skuList?: unknown;
+  sortField?: unknown;
+  sortDirection?: unknown;
+}) {
+  const quantity = Math.max(1, Math.floor(input.quantity));
+  const skuList = normalizeEbayImportSkuList(input.skuList);
+  const requested = skuList.length > 0 ? skuList.length : quantity;
+  const metadata: EbayImportSelectionMetadata = {
+    mode: skuList.length > 0 ? "SKU" : "QUANTITY",
+    skuList,
+    unmatchedSkus: [],
+    matchedSkuCount: 0,
+    selectedListingCount: 0,
+    sortField: normalizeEbayImportSortField(input.sortField),
+    sortDirection: normalizeEbayImportSortDirection(input.sortDirection),
+  };
+
+  return { quantity, requested, total: requested, metadata };
+}
+
 function parseStartTime(value: string | null) {
   if (!value) {
     return null;

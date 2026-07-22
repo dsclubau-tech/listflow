@@ -30,7 +30,7 @@ export default function ActionProgressBar({
   const heightClass = compact ? "h-1.5" : "h-2";
 
   return (
-    <div className={compact ? "min-w-[160px]" : "w-full"} aria-live="polite">
+    <div className={compact ? "min-w-0 w-full" : "w-full"} aria-live="polite">
       <div className="mb-1 flex items-center justify-between gap-3 text-xs">
         <span className="truncate font-medium text-gray-700">{label}</span>
         {!indeterminate && (
@@ -48,9 +48,11 @@ export default function ActionProgressBar({
         aria-valuenow={indeterminate ? undefined : normalizedPercent}
       >
         {indeterminate ? (
-          <div
-            className={`h-full w-full rounded-full ${toneClasses[tone]} animate-pulse`}
-          />
+          <div className="h-full w-full overflow-hidden rounded-full">
+            <div
+              className={`listflow-progress-indeterminate h-full w-2/5 rounded-full ${toneClasses[tone]} motion-reduce:w-full motion-reduce:animate-none`}
+            />
+          </div>
         ) : (
           <div
             className={`h-full rounded-full ${toneClasses[tone]} transition-all duration-300`}
@@ -59,7 +61,7 @@ export default function ActionProgressBar({
         )}
       </div>
       {detail && !compact && (
-        <p className="mt-1 truncate text-xs text-gray-500">{detail}</p>
+        <p className="mt-1 text-xs leading-5 text-gray-500">{detail}</p>
       )}
     </div>
   );

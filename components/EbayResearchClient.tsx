@@ -702,14 +702,6 @@ export default function EbayResearchClient({
     setJobs((current) =>
       batchJobs.reduce((nextJobs, job) => mergeJob(nextJobs, job), current)
     );
-
-    setSelectedJob((current) => {
-      if (!current) {
-        return current;
-      }
-
-      return batchJobs.find((job) => job.id === current.id) ?? current;
-    });
   }, []);
 
   const fetchJob = useCallback(async (jobId: string) => {

@@ -53,3 +53,29 @@ test("research match scoring does not mark ceramic or piece-count variants as pe
     ) < 90,
   );
 });
+
+test("research match scoring gives the exact Fitarc pull-up bar search a perfect match", () => {
+  const title = "Fitarc Joist Mount Pull Up Bar Chin Up Bar Ceiling";
+
+  assert.equal(scoreEbayResearchResultForQuery(title, title), 100);
+});
+
+const tabletQuery = "2 in 1 Tablet 10 Inch Android 14 OS Tableta";
+
+test("research match scoring keeps rearranged tablet query tokens relevant", () => {
+  assert.ok(
+    scoreEbayResearchResultForQuery(
+      "Android 14 Tableta 10 Inch 2 in 1 Tablet OS",
+      tabletQuery,
+    ) >= 60,
+  );
+});
+
+test("research match scoring does not reject a tablet result missing standalone 1", () => {
+  assert.ok(
+    scoreEbayResearchResultForQuery(
+      "Android 14 Tableta 10 Inch 2 Tablet OS",
+      tabletQuery,
+    ) >= 50,
+  );
+});

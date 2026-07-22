@@ -234,7 +234,6 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
       : 0);
   const importDisabled =
     importing ||
-    activeImportRunning ||
     statsLoading ||
     !stats ||
     stats.remaining === 0 ||
@@ -340,7 +339,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
   }
 
   function openConfirmation(amount = quantityValue) {
-    if (!stats || importing || activeImportRunning) {
+    if (!stats || importing) {
       return;
     }
 
@@ -375,7 +374,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
   }
 
   function handleImportAllRemaining() {
-    if (!stats || stats.remaining < 1 || importing || activeImportRunning || skuMode) {
+    if (!stats || stats.remaining < 1 || importing || skuMode) {
       return;
     }
 
@@ -581,7 +580,6 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
     if (
       !selectedStore ||
       importing ||
-      activeImportRunning ||
       (!pendingSkuMode && pendingQuantity < 1)
     ) {
       return;
@@ -795,7 +793,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
               id="store"
               value={selectedStore}
               onChange={(event) => setSelectedStore(event.target.value)}
-              disabled={importing || activeImportRunning || stores.length === 0}
+              disabled={importing || stores.length === 0}
               className="mt-2 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
             >
               {stores.length === 0 ? (
@@ -818,7 +816,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
               id="startDateOrder"
               value={sortDirection}
               onChange={(event) => setSortDirection(event.target.value === "ASC" ? "ASC" : "DESC")}
-              disabled={importing || activeImportRunning || statsLoading || !stats}
+              disabled={importing || statsLoading || !stats}
               className="mt-2 w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
             >
               <option value="DESC">Newest first</option>
@@ -837,7 +835,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
               max={stats?.remaining ?? undefined}
               value={quantity}
               onChange={(event) => handleQuantityChange(event.target.value)}
-              disabled={importing || activeImportRunning || statsLoading || !stats || skuMode}
+              disabled={importing || statsLoading || !stats || skuMode}
               className="mt-2 w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
             />
           </div>
@@ -851,7 +849,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
             id="skuList"
             value={skuText}
             onChange={(event) => setSkuText(event.target.value)}
-            disabled={importing || activeImportRunning || statsLoading || !stats}
+            disabled={importing || statsLoading || !stats}
             rows={5}
             placeholder="Paste SKUs or custom labels, one per line"
             className="mt-2 w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20 disabled:cursor-not-allowed disabled:bg-gray-100 disabled:text-gray-500"
@@ -916,7 +914,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
           <button
             type="button"
             onClick={handleImportAllRemaining}
-            disabled={importing || activeImportRunning || statsLoading || !stats || stats.remaining < 1 || skuMode}
+            disabled={importing || statsLoading || !stats || stats.remaining < 1 || skuMode}
             className="inline-flex items-center justify-center rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
           >
             Import All Remaining

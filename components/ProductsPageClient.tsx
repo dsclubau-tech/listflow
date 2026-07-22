@@ -418,7 +418,6 @@ export default function ProductsPageClient({
   const filterMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const { toast, showToast, hideToast } = useToast();
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
-  const isPriceCheckJobActive = isActivePriceCheckJob(priceCheckJob);
   const isPromotionJobActive = isActivePromotedListingsJob(promotedListingsJob);
   const displayedProductFilter = pendingProductFilter ?? productFilter;
   const selectedPriceCheckSummary = useMemo(
@@ -761,7 +760,7 @@ export default function ProductsPageClient({
       applyPriceCheckJob(data.job, true);
 
       if (data.reused) {
-        showToast("A price check is already running.", "success");
+        showToast("Price check is queued.", "success");
       } else if (data.resumed && isActivePriceCheckJob(data.job)) {
         showToast(
           `Resumed price check for ${data.job.total} product${data.job.total === 1 ? "" : "s"}.`,
@@ -1464,11 +1463,6 @@ export default function ProductsPageClient({
 
   const startPriceCheckJob = useCallback(
     async (productIds?: string[]) => {
-      if (isPriceCheckJobActive) {
-        showToast("A price check is already running.", "error");
-        return;
-      }
-
       setIsStartingPriceCheckJob(true);
 
       try {
@@ -1514,12 +1508,12 @@ export default function ProductsPageClient({
         if (isActivePriceCheckJob(data.job)) {
           showToast(
             data.reused
-              ? "A price check is already running."
+              ? "Price check is queued."
               : skippedSelectedMessage
-                ? `Price check started for ${data.job.total} product${
+                ? `Price check queued for ${data.job.total} product${
                     data.job.total === 1 ? "" : "s"
                   }. ${skippedSelectedMessage}`
-                : `Price check started for ${data.job.total} product${data.job.total === 1 ? "" : "s"}.`,
+                : `Price check queued for ${data.job.total} product${data.job.total === 1 ? "" : "s"}.`,
             "success"
           );
         }
@@ -1531,7 +1525,7 @@ export default function ProductsPageClient({
         setIsStartingPriceCheckJob(false);
       }
     },
-    [applyPriceCheckJob, isPriceCheckJobActive, products, showToast]
+    [applyPriceCheckJob, products, showToast]
   );
 
   const handleCheckPrices = () => {
@@ -1962,7 +1956,7 @@ export default function ProductsPageClient({
 
           <button
             onClick={handleCheckPrices}
-            disabled={isStartingPriceCheckJob || isPriceCheckJobActive}
+            disabled={isStartingPriceCheckJob}
             title={
               selectedHasNoEligiblePriceChecks
                 ? `${selectedPriceCheckSummary.message} This button will check all other trackable products.`
@@ -1989,9 +1983,7 @@ export default function ProductsPageClient({
             {isStartingPriceCheckJob
               ? "Starting..."
               : isPriceCheckJobStopping
-                ? "Stopping..."
-              : isPriceCheckJobActive
-                ? `Checking ${priceCheckJob?.checked ?? 0}/${priceCheckJob?.total ?? 0}`
+                ? "Queue Price Check"
               : selectedHasNoEligiblePriceChecks
                 ? "Check All Trackable"
               : selectedProductIds.length > 0
@@ -2134,7 +2126,6 @@ export default function ProductsPageClient({
         autoExpandProductId={focusedProductId}
         onSelectionChange={setSelectedProductIds}
         onPriceCheckSelected={startPriceCheckJob}
-        isPriceCheckJobActive={isStartingPriceCheckJob || isPriceCheckJobActive}
         onSyncSelectedEbayAds={handleSyncEbayAds}
         isEbayAdsSyncing={isSyncingEbayAds}
         onManagePromotionsSelected={openPromotedListings}

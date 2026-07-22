@@ -8,9 +8,10 @@ import {
   getAmazonPriceTrackingLabel,
   type AmazonPriceTrackingMode,
 } from "@/lib/amazon-price-tracking";
-import { useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { DuplicateDraftError } from "@/components/draft-autosave";
 import type { ExistingProductConflict } from "@/types/product-duplicate";
+import Button from "@/components/ui/Button";
 
 interface AddProductModalProps {
   isOpen: boolean;
@@ -123,11 +124,70 @@ export default function AddProductModal({
     useState<ExistingProductConflict | null>(null);
   const [selectedMode, setSelectedMode] =
     useState<AmazonPriceTrackingMode>(DEFAULT_AMAZON_PRICE_TRACKING_MODE);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const urlInputRef = useRef<HTMLInputElement>(null);
+  const titleId = useId();
+  const descriptionId = useId();
   const importProgress = useTimedActionProgress(isLoading, {
     initialPercent: 12,
     maxWaitingPercent: 90,
     stepPercent: 8,
   });
+  const handleClose = useCallback(() => {
+    if (!isLoading) {
+      setUrl("");
+      setError("");
+      setScrapedProduct(null);
+      setDuplicateProduct(null);
+      setSelectedMode(DEFAULT_AMAZON_PRICE_TRACKING_MODE);
+      onClose();
+    }
+  }, [isLoading, onClose]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const previousBodyOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const focusFrame = window.requestAnimationFrame(() => urlInputRef.current?.focus());
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape" && !isLoading) {
+        event.preventDefault();
+        handleClose();
+        return;
+      }
+
+      if (event.key !== "Tab" || !dialogRef.current) return;
+
+      const focusable = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>(
+          'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), a[href]',
+        ),
+      );
+
+      if (focusable.length === 0) return;
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(focusFrame);
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = previousBodyOverflow;
+      previouslyFocused?.focus();
+    };
+  }, [handleClose, isLoading, isOpen]);
 
   if (!isOpen) return null;
 
@@ -320,38 +380,55 @@ export default function AddProductModal({
     }
   }
 
-  function handleClose() {
-    if (!isLoading) {
-      setUrl("");
-      setError("");
-      setScrapedProduct(null);
-      setDuplicateProduct(null);
-      setSelectedMode(DEFAULT_AMAZON_PRICE_TRACKING_MODE);
-      onClose();
-    }
-  }
-
   return (
     <>
-      {/* Overlay */}
       <div
-        className="fixed inset-0 bg-black/40 z-40"
+        className="fixed inset-0 z-40 bg-gray-950/50 backdrop-blur-[1px]"
         onClick={handleClose}
+        aria-hidden="true"
       />
 
-      {/* Modal */}
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div className="bg-white rounded-lg shadow-xl w-full max-w-lg p-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-1">
-            {isAdvancedMode ? "Advanced Upload" : "Normal Upload"}
-          </h2>
-          <p className="text-sm text-gray-500 mb-6">
-            {isAdvancedMode
-              ? "Choose which Amazon price ListFlow should track."
-              : "Tracks the regular Amazon price and creates the draft in the background."}
-          </p>
+      <div className="fixed inset-0 z-50 flex items-end justify-center p-2 sm:items-center sm:p-4">
+        <div
+          ref={dialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby={titleId}
+          aria-describedby={descriptionId}
+          className="flex max-h-[calc(100dvh-1rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl sm:max-h-[calc(100dvh-2rem)]"
+        >
+          <div className="flex items-start justify-between gap-4 border-b border-gray-100 px-5 py-4 sm:px-6">
+            <div>
+              <h2 id={titleId} className="text-lg font-bold text-gray-950">
+                {isAdvancedMode ? "Advanced Upload" : "Normal Upload"}
+              </h2>
+              <p id={descriptionId} className="mt-1 text-sm leading-5 text-gray-500">
+                {isAdvancedMode
+                  ? "Choose which Amazon price ListFlow should track."
+                  : "Tracks the regular Amazon price and creates the draft in the background."}
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleClose}
+              disabled={isLoading}
+              className="-mr-2 min-h-10 w-10 px-0"
+              aria-label="Close upload dialog"
+              icon={
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18 18 6M6 6l12 12" />
+                </svg>
+              }
+            >
+              <span className="sr-only">Close</span>
+            </Button>
+          </div>
+
+          <div className="overflow-y-auto px-5 py-5 sm:px-6">
 
           <input
+            ref={urlInputRef}
             type="url"
             value={url}
             onChange={(e) => {
@@ -362,7 +439,9 @@ export default function AddProductModal({
             }}
             placeholder="https://www.amazon.com.au/dp/..."
             disabled={isLoading}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-gray-800 focus:border-gray-800 disabled:opacity-50"
+            aria-invalid={Boolean(error)}
+            aria-describedby={error ? `${descriptionId}-error` : undefined}
+            className="min-h-11 w-full rounded-lg border border-gray-300 px-3 py-2 text-sm text-gray-900 shadow-sm focus:border-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-800 disabled:opacity-50"
             onKeyDown={(e) => {
               if (e.key === "Enter" && !isLoading) {
                 if (scrapedProduct) {
@@ -375,7 +454,7 @@ export default function AddProductModal({
           />
 
           {isAdvancedMode && scrapedProduct && (
-            <div className="mt-5 rounded-md border border-gray-200 bg-gray-50 p-4">
+            <div className="mt-5 rounded-xl border border-gray-200 bg-gray-50 p-4">
               <div className="mb-3">
                 <p className="text-sm font-medium text-gray-900 line-clamp-2">
                   {scrapedProduct.title}
@@ -387,7 +466,7 @@ export default function AddProductModal({
 
               <div className="space-y-2">
                 {regularChoice && (
-                  <label className="flex cursor-pointer items-center justify-between rounded-md border border-gray-200 bg-white px-3 py-2 text-sm">
+                  <label className="flex min-h-11 cursor-pointer items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
                     <span>
                       <span className="font-medium text-gray-900">
                         Regular price
@@ -405,7 +484,7 @@ export default function AddProductModal({
                 )}
 
                 {dealChoice && (
-                  <label className="flex cursor-pointer items-center justify-between rounded-md border border-gray-200 bg-white px-3 py-2 text-sm">
+                  <label className="flex min-h-11 cursor-pointer items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
                     <span>
                       <span className="font-medium text-gray-900">
                         Deal price
@@ -426,7 +505,11 @@ export default function AddProductModal({
           )}
 
           {error && (
-            <div className="mt-2 text-sm text-red-600">
+            <div
+              id={`${descriptionId}-error`}
+              className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700"
+              role="alert"
+            >
               <p>{error}</p>
               {duplicateProduct && onOpenExisting && (
                 <button
@@ -440,9 +523,9 @@ export default function AddProductModal({
             </div>
           )}
 
-          <div className="flex items-center gap-3 mt-6">
+          <div className="mt-6">
             {isLoading ? (
-              <div className="w-full px-1 py-2">
+              <div className="w-full rounded-xl border border-orange-100 bg-orange-50/60 px-4 py-3">
                 <ActionProgressBar
                   label={
                     scrapedProduct
@@ -459,22 +542,27 @@ export default function AddProductModal({
                 />
               </div>
             ) : (
-              <>
-                <button
+              <div className="grid gap-2 sm:grid-cols-2">
+                <Button
                   onClick={scrapedProduct ? handleCreateDraft : handleImport}
                   disabled={Boolean(scrapedProduct && !selectedChoice)}
-                  className="px-4 py-2 bg-gray-900 text-white text-sm font-medium rounded-md hover:bg-gray-700 transition-colors"
+                  variant="primary"
+                  size="md"
+                  fullWidth
                 >
                   {scrapedProduct ? "Create Draft" : "Import Product"}
-                </button>
-                <button
+                </Button>
+                <Button
                   onClick={handleClose}
-                  className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 transition-colors"
+                  variant="secondary"
+                  size="md"
+                  fullWidth
                 >
                   Cancel
-                </button>
-              </>
+                </Button>
+              </div>
             )}
+          </div>
           </div>
         </div>
       </div>

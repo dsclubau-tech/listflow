@@ -13,6 +13,7 @@ import {
 import { useRouter } from "next/navigation";
 import AsinLink from "@/components/AsinLink";
 import ActionProgressBar from "@/components/ActionProgressBar";
+import Button from "@/components/ui/Button";
 import { hasMissingItemSpecifics } from "@/components/draft-upload-response";
 import InlineEditForm from "@/components/InlineEditForm";
 import {
@@ -34,7 +35,6 @@ interface DraftsTableProps {
   autoExpandProductId?: string | null;
   onSelectionChange?: (selectedIds: string[]) => void;
   onPriceCheckSelected?: (productIds: string[]) => Promise<void>;
-  isPriceCheckJobActive?: boolean;
   onSyncSelectedEbayAds?: (productIds: string[]) => Promise<void>;
   isEbayAdsSyncing?: boolean;
   onManagePromotionsSelected?: (productIds: string[]) => void;
@@ -423,7 +423,6 @@ export default function DraftsTable({
   autoExpandProductId = null,
   onSelectionChange,
   onPriceCheckSelected,
-  isPriceCheckJobActive = false,
   onSyncSelectedEbayAds,
   isEbayAdsSyncing = false,
   onManagePromotionsSelected,
@@ -469,6 +468,12 @@ export default function DraftsTable({
     x: number;
     y: number;
   } | null>(null);
+  const [draftActionMenuProductId, setDraftActionMenuProductId] = useState<
+    string | null
+  >(null);
+  const draftActionMenuTriggerRefs = useRef<Map<string, HTMLButtonElement>>(
+    new Map(),
+  );
   const previousActiveUploadJobIds = useRef<Set<string>>(new Set());
   const didInitializeUploadJobs = useRef(false);
   const router = useRouter();
@@ -699,6 +704,41 @@ export default function DraftsTable({
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [contextMenu]);
+
+  useEffect(() => {
+    if (!draftActionMenuProductId) return;
+    const openProductId = draftActionMenuProductId;
+
+    function closeDraftActionMenu(restoreFocus = false) {
+      setDraftActionMenuProductId(null);
+      if (restoreFocus) {
+        window.requestAnimationFrame(() =>
+          draftActionMenuTriggerRefs.current.get(openProductId)?.focus(),
+        );
+      }
+    }
+
+    function handlePointerDown(event: PointerEvent) {
+      const target = event.target as Element | null;
+      if (!target?.closest("[data-draft-action-menu]")) {
+        closeDraftActionMenu();
+      }
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        closeDraftActionMenu(true);
+      }
+    }
+
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [draftActionMenuProductId]);
 
   function getStatusBadgeClasses(status: string) {
     if (status === "FAILED" && isDraftsView) {
@@ -1675,9 +1715,9 @@ export default function DraftsTable({
 
   if (products.length === 0) {
     return (
-      <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
+      <div className="rounded-2xl border border-dashed border-gray-300 bg-white px-5 py-14 text-center shadow-sm">
         <svg
-          className="w-12 h-12 mx-auto text-gray-300 mb-4"
+          className="mx-auto mb-4 h-12 w-12 text-gray-300"
           fill="none"
           stroke="currentColor"
           viewBox="0 0 24 24"
@@ -1689,7 +1729,7 @@ export default function DraftsTable({
             d="M20 13V6a2 2 0 00-2-2H6a2 2 0 00-2 2v7m16 0v5a2 2 0 01-2 2H6a2 2 0 01-2-2v-5m16 0h-2.586a1 1 0 00-.707.293l-2.414 2.414a1 1 0 01-.707.293h-3.172a1 1 0 01-.707-.293l-2.414-2.414A1 1 0 006.586 13H4"
           />
         </svg>
-        <p className="text-gray-500 text-sm">
+        <p className="text-sm font-medium text-gray-600">
           {isDraftsView
             ? "No drafts yet. Click 'Add Product' to get started."
             : "No active listings yet. Import a draft to publish it on eBay."}
@@ -1716,7 +1756,7 @@ export default function DraftsTable({
             return (
               <div
                 key={job.id}
-                className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3"
+                className="rounded-2xl border border-blue-200 bg-blue-50 px-4 py-4 shadow-sm"
               >
                 <ActionProgressBar
                   label={statusLabel}
@@ -1732,14 +1772,32 @@ export default function DraftsTable({
       )}
 
       {selectedIds.length > 0 && (
-        <p className="text-sm text-gray-500 mb-2">
+        <p className="mb-2 text-sm font-medium text-gray-500">
           {selectedIds.length} selected
         </p>
       )}
 
-      <div className="max-w-full overflow-hidden rounded-lg border border-gray-200 bg-white">
-        <div className="relative max-w-full overflow-x-auto">
-          <table className={isProductsView ? "w-full min-w-[1390px] table-fixed" : "w-full"}>
+      <div
+        className={
+          isDraftsView
+            ? "max-w-full xl:overflow-hidden xl:rounded-2xl xl:border xl:border-gray-200 xl:bg-white xl:shadow-sm"
+            : "max-w-full overflow-hidden rounded-lg border border-gray-200 bg-white"
+        }
+      >
+        <div
+          className={
+            isDraftsView
+              ? "relative max-w-full"
+              : "relative max-w-full overflow-x-auto"
+          }
+        >
+          <table
+            className={
+              isProductsView
+                ? "w-full min-w-[1390px] table-fixed"
+                : "block w-full xl:table"
+            }
+          >
           {isProductsView && (
             <colgroup>
               <col className="w-[34px]" />
@@ -1756,8 +1814,8 @@ export default function DraftsTable({
               <col className="w-[128px]" />
             </colgroup>
           )}
-          <thead>
-            <tr className="bg-gray-50 border-b text-xs font-medium text-gray-500 uppercase tracking-wide">
+          <thead className={isDraftsView ? "hidden xl:table-header-group" : undefined}>
+            <tr className="border-b bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
               {hasSelectionColumn && (
                 <th className="px-3 py-3 text-left w-10">
                   <input
@@ -1803,7 +1861,7 @@ export default function DraftsTable({
               </th>
             </tr>
           </thead>
-          <tbody>
+          <tbody className={isDraftsView ? "block space-y-3 xl:table-row-group xl:space-y-0" : undefined}>
             {products.map((product) => {
               const isExpanded = expandedProductId === product.id;
               const expandedProduct = isProductsView
@@ -1838,14 +1896,38 @@ export default function DraftsTable({
               return (
                 <Fragment key={product.id}>
                   <tr
-                    className={`group border-b transition-colors cursor-pointer ${rowToneClass}`}
+                    className={
+                      isDraftsView
+                        ? `group grid cursor-pointer grid-cols-[auto_4rem_minmax(0,1fr)] gap-x-3 rounded-2xl border border-gray-200 p-4 shadow-sm transition-colors xl:table-row xl:rounded-none xl:border-0 xl:border-b xl:p-0 xl:shadow-none ${rowToneClass}`
+                        : `group cursor-pointer border-b transition-colors ${rowToneClass}`
+                    }
                     onClick={() => toggleExpand(product.id)}
+                    onKeyDown={(event) => {
+                      if (
+                        isDraftsView &&
+                        event.currentTarget === event.target &&
+                        (event.key === "Enter" || event.key === " ")
+                      ) {
+                        event.preventDefault();
+                        toggleExpand(product.id);
+                      }
+                    }}
+                    tabIndex={isDraftsView ? 0 : undefined}
+                    aria-expanded={isDraftsView ? isExpanded : undefined}
+                    aria-controls={isDraftsView ? `draft-editor-${product.id}` : undefined}
                     onContextMenu={(event) =>
                       handleRowContextMenu(event, product)
                     }
                   >
                     {hasSelectionColumn && (
-                      <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
+                      <td
+                        className={
+                          isDraftsView
+                            ? "col-start-1 row-start-1 p-0 xl:table-cell xl:px-3 xl:py-4"
+                            : "px-3 py-3"
+                        }
+                        onClick={(e) => e.stopPropagation()}
+                      >
                         <input
                           type="checkbox"
                           checked={isSelected}
@@ -1856,12 +1938,13 @@ export default function DraftsTable({
                               ? "Add an ASIN and at least one variant to price check this product."
                               : undefined
                           }
-                          className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                          aria-label={`Select ${product.title}`}
+                          className="h-5 w-5 rounded border-gray-300 text-orange-500 focus:ring-orange-500 xl:h-4 xl:w-4"
                         />
                       </td>
                     )}
 
-                    <td className="px-2 py-3">
+                    <td className={isDraftsView ? "hidden px-2 py-3 xl:table-cell" : "px-2 py-3"}>
                       <svg
                         className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${
                           isExpanded ? "rotate-90" : ""
@@ -1874,15 +1957,21 @@ export default function DraftsTable({
                       </svg>
                     </td>
 
-                    <td className="px-3 py-3">
+                    <td
+                      className={
+                        isDraftsView
+                          ? "col-start-2 row-start-1 row-span-2 p-0 xl:table-cell xl:px-3 xl:py-4"
+                          : "px-3 py-3"
+                      }
+                    >
                       {product.images && product.images.length > 0 ? (
                         <img
                           src={product.images[0]}
                           alt={product.title}
-                          className="w-12 h-12 object-cover rounded"
+                          className="h-16 w-16 rounded-xl object-cover ring-1 ring-gray-200 xl:h-12 xl:w-12 xl:rounded-lg"
                         />
                       ) : (
-                        <div className="w-12 h-12 bg-gray-200 rounded flex items-center justify-center">
+                        <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-gray-100 ring-1 ring-gray-200 xl:h-12 xl:w-12 xl:rounded-lg">
                           <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                           </svg>
@@ -1890,21 +1979,44 @@ export default function DraftsTable({
                       )}
                     </td>
 
-                    <td className="px-3 py-3">
-                      <div className={isProductsView ? "max-w-[15rem]" : "max-w-xs"}>
+                    <td
+                      className={
+                        isDraftsView
+                          ? "col-start-3 row-start-1 min-w-0 p-0 xl:table-cell xl:px-3 xl:py-4"
+                          : "px-3 py-3"
+                      }
+                    >
+                      <div className={isProductsView ? "max-w-[15rem]" : "min-w-0 xl:max-w-xs"}>
                         <span
-                          className="text-sm font-medium text-gray-900 truncate block"
+                          className="block text-sm font-semibold leading-5 text-gray-900 xl:truncate"
                           title={product.title}
                         >
                           {product.title}
                         </span>
                         {isFailedDraft && product.errorMessage && (
                           <span
-                            className="mt-1 block truncate text-xs text-red-600"
+                            className="mt-1 block text-xs leading-5 text-red-600 xl:truncate"
                             title={product.errorMessage}
                           >
                             {product.errorMessage}
                           </span>
+                        )}
+                        {isDraftsView && (
+                          <div className="mt-3 flex flex-wrap items-center gap-2 xl:hidden">
+                            <span
+                              className={`inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${getStoreBadgeClass(product.store.id, product.store.name)}`}
+                            >
+                              {product.store.name}
+                            </span>
+                            <span
+                              className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusBadgeClasses(product.status)}`}
+                            >
+                              {statusBadgeLabels[product.status] || product.status}
+                            </span>
+                            <span className="basis-full text-xs text-gray-500 sm:basis-auto">
+                              Created by {product.createdBy.name}
+                            </span>
+                          </div>
                         )}
                       </div>
                     </td>
@@ -1926,7 +2038,7 @@ export default function DraftsTable({
                     )}
 
                     {!isProductsView && (
-                      <td className="px-3 py-3">
+                      <td className="hidden px-3 py-4 xl:table-cell">
                         <span
                           className={`inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-medium ${
                             getStoreBadgeClass(product.store.id, product.store.name)
@@ -1937,7 +2049,7 @@ export default function DraftsTable({
                       </td>
                     )}
 
-                    <td className="px-3 py-3">
+                    <td className={isDraftsView ? "hidden px-3 py-4 xl:table-cell" : "px-3 py-3"}>
                       <span className="whitespace-nowrap text-sm text-gray-500">
                         {isProductsView
                           ? formatDate(product.uploadedAt) ?? "-"
@@ -1945,7 +2057,7 @@ export default function DraftsTable({
                       </span>
                     </td>
 
-                    <td className="px-3 py-3">
+                    <td className={isDraftsView ? "hidden px-3 py-4 xl:table-cell" : "px-3 py-3"}>
                       <span
                         className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusBadgeClasses(product.status)}`}
                       >
@@ -2058,139 +2170,208 @@ export default function DraftsTable({
                       className={
                         isProductsView
                           ? `sticky right-0 z-10 border-l border-gray-100 px-3 py-3 shadow-[-10px_0_14px_-16px_rgba(15,23,42,0.7)] ${stickyActionToneClass}`
-                          : "px-3 py-3"
+                          : "col-span-3 mt-4 border-t border-gray-200 p-0 pt-4 xl:table-cell xl:mt-0 xl:border-t-0 xl:px-3 xl:py-4"
                       }
                       onClick={(e) => e.stopPropagation()}
                     >
-                      <div className="flex items-center gap-2">
-                        {loadingId === product.id ? (
-                          <button
-                            disabled
-                            className="bg-gray-400 text-white text-sm px-3 py-1 rounded flex items-center gap-1.5"
-                          >
-                            <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                            </svg>
-                            Queueing...
-                          </button>
-                        ) : isUploadQueued && uploadJob && isDraftsView && product.status !== "IMPORTED" ? (
-                          <div className="w-44">
-                            <ActionProgressBar
-                              label={
-                                uploadJob.completedProductIds.includes(product.id)
-                                  ? "Processed"
-                                  : uploadJob.status === "QUEUED"
-                                    ? "Queued"
-                                    : "Uploading"
-                              }
-                              percent={
-                                uploadJob.completedProductIds.includes(product.id)
-                                  ? 100
-                                  : 0
-                              }
-                              indeterminate={
-                                !uploadJob.completedProductIds.includes(product.id)
-                              }
-                              tone={
-                                uploadJob.errors.some(
-                                  (error) => error.productId === product.id,
-                                )
-                                  ? "red"
-                                  : "blue"
-                              }
-                              compact
-                            />
+                      {isDraftsView ? (
+                        <div className="flex min-h-11 w-full min-w-0 items-center justify-between gap-2 xl:justify-start">
+                          <div className="min-w-0 flex-1 xl:flex-none">
+                            {loadingId === product.id ? (
+                              <Button
+                                variant="primary"
+                                size="md"
+                                pending
+                                pendingLabel="Queueing…"
+                                fullWidth
+                                className="border-gray-500 bg-gray-500 xl:w-auto"
+                              >
+                                Queue
+                              </Button>
+                            ) : isUploadQueued && uploadJob && product.status !== "IMPORTED" ? (
+                              <div className="min-w-0 rounded-lg bg-white/70 px-3 py-2 xl:w-44">
+                                <ActionProgressBar
+                                  label={
+                                    uploadJob.completedProductIds.includes(product.id)
+                                      ? "Processed"
+                                      : uploadJob.status === "QUEUED"
+                                        ? "Queued"
+                                        : "Uploading"
+                                  }
+                                  percent={uploadJob.completedProductIds.includes(product.id) ? 100 : 0}
+                                  indeterminate={!uploadJob.completedProductIds.includes(product.id)}
+                                  tone={
+                                    uploadJob.errors.some((error) => error.productId === product.id)
+                                      ? "red"
+                                      : "blue"
+                                  }
+                                  compact
+                                />
+                              </div>
+                            ) : product.status === "FAILED" ? (
+                              <Button
+                                onClick={() => handleImport(product.id)}
+                                variant="danger"
+                                size="md"
+                                fullWidth
+                                className="border-red-600 bg-red-600 text-white hover:border-red-700 hover:bg-red-700 xl:w-auto"
+                              >
+                                Retry upload
+                              </Button>
+                            ) : product.status === "DRAFT" ? (
+                              <Button
+                                onClick={() => handleImport(product.id)}
+                                variant="primary"
+                                size="md"
+                                fullWidth
+                                className="border-orange-500 bg-orange-500 hover:border-orange-600 hover:bg-orange-600 xl:w-auto"
+                              >
+                                Import to eBay
+                              </Button>
+                            ) : (
+                              <span className="inline-flex min-h-10 items-center rounded-lg bg-green-100 px-3 text-sm font-semibold text-green-700">
+                                Imported
+                              </span>
+                            )}
                           </div>
-                        ) : product.status === "FAILED" && isDraftsView ? (
-                          <button
-                            onClick={() => handleImport(product.id)}
-                            className="bg-red-500 hover:bg-red-600 text-white text-sm px-3 py-1 rounded transition-colors"
-                          >
-                            Retry
-                          </button>
-                        ) : product.status === "DRAFT" && isDraftsView ? (
-                          <button
-                            onClick={() => handleImport(product.id)}
-                            className="bg-orange-500 hover:bg-orange-600 text-white text-sm px-3 py-1 rounded transition-colors"
-                          >
-                            Import
-                          </button>
-                        ) : product.status === "IMPORTED" && !isProductsView ? (
-                          <span className="inline-flex items-center px-3 py-1 rounded text-sm font-medium bg-green-100 text-green-700">
-                            Imported
-                          </span>
-                        ) : null}
 
-                        {isProductsView &&
-                          (product.status === "IMPORTED" ||
-                            product.status === "ON_HOLD") && (
-                          <button
-                            onClick={() => openRemovalDialog(product)}
-                            disabled={
-                              endingId === product.id || deletingId === product.id
-                            }
-                            className="flex items-center gap-1 whitespace-nowrap rounded bg-red-500 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-40"
-                            title="Choose how to remove this product"
-                          >
-                            {endingId === product.id || deletingId === product.id ? (
-                              <>
-                                <svg className="w-3.5 h-3.5 animate-spin" fill="none" viewBox="0 0 24 24">
-                                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                          <div className="hidden min-h-11 items-stretch gap-2 xl:flex">
+                            {product.status !== "IMPORTED" && (
+                              <Button
+                                onClick={() => handleDelete(product.id)}
+                                disabled={deletingId === product.id}
+                                pending={deletingId === product.id}
+                                pendingLabel="Deletingâ€¦"
+                                variant="danger"
+                                size="md"
+                                className="min-w-[6.5rem] whitespace-nowrap"
+                                aria-label={`Delete ${product.title}`}
+                                icon={
+                                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5} aria-hidden="true">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                                  </svg>
+                                }
+                              >
+                                Delete
+                              </Button>
+                            )}
+                            {product.asin && (
+                              <AsinLink
+                                asin={product.asin}
+                                className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 shadow-sm transition-colors hover:border-orange-200 hover:bg-orange-50 hover:text-orange-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500"
+                                title="Go to Amazon"
+                              >
+                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5} aria-hidden="true">
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
                                 </svg>
-                                Removing...
-                              </>
-                            ) : "Remove"}
-                          </button>
-                        )}
+                              </AsinLink>
+                            )}
+                            {product.ebayItemId && (
+                              <a
+                                href={`https://www.ebay.com.au/itm/${product.ebayItemId}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 shadow-sm transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                                title="Go to eBay"
+                              >
+                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5} aria-hidden="true">
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+                                </svg>
+                              </a>
+                            )}
+                          </div>
 
-                        {isDraftsView && product.status !== "IMPORTED" && (
-                          <button
-                            onClick={() => handleDelete(product.id)}
-                            disabled={deletingId === product.id}
-                            className="text-gray-400 hover:text-red-500 transition-colors p-1 rounded disabled:opacity-40"
-                            title="Delete product"
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
-                            </svg>
-                          </button>
-                        )}
-
-                        {product.asin && !isProductsView && (
-                          <AsinLink
-                            asin={product.asin}
-                            className="text-gray-400 hover:text-orange-500 transition-colors p-1 rounded"
-                            title="Go to Amazon"
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
-                            </svg>
-                          </AsinLink>
-                        )}
-
-                        {product.ebayItemId && !isProductsView && (
-                          <a
-                            href={`https://www.ebay.com.au/itm/${product.ebayItemId}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-gray-400 hover:text-blue-500 transition-colors p-1 rounded"
-                            title="Go to eBay"
-                          >
-                            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>
-                              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
-                            </svg>
-                          </a>
-                        )}
-                      </div>
+                          {(product.status !== "IMPORTED" || product.asin || product.ebayItemId) && (
+                            <div className="relative xl:hidden" data-draft-action-menu>
+                              <Button
+                                ref={(node) => {
+                                  if (node) draftActionMenuTriggerRefs.current.set(product.id, node);
+                                  else draftActionMenuTriggerRefs.current.delete(product.id);
+                                }}
+                                variant="secondary"
+                                onClick={() =>
+                                  setDraftActionMenuProductId((current) =>
+                                    current === product.id ? null : product.id,
+                                  )
+                                }
+                                aria-haspopup="menu"
+                                aria-expanded={draftActionMenuProductId === product.id}
+                                className="px-3"
+                              >
+                                More
+                              </Button>
+                              {draftActionMenuProductId === product.id && (
+                                <div className="absolute bottom-full right-0 z-30 mb-2 w-52 overflow-hidden rounded-xl border border-gray-200 bg-white p-1.5 shadow-xl" role="menu">
+                                  {product.asin && (
+                                    <AsinLink
+                                      asin={product.asin}
+                                      className="flex min-h-10 items-center rounded-lg px-3 text-sm font-medium text-gray-700 hover:bg-orange-50 hover:text-orange-700"
+                                      role="menuitem"
+                                    >
+                                      Open on Amazon
+                                    </AsinLink>
+                                  )}
+                                  {product.ebayItemId && (
+                                    <a
+                                      href={`https://www.ebay.com.au/itm/${product.ebayItemId}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="flex min-h-10 items-center rounded-lg px-3 text-sm font-medium text-gray-700 hover:bg-blue-50 hover:text-blue-700"
+                                      role="menuitem"
+                                    >
+                                      Open on eBay
+                                    </a>
+                                  )}
+                                  {product.status !== "IMPORTED" && (
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setDraftActionMenuProductId(null);
+                                        void handleDelete(product.id);
+                                      }}
+                                      disabled={deletingId === product.id}
+                                      className="flex min-h-10 w-full items-center rounded-lg px-3 text-left text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                                      role="menuitem"
+                                    >
+                                      {deletingId === product.id ? "Deleting…" : "Delete draft"}
+                                    </button>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          {(product.status === "IMPORTED" || product.status === "ON_HOLD") && (
+                            <button
+                              onClick={() => openRemovalDialog(product)}
+                              disabled={endingId === product.id || deletingId === product.id}
+                              className="flex items-center gap-1 whitespace-nowrap rounded bg-red-500 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-40"
+                              title="Choose how to remove this product"
+                            >
+                              {endingId === product.id || deletingId === product.id ? "Removing..." : "Remove"}
+                            </button>
+                          )}
+                        </div>
+                      )}
                     </td>
                   </tr>
 
                   {isExpanded && (
-                    <tr>
-                      <td colSpan={columnCount} className="p-0">
+                    <tr
+                      className={
+                        isDraftsView
+                          ? "block overflow-hidden rounded-2xl border border-orange-200 bg-gray-50 shadow-sm xl:table-row xl:rounded-none xl:border-0 xl:shadow-none"
+                          : undefined
+                      }
+                    >
+                      <td
+                        colSpan={columnCount}
+                        className={isDraftsView ? "block p-0 xl:table-cell" : "p-0"}
+                      >
                         <div
+                          id={isDraftsView ? `draft-editor-${product.id}` : undefined}
                           className={
                             isProductsView
                               ? "sticky left-0 w-[calc(100vw-20rem)] max-w-full"
@@ -2392,8 +2573,19 @@ export default function DraftsTable({
         </div>
       )}
 
+      {selectedIds.length > 0 && isDraftsView && (
+        <div className="h-44 sm:h-28 xl:h-24" aria-hidden="true" />
+      )}
+
       {selectedIds.length > 0 && (
-        <div className="fixed bottom-0 left-64 right-0 bg-white border-t border-gray-200 shadow-lg p-4 z-30 flex items-center justify-between">
+        <div
+          className={
+            isDraftsView
+              ? "fixed bottom-4 left-[17rem] right-4 z-30 flex flex-col gap-3 rounded-2xl border border-gray-200 bg-white/95 p-4 shadow-2xl backdrop-blur md:left-[17.5rem] md:right-6 xl:flex-row xl:items-center xl:justify-between"
+              : "fixed bottom-0 left-64 right-0 bg-white border-t border-gray-200 shadow-lg p-4 z-30 flex items-center justify-between"
+          }
+          aria-live="polite"
+        >
           <div className="min-w-0">
             <div className="text-sm text-gray-500">
               {selectedIds.length} product(s) selected
@@ -2409,49 +2601,48 @@ export default function DraftsTable({
                 </div>
               )}
           </div>
-          <div className="flex flex-wrap items-center justify-end gap-3">
-            <button
-              onClick={() => setSelectedIds([])}
-              className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 transition-colors"
-            >
-              Deselect All
-            </button>
+          <div
+            className={
+              isDraftsView
+                ? "grid w-full grid-cols-2 gap-2 sm:grid-cols-3 xl:flex xl:w-auto xl:flex-wrap xl:items-center xl:justify-end"
+                : "flex flex-wrap items-center justify-end gap-3"
+            }
+          >
+            {isDraftsView ? (
+              <Button onClick={() => setSelectedIds([])} variant="secondary" fullWidth>
+                Deselect
+              </Button>
+            ) : (
+              <button
+                onClick={() => setSelectedIds([])}
+                className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 transition-colors"
+              >
+                Deselect All
+              </button>
+            )}
             {isDraftsView && (
               <>
-                <button
+                <Button
                   onClick={handleBulkImport}
                   disabled={bulkImporting || isBulkDeleting}
-                  className="px-4 py-2 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
+                  pending={bulkImporting}
+                  pendingLabel="Queueing…"
+                  variant="primary"
+                  fullWidth
+                  className="border-orange-500 bg-orange-500 hover:border-orange-600 hover:bg-orange-600"
                 >
-                  {bulkImporting ? (
-                    <>
-                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                      </svg>
-                      Queueing...
-                    </>
-                  ) : (
-                    "Queue Selected"
-                  )}
-                </button>
-                <button
+                  Queue Selected
+                </Button>
+                <Button
                   onClick={handleBulkDelete}
                   disabled={isBulkDeleting || bulkImporting}
-                  className="px-4 py-2 border border-red-200 text-red-600 text-sm font-medium rounded-md hover:bg-red-50 transition-colors disabled:opacity-60 flex items-center gap-2"
+                  pending={isBulkDeleting}
+                  pendingLabel="Deleting…"
+                  variant="danger"
+                  fullWidth
                 >
-                  {isBulkDeleting ? (
-                    <>
-                      <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                      </svg>
-                      Deleting...
-                    </>
-                  ) : (
-                    "Delete Selected"
-                  )}
-                </button>
+                  Delete Selected
+                </Button>
               </>
             )}
             {isProductsView && (
@@ -2607,17 +2798,17 @@ export default function DraftsTable({
                 )}
                 <button
                   onClick={handleBulkPriceCheck}
-                  disabled={isBulkPriceChecking || isPriceCheckJobActive}
+                  disabled={isBulkPriceChecking}
                   title={selectedPriceCheckSummary?.message}
                   className="px-4 py-2 bg-gray-900 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
                 >
-                  {isBulkPriceChecking || isPriceCheckJobActive ? (
+                  {isBulkPriceChecking ? (
                     <>
                       <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                       </svg>
-                      Checking...
+                      Queueing...
                     </>
                   ) : (
                     selectedPriceCheckSummary &&

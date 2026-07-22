@@ -89,8 +89,12 @@ function tokenMatches(tokenSet: Set<string>, token: string) {
 }
 
 function getTokenWeight(token: string, plan: SearchPlan) {
-  if (/\d/.test(token)) {
+  if (/\d/.test(token) && token.length >= 2) {
     return 4;
+  }
+
+  if (/^\d$/.test(token)) {
+    return 2;
   }
 
   return plan.strongTokens.includes(token) ? 3 : 1;
@@ -155,7 +159,7 @@ export function buildSearchPlan(rawQuery: string): SearchPlan {
       (token) => (token.length >= 2 || /^\d+$/.test(token)) && !weakTokens.has(token)
     );
   const strongTokens = tokens.filter(
-    (token) => /\d/.test(token) || token.length >= 7
+    (token) => (/\d/.test(token) && token.length >= 2) || token.length >= 7
   );
   const strictTokens = [
     ...strongTokens.slice(0, 4),
@@ -241,7 +245,7 @@ export function scoreResultMatch(result: ScorableResearchResult, plan: SearchPla
     score += 6;
   }
 
-  score -= missingStrongTokens.length * 10;
+  score -= missingStrongTokens.length * 6;
   score -= (missingTokens.length - missingStrongTokens.length) * 3;
 
   const queryCounts = extractExplicitCounts(normalizeSearchText(plan.primary));
@@ -256,7 +260,7 @@ export function scoreResultMatch(result: ScorableResearchResult, plan: SearchPla
   score -= Math.min(24, extraMaterialModifiers.length * 12);
 
   if (missingStrongTokens.length > 0) {
-    score = Math.min(score, 82 - missingStrongTokens.length * 6);
+    score = Math.min(score, 85 - missingStrongTokens.length * 5);
   } else if (missingTokens.length > 0) {
     score = Math.min(score, 94);
   }

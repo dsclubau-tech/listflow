@@ -62,7 +62,7 @@ export async function POST(request: Request) {
           held: 0,
           failed: 0,
           failures: [],
-          message: "A low-stock hold job is already queued or running.",
+          message: "The low-stock hold task is queued.",
         });
       }
     }
