@@ -262,7 +262,7 @@ test("scrapeAmazonProductDirect stores parsed package dimensions as hidden speci
   );
 
   assert.equal(product.itemSpecifics._WeightKg, "0");
-  assert.equal(product.itemSpecifics._WeightG, "907");
+  assert.equal(product.itemSpecifics._WeightG, "908");
   assert.equal(product.itemSpecifics._LengthCm, "30.48");
   assert.equal(product.itemSpecifics._WidthCm, "20.32");
   assert.equal(product.itemSpecifics._HeightCm, "10.16");

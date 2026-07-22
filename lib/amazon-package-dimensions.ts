@@ -107,19 +107,19 @@ export function parsePackageWeight(raw: string): ParsedWeight | null {
 export function parsePackageDimensionValue(raw: string): ParsedDimensions | null {
   const normalized = raw.replace(/\u00a0/g, " ").replace(/[×*]/g, "x");
   const match = normalized.match(
-    /(\d+(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)\s*(?:[ldwh]\s*)?x\s*(\d+(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)\s*(?:[ldwh]\s*)?x\s*(\d+(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)(?:\s*(?:[ldwh]\s*)?)\s*(cm|centimetres?|centimeters?|mm|millimetres?|millimeters?|m|metres?|meters?|in|inch|inches|["”])?\b/i,
+    /(\d+(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)\s*(?:[ldwh]\s*)?(cm|centimetres?|centimeters?|mm|millimetres?|millimeters?|m|metres?|meters?|in|inch|inches|["”])?\s*(?:x|by)\s*(\d+(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)\s*(?:[ldwh]\s*)?(cm|centimetres?|centimeters?|mm|millimetres?|millimeters?|m|metres?|meters?|in|inch|inches|["”])?\s*(?:x|by)\s*(\d+(?:,\d{3})*(?:\.\d+)?|\d+(?:\.\d+)?)(?:\s*(?:[ldwh]\s*)?)\s*(cm|centimetres?|centimeters?|mm|millimetres?|millimeters?|m|metres?|meters?|in|inch|inches|["”])?\b/i,
   );
 
   if (!match) {
     return null;
   }
 
-  const values = [match[1], match[2], match[3]].map(parseNumericValue);
+  const values = [match[1], match[3], match[5]].map(parseNumericValue);
   if (values.some((value) => value === null)) {
     return null;
   }
 
-  const unit = (match[4] ?? "cm").toLowerCase();
+  const unit = (match[2] ?? match[4] ?? match[6] ?? "cm").toLowerCase();
   const convertedUnits: string[] = [];
   let multiplier = 1;
 
@@ -147,6 +147,22 @@ export function parsePackageDimensionValue(raw: string): ParsedDimensions | null
   };
 }
 
+function parseInlineWeightFromDimensionValue(raw: string): ParsedWeight | null {
+  const parts = raw
+    .split(/[;|]/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  for (const part of parts.slice(1)) {
+    const weight = parsePackageWeight(part);
+    if (weight) {
+      return weight;
+    }
+  }
+
+  return null;
+}
+
 export function extractPackageDimensions(
   itemSpecifics: Record<string, string>,
 ): PackageDimensions | null {
@@ -170,6 +186,11 @@ export function extractPackageDimensions(
     if (!dimensions && DIMENSION_KEYS.has(key)) {
       dimensions = parsePackageDimensionValue(value);
       dimensions?.convertedUnits.forEach((unit) => convertedUnits.add(unit));
+
+      if (!weight) {
+        weight = parseInlineWeightFromDimensionValue(value);
+        weight?.convertedUnits.forEach((unit) => convertedUnits.add(unit));
+      }
     }
   }
 
@@ -182,7 +203,7 @@ export function extractPackageDimensions(
   };
 
   if (weight) {
-    const totalGrams = Math.max(1, Math.round(weight.totalGrams));
+    const totalGrams = Math.max(1, Math.ceil(weight.totalGrams));
     result.weightKg = Math.floor(totalGrams / 1000);
     result.weightG = totalGrams % 1000;
   }

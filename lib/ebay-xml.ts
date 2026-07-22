@@ -5,6 +5,10 @@ import {
   normalizeItemSpecifics,
   type ItemSpecificsRecord,
 } from "@/lib/item-specifics";
+import {
+  parsePackageDimensionValue,
+  parsePackageWeight,
+} from "@/lib/amazon-package-dimensions";
 import { resolveEbayLocationMetadata } from "@/lib/ebay-location";
 import {
   MAX_EBAY_PICTURES,
@@ -240,34 +244,97 @@ function readPositiveNumber(value: string | undefined): string | null {
   return parsed;
 }
 
+function readRoundedPositiveWholeNumber(value: string | undefined): string | null {
+  const parsed = readPositiveNumber(value);
+  if (parsed === null) {
+    return null;
+  }
+
+  return String(Math.ceil(Number(parsed)));
+}
+
+function readPackageWeight(specifics: ProductSpecifics | null) {
+  const hiddenKg = readNonNegativeNumber(specifics?.["_WeightKg"]);
+  const hiddenG = readNonNegativeNumber(specifics?.["_WeightG"]);
+  if (hiddenKg !== null || hiddenG !== null) {
+    return {
+      kg: hiddenKg ?? "0",
+      g: hiddenG ?? "0",
+    };
+  }
+
+  const publicWeight = specifics?.["Item Weight"];
+  const parsed = publicWeight ? parsePackageWeight(publicWeight) : null;
+  if (!parsed) {
+    return null;
+  }
+
+  const totalGrams = Math.max(1, Math.ceil(parsed.totalGrams));
+  return {
+    kg: String(Math.floor(totalGrams / 1000)),
+    g: String(totalGrams % 1000),
+  };
+}
+
+function readPackageDimensions(specifics: ProductSpecifics | null) {
+  const hiddenLength = readRoundedPositiveWholeNumber(specifics?.["_LengthCm"]);
+  const hiddenWidth = readRoundedPositiveWholeNumber(specifics?.["_WidthCm"]);
+  const hiddenHeight = readRoundedPositiveWholeNumber(specifics?.["_HeightCm"]);
+  if (hiddenLength || hiddenWidth || hiddenHeight) {
+    return {
+      length: hiddenLength,
+      width: hiddenWidth,
+      height: hiddenHeight,
+    };
+  }
+
+  const publicLength = specifics?.["Item Length"];
+  const publicWidth = specifics?.["Item Width"];
+  const publicHeight = specifics?.["Item Height"];
+  if (!publicLength || !publicWidth || !publicHeight) {
+    return null;
+  }
+
+  const parsed = parsePackageDimensionValue(
+    `${publicLength} x ${publicWidth} x ${publicHeight}`,
+  );
+  if (!parsed) {
+    return null;
+  }
+
+  return {
+    length: String(Math.ceil(parsed.lengthCm)),
+    width: String(Math.ceil(parsed.widthCm)),
+    height: String(Math.ceil(parsed.heightCm)),
+  };
+}
+
 export function buildShippingPackageDetailsXml(
   specifics: ProductSpecifics | null,
 ): string {
-  const weightKg = readNonNegativeNumber(specifics?.["_WeightKg"]);
-  const weightG = readNonNegativeNumber(specifics?.["_WeightG"]);
-  const lengthCm = readPositiveNumber(specifics?.["_LengthCm"]);
-  const widthCm = readPositiveNumber(specifics?.["_WidthCm"]);
-  const heightCm = readPositiveNumber(specifics?.["_HeightCm"]);
+  const weight = readPackageWeight(specifics);
+  const dimensions = readPackageDimensions(specifics);
 
   const rows = [
-    weightKg !== null
-      ? `      <WeightMajor unit="kg">${escapeXml(weightKg)}</WeightMajor>`
+    "      <MeasurementUnit>Metric</MeasurementUnit>",
+    weight
+      ? `      <WeightMajor>${escapeXml(weight.kg)}</WeightMajor>`
       : "",
-    weightG !== null
-      ? `      <WeightMinor unit="gm">${escapeXml(weightG)}</WeightMinor>`
+    weight
+      ? `      <WeightMinor>${escapeXml(weight.g)}</WeightMinor>`
       : "",
-    heightCm !== null
-      ? `      <PackageDepth unit="cm">${escapeXml(heightCm)}</PackageDepth>`
+    dimensions?.height
+      ? `      <PackageDepth>${escapeXml(dimensions.height)}</PackageDepth>`
       : "",
-    lengthCm !== null
-      ? `      <PackageLength unit="cm">${escapeXml(lengthCm)}</PackageLength>`
+    dimensions?.length
+      ? `      <PackageLength>${escapeXml(dimensions.length)}</PackageLength>`
       : "",
-    widthCm !== null
-      ? `      <PackageWidth unit="cm">${escapeXml(widthCm)}</PackageWidth>`
+    dimensions?.width
+      ? `      <PackageWidth>${escapeXml(dimensions.width)}</PackageWidth>`
       : "",
   ].filter(Boolean);
 
-  if (rows.length === 0) {
+  if (!weight && !dimensions) {
     return "";
   }
 

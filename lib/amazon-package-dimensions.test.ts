@@ -62,11 +62,27 @@ test("extractPackageDimensions reads mixed Amazon package fields", () => {
     }),
     {
       weightKg: 0,
-      weightG: 907,
+      weightG: 908,
       lengthCm: 30.48,
       widthCm: 20.32,
       heightCm: 10.16,
       convertedUnits: ["lb", "in"],
+    },
+  );
+});
+
+test("extractPackageDimensions reads inline weight from a dimensions row", () => {
+  assert.deepEqual(
+    extractPackageDimensions({
+      "Product Dimensions": "12 x 8 x 4 inches; 2 pounds",
+    }),
+    {
+      weightKg: 0,
+      weightG: 908,
+      lengthCm: 30.48,
+      widthCm: 20.32,
+      heightCm: 10.16,
+      convertedUnits: ["in", "lb"],
     },
   );
 });

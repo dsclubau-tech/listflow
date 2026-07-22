@@ -115,11 +115,12 @@ test("buildShippingPackageDetailsXml sends full package weight and dimensions", 
   });
 
   assert.match(xml, /<ShippingPackageDetails>/);
-  assert.match(xml, /<WeightMajor unit="kg">1<\/WeightMajor>/);
-  assert.match(xml, /<WeightMinor unit="gm">200<\/WeightMinor>/);
-  assert.match(xml, /<PackageDepth unit="cm">10<\/PackageDepth>/);
-  assert.match(xml, /<PackageLength unit="cm">30<\/PackageLength>/);
-  assert.match(xml, /<PackageWidth unit="cm">20<\/PackageWidth>/);
+  assert.match(xml, /<MeasurementUnit>Metric<\/MeasurementUnit>/);
+  assert.match(xml, /<WeightMajor>1<\/WeightMajor>/);
+  assert.match(xml, /<WeightMinor>200<\/WeightMinor>/);
+  assert.match(xml, /<PackageDepth>10<\/PackageDepth>/);
+  assert.match(xml, /<PackageLength>30<\/PackageLength>/);
+  assert.match(xml, /<PackageWidth>20<\/PackageWidth>/);
   assert.match(xml, /<ShippingPackage>PackageThickEnvelope<\/ShippingPackage>/);
 });
 
@@ -129,8 +130,9 @@ test("buildShippingPackageDetailsXml sends weight-only package details", () => {
     _WeightG: "500",
   });
 
-  assert.match(xml, /<WeightMajor unit="kg">0<\/WeightMajor>/);
-  assert.match(xml, /<WeightMinor unit="gm">500<\/WeightMinor>/);
+  assert.match(xml, /<MeasurementUnit>Metric<\/MeasurementUnit>/);
+  assert.match(xml, /<WeightMajor>0<\/WeightMajor>/);
+  assert.match(xml, /<WeightMinor>500<\/WeightMinor>/);
   assert.doesNotMatch(xml, /<PackageLength/);
 });
 
@@ -141,10 +143,26 @@ test("buildShippingPackageDetailsXml sends dimensions-only package details", () 
     _HeightCm: "10.16",
   });
 
-  assert.match(xml, /<PackageDepth unit="cm">10\.16<\/PackageDepth>/);
-  assert.match(xml, /<PackageLength unit="cm">30\.48<\/PackageLength>/);
-  assert.match(xml, /<PackageWidth unit="cm">20\.32<\/PackageWidth>/);
+  assert.match(xml, /<MeasurementUnit>Metric<\/MeasurementUnit>/);
+  assert.match(xml, /<PackageDepth>11<\/PackageDepth>/);
+  assert.match(xml, /<PackageLength>31<\/PackageLength>/);
+  assert.match(xml, /<PackageWidth>21<\/PackageWidth>/);
   assert.doesNotMatch(xml, /<WeightMajor/);
+});
+
+test("buildShippingPackageDetailsXml falls back to public item specifics for older drafts", () => {
+  const xml = buildShippingPackageDetailsXml({
+    "Item Weight": "2 pounds",
+    "Item Length": "12 in",
+    "Item Width": "8 in",
+    "Item Height": "4 in",
+  });
+
+  assert.match(xml, /<WeightMajor>0<\/WeightMajor>/);
+  assert.match(xml, /<WeightMinor>908<\/WeightMinor>/);
+  assert.match(xml, /<PackageDepth>11<\/PackageDepth>/);
+  assert.match(xml, /<PackageLength>31<\/PackageLength>/);
+  assert.match(xml, /<PackageWidth>21<\/PackageWidth>/);
 });
 
 test("buildShippingPackageDetailsXml returns empty string when package data is missing", () => {
@@ -172,7 +190,7 @@ test("buildAddItemXML sends package details from hidden item specifics", () => {
   const xml = buildAddItemXML(product);
 
   assert.match(xml, /<ShippingPackageDetails>/);
-  assert.match(xml, /<PackageLength unit="cm">30<\/PackageLength>/);
+  assert.match(xml, /<PackageLength>30<\/PackageLength>/);
   assert.doesNotMatch(xml, /<Name>_LengthCm<\/Name>/);
 });
 
