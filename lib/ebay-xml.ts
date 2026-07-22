@@ -338,7 +338,7 @@ export function buildShippingPackageDetailsXml(
     return "";
   }
 
-  return `    <ShippingPackageDetails>\n${rows.join("\n")}\n      <ShippingPackage>PackageThickEnvelope</ShippingPackage>\n    </ShippingPackageDetails>`;
+  return `    <ShippingPackageDetails>\n${rows.join("\n")}\n      <ShippingPackage>MailingBoxes</ShippingPackage>\n    </ShippingPackageDetails>`;
 }
 
 /**

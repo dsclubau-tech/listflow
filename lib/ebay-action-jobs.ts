@@ -950,7 +950,11 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
             images: preparedImages,
           },
           overrideStartPrice,
-          { includePictures: true, includeItemSpecifics: true },
+          {
+            includePictures: true,
+            includeItemSpecifics: true,
+            includeShippingPackage: true,
+          },
         ),
         storeNumber,
       );

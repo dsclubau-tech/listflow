@@ -121,7 +121,7 @@ test("buildShippingPackageDetailsXml sends full package weight and dimensions", 
   assert.match(xml, /<PackageDepth>10<\/PackageDepth>/);
   assert.match(xml, /<PackageLength>30<\/PackageLength>/);
   assert.match(xml, /<PackageWidth>20<\/PackageWidth>/);
-  assert.match(xml, /<ShippingPackage>PackageThickEnvelope<\/ShippingPackage>/);
+  assert.match(xml, /<ShippingPackage>MailingBoxes<\/ShippingPackage>/);
 });
 
 test("buildShippingPackageDetailsXml sends weight-only package details", () => {
