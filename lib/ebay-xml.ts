@@ -26,6 +26,7 @@ type ReviseItemOptions = {
   quantityOverride?: number;
   customLabel?: string | null;
   includeSku?: boolean;
+  includeShippingPackage?: boolean;
   includeTitle?: boolean;
   includeDescription?: boolean;
   includeStartPrice?: boolean;
@@ -217,6 +218,62 @@ function buildSkuXml(customLabel: string | null | undefined): string {
   return sku ? `    <SKU>${escapeXml(sku.slice(0, 50))}</SKU>` : "";
 }
 
+function readNonNegativeNumber(value: string | undefined): string | null {
+  if (value === undefined) {
+    return null;
+  }
+
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return null;
+  }
+
+  return Number.isInteger(parsed) ? String(parsed) : String(parsed);
+}
+
+function readPositiveNumber(value: string | undefined): string | null {
+  const parsed = readNonNegativeNumber(value);
+  if (parsed === null || Number(parsed) <= 0) {
+    return null;
+  }
+
+  return parsed;
+}
+
+export function buildShippingPackageDetailsXml(
+  specifics: ProductSpecifics | null,
+): string {
+  const weightKg = readNonNegativeNumber(specifics?.["_WeightKg"]);
+  const weightG = readNonNegativeNumber(specifics?.["_WeightG"]);
+  const lengthCm = readPositiveNumber(specifics?.["_LengthCm"]);
+  const widthCm = readPositiveNumber(specifics?.["_WidthCm"]);
+  const heightCm = readPositiveNumber(specifics?.["_HeightCm"]);
+
+  const rows = [
+    weightKg !== null
+      ? `      <WeightMajor unit="kg">${escapeXml(weightKg)}</WeightMajor>`
+      : "",
+    weightG !== null
+      ? `      <WeightMinor unit="gm">${escapeXml(weightG)}</WeightMinor>`
+      : "",
+    heightCm !== null
+      ? `      <PackageDepth unit="cm">${escapeXml(heightCm)}</PackageDepth>`
+      : "",
+    lengthCm !== null
+      ? `      <PackageLength unit="cm">${escapeXml(lengthCm)}</PackageLength>`
+      : "",
+    widthCm !== null
+      ? `      <PackageWidth unit="cm">${escapeXml(widthCm)}</PackageWidth>`
+      : "",
+  ].filter(Boolean);
+
+  if (rows.length === 0) {
+    return "";
+  }
+
+  return `    <ShippingPackageDetails>\n${rows.join("\n")}\n      <ShippingPackage>PackageThickEnvelope</ShippingPackage>\n    </ShippingPackageDetails>`;
+}
+
 /**
  * Builds a valid eBay AddItem XML request body for the Trading API.
  * Throws if required business policy, pricing, quantity, or category data is missing.
@@ -246,6 +303,7 @@ export function buildAddItemXML(
   const productListingDetailsXml = buildProductListingDetailsXml(specifics);
   const sellerProfilesXml = buildSellerProfilesXml(product);
   const skuXml = buildSkuXml(options.customLabel);
+  const shippingPackageDetailsXml = buildShippingPackageDetailsXml(specifics);
 
   return `<?xml version="1.0" encoding="utf-8"?>
 <AddItemRequest xmlns="urn:ebay:apis:eBLBaseComponents">
@@ -271,6 +329,7 @@ ${skuXml}
 ${productListingDetailsXml}
 ${pictureDetailsXml}
 ${itemSpecificsXml}
+${shippingPackageDetailsXml}
 ${sellerProfilesXml}
     <Location>${escapeXml(location)}</Location>
     <PostalCode>${escapeXml(postalCode)}</PostalCode>
@@ -452,6 +511,7 @@ export function buildReviseItemXML(
   const includeLocation = options.includeLocation ?? true;
   const includeItemSpecifics = options.includeItemSpecifics ?? false;
   const includePictures = options.includePictures ?? false;
+  const includeShippingPackage = options.includeShippingPackage ?? false;
   const quantity = includeQuantity
     ? getValidatedQuantity(product, options.quantityOverride)
     : null;
@@ -463,6 +523,9 @@ export function buildReviseItemXML(
     ? buildPictureDetailsXml(product.images)
     : "";
   const skuXml = includeSku ? buildSkuXml(options.customLabel) : "";
+  const shippingPackageDetailsXml = includeShippingPackage
+    ? buildShippingPackageDetailsXml(specifics)
+    : "";
 
   // Use the override price (from the primary variant's sellPrice) when available,
   // otherwise fall back to product.price for backwards compatibility.
@@ -494,6 +557,7 @@ ${includeLocation ? `    <Location>${escapeXml(location)}</Location>
     <PostalCode>${escapeXml(postalCode)}</PostalCode>` : ""}
 ${pictureDetailsXml}
 ${itemSpecificsXml}
+${shippingPackageDetailsXml}
   </Item>
 </ReviseItemRequest>`;
 }

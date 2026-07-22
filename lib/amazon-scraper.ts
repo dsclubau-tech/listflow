@@ -7,6 +7,12 @@ import {
   DEFAULT_AMAZON_PRICE_TRACKING_MODE,
   type AmazonPriceTrackingMode,
 } from "@/lib/amazon-price-tracking";
+import {
+  addPackageDimensionItemSpecifics,
+  extractPackageDimensions,
+  logConvertedPackageDimensionUnits,
+  parsePackageDimensionValue,
+} from "@/lib/amazon-package-dimensions";
 import { dedupeProductImages } from "@/lib/product-images";
 import { toEbayListingTitle } from "@/lib/product-title";
 import { PriceCheckFailureCode } from "@/app/generated/prisma/enums";
@@ -173,6 +179,15 @@ const AMAZON_TO_EBAY_FIELD_MAP: Record<string, string> = {
  * into { length, width, height } with units.
  */
 function parseDimensions(raw: string): { length: string; width: string; height: string } | null {
+  const packageDimensions = parsePackageDimensionValue(raw);
+  if (packageDimensions) {
+    return {
+      length: `${packageDimensions.lengthCm} cm`,
+      width: `${packageDimensions.widthCm} cm`,
+      height: `${packageDimensions.heightCm} cm`,
+    };
+  }
+
   // Match patterns like "120 x 50 x 86.8 cm", "120 * 50 * 86.8 cm", or "120L x 50W x 86.8H cm"
   const normalized = raw.replace(/\*/g, "x");
   const match = normalized.match(
@@ -1519,8 +1534,15 @@ export async function scrapeAmazonProduct(
       return specs;
     });
 
+    const packageDimensions = extractPackageDimensions(itemSpecifics);
+    logConvertedPackageDimensionUnits("amazon-scraper", packageDimensions);
+
     // Map Amazon field names to eBay-required field names
     const normalizedSpecs = normalizeItemSpecificsForEbay(itemSpecifics);
+    const specsWithPackageDimensions = addPackageDimensionItemSpecifics(
+      normalizedSpecs,
+      packageDimensions,
+    );
 
     return {
       title: toEbayListingTitle(title),
@@ -1532,7 +1554,7 @@ export async function scrapeAmazonProduct(
       category,
       categoryId: "",
       categoryName: "",
-      itemSpecifics: normalizedSpecs,
+      itemSpecifics: specsWithPackageDimensions,
       variantName,
       asin: normalizedAsin || asin,
       brand,

@@ -50,6 +50,7 @@ function amazonProductHtml(input: {
   postcode?: string | null;
   imageScript?: string | null;
   descriptionHtml?: string | null;
+  detailsHtml?: string | null;
 }) {
   const deliveryLocation = input.postcode
     ? `<div id="glow-ingress-line1">Deliver to RK</div><div id="glow-ingress-line2">Kogarah ${input.postcode}</div>`
@@ -87,6 +88,7 @@ function amazonProductHtml(input: {
         ${input.imageScript ?? ""}
         ${pageWide}
         ${buybox}
+        ${input.detailsHtml ?? ""}
         ${
           input.descriptionHtml ??
           `<div id="feature-bullets"><ul><li><span>${
@@ -226,6 +228,44 @@ test("scrapeAmazonProductDirect keeps full Amazon title separately from eBay lis
   assert.equal(product.title.length <= 80, true);
   assert.notEqual(product.title, product.fullTitle);
   assert.match(product.description, /Superhero String Launcher Toy/);
+});
+
+test("scrapeAmazonProductDirect stores parsed package dimensions as hidden specifics", async (t) => {
+  const { scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
+  const detailsHtml = `
+    <table id="productDetails_techSpec_section_1">
+      <tr><th>Item Weight</th><td>2 pounds</td></tr>
+      <tr><th>Product Dimensions</th><td>12 x 8 x 4 inches</td></tr>
+    </table>
+  `;
+
+  installFetchMock(t, [
+    {
+      body: amazonProductHtml({
+        buyboxPrice: "$89.59",
+        detailsHtml,
+      }),
+    },
+    { body: '{"isValidAddress":1}' },
+    {
+      body: amazonProductHtml({
+        buyboxPrice: "$89.59",
+        postcode: "2217",
+        detailsHtml,
+      }),
+    },
+  ]);
+
+  const product = await scrapeAmazonProductDirect(
+    "https://www.amazon.com.au/dp/B0TEST1234",
+    { postcode: "2217" },
+  );
+
+  assert.equal(product.itemSpecifics._WeightKg, "0");
+  assert.equal(product.itemSpecifics._WeightG, "907");
+  assert.equal(product.itemSpecifics._LengthCm, "30.48");
+  assert.equal(product.itemSpecifics._WidthCm, "20.32");
+  assert.equal(product.itemSpecifics._HeightCm, "10.16");
 });
 
 test("renderAmazonDescription keeps About bullets then Product Description A+ content and stops before Product Information", async () => {

@@ -18,6 +18,12 @@ import {
   type AmazonPriceTrackingMode,
 } from "@/lib/amazon-price-tracking";
 import {
+  addPackageDimensionItemSpecifics,
+  extractPackageDimensions,
+  logConvertedPackageDimensionUnits,
+  parsePackageDimensionValue,
+} from "@/lib/amazon-package-dimensions";
+import {
   inferBrandItemSpecific,
   inferSizeItemSpecific,
   inferTypeItemSpecific,
@@ -448,6 +454,15 @@ export function verifyAmazonDeliveryPostcode(html: string, postcode: string) {
 }
 
 function parseDimensions(raw: string) {
+  const packageDimensions = parsePackageDimensionValue(raw);
+  if (packageDimensions) {
+    return {
+      length: `${packageDimensions.lengthCm} cm`,
+      width: `${packageDimensions.widthCm} cm`,
+      height: `${packageDimensions.heightCm} cm`,
+    };
+  }
+
   const normalized = raw.replace(/\*/g, "x");
   const match = normalized.match(
     /(\d+(?:\.\d+)?)\s*[A-Za-z]?\s*[x×]\s*(\d+(?:\.\d+)?)\s*[A-Za-z]?\s*[x×]\s*(\d+(?:\.\d+)?)\s*[A-Za-z]?\s*(cm|centimetres|centimeters|mm|m|inches|in)?/i
@@ -833,7 +848,13 @@ function extractItemSpecifics($: CheerioAPI) {
     }
   );
 
-  return normalizeItemSpecificsForEbay(specs);
+  const packageDimensions = extractPackageDimensions(specs);
+  logConvertedPackageDimensionUnits("amazon-direct-scraper", packageDimensions);
+
+  return addPackageDimensionItemSpecifics(
+    normalizeItemSpecificsForEbay(specs),
+    packageDimensions,
+  );
 }
 
 function withInferredItemSpecifics(

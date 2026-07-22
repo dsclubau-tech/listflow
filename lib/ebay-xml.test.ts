@@ -5,6 +5,7 @@ import {
   buildGetSellerListIdsXML,
   buildReviseInventoryStatusXML,
   buildReviseItemXML,
+  buildShippingPackageDetailsXml,
 } from "@/lib/ebay-xml";
 
 function buildTestProduct() {
@@ -104,6 +105,77 @@ test("buildAddItemXML repairs country-only item location from postcode", () => {
   assert.doesNotMatch(xml, /<Location>Australia<\/Location>/);
 });
 
+test("buildShippingPackageDetailsXml sends full package weight and dimensions", () => {
+  const xml = buildShippingPackageDetailsXml({
+    _WeightKg: "1",
+    _WeightG: "200",
+    _LengthCm: "30",
+    _WidthCm: "20",
+    _HeightCm: "10",
+  });
+
+  assert.match(xml, /<ShippingPackageDetails>/);
+  assert.match(xml, /<WeightMajor unit="kg">1<\/WeightMajor>/);
+  assert.match(xml, /<WeightMinor unit="gm">200<\/WeightMinor>/);
+  assert.match(xml, /<PackageDepth unit="cm">10<\/PackageDepth>/);
+  assert.match(xml, /<PackageLength unit="cm">30<\/PackageLength>/);
+  assert.match(xml, /<PackageWidth unit="cm">20<\/PackageWidth>/);
+  assert.match(xml, /<ShippingPackage>PackageThickEnvelope<\/ShippingPackage>/);
+});
+
+test("buildShippingPackageDetailsXml sends weight-only package details", () => {
+  const xml = buildShippingPackageDetailsXml({
+    _WeightKg: "0",
+    _WeightG: "500",
+  });
+
+  assert.match(xml, /<WeightMajor unit="kg">0<\/WeightMajor>/);
+  assert.match(xml, /<WeightMinor unit="gm">500<\/WeightMinor>/);
+  assert.doesNotMatch(xml, /<PackageLength/);
+});
+
+test("buildShippingPackageDetailsXml sends dimensions-only package details", () => {
+  const xml = buildShippingPackageDetailsXml({
+    _LengthCm: "30.48",
+    _WidthCm: "20.32",
+    _HeightCm: "10.16",
+  });
+
+  assert.match(xml, /<PackageDepth unit="cm">10\.16<\/PackageDepth>/);
+  assert.match(xml, /<PackageLength unit="cm">30\.48<\/PackageLength>/);
+  assert.match(xml, /<PackageWidth unit="cm">20\.32<\/PackageWidth>/);
+  assert.doesNotMatch(xml, /<WeightMajor/);
+});
+
+test("buildShippingPackageDetailsXml returns empty string when package data is missing", () => {
+  assert.equal(buildShippingPackageDetailsXml({ Brand: "Test" }), "");
+  assert.equal(buildShippingPackageDetailsXml(null), "");
+});
+
+test("buildAddItemXML sends package details from hidden item specifics", () => {
+  const product = {
+    ...buildTestProduct(),
+    itemSpecifics: {
+      Brand: "Test Brand",
+      _Country: "AU",
+      _Currency: "AUD",
+      _Site: "Australia",
+      _Location: "Australia",
+      _PostalCode: "3000",
+      _WeightKg: "1",
+      _WeightG: "200",
+      _LengthCm: "30",
+      _WidthCm: "20",
+      _HeightCm: "10",
+    },
+  };
+  const xml = buildAddItemXML(product);
+
+  assert.match(xml, /<ShippingPackageDetails>/);
+  assert.match(xml, /<PackageLength unit="cm">30<\/PackageLength>/);
+  assert.doesNotMatch(xml, /<Name>_LengthCm<\/Name>/);
+});
+
 test("buildReviseItemXML sends the edited eBay listing title", () => {
   const editedTitle =
     "Nail Dust Collector, Compact Vacuum Fan Dust Collector for Beginner";
@@ -152,6 +224,31 @@ test("buildReviseItemXML omits SKU by default", () => {
   } as Parameters<typeof buildReviseItemXML>[0];
 
   assert.doesNotMatch(buildReviseItemXML(product), /<SKU>/);
+});
+
+test("buildReviseItemXML sends package details only when requested", () => {
+  const product = {
+    ...buildTestProduct(),
+    ebayItemId: "307056203187",
+    itemSpecifics: {
+      Brand: "Test Brand",
+      _Country: "AU",
+      _Currency: "AUD",
+      _Site: "Australia",
+      _Location: "Australia",
+      _PostalCode: "3000",
+      _WeightKg: "1",
+      _WeightG: "200",
+    },
+  } as Parameters<typeof buildReviseItemXML>[0];
+
+  assert.doesNotMatch(buildReviseItemXML(product), /<ShippingPackageDetails>/);
+  assert.match(
+    buildReviseItemXML(product, undefined, {
+      includeShippingPackage: true,
+    }),
+    /<ShippingPackageDetails>/,
+  );
 });
 
 test("buildReviseItemXML omits pictures unless explicitly requested", () => {
