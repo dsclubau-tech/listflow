@@ -68,6 +68,8 @@ export function getEbayActionJobLabel(input: {
 
   if (input.type === "UPLOAD_LISTING") return "Upload listings";
   if (input.type === "REVISE_LISTING") return "Update eBay listing";
+  if (input.type === "SYNC_PACKAGE_DATA") return "Sync package data";
+  if (input.type === "APPLY_PACKAGE_DATA") return "Update eBay package data";
   if (input.type === "HOLD") return "Put listings on hold";
   if (input.type === "RESUME") return "Resume listings";
   if (input.type === "END") return "End listings";

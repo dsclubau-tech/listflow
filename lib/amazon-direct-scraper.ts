@@ -20,6 +20,7 @@ import {
 import {
   addPackageDimensionItemSpecifics,
   extractPackageDimensions,
+  fillMissingPackageDimensionItemSpecifics,
   logConvertedPackageDimensionUnits,
   parsePackageDimensionValue,
 } from "@/lib/amazon-package-dimensions";
@@ -123,9 +124,16 @@ const AMAZON_TO_EBAY_FIELD_MAP: Record<string, string> = {
   "product dimensions": "__dimensions__",
   "package dimensions": "__dimensions__",
   "item dimensions": "__dimensions__",
+  "product dimensions l x w x h": "__dimensions__",
+  "product dimensions d x w x h": "__dimensions__",
+  "package dimensions l x w x h": "__dimensions__",
+  "package dimensions d x w x h": "__dimensions__",
+  "item dimensions l x w x h": "__dimensions__",
   "item dimensions d x w x h": "__dimensions__",
   "item dimensions lxwxh": "__dimensions__",
   "item dimensions  lxwxh": "__dimensions__",
+  "item package dimensions l x w x h": "__dimensions__",
+  "item package dimensions lxwxh": "__dimensions__",
   style: "Style",
   pattern: "Pattern",
   "finish type": "Finish",
@@ -851,9 +859,16 @@ function extractItemSpecifics($: CheerioAPI) {
   const packageDimensions = extractPackageDimensions(specs);
   logConvertedPackageDimensionUnits("amazon-direct-scraper", packageDimensions);
 
-  return addPackageDimensionItemSpecifics(
+  const normalizedSpecs = addPackageDimensionItemSpecifics(
     normalizeItemSpecificsForEbay(specs),
     packageDimensions,
+  );
+
+  // Amazon sometimes supplies dimensions as three separate fields. Those are
+  // created by normalization, so parse the final shape as well as the raw page.
+  return fillMissingPackageDimensionItemSpecifics(
+    normalizedSpecs,
+    extractPackageDimensions(normalizedSpecs),
   );
 }
 
@@ -1278,6 +1293,51 @@ function logStage(
 function getScrapePostcode(postcode: string | undefined) {
   const normalized = postcode?.replace(/\D/g, "").slice(0, 4) ?? "";
   return normalized.length === 4 ? normalized : "2217";
+}
+
+export async function scrapeAmazonPackageItemSpecificsDirect(
+  url: string,
+  options: Pick<ScrapeDirectOptions, "onStage"> = {},
+) {
+  if (!isAmazonAuUrl(url)) {
+    throw new AmazonDirectScrapeError(
+      "Only Amazon AU (amazon.com.au) URLs are supported.",
+      400,
+      "AMAZON_URL_INVALID",
+    );
+  }
+
+  const canonicalUrl = getCanonicalAmazonProductUrl(url);
+  const fetchStartedAt = Date.now();
+  const html = await fetchAmazonHtml(canonicalUrl, PRODUCT_FETCH_TIMEOUT_MS);
+  logStage(options, "page_fetch", fetchStartedAt, {
+    canonicalUrl,
+    bytes: html.length,
+    packageDataOnly: true,
+  });
+
+  if (detectAmazonBlock(html)) {
+    throw new AmazonDirectScrapeError(
+      "Amazon blocked the package-data request.",
+      422,
+      "AMAZON_BLOCKED",
+    );
+  }
+
+  const parseStartedAt = Date.now();
+  const itemSpecifics = extractItemSpecifics(load(html));
+  logStage(options, "html_parse", parseStartedAt, {
+    canonicalUrl,
+    packageDataOnly: true,
+    weightFound: Boolean(itemSpecifics._WeightKg || itemSpecifics._WeightG),
+    dimensionsFound: Boolean(
+      itemSpecifics._LengthCm &&
+        itemSpecifics._WidthCm &&
+        itemSpecifics._HeightCm,
+    ),
+  });
+
+  return itemSpecifics;
 }
 
 export async function scrapeAmazonProductDirect(

@@ -87,6 +87,56 @@ test("extractPackageDimensions reads inline weight from a dimensions row", () =>
   );
 });
 
+test("extractPackageDimensions reads separate Amazon item dimension fields", () => {
+  assert.deepEqual(
+    extractPackageDimensions({
+      "Item Weight": "181 Grams",
+      "Item Length": "12.5 cm",
+      "Item Width": "8.5 cm",
+      "Item Height": "2.5 cm",
+    }),
+    {
+      weightKg: 0,
+      weightG: 181,
+      lengthCm: 12.5,
+      widthCm: 8.5,
+      heightCm: 2.5,
+      convertedUnits: [],
+    },
+  );
+});
+
+test("extractPackageDimensions prefers explicit package fields over item fields", () => {
+  assert.deepEqual(
+    extractPackageDimensions({
+      "Item Dimensions L x W x H": "40 x 30 x 20 cm",
+      "Package Dimensions": "20 x 10 x 5 cm",
+    }),
+    {
+      lengthCm: 20,
+      widthCm: 10,
+      heightCm: 5,
+      convertedUnits: [],
+    },
+  );
+});
+
+test("extractPackageDimensions converts separate imperial dimensions", () => {
+  assert.deepEqual(
+    extractPackageDimensions({
+      "Package Length": "12 in",
+      "Package Width": "8 in",
+      "Package Height": "4 in",
+    }),
+    {
+      lengthCm: 30.48,
+      widthCm: 20.32,
+      heightCm: 10.16,
+      convertedUnits: ["in"],
+    },
+  );
+});
+
 test("addPackageDimensionItemSpecifics stores hidden eBay package keys", () => {
   assert.deepEqual(
     addPackageDimensionItemSpecifics(

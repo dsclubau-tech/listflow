@@ -60,6 +60,13 @@ import {
   isAutoHoldPriceCheckFailureCode,
   isPriceCheckAutoHoldMetadata,
 } from "@/lib/price-check-failures";
+import {
+  canonicalizePackageItemSpecifics,
+  compareEbayPackageDimensions,
+  fetchEbayPackageItem,
+  getStoredPackageDimensions,
+  mergeEbayPackageItemSpecifics,
+} from "@/lib/package-data-sync";
 
 const ACTIVE_ACTION_JOB_STATUSES: EbayActionJobStatus[] = [
   EbayActionJobStatus.QUEUED,
@@ -321,6 +328,8 @@ async function applySuccessfulBulkEditRevision(
 function actionLabel(type: EbayActionJobType) {
   if (type === EbayActionJobType.UPLOAD_LISTING) return "Upload listings";
   if (type === EbayActionJobType.REVISE_LISTING) return "Update eBay listing";
+  if (type === EbayActionJobType.SYNC_PACKAGE_DATA) return "Sync package data";
+  if (type === EbayActionJobType.APPLY_PACKAGE_DATA) return "Update eBay package data";
   if (type === EbayActionJobType.HOLD) return "Put listings on hold";
   if (type === EbayActionJobType.RESUME) return "Resume listings";
   if (type === EbayActionJobType.BULK_EDIT_REVISE) return "Bulk edit listings";
@@ -898,6 +907,152 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
             error: result.body.error || "Upload failed.",
           },
         };
+  }
+
+  if (job.type === EbayActionJobType.SYNC_PACKAGE_DATA) {
+    if (!product.ebayItemId) {
+      return {
+        ok: false,
+        failure: {
+          productId,
+          title: product.title,
+          error: "Product is not currently listed on eBay",
+        },
+      };
+    }
+
+    try {
+      const storeNumber = await getStoreNumber(product.storeId);
+      const ebayItem = await fetchEbayPackageItem({
+        ebayItemId: product.ebayItemId,
+        storeNumber,
+      });
+      const itemSpecifics = mergeEbayPackageItemSpecifics({
+        itemSpecifics: product.itemSpecifics,
+        ebayItem,
+      });
+
+      await prisma.product.update({
+        where: { id: product.id },
+        data: { itemSpecifics, errorMessage: null },
+      });
+
+      logger.info("ebay-action/jobs", "eBay package data synchronized", {
+        jobId: job.id,
+        productId,
+        ebayItemId: product.ebayItemId,
+        hasEbayPackageData: Boolean(getStoredPackageDimensions(itemSpecifics)),
+      });
+      return { ok: true, failure: null };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "Package data synchronization failed";
+      return {
+        ok: false,
+        failure: { productId, title: product.title, error: errorMessage },
+      };
+    }
+  }
+
+  if (job.type === EbayActionJobType.APPLY_PACKAGE_DATA) {
+    if (product.status !== ProductStatus.IMPORTED || !product.ebayItemId) {
+      return {
+        ok: false,
+        failure: {
+          productId,
+          title: product.title,
+          error: "Product is not currently listed on eBay",
+        },
+      };
+    }
+
+    try {
+      const itemSpecifics = canonicalizePackageItemSpecifics(product.itemSpecifics);
+      if (!getStoredPackageDimensions(itemSpecifics)) {
+        return {
+          ok: false,
+          failure: {
+            productId,
+            title: product.title,
+            error: "No complete package weight or dimensions are available in ListFlow.",
+          },
+        };
+      }
+
+      const storeNumber = await getStoreNumber(product.storeId);
+      const result = await callEbayReviseItem(
+        buildReviseItemXML(
+          { ...product, itemSpecifics },
+          undefined,
+          {
+            includeTitle: false,
+            includeDescription: false,
+            includeStartPrice: false,
+            includeDispatchTimeMax: false,
+            includeQuantity: false,
+            includeSellerProfiles: false,
+            includeLocation: false,
+            includeItemSpecifics: false,
+            includePictures: false,
+            includeShippingPackage: true,
+          },
+        ),
+        storeNumber,
+      );
+
+      if (!result.success) {
+        return {
+          ok: false,
+          failure: {
+            productId,
+            title: product.title,
+            error: result.errorMessage || "eBay package update failed",
+          },
+        };
+      }
+
+      const ebayItem = await fetchEbayPackageItem({
+        ebayItemId: product.ebayItemId,
+        storeNumber,
+      });
+      const verification = compareEbayPackageDimensions({ itemSpecifics, ebayItem });
+      const verifiedItemSpecifics = {
+        ...itemSpecifics,
+        _EbayPackageVerification: verification.status,
+        _EbayPackageVerifiedAt: new Date().toISOString(),
+      };
+
+      await prisma.product.update({
+        where: { id: product.id },
+        data: { itemSpecifics: verifiedItemSpecifics },
+      });
+
+      if (verification.status !== "confirmed") {
+        return {
+          ok: false,
+          failure: {
+            productId,
+            title: product.title,
+            error: `eBay accepted the package update but verification was ${verification.status}.`,
+          },
+        };
+      }
+
+      logger.info("ebay-action/jobs", "eBay package data update confirmed", {
+        jobId: job.id,
+        productId,
+        ebayItemId: product.ebayItemId,
+        verification,
+      });
+      return { ok: true, failure: null };
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : "eBay package update failed";
+      return {
+        ok: false,
+        failure: { productId, title: product.title, error: errorMessage },
+      };
+    }
   }
 
   if (job.type === EbayActionJobType.REVISE_LISTING) {

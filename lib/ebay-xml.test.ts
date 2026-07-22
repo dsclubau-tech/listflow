@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildAddItemXML,
+  buildGetItemXML,
   buildGetSellerListIdsXML,
   buildReviseInventoryStatusXML,
   buildReviseItemXML,
@@ -122,6 +123,12 @@ test("buildShippingPackageDetailsXml sends full package weight and dimensions", 
   assert.match(xml, /<PackageLength>30<\/PackageLength>/);
   assert.match(xml, /<PackageWidth>20<\/PackageWidth>/);
   assert.match(xml, /<ShippingPackage>MailingBoxes<\/ShippingPackage>/);
+});
+
+test("buildGetItemXML requests ShippingPackageDetails for import and verification", () => {
+  const xml = buildGetItemXML("307078462269");
+
+  assert.match(xml, /<OutputSelector>ShippingPackageDetails<\/OutputSelector>/);
 });
 
 test("buildShippingPackageDetailsXml sends weight-only package details", () => {

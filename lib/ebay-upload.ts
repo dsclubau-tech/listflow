@@ -19,6 +19,15 @@ import {
   shouldBlockUploadForRequiredSpecificsPreflight,
 } from "@/lib/upload-item-specifics";
 import { prisma } from "@/lib/prisma";
+import { scrapeAmazonPackageItemSpecificsDirect } from "@/lib/amazon-direct-scraper";
+import { fillMissingPackageDimensionItemSpecifics } from "@/lib/amazon-package-dimensions";
+import {
+  canonicalizePackageItemSpecifics,
+  compareEbayPackageDimensions,
+  fetchEbayPackageItem,
+  getStoredPackageDimensions,
+  type PackageVerificationStatus,
+} from "@/lib/package-data-sync";
 
 type UploadLogger = Pick<typeof logger, "info" | "warn" | "error">;
 
@@ -26,6 +35,7 @@ type UploadResponseBody = {
   success: boolean;
   itemId?: string;
   reconciled?: boolean;
+  packageVerification?: PackageVerificationStatus;
   error?: string;
   missingItemSpecifics?: string[];
   requiredItemSpecifics?: Array<{
@@ -44,6 +54,80 @@ export type ProductUploadResult = {
 
 function isTooManyItemSpecificsError(message: string | undefined) {
   return /too many item specifics|maximum.+item specifics/i.test(message ?? "");
+}
+
+function getPackageDataCoverage(itemSpecifics: Record<string, string>) {
+  const dimensions = getStoredPackageDimensions(itemSpecifics);
+  return {
+    dimensions,
+    hasWeight: Boolean(
+      dimensions &&
+        ((dimensions.weightKg ?? 0) > 0 || (dimensions.weightG ?? 0) > 0),
+    ),
+    hasDimensions: Boolean(
+      dimensions?.lengthCm && dimensions.widthCm && dimensions.heightCm,
+    ),
+  };
+}
+
+async function preparePackageItemSpecificsForUpload(input: {
+  productId: string;
+  asin?: string | null;
+  itemSpecifics: unknown;
+  log: UploadLogger;
+}) {
+  let itemSpecifics = canonicalizePackageItemSpecifics(input.itemSpecifics);
+  let coverage = getPackageDataCoverage(itemSpecifics);
+  const asin = input.asin?.trim().toUpperCase() ?? "";
+
+  if ((!coverage.hasWeight || !coverage.hasDimensions) && /^[A-Z0-9]{10}$/.test(asin)) {
+    try {
+      input.log.info("upload/product", "Refreshing missing package data from Amazon", {
+        productId: input.productId,
+        asin,
+        missingWeight: !coverage.hasWeight,
+        missingDimensions: !coverage.hasDimensions,
+      });
+
+      const amazonSpecifics = await scrapeAmazonPackageItemSpecificsDirect(
+        `https://www.amazon.com.au/dp/${encodeURIComponent(asin)}`,
+      );
+      const amazonDimensions = getStoredPackageDimensions(
+        canonicalizePackageItemSpecifics(amazonSpecifics),
+      );
+      itemSpecifics = fillMissingPackageDimensionItemSpecifics(
+        itemSpecifics,
+        amazonDimensions,
+      );
+      coverage = getPackageDataCoverage(itemSpecifics);
+
+      input.log.info("upload/product", "Amazon package-data refresh completed", {
+        productId: input.productId,
+        asin,
+        weightFound: coverage.hasWeight,
+        dimensionsFound: coverage.hasDimensions,
+      });
+    } catch (error) {
+      input.log.warn(
+        "upload/product",
+        "Could not refresh optional package data from Amazon; continuing upload",
+        {
+          productId: input.productId,
+          asin,
+          error: error instanceof Error ? error.message : "Unknown Amazon package-data error",
+        },
+      );
+    }
+  }
+
+  if (coverage.hasWeight || coverage.hasDimensions) {
+    await prisma.product.update({
+      where: { id: input.productId },
+      data: { itemSpecifics },
+    });
+  }
+
+  return itemSpecifics;
 }
 
 async function createSuccessUploadLog(input: {
@@ -138,6 +222,56 @@ async function getCurrentListedItemId(productId: string, storeId: string) {
   });
 
   return currentProduct?.ebayItemId?.trim() || null;
+}
+
+async function verifyUploadedPackageData(input: {
+  productId: string;
+  ebayItemId: string;
+  storeNumber: 1 | 2 | 3;
+  itemSpecifics: unknown;
+  log: UploadLogger;
+}) {
+  const itemSpecifics = canonicalizePackageItemSpecifics(input.itemSpecifics);
+  const expected = getStoredPackageDimensions(itemSpecifics);
+
+  if (!expected) {
+    return "not-sent" as const;
+  }
+
+  try {
+    const ebayItem = await fetchEbayPackageItem({
+      ebayItemId: input.ebayItemId,
+      storeNumber: input.storeNumber,
+    });
+    const verification = compareEbayPackageDimensions({ itemSpecifics, ebayItem });
+
+    await prisma.product.update({
+      where: { id: input.productId },
+      data: {
+        itemSpecifics: {
+          ...itemSpecifics,
+          _EbayPackageVerification: verification.status,
+          _EbayPackageVerifiedAt: new Date().toISOString(),
+        },
+      },
+    });
+
+    const logMethod = verification.status === "confirmed" ? "info" : "warn";
+    input.log[logMethod]("upload/product", "eBay package data reconciliation completed", {
+      productId: input.productId,
+      ebayItemId: input.ebayItemId,
+      verification,
+    });
+
+    return verification.status;
+  } catch (error) {
+    input.log.warn("upload/product", "Could not verify eBay package data after upload", {
+      productId: input.productId,
+      ebayItemId: input.ebayItemId,
+      error: error instanceof Error ? error.message : "Unknown package verification error",
+    });
+    return undefined;
+  }
 }
 
 export async function uploadProductToEbay(input: {
@@ -237,7 +371,17 @@ export async function uploadProductToEbay(input: {
       });
     }
 
-    const finalDescription = await resolveDescriptionTemplate(productWithPolicies);
+    const packageItemSpecifics = await preparePackageItemSpecificsForUpload({
+      productId: product.id,
+      asin: product.asin,
+      itemSpecifics: productWithPolicies.itemSpecifics,
+      log,
+    });
+    const productWithPackageData = {
+      ...productWithPolicies,
+      itemSpecifics: packageItemSpecifics,
+    };
+    const finalDescription = await resolveDescriptionTemplate(productWithPackageData);
     const supplierSettings = await prisma.supplierSettings.findUnique({
       where: {
         storeId_supplierName: {
@@ -252,7 +396,7 @@ export async function uploadProductToEbay(input: {
       },
     });
     const requiredSpecifics = await validateRequiredItemSpecifics({
-      product: productWithPolicies,
+      product: productWithPackageData,
       storeNumber,
       supplierDefaultItemSpecifics: supplierSettings?.defaultItemSpecifics,
     });
@@ -319,7 +463,7 @@ export async function uploadProductToEbay(input: {
     }
 
     const productWithResolvedDesc = {
-      ...productWithPolicies,
+      ...productWithPackageData,
       itemSpecifics: requiredSpecifics.itemSpecifics,
       description: finalDescription,
     };
@@ -444,12 +588,23 @@ export async function uploadProductToEbay(input: {
         asin: product.asin,
         price: overrideStartPrice,
       });
+      const packageVerification = await verifyUploadedPackageData({
+        productId,
+        ebayItemId: itemId,
+        storeNumber,
+        itemSpecifics: productWithResolvedDesc.itemSpecifics,
+        log,
+      });
 
       return {
         ok: true,
         status: 200,
         productTitle: product.title,
-        body: { success: true, itemId },
+        body: {
+          success: true,
+          itemId,
+          ...(packageVerification ? { packageVerification } : {}),
+        },
       };
     }
 

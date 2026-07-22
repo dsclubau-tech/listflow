@@ -453,6 +453,7 @@ export function buildGetSellerListXML(page: number): string {
     "ListingDetails",
     "StartTime",
     "SellerProfiles",
+    "ShippingPackageDetails",
     "EndTime",
   ]
     .map((selector) => `  <OutputSelector>${selector}</OutputSelector>`)
@@ -531,6 +532,7 @@ export function buildGetItemXML(itemId: string): string {
     "ListingDetails",
     "StartTime",
     "SellerProfiles",
+    "ShippingPackageDetails",
     "EndTime",
   ]
     .map((selector) => `  <OutputSelector>${selector}</OutputSelector>`)

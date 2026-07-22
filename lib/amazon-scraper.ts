@@ -10,6 +10,7 @@ import {
 import {
   addPackageDimensionItemSpecifics,
   extractPackageDimensions,
+  fillMissingPackageDimensionItemSpecifics,
   logConvertedPackageDimensionUnits,
   parsePackageDimensionValue,
 } from "@/lib/amazon-package-dimensions";
@@ -155,9 +156,16 @@ const AMAZON_TO_EBAY_FIELD_MAP: Record<string, string> = {
   "product dimensions":     "__dimensions__",   // handled specially
   "package dimensions":     "__dimensions__",   // handled specially
   "item dimensions":        "__dimensions__",   // handled specially
+  "product dimensions l x w x h": "__dimensions__",
+  "product dimensions d x w x h": "__dimensions__",
+  "package dimensions l x w x h": "__dimensions__",
+  "package dimensions d x w x h": "__dimensions__",
+  "item dimensions l x w x h": "__dimensions__",
   "item dimensions d x w x h": "__dimensions__", // handled specially
   "item dimensions lxwxh":  "__dimensions__",   // handled specially
   "item dimensions  lxwxh": "__dimensions__",   // double-space variant
+  "item package dimensions l x w x h": "__dimensions__",
+  "item package dimensions lxwxh": "__dimensions__",
   "style":                  "Style",
   "pattern":                "Pattern",
   "finish type":            "Finish",
@@ -1543,6 +1551,10 @@ export async function scrapeAmazonProduct(
       normalizedSpecs,
       packageDimensions,
     );
+    const completeSpecsWithPackageDimensions = fillMissingPackageDimensionItemSpecifics(
+      specsWithPackageDimensions,
+      extractPackageDimensions(specsWithPackageDimensions),
+    );
 
     return {
       title: toEbayListingTitle(title),
@@ -1554,7 +1566,7 @@ export async function scrapeAmazonProduct(
       category,
       categoryId: "",
       categoryName: "",
-      itemSpecifics: specsWithPackageDimensions,
+      itemSpecifics: completeSpecsWithPackageDimensions,
       variantName,
       asin: normalizedAsin || asin,
       brand,

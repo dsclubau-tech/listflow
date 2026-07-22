@@ -196,6 +196,17 @@ async function postJson<T>(url: string, body?: unknown): Promise<T> {
   return data;
 }
 
+async function getJson<T>(url: string): Promise<T> {
+  const response = await fetch(url, { cache: "no-store" });
+  const data = (await response.json().catch(() => ({}))) as T & { error?: string };
+
+  if (!response.ok) {
+    throw new Error(data.error || "Action failed.");
+  }
+
+  return data;
+}
+
 function isActivePriceJob(job: ActionCenterPriceCheckJob) {
   return ACTIVE_PRICE_JOB_STATUSES.has(job.status);
 }
@@ -852,6 +863,64 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
       "No visible low-stock products to check.",
       (total) => `Started low-stock price check for ${total} product${total === 1 ? "" : "s"}.`
     );
+  }
+
+  function syncAllPackageData() {
+    void runAction("sync-package-data", async () => {
+      const preview = await getJson<{
+        listed: number;
+        readyToApply: number;
+        missingLocalPackageData: number;
+      }>("/api/products/package-data");
+
+      if (preview.listed === 0) {
+        return "No listed products are available for package-data sync.";
+      }
+
+      if (
+        !window.confirm(
+          `Sync package weight and dimensions from eBay for ${preview.listed} listing(s)?\n\nThis only reads eBay and updates ListFlow. It does not change any eBay listings.`,
+        )
+      ) {
+        return "Package-data sync cancelled.";
+      }
+
+      const result = await postJson<{ message?: string; job?: ActionCenterEbayActionJob }>(
+        "/api/products/package-data/sync",
+        { all: true },
+      );
+      setJobPanelFilter("current");
+      return result.message ?? "Package-data sync queued.";
+    });
+  }
+
+  function applyAllPackageData() {
+    void runAction("apply-package-data", async () => {
+      const preview = await getJson<{
+        listed: number;
+        readyToApply: number;
+        missingLocalPackageData: number;
+      }>("/api/products/package-data");
+
+      if (preview.readyToApply === 0) {
+        return "No imported listings have complete package data to send to eBay.";
+      }
+
+      if (
+        !window.confirm(
+          `Send package weight and dimensions to eBay for ${preview.readyToApply} listing(s)?\n\nThis updates only eBay package details and verifies each result after eBay accepts it.`,
+        )
+      ) {
+        return "Package-data update cancelled.";
+      }
+
+      const result = await postJson<{ message?: string; job?: ActionCenterEbayActionJob }>(
+        "/api/products/package-data/apply",
+        { all: true },
+      );
+      setJobPanelFilter("current");
+      return result.message ?? "Package-data update queued.";
+    });
   }
 
   return (
@@ -1663,6 +1732,39 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                     {runningAction === "start-visible-low-stock"
                       ? "Starting..."
                       : "Check low stock"}
+                  </ActionButton>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                  <div>
+                    <div className="text-sm font-medium text-gray-900">
+                      Sync eBay package data
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      Read existing package weight and dimensions from eBay into ListFlow. No eBay listings are changed.
+                    </div>
+                  </div>
+                  <ActionButton
+                    onClick={syncAllPackageData}
+                    disabled={workerOffline || runningAction === "sync-package-data"}
+                  >
+                    {runningAction === "sync-package-data" ? "Starting..." : "Sync package data"}
+                  </ActionButton>
+                </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+                  <div>
+                    <div className="text-sm font-medium text-gray-900">
+                      Apply package data to eBay
+                    </div>
+                    <div className="mt-1 text-xs text-gray-500">
+                      Send complete ListFlow package fields to eBay and confirm the saved result.
+                    </div>
+                  </div>
+                  <ActionButton
+                    onClick={applyAllPackageData}
+                    disabled={workerOffline || runningAction === "apply-package-data"}
+                    tone="primary"
+                  >
+                    {runningAction === "apply-package-data" ? "Starting..." : "Apply to eBay"}
                   </ActionButton>
                 </div>
                 <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">

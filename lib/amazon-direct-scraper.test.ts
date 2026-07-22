@@ -268,6 +268,33 @@ test("scrapeAmazonProductDirect stores parsed package dimensions as hidden speci
   assert.equal(product.itemSpecifics._HeightCm, "10.16");
 });
 
+test("scrapeAmazonPackageItemSpecificsDirect fetches package data in one request", async (t) => {
+  const { scrapeAmazonPackageItemSpecificsDirect } = await loadAmazonDirectScraper();
+  const calls = installFetchMock(t, [
+    {
+      body: amazonProductHtml({
+        detailsHtml: `
+          <table id="productDetails_techSpec_section_1">
+            <tr><th>Package Weight</th><td>1.25 kg</td></tr>
+            <tr><th>Package Dimensions</th><td>50 x 30 x 12 cm</td></tr>
+          </table>
+        `,
+      }),
+    },
+  ]);
+
+  const itemSpecifics = await scrapeAmazonPackageItemSpecificsDirect(
+    "https://www.amazon.com.au/dp/B0TEST1234",
+  );
+
+  assert.equal(calls.length, 1);
+  assert.equal(itemSpecifics._WeightKg, "1");
+  assert.equal(itemSpecifics._WeightG, "250");
+  assert.equal(itemSpecifics._LengthCm, "50");
+  assert.equal(itemSpecifics._WidthCm, "30");
+  assert.equal(itemSpecifics._HeightCm, "12");
+});
+
 test("renderAmazonDescription keeps About bullets then Product Description A+ content and stops before Product Information", async () => {
   const { renderAmazonDescription } = await loadAmazonDirectScraper();
   const $ = load(`

@@ -7,6 +7,7 @@ import {
   VariantStatus,
 } from "@/app/generated/prisma/client";
 import { callEbayGetItem, callEbayGetSellerList } from "@/lib/ebay";
+import { fillMissingEbayPackageItemSpecifics } from "@/lib/ebay-package-details";
 import {
   buildGetItemXML,
   buildGetSellerListXML,
@@ -551,7 +552,10 @@ function mapEbayItemToProduct(
   const categoryId = getString(item, "PrimaryCategory", "CategoryID");
   const title = getString(item, "Title") || "(no title)";
   const quantity = getAvailableQuantity(item);
-  const itemSpecifics = getItemSpecifics(item);
+  const itemSpecifics = fillMissingEbayPackageItemSpecifics(
+    getItemSpecifics(item),
+    item,
+  );
   const policyIds = {
     shippingPolicyId:
       getPolicyId(item, "SellerShippingProfile", "ShippingProfileID") ??
@@ -1212,8 +1216,13 @@ export async function importEbayListings(
 
     try {
       const batchedItem = itemsById.get(itemId);
+      // GetSellerList often includes the description but omits package details.
+      // Fetch a full GetItem response whenever the batch record lacks them so
+      // imported ListFlow products retain the package fields eBay already has.
       const item =
-        batchedItem && getItemDescription(batchedItem)
+        batchedItem &&
+        getItemDescription(batchedItem) &&
+        getPath(batchedItem, "ShippingPackageDetails")
           ? batchedItem
           : await fetchEbayItemDetails(options.storeNumber, itemId);
       title = getString(item, "Title") || "(no title)";
