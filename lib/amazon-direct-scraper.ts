@@ -212,6 +212,13 @@ export function getCanonicalAmazonProductUrl(url: string) {
   return asin ? `https://www.amazon.com.au/dp/${asin}` : url;
 }
 
+function getAmazonProductRetryUrl(canonicalUrl: string) {
+  const retryUrl = new URL(canonicalUrl);
+  retryUrl.searchParams.set("th", "1");
+  retryUrl.searchParams.set("psc", "1");
+  return retryUrl.toString();
+}
+
 function isAmazonAuUrl(url: string) {
   try {
     const parsed = new URL(url);
@@ -1380,12 +1387,9 @@ export async function scrapeAmazonProductDirect(
       throw error;
     }
 
-    const retryUrl = new URL(canonicalUrl);
-    retryUrl.searchParams.set("th", "1");
-    retryUrl.searchParams.set("psc", "1");
     const retryStartedAt = Date.now();
     html = await fetchAmazonHtml(
-      retryUrl.toString(),
+      getAmazonProductRetryUrl(canonicalUrl),
       PRODUCT_FETCH_TIMEOUT_MS,
       canonicalUrl,
       cookieJar
@@ -1516,7 +1520,7 @@ export async function scrapeAmazonProductDirect(
   }
 
   const priceStartedAt = Date.now();
-  const priceChoices = extractLocalizedBuyboxPriceChoices(
+  let priceChoices = extractLocalizedBuyboxPriceChoices(
     load(localizedHtml),
     product.asin
   );
@@ -1524,11 +1528,52 @@ export async function scrapeAmazonProductDirect(
   const requestedMode = normalizeAmazonPriceTrackingMode(
     options.priceTrackingMode
   );
-  const buyboxPrice = hasExplicitMode
+  let buyboxPrice = hasExplicitMode
     ? requestedMode === "DEAL"
       ? priceChoices.deal
       : priceChoices.regular
     : priceChoices.regular ?? priceChoices.deal;
+  let priceRetryAttempted = false;
+
+  if (!buyboxPrice && !options.allowMetadataOnly) {
+    priceRetryAttempted = true;
+
+    try {
+      const retryStartedAt = Date.now();
+      const retryHtml = await fetchAmazonHtml(
+        getAmazonProductRetryUrl(canonicalUrl),
+        PRODUCT_FETCH_TIMEOUT_MS,
+        canonicalUrl,
+        cookieJar
+      );
+      logStage(options, "page_fetch", retryStartedAt, {
+        canonicalUrl,
+        bytes: retryHtml.length,
+        localized: true,
+        retry: true,
+        reason: "buybox_price_missing",
+      });
+
+      const retryProduct = parseProductHtml(retryHtml, canonicalUrl);
+      const retryChoices = extractLocalizedBuyboxPriceChoices(
+        load(retryHtml),
+        retryProduct.asin || product.asin
+      );
+      const retryBuyboxPrice = hasExplicitMode
+        ? requestedMode === "DEAL"
+          ? retryChoices.deal
+          : retryChoices.regular
+        : retryChoices.regular ?? retryChoices.deal;
+
+      if (retryBuyboxPrice) {
+        priceChoices = retryChoices;
+        buyboxPrice = retryBuyboxPrice;
+      }
+    } catch {
+      // Preserve the clear missing-buybox result after the bounded retry.
+    }
+  }
+
   const availableModes = [
     priceChoices.regular ? "REGULAR" : null,
     priceChoices.deal ? "DEAL" : null,
@@ -1542,6 +1587,7 @@ export async function scrapeAmazonProductDirect(
     requestedMode,
     selectedMode: buyboxPrice?.mode ?? null,
     availableModes,
+    priceRetryAttempted,
     postcodeApplied,
     postcodeResponseConfirmed: postcodeResult.responseConfirmed,
     postcodeVerified,

@@ -608,6 +608,37 @@ test("scrapeAmazonProductDirect proceeds when postcode response is ambiguous but
   assert.equal(priceStage?.metadata?.postcodeApplied, true);
 });
 
+test("scrapeAmazonProductDirect retries the localized selected-variant buybox", async (t) => {
+  const { scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
+  const calls = installFetchMock(t, [
+    { body: amazonProductHtml({ buyboxPrice: "$79.99" }) },
+    { body: '{"isValidAddress":1}' },
+    {
+      body: amazonProductHtml({
+        postcode: "2217",
+      }),
+    },
+    {
+      body: amazonProductHtml({
+        buyboxPrice: "$79.99",
+        postcode: "2217",
+      }),
+    },
+  ]);
+
+  const product = await scrapeAmazonProductDirect(
+    "https://www.amazon.com.au/dp/B0GWM5MWXX",
+    {
+      postcode: "2217",
+      priceTrackingMode: "REGULAR",
+    }
+  );
+
+  assert.equal(product.price, 79.99);
+  assert.equal(calls.length, 4);
+  assert.match(String(calls[3]?.input), /\?th=1&psc=1$/);
+});
+
 test("scrapeAmazonProductDirect fails when only page-wide prices exist after postcode check", async (t) => {
   const { AmazonDirectScrapeError, scrapeAmazonProductDirect } =
     await loadAmazonDirectScraper();
@@ -616,6 +647,12 @@ test("scrapeAmazonProductDirect fails when only page-wide prices exist after pos
     { body: amazonProductHtml({ pageWidePrice: "$98.00" }) },
     { body: '{"isValidAddress":0}' },
     { body: '{"isValidAddress":0}' },
+    {
+      body: amazonProductHtml({
+        pageWidePrice: "$98.00",
+        postcode: "2217",
+      }),
+    },
     {
       body: amazonProductHtml({
         pageWidePrice: "$98.00",
