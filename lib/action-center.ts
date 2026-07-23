@@ -23,6 +23,7 @@ import {
   calculatePendingReviewMetrics,
   getEffectiveListingQuantity,
   getLatestPendingReviewHistory,
+  getOnHoldReason,
 } from "@/lib/action-center-metrics";
 import { getLowStockProductWhere } from "@/lib/low-stock-products";
 import {
@@ -102,7 +103,7 @@ export interface LowStockActionItem {
 export interface OnHoldActionItem {
   product: ActionCenterProductSummary;
   quantity: number;
-  priceCheckError: string | null;
+  reason: string;
 }
 
 export interface ActionCenterPriceCheckJob {
@@ -386,6 +387,7 @@ async function getCachedActionCenterQueues(
       ebayItemId: true,
       status: true,
       quantity: true,
+      amazonStockLeft: true,
       priceCheckError: true,
     },
   });
@@ -454,7 +456,11 @@ async function getCachedActionCenterQueues(
       onHold: onHoldProducts.map((product) => ({
         product: serializeProduct(product),
         quantity: getEffectiveListingQuantity(product.status, product.quantity),
-        priceCheckError: product.priceCheckError,
+        reason: getOnHoldReason({
+          priceCheckError: product.priceCheckError,
+          amazonStockLeft: product.amazonStockLeft,
+          savedQuantity: product.quantity,
+        }),
       })),
     },
   };

@@ -1281,24 +1281,25 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
             <thead className="bg-gray-50 text-xs font-medium uppercase tracking-wide text-gray-500">
               <tr>
                 <th className="px-4 py-3">Product</th>
+                <th className="px-4 py-3">Reason</th>
                 <th className="px-4 py-3">Quantity</th>
                 <th className="px-4 py-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {data.queues.onHold.length === 0 ? (
-                <EmptyRow colSpan={3} message="No on-hold products." />
+                <EmptyRow colSpan={4} message="No on-hold products." />
               ) : (
                 data.queues.onHold.map((item: OnHoldActionItem) => (
                   <tr key={item.product.id}>
                     <td className="px-4 py-3 align-top">
                       <div className="font-medium text-gray-900">{item.product.title}</div>
                       <ProductLinks product={item.product} />
-                      {item.priceCheckError && (
-                        <div className="mt-1 max-w-xl text-xs text-red-700">
-                          Held automatically: {item.priceCheckError}
-                        </div>
-                      )}
+                    </td>
+                    <td className="max-w-xl px-4 py-3 align-top text-sm text-gray-700">
+                      <div className="line-clamp-3" title={item.reason}>
+                        {item.reason}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-700">{item.quantity}</td>
                     <td className="px-4 py-3">

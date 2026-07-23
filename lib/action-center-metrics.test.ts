@@ -4,6 +4,7 @@ import {
   calculatePendingReviewMetrics,
   getEffectiveListingQuantity,
   getLatestPendingReviewHistory,
+  getOnHoldReason,
   getStoredQuantityAfterEdit,
 } from "@/lib/action-center-metrics";
 
@@ -128,4 +129,39 @@ test("on-hold quantity is displayed as zero without changing resume quantity", (
   assert.equal(getStoredQuantityAfterEdit("ON_HOLD", 0, 1), 1);
   assert.equal(getStoredQuantityAfterEdit("ON_HOLD", 4, 1), 4);
   assert.equal(getStoredQuantityAfterEdit("IMPORTED", 0, 1), 0);
+});
+
+test("on-hold reason explains every supported hold path", () => {
+  assert.equal(
+    getOnHoldReason({
+      priceCheckError: "Amazon price is unavailable.",
+      amazonStockLeft: 0,
+      savedQuantity: 1,
+    }),
+    "Automatic hold after failed price check: Amazon price is unavailable.",
+  );
+  assert.equal(
+    getOnHoldReason({
+      priceCheckError: null,
+      amazonStockLeft: null,
+      savedQuantity: 0,
+    }),
+    "Listing quantity was set to 0.",
+  );
+  assert.equal(
+    getOnHoldReason({
+      priceCheckError: null,
+      amazonStockLeft: 2,
+      savedQuantity: 1,
+    }),
+    "Low Amazon stock (2 left).",
+  );
+  assert.equal(
+    getOnHoldReason({
+      priceCheckError: null,
+      amazonStockLeft: 12,
+      savedQuantity: 1,
+    }),
+    "Put on hold manually.",
+  );
 });
