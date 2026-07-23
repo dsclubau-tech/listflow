@@ -64,6 +64,31 @@ function textIncludesPhrase(text: string, phrase: string) {
   return new RegExp(`\\b${phrase.replace(/\s+/g, "\\s+")}\\b`).test(text);
 }
 
+function buildComparableTokenSet(text: string) {
+  const tokens = text.split(" ").filter(Boolean);
+  const tokenSet = new Set(tokens);
+
+  for (const token of tokens) {
+    if (
+      /^\d+(?:\.\d+)?(?:x\d+(?:\.\d+)?)+(?:[a-z]+)?$/.test(token)
+    ) {
+      for (const part of token.match(/\d+(?:\.\d+)?/g) ?? []) {
+        tokenSet.add(part);
+      }
+      continue;
+    }
+
+    const measurement = token.match(
+      /^(\d+(?:\.\d+)?)(?:in|inch|hz|khz|mhz|ghz|mm|cm|kg|mah|w|p)$/,
+    );
+    if (measurement?.[1]) {
+      tokenSet.add(measurement[1]);
+    }
+  }
+
+  return tokenSet;
+}
+
 function tokenMatches(tokenSet: Set<string>, token: string) {
   if (tokenSet.has(token)) {
     return true;
@@ -153,11 +178,12 @@ export function buildSearchPlan(rawQuery: string): SearchPlan {
     "product",
     "sale",
   ]);
-  const tokens = normalized
+  const rawTokens = normalized
     .split(" ")
     .filter(
       (token) => (token.length >= 2 || /^\d+$/.test(token)) && !weakTokens.has(token)
     );
+  const tokens = Array.from(new Set(rawTokens));
   const strongTokens = tokens.filter(
     (token) => (/\d/.test(token) && token.length >= 2) || token.length >= 7
   );
@@ -168,25 +194,59 @@ export function buildSearchPlan(rawQuery: string): SearchPlan {
   const strict =
     strictTokens.length >= 2 ? strictTokens.join(" ").slice(0, 100) : null;
 
-  const modelTokens = tokens.filter((token) => /\d/.test(token));
-  const brandLikeTokens = tokens.filter(
-    (token) => !modelTokens.includes(token) && /^[a-z]{3,}$/i.test(token)
+  const modelTokens = tokens.filter(
+    (token) => /\d/.test(token) && token.length >= 2,
   );
-  const productTypeTokens = tokens.filter(
+  const tokenCounts = new Map<string, number>();
+  for (const token of rawTokens) {
+    tokenCounts.set(token, (tokenCounts.get(token) ?? 0) + 1);
+  }
+  const firstToken = tokens[0] ?? "";
+  const probableBrand =
+    /^[a-z]{3,}$/i.test(firstToken) &&
+    strongTokens.includes(firstToken) &&
+    (tokenCounts.get(firstToken) ?? 0) === 1
+      ? firstToken
+      : null;
+  const repeatedTextTokens = tokens.filter(
     (token) =>
-      !modelTokens.includes(token) &&
-      !brandLikeTokens.includes(token) &&
-      token.length >= 3
+      /^[a-z]{3,}$/i.test(token) &&
+      (tokenCounts.get(token) ?? 0) > 1,
+  );
+  const strongTextTokens = strongTokens.filter(
+    (token) => /^[a-z]{3,}$/i.test(token) && token !== probableBrand,
+  );
+  const fallbackTextTokens = tokens.filter(
+    (token) =>
+      /^[a-z]{3,}$/i.test(token) &&
+      token !== probableBrand &&
+      !["inch", "black", "white", "true", "active"].includes(token),
+  );
+  const descriptiveTokens = Array.from(
+    new Set([
+      ...repeatedTextTokens,
+      ...strongTextTokens,
+      ...fallbackTextTokens,
+    ]),
   );
 
-  const broadParts =
-    modelTokens.length > 0
-      ? [
-          ...brandLikeTokens.slice(0, 1),
-          ...modelTokens.slice(0, 2),
-          ...productTypeTokens.slice(0, 1),
-        ]
-      : [...brandLikeTokens.slice(0, 2), ...productTypeTokens.slice(0, 1)];
+  let broadParts: string[];
+  if (repeatedTextTokens.length > 0) {
+    broadParts = [
+      ...repeatedTextTokens.slice(0, 2),
+      ...modelTokens.slice(0, 1),
+      ...strongTextTokens.slice(0, 1),
+    ];
+  } else if (modelTokens.length >= 2) {
+    broadParts = [
+      ...modelTokens.slice(0, 2),
+      ...descriptiveTokens.slice(0, 1),
+    ];
+  } else {
+    broadParts = descriptiveTokens.slice(0, 3);
+  }
+
+  broadParts = Array.from(new Set(broadParts)).slice(0, 3);
   const broad =
     broadParts.length >= 2 ? broadParts.join(" ").slice(0, 100) : null;
 
@@ -202,7 +262,7 @@ export function buildSearchPlan(rawQuery: string): SearchPlan {
 
 export function scoreResultMatch(result: ScorableResearchResult, plan: SearchPlan) {
   const title = normalizeSearchText(result.title);
-  const titleTokenSet = new Set(title.split(" ").filter(Boolean));
+  const titleTokenSet = buildComparableTokenSet(title);
 
   if (!title || plan.tokens.length === 0) {
     return 50;

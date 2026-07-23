@@ -38,7 +38,10 @@ const DEFAULT_RESEARCH_LIMIT = 30;
 const DEFAULT_POSTCODE = "2217";
 const ACTIVE_SEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const EMPTY_ACTIVE_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
-const ACTIVE_SEARCH_CACHE_VERSION = "v6";
+const ACTIVE_SEARCH_CACHE_VERSION = "v7";
+const MIN_STRICT_RESEARCH_MATCHES = 5;
+const RELAXED_STRONG_MATCH_SCORE = 20;
+const RELAXED_REGULAR_MATCH_SCORE = 15;
 const RESEARCH_BATCH_SEARCH_COOLDOWN_MS = 10 * 1000;
 const RESEARCH_RETENTION_MS = 24 * 60 * 60 * 1000;
 const RESEARCH_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
@@ -514,12 +517,31 @@ function dedupeAndSortResults(
   }
 
   const filtered = plan
-    ? deduped
-        .filter((result) => !isAccessoryOnlyMismatch(result.title, plan))
-        .filter((result) => {
-          const score = result.matchScore ?? 0;
-          return score >= (plan.strongTokens.length > 0 ? 40 : 25);
-        })
+    ? (() => {
+        const nonAccessoryResults = deduped.filter(
+          (result) => !isAccessoryOnlyMismatch(result.title, plan),
+        );
+        const strictThreshold = plan.strongTokens.length > 0 ? 40 : 25;
+        const strictMatches = nonAccessoryResults.filter(
+          (result) => (result.matchScore ?? 0) >= strictThreshold,
+        );
+        const desiredStrictMatches = Math.min(
+          MIN_STRICT_RESEARCH_MATCHES,
+          limit,
+        );
+
+        if (strictMatches.length >= desiredStrictMatches) {
+          return strictMatches;
+        }
+
+        const relaxedThreshold =
+          plan.strongTokens.length > 0
+            ? RELAXED_STRONG_MATCH_SCORE
+            : RELAXED_REGULAR_MATCH_SCORE;
+        return nonAccessoryResults.filter(
+          (result) => (result.matchScore ?? 0) >= relaxedThreshold,
+        );
+      })()
     : deduped;
   const pool = filtered;
 

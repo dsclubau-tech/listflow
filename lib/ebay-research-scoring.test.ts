@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { scoreEbayResearchResultForQuery } from "@/lib/ebay-research-scoring";
+import {
+  buildSearchPlan,
+  scoreEbayResearchResultForQuery,
+} from "@/lib/ebay-research-scoring";
 
 const cookwareQuery =
   "Pots and Pans Set Non Stick, Nonstick Detachable Handle Cookware Sets,";
@@ -77,5 +80,42 @@ test("research match scoring does not reject a tablet result missing standalone 
       "Android 14 Tableta 10 Inch 2 Tablet OS",
       tabletQuery,
     ) >= 50,
+  );
+});
+
+test("research scoring matches compact resolution and measurement tokens", () => {
+  assert.ok(
+    scoreEbayResearchResultForQuery(
+      "32 Inch Curved Gaming Monitor 4K UHD 3840x2160 VA 240Hz 1ms",
+      "CRUA 32 Inch Curved Gaming Monitor, 4K UHD 3840 x 2160, 240Hz, Black | VA",
+    ) >= 60,
+  );
+  assert.ok(
+    scoreEbayResearchResultForQuery(
+      "VEVOR Tile Cutter 24in Cutting Tool with Laser Guide Double Rail",
+      "tile cutter 24 inch Double Guide Rails hand tile cutter Wide Base Plate Tile",
+    ) >= 40,
+  );
+});
+
+test("research plans deduplicate query words and create generic broad searches", () => {
+  const tilePlan = buildSearchPlan(
+    "tile cutter 24 inch Double Guide Rails hand tile cutter Wide Base Plate Tile",
+  );
+  assert.equal(tilePlan.tokens.filter((token) => token === "tile").length, 1);
+  assert.equal(tilePlan.tokens.filter((token) => token === "cutter").length, 1);
+  assert.equal(tilePlan.broad, "tile cutter 24");
+
+  assert.equal(
+    buildSearchPlan(
+      "CRUA 32 Inch Curved Gaming Monitor, 4K UHD 3840 x 2160, 240Hz, Black | VA",
+    ).broad,
+    "32 4k monitor",
+  );
+  assert.equal(
+    buildSearchPlan(
+      "BlueAnt Pump Air ANC2 True Wireless Bluetooth Earbuds, Active Noise Cancelling",
+    ).broad,
+    "wireless bluetooth earbuds",
   );
 });
