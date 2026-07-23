@@ -1356,7 +1356,7 @@ export async function scrapeAmazonProductDirect(
   const cookieJar: CookieJar = new Map();
 
   const fetchStartedAt = Date.now();
-  const html = await fetchAmazonHtml(
+  let html = await fetchAmazonHtml(
     canonicalUrl,
     PRODUCT_FETCH_TIMEOUT_MS,
     undefined,
@@ -1368,7 +1368,37 @@ export async function scrapeAmazonProductDirect(
   });
 
   const parseStartedAt = Date.now();
-  const product = parseProductHtml(html, canonicalUrl);
+  let product: ScrapedProduct;
+
+  try {
+    product = parseProductHtml(html, canonicalUrl);
+  } catch (error) {
+    if (
+      !(error instanceof AmazonDirectScrapeError) ||
+      error.code !== "AMAZON_TITLE_MISSING"
+    ) {
+      throw error;
+    }
+
+    const retryUrl = new URL(canonicalUrl);
+    retryUrl.searchParams.set("th", "1");
+    retryUrl.searchParams.set("psc", "1");
+    const retryStartedAt = Date.now();
+    html = await fetchAmazonHtml(
+      retryUrl.toString(),
+      PRODUCT_FETCH_TIMEOUT_MS,
+      canonicalUrl,
+      cookieJar
+    );
+    logStage(options, "page_fetch", retryStartedAt, {
+      canonicalUrl,
+      bytes: html.length,
+      retry: true,
+      reason: "title_missing",
+    });
+    product = parseProductHtml(html, canonicalUrl);
+  }
+
   logStage(options, "html_parse", parseStartedAt, {
     asin: product.asin,
     title: product.title,

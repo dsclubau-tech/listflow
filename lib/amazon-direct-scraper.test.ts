@@ -142,6 +142,28 @@ test("extractAmazonProductTitle reads meta content when text title is missing", 
   );
 });
 
+test("extractAmazonProductTitle reads the document title for alternate Amazon markup", () => {
+  const $ = load(`
+    <html>
+      <head>
+        <title>KNQZE Shiatsu Cordless Neck Massager : Amazon.com.au: Health, Household &amp; Personal Care</title>
+      </head>
+      <body></body>
+    </html>
+  `);
+
+  assert.equal(
+    extractAmazonProductTitle($),
+    "KNQZE Shiatsu Cordless Neck Massager"
+  );
+});
+
+test("extractAmazonProductTitle rejects generic Amazon document titles", () => {
+  const $ = load("<html><head><title>Amazon.com.au</title></head></html>");
+
+  assert.equal(extractAmazonProductTitle($), "");
+});
+
 test("Amazon URL variants resolve to the same normalized ASIN", async () => {
   const { extractAmazonAsinFromValue } = await loadAmazonDirectScraper();
 
@@ -161,6 +183,39 @@ test("Amazon URL variants resolve to the same normalized ASIN", async () => {
     ),
     "B0TEST1234",
   );
+});
+
+test("scrapeAmazonProductDirect retries once when the initial page has no product title", async (t) => {
+  const { scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
+  const calls = installFetchMock(t, [
+    {
+      body: "<html><head><title>Amazon.com.au</title></head><body>Temporary response</body></html>",
+    },
+    {
+      body: amazonProductHtml({
+        title: "KNQZE Shiatsu Cordless Neck Massager",
+        buyboxPrice: "$119.99",
+      }),
+    },
+    { body: '{"isValidAddress":1}' },
+    {
+      body: amazonProductHtml({
+        title: "KNQZE Shiatsu Cordless Neck Massager",
+        buyboxPrice: "$119.99",
+        postcode: "2217",
+      }),
+    },
+  ]);
+
+  const product = await scrapeAmazonProductDirect(
+    "https://www.amazon.com.au/dp/B0GWM5MWXX",
+    { postcode: "2217" }
+  );
+
+  assert.equal(product.fullTitle, "KNQZE Shiatsu Cordless Neck Massager");
+  assert.equal(product.price, 119.99);
+  assert.equal(calls.length, 4);
+  assert.match(String(calls[1]?.input), /\?th=1&psc=1$/);
 });
 
 test("scrapeAmazonProductDirect uses selected Amazon price tracking mode", async (t) => {

@@ -84,6 +84,21 @@ function extractJsonLdTitle($: CheerioAPI) {
   return "";
 }
 
+function extractDocumentTitle($: CheerioAPI) {
+  const title = normalizeAmazonTitle(extractFirstText($, ["title"]));
+
+  if (
+    !title ||
+    /^(?:amazon\.com\.au|robot check|page not found|sorry!?|something went wrong)$/i.test(
+      title
+    )
+  ) {
+    return "";
+  }
+
+  return title;
+}
+
 export function extractAmazonProductTitle($: CheerioAPI, html = "") {
   return (
     normalizeAmazonTitle(extractFirstText($, ["#productTitle", "#title h1"])) ||
@@ -99,6 +114,7 @@ export function extractAmazonProductTitle($: CheerioAPI, html = "") {
       )
     ) ||
     extractJsonLdTitle($) ||
+    extractDocumentTitle($) ||
     normalizeAmazonTitle(
       html.match(/"productTitle"\s*:\s*"([^"]+)"/)?.[1]?.replace(/\\"/g, '"')
     )
