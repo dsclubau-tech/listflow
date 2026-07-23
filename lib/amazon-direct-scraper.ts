@@ -56,6 +56,11 @@ type ScrapeDirectOptions = {
   onStage?: AmazonScrapeStageLogger;
   postcode?: string;
   priceTrackingMode?: AmazonPriceTrackingMode;
+  resolveMissingPrice?: (request: {
+    asin: string;
+    postcode: string;
+    priceTrackingMode: AmazonPriceTrackingMode;
+  }) => Promise<number | null>;
 };
 
 type CheerioSelection = ReturnType<CheerioAPI>;
@@ -1534,6 +1539,9 @@ export async function scrapeAmazonProductDirect(
       : priceChoices.regular
     : priceChoices.regular ?? priceChoices.deal;
   let priceRetryAttempted = false;
+  let renderedFallbackAttempted = false;
+  let renderedFallbackPrice: number | null = null;
+  let renderedFallbackError: string | null = null;
 
   if (!buyboxPrice && !options.allowMetadataOnly) {
     priceRetryAttempted = true;
@@ -1574,6 +1582,33 @@ export async function scrapeAmazonProductDirect(
     }
   }
 
+  if (
+    !buyboxPrice &&
+    !options.allowMetadataOnly &&
+    options.resolveMissingPrice
+  ) {
+    renderedFallbackAttempted = true;
+
+    try {
+      const resolvedPrice = await options.resolveMissingPrice({
+        asin: product.asin,
+        postcode,
+        priceTrackingMode: requestedMode,
+      });
+
+      if (
+        typeof resolvedPrice === "number" &&
+        Number.isFinite(resolvedPrice) &&
+        resolvedPrice > 0
+      ) {
+        renderedFallbackPrice = resolvedPrice;
+      }
+    } catch (error) {
+      renderedFallbackError =
+        error instanceof Error ? error.message : "Rendered price lookup failed";
+    }
+  }
+
   const availableModes = [
     priceChoices.regular ? "REGULAR" : null,
     priceChoices.deal ? "DEAL" : null,
@@ -1581,13 +1616,21 @@ export async function scrapeAmazonProductDirect(
   logStage(options, "price_extract", priceStartedAt, {
     asin: product.asin,
     localized: true,
-    price: buyboxPrice?.price ?? null,
-    priceFound: buyboxPrice !== null,
-    priceSource: buyboxPrice?.priceSource ?? "localized_buybox",
+    price: buyboxPrice?.price ?? renderedFallbackPrice,
+    priceFound: buyboxPrice !== null || renderedFallbackPrice !== null,
+    priceSource:
+      buyboxPrice?.priceSource ??
+      (renderedFallbackPrice !== null
+        ? "rendered_selected_variant_buybox"
+        : "localized_buybox"),
     requestedMode,
-    selectedMode: buyboxPrice?.mode ?? null,
+    selectedMode:
+      buyboxPrice?.mode ??
+      (renderedFallbackPrice !== null ? requestedMode : null),
     availableModes,
     priceRetryAttempted,
+    renderedFallbackAttempted,
+    renderedFallbackError,
     postcodeApplied,
     postcodeResponseConfirmed: postcodeResult.responseConfirmed,
     postcodeVerified,
@@ -1597,7 +1640,7 @@ export async function scrapeAmazonProductDirect(
 
   product.priceChoices = toScrapedPriceChoices(priceChoices);
 
-  if (!buyboxPrice) {
+  if (!buyboxPrice && renderedFallbackPrice === null) {
     if (options.allowMetadataOnly) {
       return product;
     }
@@ -1609,8 +1652,17 @@ export async function scrapeAmazonProductDirect(
     );
   }
 
-  product.price = buyboxPrice.price;
-  product.amazonPriceTrackingMode = buyboxPrice.mode;
+  if (buyboxPrice) {
+    product.price = buyboxPrice.price;
+    product.amazonPriceTrackingMode = buyboxPrice.mode;
+  } else {
+    product.price = renderedFallbackPrice;
+    product.amazonPriceTrackingMode = requestedMode;
+    product.priceChoices[requestedMode === "DEAL" ? "deal" : "regular"] = {
+      price: renderedFallbackPrice!,
+      label: getAmazonPriceTrackingLabel(requestedMode),
+    };
+  }
 
   if (product.images.length === 0) {
     throw new AmazonDirectScrapeError(

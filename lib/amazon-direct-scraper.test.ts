@@ -639,6 +639,58 @@ test("scrapeAmazonProductDirect retries the localized selected-variant buybox", 
   assert.match(String(calls[3]?.input), /\?th=1&psc=1$/);
 });
 
+test("scrapeAmazonProductDirect uses a rendered selected-variant price fallback", async (t) => {
+  const { scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
+  const fallbackRequests: Array<{
+    asin: string;
+    postcode: string;
+    priceTrackingMode: string;
+  }> = [];
+
+  installFetchMock(t, [
+    { body: amazonProductHtml({ pageWidePrice: "$79.99" }) },
+    { body: '{"isValidAddress":1}' },
+    {
+      body: amazonProductHtml({
+        pageWidePrice: "$79.99",
+        postcode: "2217",
+      }),
+    },
+    {
+      body: amazonProductHtml({
+        pageWidePrice: "$79.99",
+        postcode: "2217",
+      }),
+    },
+  ]);
+
+  const product = await scrapeAmazonProductDirect(
+    "https://www.amazon.com.au/dp/B0GWM5MWXX",
+    {
+      postcode: "2217",
+      priceTrackingMode: "REGULAR",
+      resolveMissingPrice: async (request) => {
+        fallbackRequests.push(request);
+        return 119.99;
+      },
+    },
+  );
+
+  assert.equal(product.price, 119.99);
+  assert.equal(product.amazonPriceTrackingMode, "REGULAR");
+  assert.deepEqual(product.priceChoices?.regular, {
+    price: 119.99,
+    label: "Regular price",
+  });
+  assert.deepEqual(fallbackRequests, [
+    {
+      asin: "B0TEST1234",
+      postcode: "2217",
+      priceTrackingMode: "REGULAR",
+    },
+  ]);
+});
+
 test("scrapeAmazonProductDirect fails when only page-wide prices exist after postcode check", async (t) => {
   const { AmazonDirectScrapeError, scrapeAmazonProductDirect } =
     await loadAmazonDirectScraper();

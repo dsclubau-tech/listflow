@@ -124,6 +124,41 @@ export async function POST(request: Request) {
         supplierSettings?.scrapePostcode?.trim() ||
         supplierSettings?.defaultZipcode?.trim() ||
         "2217",
+      resolveMissingPrice: async ({
+        asin,
+        postcode,
+        priceTrackingMode: requestedPriceMode,
+      }) => {
+        log.info(
+          "scrape/route",
+          "Direct buybox price missing; starting rendered Amazon fallback",
+          {
+            asin,
+            postcode,
+            priceTrackingMode: requestedPriceMode,
+          },
+        );
+
+        const { scrapeAmazonPrice } = await import("@/lib/amazon-scraper");
+        const result = await withTimeout(
+          scrapeAmazonPrice(
+            asin,
+            undefined,
+            postcode,
+            requestedPriceMode,
+          ),
+          40_000,
+          "Rendered Amazon price lookup timed out",
+        );
+
+        log.info("scrape/route", "Rendered Amazon fallback completed", {
+          asin,
+          price: result.price,
+          priceTrackingMode: requestedPriceMode,
+        });
+
+        return result.price;
+      },
     });
 
     if (!allowMetadataOnly && (product.price === null || product.price <= 0)) {
