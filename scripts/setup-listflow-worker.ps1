@@ -132,6 +132,13 @@ try {
     (Join-Path $repoRoot "scripts\install-worker-shortcut.ps1"),
     "-CreateRepairShortcut"
   )
+  Invoke-CheckedCommand "Creating per-store desktop shortcuts" "powershell.exe" @(
+    "-NoProfile",
+    "-ExecutionPolicy",
+    "Bypass",
+    "-File",
+    (Join-Path $repoRoot "scripts\install-store-worker-shortcuts.ps1")
+  )
 
   Write-Step "Setup complete"
   Write-Host "Daily use: double-click Start ListFlow Worker on the desktop."

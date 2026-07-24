@@ -41,10 +41,9 @@ const STOCK_REPLENISH_INTERVAL_MS = parsePositiveMs(
   process.env.LISTFLOW_STOCK_REPLENISH_INTERVAL_MS,
   10 * 60 * 1000
 );
-const workerName = process.env.LISTFLOW_WORKER_NAME || `${os.hostname()} manual worker`;
-const workerId =
-  process.env.LISTFLOW_WORKER_ID ||
-  `manual-${os.hostname().toLowerCase().replace(/[^a-z0-9-]+/g, "-")}`;
+
+let workerName = process.env.LISTFLOW_WORKER_NAME || "";
+let workerId = process.env.LISTFLOW_WORKER_ID || "";
 const startedAt = new Date();
 let stopping = false;
 let heartbeatStoreIds: string[] = [];
@@ -115,7 +114,7 @@ function acquireLocalWorkerGuard() {
 
     if (Number.isFinite(existingPid) && isProcessAlive(existingPid)) {
       throw new Error(
-        `Another ListFlow Worker window is already running for ${workerId}. Close it before starting a second one.`
+        `Another ListFlow Worker window is already running for ${workerName} (${workerId}). Close it before starting a second one.`
       );
     }
 
@@ -148,8 +147,20 @@ function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error ?? "Unknown error");
 }
 
-function parseStoreFilter() {
-  const raw = process.env.LISTFLOW_WORKER_STORE_LOGIN_ID?.trim();
+function parseStoreFilter(): string[] {
+  const args = process.argv.slice(2);
+  let cliStore: string | undefined;
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg.startsWith("--store=")) {
+      cliStore = arg.slice("--store=".length);
+    } else if (arg === "--store" && i + 1 < args.length) {
+      cliStore = args[i + 1];
+    }
+  }
+
+  const raw = cliStore?.trim() || process.env.LISTFLOW_WORKER_STORE_LOGIN_ID?.trim();
 
   if (!raw) {
     return [];
@@ -242,10 +253,53 @@ async function main() {
   }
 
   modules = await loadWorkerModules();
+
+  const stores = await getActiveStores();
+  const storeFilters = parseStoreFilter();
+
+  if (!workerName) {
+    if (storeFilters.length === 1 && stores.length === 1) {
+      workerName = `${stores[0].name} Worker`;
+    } else if (storeFilters.length > 0) {
+      workerName = `Store (${storeFilters.join(", ")}) Worker`;
+    } else {
+      workerName = `${os.hostname()} manual worker`;
+    }
+  }
+
+  if (!workerId) {
+    if (storeFilters.length === 1 && stores.length === 1) {
+      const sanitized = (stores[0].loginId || stores[0].id)
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, "-");
+      workerId = `worker-${sanitized}`;
+    } else if (storeFilters.length > 0) {
+      const sanitized = storeFilters[0]
+        .toLowerCase()
+        .replace(/[^a-z0-9-]+/g, "-");
+      workerId = `worker-${sanitized}`;
+    } else {
+      workerId = `manual-${os.hostname().toLowerCase().replace(/[^a-z0-9-]+/g, "-")}`;
+    }
+  }
+
+  // Update terminal window title
+  if (process.stdout.isTTY) {
+    process.stdout.write(`\x1b]0;ListFlow Worker - ${workerName}\x07`);
+  }
+
+  modules.logger = modules.logger.child({
+    source: "worker",
+    runtime: "worker",
+    workerId,
+    workerName,
+    tags: ["worker"],
+  });
+
   acquireLocalWorkerGuard();
 
-  console.log("ListFlow Worker online");
-  console.log(`Worker: ${workerName}`);
+  console.log(`ListFlow Worker online — ${workerName}`);
+  console.log(`Worker ID: ${workerId}`);
   console.log("Waiting for jobs...");
   if (STOCK_REPLENISH_ENABLED) {
     console.log(
@@ -255,7 +309,7 @@ async function main() {
   modules.logger.info("worker/start", "ListFlow Worker online", {
     workerId,
     workerName,
-    storeFilter: parseStoreFilter(),
+    storeFilter: storeFilters,
     stockReplenishEnabled: STOCK_REPLENISH_ENABLED,
     stockReplenishIntervalMs: STOCK_REPLENISH_INTERVAL_MS,
   });
@@ -275,10 +329,10 @@ async function main() {
   try {
     while (!stopping) {
       try {
-        const stores = await getActiveStores();
-        heartbeatStoreIds = stores.map((store) => store.id);
+        const currentStores = await getActiveStores();
+        heartbeatStoreIds = currentStores.map((store) => store.id);
 
-        for (const store of stores) {
+        for (const store of currentStores) {
           if (!loggedOnlineStoreIds.has(store.id)) {
             loggedOnlineStoreIds.add(store.id);
             modules.logger.info(
@@ -295,8 +349,8 @@ async function main() {
           }
         }
 
-        if (stores.length === 0) {
-          console.log("No active stores found. Waiting...");
+        if (currentStores.length === 0) {
+          console.log("No active stores found for this worker. Waiting...");
           await sleep(IDLE_SLEEP_MS);
           continue;
         }
@@ -305,7 +359,7 @@ async function main() {
 
         let didWork = false;
 
-        for (const store of stores) {
+        for (const store of currentStores) {
           if (stopping) {
             break;
           }

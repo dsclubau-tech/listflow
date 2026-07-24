@@ -53,6 +53,10 @@ export function resolveLegacyEbayStoreNumber(input: {
   const nameClean = input.name?.trim() || "";
   const loginClean = input.loginId?.trim() || "";
 
+  if (/rk\s*ecom|rk\s*ecommerce/i.test(nameClean) || /rk\s*ecom|rk\s*ecommerce/i.test(loginClean)) {
+    return 1;
+  }
+
   if (/walmart/i.test(nameClean) || /walmart/i.test(loginClean)) {
     return 3;
   }
