@@ -46,7 +46,18 @@ export function resolveLegacyEbayStoreNumber(input: {
   }
 
   const nameMatch = input.name?.trim().match(/^store\s+([123])$/i);
-  return nameMatch ? (Number(nameMatch[1]) as 1 | 2 | 3) : null;
+  if (nameMatch) {
+    return Number(nameMatch[1]) as 1 | 2 | 3;
+  }
+
+  const nameClean = input.name?.trim() || "";
+  const loginClean = input.loginId?.trim() || "";
+
+  if (/walmart/i.test(nameClean) || /walmart/i.test(loginClean)) {
+    return 3;
+  }
+
+  return null;
 }
 
 export function resolveEbayStoreNumber(input: {

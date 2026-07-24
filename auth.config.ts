@@ -38,9 +38,10 @@ export const authConfig = {
     authorized({ auth, request: { nextUrl } }) {
       const isStoreSession = !!auth?.user?.storeId;
       const isProtected = isPrivateAppPath(nextUrl.pathname);
-      const isLoginPage = nextUrl.pathname === "/login";
+      const isAuthPage =
+        nextUrl.pathname === "/login" || nextUrl.pathname === "/register";
 
-      if (isLoginPage && isStoreSession) {
+      if (isAuthPage && isStoreSession) {
         return Response.redirect(new URL(DEFAULT_AUTHENTICATED_PATH, nextUrl));
       }
 

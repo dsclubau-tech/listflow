@@ -37,7 +37,11 @@ export function getSafeCallbackPath(value: string | null | undefined) {
     const baseUrl = new URL("https://listflow.local");
     const parsed = new URL(candidate, baseUrl);
 
-    if (parsed.origin !== baseUrl.origin || parsed.pathname === "/login") {
+    if (
+      parsed.origin !== baseUrl.origin ||
+      parsed.pathname === "/login" ||
+      parsed.pathname === "/register"
+    ) {
       return DEFAULT_AUTHENTICATED_PATH;
     }
 

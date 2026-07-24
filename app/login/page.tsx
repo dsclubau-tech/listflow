@@ -1,21 +1,25 @@
 "use client";
 
 import { Suspense, useState } from "react";
+import Link from "next/link";
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import { getSafeCallbackPath } from "@/lib/auth-navigation";
 
 function LoginForm() {
-  const [storeId, setStoreId] = useState("");
+  const searchParams = useSearchParams();
+  const initialStoreId = searchParams.get("storeId") || "";
+  const [storeId, setStoreId] = useState(initialStoreId);
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [capsLockActive, setCapsLockActive] = useState(false);
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const searchParams = useSearchParams();
+
   const callbackUrl = getSafeCallbackPath(searchParams.get("callbackUrl"));
   const authError = searchParams.get("error");
   const passwordChanged = searchParams.get("passwordChanged") === "1";
+  const justRegistered = searchParams.get("registered") === "1";
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,13 +46,19 @@ function LoginForm() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50">
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
       <div className="w-full max-w-md">
         <div className="bg-white rounded-lg shadow-md p-8">
           <div className="text-center mb-8">
             <h1 className="text-3xl font-bold text-gray-900">ListFlow</h1>
             <p className="text-sm text-gray-500 mt-1">eBay listing tool</p>
           </div>
+
+          {justRegistered && !(error || authError) && (
+            <div className="mb-6 p-3 bg-green-50 border border-green-200 rounded-md text-sm text-green-800 text-center">
+              Account created successfully! Please sign in below.
+            </div>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-6">
             <div>
@@ -132,6 +142,18 @@ function LoginForm() {
               Password changed. Sign in with the new password.
             </p>
           )}
+
+          <div className="mt-6 text-center border-t border-gray-100 pt-4">
+            <p className="text-sm text-gray-600">
+              Don&apos;t have a store account?{" "}
+              <Link
+                href="/register"
+                className="font-medium text-orange-600 hover:text-orange-500 underline underline-offset-2"
+              >
+                Register
+              </Link>
+            </p>
+          </div>
         </div>
       </div>
     </div>

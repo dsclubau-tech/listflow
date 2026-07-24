@@ -222,6 +222,12 @@ async function getStoreIdForStoreNumber(storeNumber: 1 | 2 | 3) {
         { name: `Store ${storeNumber}` },
         { loginId: `store-${storeNumber}` },
         { loginId: `store${storeNumber}` },
+        ...(storeNumber === 3
+          ? [
+              { name: { contains: "Walmart", mode: "insensitive" as const } },
+              { loginId: { contains: "walmart", mode: "insensitive" as const } },
+            ]
+          : []),
       ],
     },
     select: { id: true },
