@@ -5,6 +5,32 @@ import {
   isPrivateAppPath,
 } from "@/lib/auth-navigation";
 
+function getBaseOrigin(nextUrl: URL) {
+  if (
+    nextUrl.host &&
+    !nextUrl.host.includes("localhost") &&
+    !nextUrl.host.includes("127.0.0.1")
+  ) {
+    const protocol =
+      nextUrl.protocol && nextUrl.protocol.startsWith("http")
+        ? nextUrl.protocol
+        : "https:";
+    return `${protocol}//${nextUrl.host}`;
+  }
+
+  const vercelUrl =
+    process.env.LISTFLOW_PUBLIC_IMAGE_BASE_URL ||
+    process.env.NEXTAUTH_URL ||
+    process.env.VERCEL_PROJECT_PRODUCTION_URL ||
+    process.env.VERCEL_URL;
+
+  if (vercelUrl && !vercelUrl.includes("localhost")) {
+    return vercelUrl.startsWith("http") ? vercelUrl : `https://${vercelUrl}`;
+  }
+
+  return nextUrl.origin;
+}
+
 // This file is Edge-compatible - no Prisma or Node.js-only modules.
 // It contains only the NextAuth config that can run in Edge middleware.
 export const authConfig = {
@@ -41,13 +67,14 @@ export const authConfig = {
       const isProtected = isPrivateAppPath(nextUrl.pathname);
       const isAuthPage =
         nextUrl.pathname === "/login" || nextUrl.pathname === "/register";
+      const origin = getBaseOrigin(nextUrl);
 
       if (isAuthPage && isStoreSession) {
-        return Response.redirect(new URL(DEFAULT_AUTHENTICATED_PATH, nextUrl));
+        return Response.redirect(new URL(DEFAULT_AUTHENTICATED_PATH, origin));
       }
 
       if (isProtected && !isStoreSession) {
-        const loginUrl = new URL("/login", nextUrl);
+        const loginUrl = new URL("/login", origin);
         loginUrl.searchParams.set(
           "callbackUrl",
           getSafeCallbackPath(`${nextUrl.pathname}${nextUrl.search}`)
