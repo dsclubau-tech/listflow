@@ -12,6 +12,7 @@ import {
   normalizeFullProductTitle,
   toEbayListingTitle,
 } from "@/lib/product-title";
+import { prependTitleToDescription } from "@/lib/description-title";
 import type { ExistingProductConflict } from "@/types/product-duplicate";
 
 type DraftCreateResponse = {
@@ -133,13 +134,19 @@ export async function createDraftFromScrapedProduct(data: ScrapedProduct) {
     throw new Error("Amazon product was found, but no usable product images were found.");
   }
 
+  const normalizedFullTitle = normalizeTitle(data);
+  const formattedDescription = prependTitleToDescription(
+    normalizedFullTitle,
+    data.description
+  );
+
   const response = await fetch("/api/products", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      title: toEbayListingTitle(normalizeTitle(data)),
-      fullTitle: normalizeTitle(data),
-      description: data.description,
+      title: toEbayListingTitle(normalizedFullTitle),
+      fullTitle: normalizedFullTitle,
+      description: formattedDescription,
       price: data.price,
       quantity: defaults?.quantity ?? 1,
       condition: data.condition || "New",

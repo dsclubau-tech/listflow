@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import Sidebar from "@/components/Sidebar";
+import SidebarLayout from "@/components/SidebarLayout";
 import { getCurrentStoreSession } from "@/lib/store-session";
 
 export default async function DashboardLayout({
@@ -14,14 +14,11 @@ export default async function DashboardLayout({
   }
 
   return (
-    <div className="flex min-h-screen">
-      <Sidebar
-        userName={storeSession.storeName}
-        userEmail={storeSession.storeLoginId}
-      />
-      <main className="flex-1 ml-64 overflow-auto bg-gray-50">
-        {children}
-      </main>
-    </div>
+    <SidebarLayout
+      userName={storeSession.storeName}
+      userEmail={storeSession.storeLoginId}
+    >
+      {children}
+    </SidebarLayout>
   );
 }

@@ -26,6 +26,10 @@ import {
   normalizeFullProductTitle,
   toEbayListingTitle,
 } from "@/lib/product-title";
+import {
+  prependTitleToDescription,
+  updateDescriptionTitle,
+} from "@/lib/description-title";
 
 interface Store {
   id: string;
@@ -174,7 +178,9 @@ export default function DraftEditForm({
       setQuantity(String(defaults?.quantity ?? 1));
       setBrand(scrapedData.brand);
       setVariant(scrapedData.variantName || "");
-      setDescription(scrapedData.description);
+      setDescription(
+        prependTitleToDescription(scrapedTitle, scrapedData.description)
+      );
       setImages(dedupeProductImages(scrapedData.images));
       setHoveredImage(null);
       setManualImageUrl("");
@@ -823,7 +829,12 @@ export default function DraftEditForm({
                 <input
                   type="text"
                   value={title}
-                  onChange={(e) => setTitle(e.target.value)}
+                  onChange={(e) => {
+                    const newTitle = e.target.value;
+                    setTitle(newTitle);
+                    setFullTitle(newTitle);
+                    setDescription((prev) => updateDescriptionTitle(newTitle, prev));
+                  }}
                   maxLength={80}
                   className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
                 />

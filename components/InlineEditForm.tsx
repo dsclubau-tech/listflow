@@ -53,6 +53,10 @@ import {
   normalizeFullProductTitle,
   toEbayListingTitle,
 } from "@/lib/product-title";
+import {
+  prependTitleToDescription,
+  updateDescriptionTitle,
+} from "@/lib/description-title";
 import Button from "@/components/ui/Button";
 import ActionProgressBar from "@/components/ActionProgressBar";
 import { useTimedActionProgress } from "@/hooks/useTimedActionProgress";
@@ -328,7 +332,7 @@ function buildRegrabDraftUpdate(scraped: ScrapedProduct, fallbackAsin: string) {
   return {
     title: toEbayListingTitle(fullTitle),
     fullTitle,
-    description: scraped.description,
+    description: prependTitleToDescription(fullTitle, scraped.description),
     price: scraped.price,
     images: dedupeProductImages(scraped.images),
     asin: scraped.asin || fallbackAsin,
@@ -1972,7 +1976,11 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
               <input
                 type="text"
                 value={title}
-                onChange={(e) => setTitle(e.target.value)}
+                onChange={(e) => {
+                  const newTitle = e.target.value;
+                  setTitle(newTitle);
+                  setDescription((prev) => updateDescriptionTitle(newTitle, prev));
+                }}
                 maxLength={80}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
               />
