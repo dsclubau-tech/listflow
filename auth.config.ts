@@ -8,6 +8,7 @@ import {
 // This file is Edge-compatible - no Prisma or Node.js-only modules.
 // It contains only the NextAuth config that can run in Edge middleware.
 export const authConfig = {
+  trustHost: true,
   session: {
     strategy: "jwt" as const,
   },
