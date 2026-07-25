@@ -37,6 +37,21 @@ test("calculateSellPrice handles mixed fixed fees and profit", () => {
   );
 });
 
+test("calculateSellPrice enforces minimumProfit when raw profit is lower", () => {
+  assert.equal(
+    calculateSellPrice({
+      buyPrice: 100,
+      feesPercent: 13,
+      feesFixed: 0.33,
+      profitPercent: 0,
+      profitFixed: 0,
+      roundCents: null,
+      minimumProfit: 2,
+    }),
+    117.62
+  );
+});
+
 test("applyRoundCents rounds upward to .99", () => {
   assert.equal(applyRoundCents(13.02, 0.99), 13.99);
 });

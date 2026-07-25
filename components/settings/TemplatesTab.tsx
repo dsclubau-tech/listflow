@@ -113,6 +113,27 @@ export default function TemplatesTab() {
   const [descriptionModalMode, setDescriptionModalMode] =
     useState<DescriptionModalMode>("edit");
   const [savingDescription, setSavingDescription] = useState(false);
+  const [settingDefault, setSettingDefault] = useState(false);
+
+  async function handleSetDefaultTemplate(id: string) {
+    if (!id || settingDefault) return;
+    setSettingDefault(true);
+    try {
+      const res = await fetch(`/api/templates/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isDefault: true }),
+      });
+      if (res.ok) {
+        await fetchDescriptionTemplates();
+      } else {
+        const data = (await res.json().catch(() => null)) as { error?: string } | null;
+        alert(data?.error || "Failed to set default template");
+      }
+    } finally {
+      setSettingDefault(false);
+    }
+  }
 
   const [policyModalOpen, setPolicyModalOpen] = useState(false);
   const [editingPolicyId, setEditingPolicyId] = useState<string | null>(null);
@@ -457,21 +478,43 @@ export default function TemplatesTab() {
 
       {activeSubTab === "description" && (
         <>
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <p className="text-sm text-gray-500">{descriptionTemplates.length} template(s)</p>
-            <button
-              onClick={openAddDescription}
-              className="rounded-md bg-orange-500 px-4 py-2 text-sm text-white transition-colors hover:bg-orange-600"
-            >
-              + Add blank template
-            </button>
+            <div className="flex flex-wrap items-center gap-3">
+              {descriptionTemplates.length > 0 && (
+                <div className="flex items-center gap-2 rounded-md border border-gray-300 bg-white px-3 py-1.5 shadow-sm">
+                  <label htmlFor="default-template-select" className="text-xs font-medium text-gray-600 whitespace-nowrap">
+                    Set default:
+                  </label>
+                  <select
+                    id="default-template-select"
+                    value={descriptionTemplates.find((t) => t.isDefault)?.id || ""}
+                    onChange={(e) => void handleSetDefaultTemplate(e.target.value)}
+                    disabled={settingDefault}
+                    className="bg-transparent text-xs font-semibold text-gray-900 focus:outline-none cursor-pointer disabled:opacity-50"
+                  >
+                    {descriptionTemplates.map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.name} {template.isDefault ? "(Current Default)" : ""}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+              <button
+                onClick={openAddDescription}
+                className="rounded-md bg-orange-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-orange-600 shadow-sm"
+              >
+                + Add blank template
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
             {descriptionTemplates.map((template) => (
               <div
                 key={template.id}
-                className="group relative overflow-hidden rounded-lg border border-gray-200 bg-white"
+                className="group relative overflow-hidden rounded-lg border border-gray-200 bg-white shadow-sm hover:border-gray-300 transition-all"
               >
                 <div className="relative h-40 overflow-hidden bg-gray-50 p-2">
                   <iframe
@@ -509,15 +552,24 @@ export default function TemplatesTab() {
                   </button>
                 </div>
 
-                <div className="border-t border-gray-200 px-3 py-2">
-                  <p className="truncate text-center text-sm font-medium">{template.name}</p>
-                  {template.isDefault && (
-                    <p className="mt-1 text-center">
-                      <span className="rounded bg-orange-100 px-2 py-0.5 text-xs text-orange-700">
+                <div className="border-t border-gray-200 px-3 py-2 text-center">
+                  <p className="truncate text-sm font-medium">{template.name}</p>
+                  <div className="mt-1">
+                    {template.isDefault ? (
+                      <span className="inline-block rounded bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">
                         Default
                       </span>
-                    </p>
-                  )}
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void handleSetDefaultTemplate(template.id)}
+                        disabled={settingDefault}
+                        className="inline-block rounded bg-gray-100 px-2 py-0.5 text-xs text-gray-600 hover:bg-orange-50 hover:text-orange-600 transition-colors disabled:opacity-50"
+                      >
+                        Set as default
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}

@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { getZipcodeLocationText } from "@/lib/ebay-location";
+import { calculateSellPrice } from "@/lib/variant-pricing";
 
 interface SupplierSettingsData {
   id: string;
@@ -184,13 +185,31 @@ export default function SupplierSettingsTab() {
   const pricingCalc = useMemo(() => {
     if (!settings) return { fees: 0, fixedFee: 0, profit: 0, total: 0 };
     const cost = 100;
-    const feePercent = settings.ebayFeePercent / 100;
-    const profitPercent = settings.additionalProfitPercent / 100;
-    const fees = cost * feePercent;
+    const feePercent = settings.ebayFeePercent;
     const fixedFee = settings.fixedFeeAmount;
-    const profitDollar = cost * profitPercent + settings.additionalProfitFixed;
-    const total = cost + fees + fixedFee + profitDollar;
-    return { fees: +fees.toFixed(2), fixedFee, profit: +profitDollar.toFixed(2), total: +total.toFixed(2) };
+    const profitPercent = settings.additionalProfitPercent;
+    const profitFixed = settings.additionalProfitFixed;
+    const minProfit = settings.minimumProfit || 0;
+
+    const total = calculateSellPrice({
+      buyPrice: cost,
+      feesPercent: feePercent,
+      feesFixed: fixedFee,
+      profitPercent: profitPercent,
+      profitFixed: profitFixed,
+      roundCents: null,
+      minimumProfit: minProfit,
+    });
+
+    const fees = (total * feePercent) / 100;
+    const netProfit = total - cost - (fees + fixedFee);
+
+    return {
+      fees: +fees.toFixed(2),
+      fixedFee,
+      profit: +netProfit.toFixed(2),
+      total: +total.toFixed(2),
+    };
   }, [settings]);
 
   if (loading || !settings) {

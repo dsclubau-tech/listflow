@@ -40,12 +40,20 @@ export function calculateSellPrice(input: {
   profitPercent: number;
   profitFixed: number;
   roundCents: number | null;
+  minimumProfit?: number | null;
 }) {
   const buyPrice = Math.max(0, normalizeNumber(input.buyPrice));
   const feesPercent = Math.max(0, normalizeNumber(input.feesPercent));
   const feesFixed = Math.max(0, normalizeNumber(input.feesFixed));
   const profitPercent = Math.max(0, normalizeNumber(input.profitPercent));
-  const profitFixed = normalizeNumber(input.profitFixed);
+  let profitFixed = normalizeNumber(input.profitFixed);
+  const minimumProfit = Math.max(0, normalizeNumber(input.minimumProfit));
+
+  const estimatedProfit = (buyPrice * profitPercent) / 100 + profitFixed;
+  if (minimumProfit > 0 && estimatedProfit < minimumProfit) {
+    profitFixed = minimumProfit - (buyPrice * profitPercent) / 100;
+  }
+
   const totalPercent = (feesPercent + profitPercent) / 100;
   const numerator = buyPrice + feesFixed + profitFixed;
 

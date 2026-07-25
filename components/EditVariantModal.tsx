@@ -37,6 +37,7 @@ interface SupplierPricingDefaults {
   feesFixed: number;
   profitPercent: number;
   profitFixed: number;
+  minimumProfit: number;
 }
 
 interface VariantFormState {
@@ -48,6 +49,7 @@ interface VariantFormState {
   feesFixed: string;
   profitPercent: string;
   profitFixed: string;
+  minimumProfit: string;
   promotedAdPercent: string;
   sellPrice: string;
   quantity: string;
@@ -94,6 +96,7 @@ function recalculateSellPriceForState(next: VariantFormState) {
     profitPercent: toNumber(next.profitPercent),
     profitFixed: toNumber(next.profitFixed),
     roundCents: next.roundCentsEnabled ? 0.99 : null,
+    minimumProfit: toNumber(next.minimumProfit),
   });
 
   return {
@@ -131,6 +134,7 @@ function buildFormState(props: {
       feesFixed: String(variant.feesFixed),
       profitPercent: String(variant.profitPercent),
       profitFixed: String(variant.profitFixed),
+      minimumProfit: String(pricingDefaults?.minimumProfit ?? 0),
       promotedAdPercent: String(variant.promotedAdPercent ?? 0),
       sellPrice: variant.sellPrice,
       quantity: String(
@@ -160,6 +164,7 @@ function buildFormState(props: {
     feesFixed: String(pricingDefaults?.feesFixed ?? 0),
     profitPercent: String(pricingDefaults?.profitPercent ?? 0),
     profitFixed: String(pricingDefaults?.profitFixed ?? 0),
+    minimumProfit: String(pricingDefaults?.minimumProfit ?? 0),
     promotedAdPercent: "0",
     sellPrice: toMoneyString(defaultBuyPrice),
     quantity: String(
@@ -261,6 +266,7 @@ export default function EditVariantModal({
           fixedFeeAmount?: number;
           additionalProfitPercent?: number;
           additionalProfitFixed?: number;
+          minimumProfit?: number;
         };
 
         if (cancelled) {
@@ -272,6 +278,7 @@ export default function EditVariantModal({
           feesFixed: toFiniteNumber(data.fixedFeeAmount),
           profitPercent: toFiniteNumber(data.additionalProfitPercent),
           profitFixed: toFiniteNumber(data.additionalProfitFixed),
+          minimumProfit: toFiniteNumber(data.minimumProfit),
         };
 
         pricingDefaultsRef.current = nextDefaults;
