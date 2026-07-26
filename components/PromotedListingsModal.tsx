@@ -2,6 +2,10 @@
 
 import { useEffect, useMemo, useState } from "react";
 import ActionProgressBar from "@/components/ActionProgressBar";
+import {
+  getPromotedListingProfitPreview,
+  type PromotedListingProfitProduct,
+} from "@/lib/promoted-listing-profit";
 import { normalizePromotedAdRate } from "@/lib/promoted-listings";
 
 export type PromotedListingsJob = {
@@ -32,6 +36,7 @@ type Campaign = {
 type Props = {
   open: boolean;
   selectedProductIds: string[];
+  selectedProducts: PromotedListingProfitProduct[];
   job: PromotedListingsJob | null;
   onClose: () => void;
   onJobStarted: (job: PromotedListingsJob) => void;
@@ -46,9 +51,15 @@ function isActiveJob(job: PromotedListingsJob | null) {
   return job?.status === "QUEUED" || job?.status === "RUNNING";
 }
 
+function formatAud(value: number) {
+  const sign = value < 0 ? "-" : "";
+  return `${sign}A$${Math.abs(value).toFixed(2)}`;
+}
+
 export default function PromotedListingsModal({
   open,
   selectedProductIds,
+  selectedProducts,
   job,
   onClose,
   onJobStarted,
@@ -72,6 +83,15 @@ export default function PromotedListingsModal({
   );
   const unsupportedCampaigns = campaigns.filter((campaign) => !campaign.supported);
   const active = isActiveJob(job);
+  const rate = normalizePromotedAdRate(bidPercentage);
+  const validRate = rate !== null;
+  const profitPreview = useMemo(
+    () =>
+      rate === null
+        ? null
+        : getPromotedListingProfitPreview(selectedProducts, rate),
+    [rate, selectedProducts],
+  );
 
   useEffect(() => {
     if (!open || active) return;
@@ -122,8 +142,6 @@ export default function PromotedListingsModal({
 
   if (!open) return null;
 
-  const rate = normalizePromotedAdRate(bidPercentage);
-  const validRate = rate !== null;
   const validCampaign =
     operation === "REMOVE" ||
     (campaignMode === "EXISTING" ? Boolean(campaignId) : campaignName.trim().length > 0);
@@ -326,6 +344,136 @@ export default function PromotedListingsModal({
                       </span>
                     )}
                   </label>
+
+                  {profitPreview && (
+                    <section
+                      aria-label="Promotion profit impact"
+                      className="rounded-lg border border-blue-200 bg-blue-50/60 p-4"
+                    >
+                      <div>
+                        <h3 className="text-sm font-semibold text-gray-900">
+                          Profit impact if eBay attributes a sale
+                        </h3>
+                        <p className="mt-1 text-xs text-gray-600">
+                          Calculated from the selected listings&apos; current buy price,
+                          sell price, and standard fees at a {rate?.toFixed(1)}% ad rate.
+                          {profitPreview.rows.length > 1
+                            ? " Totals illustrate one sale at each shown price."
+                            : ""}
+                        </p>
+                      </div>
+
+                      {profitPreview.rows.length > 0 ? (
+                        <>
+                          <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                            <div
+                              className={`rounded-md border p-3 ${
+                                profitPreview.profitBeforeAdFee < 0
+                                  ? "border-red-200 bg-red-50"
+                                  : "border-gray-200 bg-white"
+                              }`}
+                            >
+                              <p className="text-[11px] font-medium uppercase tracking-wide text-gray-500">
+                                Profit before ad fee
+                              </p>
+                              <p
+                                className={`mt-1 text-base font-semibold ${
+                                  profitPreview.profitBeforeAdFee < 0
+                                    ? "text-red-700"
+                                    : "text-gray-900"
+                                }`}
+                              >
+                                {formatAud(profitPreview.profitBeforeAdFee)}
+                              </p>
+                            </div>
+                            <div className="rounded-md border border-amber-200 bg-amber-50 p-3">
+                              <p className="text-[11px] font-medium uppercase tracking-wide text-amber-700">
+                                Potential ad fee
+                              </p>
+                              <p className="mt-1 text-base font-semibold text-amber-900">
+                                -{formatAud(profitPreview.potentialAdFee)}
+                              </p>
+                            </div>
+                            <div
+                              className={`rounded-md border p-3 ${
+                                profitPreview.profitAfterAdFee < 0
+                                  ? "border-red-300 bg-red-50"
+                                  : "border-emerald-200 bg-emerald-50"
+                              }`}
+                            >
+                              <p
+                                className={`text-[11px] font-medium uppercase tracking-wide ${
+                                  profitPreview.profitAfterAdFee < 0
+                                    ? "text-red-700"
+                                    : "text-emerald-700"
+                                }`}
+                              >
+                                Profit after ad fee
+                              </p>
+                              <p
+                                className={`mt-1 text-base font-semibold ${
+                                  profitPreview.profitAfterAdFee < 0
+                                    ? "text-red-800"
+                                    : "text-emerald-900"
+                                }`}
+                              >
+                                {formatAud(profitPreview.profitAfterAdFee)}
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="mt-3 max-h-40 overflow-y-auto rounded-md border border-gray-200 bg-white">
+                            {profitPreview.rows.map((row) => (
+                              <div
+                                key={`${row.productId}-${row.variantId ?? "product"}`}
+                                className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-gray-100 px-3 py-2 text-xs last:border-b-0"
+                              >
+                                <div className="min-w-0">
+                                  <p className="truncate font-medium text-gray-800">
+                                    {row.productTitle}
+                                  </p>
+                                  {row.variantTitle &&
+                                    row.variantTitle !== row.productTitle && (
+                                      <p className="truncate text-gray-500">
+                                        {row.variantTitle}
+                                      </p>
+                                    )}
+                                </div>
+                                <div className="text-right">
+                                  <p className="text-amber-700">
+                                    Fee -{formatAud(row.potentialAdFee)}
+                                  </p>
+                                  <p
+                                    className={
+                                      row.profitAfterAdFee < 0
+                                        ? "font-semibold text-red-700"
+                                        : "font-semibold text-emerald-700"
+                                    }
+                                  >
+                                    After {formatAud(row.profitAfterAdFee)}
+                                  </p>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </>
+                      ) : (
+                        <p className="mt-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                          A profit preview is unavailable because the selected listings
+                          do not have complete buy and sell prices.
+                        </p>
+                      )}
+
+                      {profitPreview.unpricedProductCount > 0 &&
+                        profitPreview.rows.length > 0 && (
+                          <p className="mt-2 text-xs text-amber-700">
+                            {profitPreview.unpricedProductCount} selected listing
+                            {profitPreview.unpricedProductCount === 1 ? " is" : "s are"} excluded
+                            because pricing is incomplete.
+                          </p>
+                        )}
+                    </section>
+                  )}
 
                   {unsupportedCampaigns.length > 0 && (
                     <p className="text-xs text-gray-500">

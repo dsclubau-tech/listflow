@@ -76,6 +76,19 @@ export function calculateTotalFees(input: {
   return roundMoney((sellPrice * feesPercent) / 100 + feesFixed);
 }
 
+export function calculatePromotedAdFee(input: {
+  sellPrice: number;
+  promotedAdPercent: number;
+}) {
+  const sellPrice = Math.max(0, normalizeNumber(input.sellPrice));
+  const promotedAdPercent = Math.max(
+    0,
+    normalizeNumber(input.promotedAdPercent),
+  );
+
+  return roundMoney((sellPrice * promotedAdPercent) / 100);
+}
+
 export function calculateNetProfit(input: {
   buyPrice: number;
   sellPrice: number;
@@ -85,16 +98,15 @@ export function calculateNetProfit(input: {
 }) {
   const buyPrice = Math.max(0, normalizeNumber(input.buyPrice));
   const sellPrice = Math.max(0, normalizeNumber(input.sellPrice));
-  const promotedAdPercent = Math.max(
-    0,
-    normalizeNumber(input.promotedAdPercent),
-  );
   const totalFees = calculateTotalFees({
     sellPrice,
     feesPercent: input.feesPercent,
     feesFixed: input.feesFixed,
   });
-  const promotedAdFee = roundMoney((sellPrice * promotedAdPercent) / 100);
+  const promotedAdFee = calculatePromotedAdFee({
+    sellPrice,
+    promotedAdPercent: input.promotedAdPercent ?? 0,
+  });
 
   return roundMoney(sellPrice - buyPrice - totalFees - promotedAdFee);
 }

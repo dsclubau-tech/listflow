@@ -204,7 +204,11 @@ export default function ProductVariantsEditor({
                     <td className="px-4 py-3 text-gray-900">
                       ${toNumber(variant.sellPrice).toFixed(2)}
                     </td>
-                    <td className="px-4 py-3 text-gray-900">
+                    <td
+                      className={`px-4 py-3 font-medium ${
+                        totalProfit < 0 ? "text-red-700" : "text-gray-900"
+                      }`}
+                    >
                       ${totalProfit.toFixed(2)}
                     </td>
                     <td className="px-4 py-3">

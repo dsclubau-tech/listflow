@@ -159,7 +159,10 @@ export async function POST(request: Request) {
         emit({ phase: "Reading eBay promoted campaigns", percent: 15 });
 
         const storeNumber = await getStoreNumber(storeSession.storeId);
-        const promotedByListingId = await getEbayPromotedListingSync(storeNumber);
+        const promotedByListingId = await getEbayPromotedListingSync(
+          storeNumber,
+          listedProducts.map((product) => String(product.ebayItemId ?? "").trim()),
+        );
 
         const updatePhase = scopedProductIds
           ? "Updating selected ListFlow ad status"

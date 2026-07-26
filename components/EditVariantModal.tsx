@@ -333,6 +333,7 @@ export default function EditVariantModal({
     feesPercent: toNumber(form.feesPercent),
     feesFixed: toNumber(form.feesFixed),
   });
+  const isNegativeTotalProfit = totalProfit < 0;
   const desiredQuantity = Math.max(0, Math.floor(toNumber(form.quantity)));
   const willResumeOnSave = isProductOnHold && desiredQuantity > 0;
 
@@ -554,14 +555,32 @@ export default function EditVariantModal({
                 </div>
               </div>
 
-              <div className="rounded-xl bg-emerald-50 px-4 py-3 text-right">
-                <p className="text-xs font-medium uppercase tracking-wide text-emerald-700">
+              <div
+                className={`rounded-xl border px-4 py-3 text-right ${
+                  isNegativeTotalProfit
+                    ? "border-red-200 bg-red-50"
+                    : "border-emerald-200 bg-emerald-50"
+                }`}
+              >
+                <p
+                  className={`text-xs font-medium uppercase tracking-wide ${
+                    isNegativeTotalProfit ? "text-red-700" : "text-emerald-700"
+                  }`}
+                >
                   Total Profit
                 </p>
-                <p className="text-xl font-semibold text-emerald-900">
+                <p
+                  className={`text-xl font-semibold ${
+                    isNegativeTotalProfit ? "text-red-800" : "text-emerald-900"
+                  }`}
+                >
                   ${totalProfit.toFixed(2)}
                 </p>
-                <p className="text-xs text-emerald-800">
+                <p
+                  className={`text-xs ${
+                    isNegativeTotalProfit ? "text-red-700" : "text-emerald-800"
+                  }`}
+                >
                   Fees ${totalFees.toFixed(2)}
                 </p>
               </div>

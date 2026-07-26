@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { getZipcodeLocationText } from "@/lib/ebay-location";
 import { calculateSellPrice } from "@/lib/variant-pricing";
 import { PostcodeAutocomplete } from "@/components/PostcodeAutocomplete";
 
@@ -496,7 +495,13 @@ export default function SupplierSettingsTab() {
                 </div>
                 <div className="bg-green-50 px-4 py-3 flex-1 border-l border-gray-200">
                   <div className="font-medium text-green-700">Profits</div>
-                  <div className="text-green-800 mt-0.5">A${pricingCalc.profit.toFixed(2)}</div>
+                  <div
+                    className={`mt-0.5 ${
+                      pricingCalc.profit < 0 ? "text-red-700" : "text-green-800"
+                    }`}
+                  >
+                    A${pricingCalc.profit.toFixed(2)}
+                  </div>
                 </div>
                 <div className="bg-orange-50 px-4 py-3 flex-1 border-l border-gray-200">
                   <div className="font-medium text-orange-700">{settings.ebayFeePercent}% Fees</div>

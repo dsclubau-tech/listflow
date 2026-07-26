@@ -424,6 +424,10 @@ export default function ProductsPageClient({
     () => getSelectedPriceCheckSummary(products, selectedProductIds),
     [products, selectedProductIds]
   );
+  const selectedProducts = useMemo(() => {
+    const selectedIds = new Set(selectedProductIds);
+    return products.filter((product) => selectedIds.has(product.id));
+  }, [products, selectedProductIds]);
   const selectedHasNoEligiblePriceChecks =
     selectedProductIds.length > 0 && selectedPriceCheckSummary.eligibleCount === 0;
   const listingCountLabel =
@@ -2147,6 +2151,7 @@ export default function ProductsPageClient({
       <PromotedListingsModal
         open={isPromotedListingsOpen}
         selectedProductIds={selectedProductIds}
+        selectedProducts={selectedProducts}
         job={promotedListingsJob}
         onClose={() => setIsPromotedListingsOpen(false)}
         onJobStarted={(job) => applyPromotedListingsJob(job)}

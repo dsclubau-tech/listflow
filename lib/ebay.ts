@@ -19,6 +19,11 @@ import {
   waitForEbayRateLimit,
   type EbayRateLimitKind,
 } from "@/lib/ebay-rate-limit";
+import {
+  buildEbayMarketingHeaders,
+  EBAY_MARKETPLACE_ID,
+  resolveEbayPromotedBidPercentage,
+} from "@/lib/ebay-marketing";
 
 const isProduction = process.env.EBAY_ENVIRONMENT === "production";
 
@@ -27,6 +32,7 @@ export const EBAY_API_BASE_URL = isProduction
   : "https://api.sandbox.ebay.com";
 
 export const EBAY_API_ENDPOINT = `${EBAY_API_BASE_URL}/ws/api.dll`;
+export { EBAY_MARKETPLACE_ID } from "@/lib/ebay-marketing";
 
 export const ebayConfig = {
   baseUrl: EBAY_API_BASE_URL,
@@ -516,12 +522,7 @@ async function fetchEbayMarketingJson<T>(
   const storeId = await waitForStoreEbayLimit(storeNumber, "BROWSE");
   const response = await fetch(url, {
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      ...extraHeaders,
-    },
+    headers: buildEbayMarketingHeaders(accessToken, extraHeaders),
   });
   const responseText = await response.text();
 
@@ -585,12 +586,10 @@ async function sendEbayMarketingRequest(
   const storeId = await waitForStoreEbayLimit(storeNumber, "TRADING");
   const response = await fetch(url, {
     ...init,
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      ...(init.headers ?? {}),
-    },
+    headers: buildEbayMarketingHeaders(
+      accessToken,
+      init.headers as Record<string, string> | undefined,
+    ),
   });
   const responseText = await response.text();
 
@@ -626,6 +625,57 @@ async function sendEbayMarketingRequest(
   return { response, responseText };
 }
 
+function normalizeEbayGeneralCampaign(
+  campaign: EbayMarketingCampaign,
+): EbayGeneralCampaignOption | null {
+  const campaignId = String(campaign.campaignId ?? "").trim();
+  if (!campaignId) {
+    return null;
+  }
+
+  const marketplaceId = String(
+    campaign.marketplaceId ?? EBAY_MARKETPLACE_ID,
+  ).toUpperCase();
+  if (marketplaceId !== EBAY_MARKETPLACE_ID) {
+    return null;
+  }
+
+  const fundingModel = String(
+    campaign.fundingStrategy?.fundingModel ?? "",
+  ).toUpperCase();
+  if (fundingModel && fundingModel !== "COST_PER_SALE") {
+    return null;
+  }
+
+  const declaredStrategy = normalizePromotedRateStrategy(
+    campaign.fundingStrategy?.adRateStrategy,
+  );
+  const bidPercentage = parseBidPercentage(
+    campaign.fundingStrategy?.bidPercentage ?? campaign.bidPercentage,
+  );
+  const campaignStatus = String(
+    campaign.campaignStatus ?? "UNKNOWN",
+  ).toUpperCase();
+
+  return {
+    campaignId,
+    campaignName: String(campaign.campaignName ?? campaignId).trim(),
+    campaignStatus,
+    marketplaceId,
+    startDate: typeof campaign.startDate === "string" ? campaign.startDate : null,
+    endDate: typeof campaign.endDate === "string" ? campaign.endDate : null,
+    rateStrategy:
+      declaredStrategy === "UNKNOWN" && bidPercentage !== null
+        ? "FIXED"
+        : declaredStrategy,
+    bidPercentage,
+    supported:
+      (declaredStrategy === "FIXED" ||
+        (declaredStrategy === "UNKNOWN" && bidPercentage !== null)) &&
+      ["RUNNING", "SCHEDULED", "PENDING"].includes(campaignStatus),
+  };
+}
+
 async function getEbayGeneralAdCampaigns(
   storeNumber: 1 | 2 | 3,
   accessToken: string,
@@ -652,45 +702,10 @@ async function getEbayGeneralAdCampaigns(
     const pageCampaigns = data.campaigns ?? data.adCampaigns ?? [];
 
     for (const campaign of pageCampaigns) {
-      const campaignId = String(campaign.campaignId ?? "").trim();
-      if (!campaignId) {
-        continue;
+      const normalized = normalizeEbayGeneralCampaign(campaign);
+      if (normalized) {
+        campaigns.push(normalized);
       }
-
-      const fundingModel = String(
-        campaign.fundingStrategy?.fundingModel ?? "",
-      ).toUpperCase();
-      if (fundingModel && fundingModel !== "COST_PER_SALE") {
-        continue;
-      }
-
-      const declaredStrategy = normalizePromotedRateStrategy(
-        campaign.fundingStrategy?.adRateStrategy,
-      );
-      const bidPercentage = parseBidPercentage(
-        campaign.fundingStrategy?.bidPercentage ?? campaign.bidPercentage,
-      );
-
-      campaigns.push({
-        campaignId,
-        campaignName: String(campaign.campaignName ?? campaignId).trim(),
-        campaignStatus: String(campaign.campaignStatus ?? "UNKNOWN").toUpperCase(),
-        marketplaceId: String(campaign.marketplaceId ?? "EBAY_AU").toUpperCase(),
-        startDate:
-          typeof campaign.startDate === "string" ? campaign.startDate : null,
-        endDate: typeof campaign.endDate === "string" ? campaign.endDate : null,
-        rateStrategy:
-          declaredStrategy === "UNKNOWN" && bidPercentage !== null
-            ? "FIXED"
-            : declaredStrategy,
-        bidPercentage,
-        supported:
-          (declaredStrategy === "FIXED" ||
-            (declaredStrategy === "UNKNOWN" && bidPercentage !== null)) &&
-          ["RUNNING", "SCHEDULED", "PENDING"].includes(
-            String(campaign.campaignStatus ?? "").toUpperCase(),
-          ),
-      });
     }
 
     const total = typeof data.total === "number" ? data.total : null;
@@ -711,6 +726,48 @@ export async function getEbayGeneralCampaignOptions(
   return getEbayGeneralAdCampaigns(storeNumber, accessToken, null);
 }
 
+export async function getEbayGeneralCampaign(
+  storeNumber: 1 | 2 | 3,
+  campaignId: string,
+) {
+  const accessToken = await getOAuthAccessToken(storeNumber);
+  const url = new URL(
+    `${EBAY_API_BASE_URL}/sell/marketing/v1/ad_campaign/${encodeURIComponent(campaignId)}`,
+  );
+  const campaign = await fetchEbayMarketingJson<EbayMarketingCampaign>(
+    storeNumber,
+    accessToken,
+    url,
+  );
+  return normalizeEbayGeneralCampaign(campaign);
+}
+
+export async function endEbayGeneralCampaign(
+  storeNumber: 1 | 2 | 3,
+  campaignId: string,
+) {
+  const accessToken = await getOAuthAccessToken(storeNumber);
+  const url = new URL(
+    `${EBAY_API_BASE_URL}/sell/marketing/v1/ad_campaign/${encodeURIComponent(campaignId)}/end`,
+  );
+  await sendEbayMarketingRequest(storeNumber, accessToken, url, {
+    method: "POST",
+  });
+}
+
+export async function deleteEbayGeneralCampaign(
+  storeNumber: 1 | 2 | 3,
+  campaignId: string,
+) {
+  const accessToken = await getOAuthAccessToken(storeNumber);
+  const url = new URL(
+    `${EBAY_API_BASE_URL}/sell/marketing/v1/ad_campaign/${encodeURIComponent(campaignId)}`,
+  );
+  await sendEbayMarketingRequest(storeNumber, accessToken, url, {
+    method: "DELETE",
+  });
+}
+
 export async function getEbayPromotedListingsEligibility(
   storeNumber: 1 | 2 | 3,
 ) {
@@ -725,9 +782,7 @@ export async function getEbayPromotedListingsEligibility(
       status?: string;
       reason?: string;
     }>;
-  }>(storeNumber, accessToken, url, {
-    "X-EBAY-C-MARKETPLACE-ID": "EBAY_AU",
-  });
+  }>(storeNumber, accessToken, url);
   const eligibility = data.advertisingEligibility?.find(
     (entry) => entry.programType === "PROMOTED_LISTINGS_STANDARD",
   );
@@ -774,10 +829,11 @@ async function getEbayAdsForCampaign(
       }
 
       const adBidPercentage = parseBidPercentage(ad.bidPercentage);
-      const fixedBidPercentage =
-        campaign.rateStrategy === "FIXED"
-          ? adBidPercentage ?? campaign.bidPercentage
-          : null;
+      const fixedBidPercentage = resolveEbayPromotedBidPercentage(
+        campaign.rateStrategy,
+        adBidPercentage,
+        campaign.bidPercentage,
+      );
 
       ads.push({
         listingId,
@@ -823,9 +879,39 @@ function shouldReplacePromotedRecord(
 
 export async function getEbayPromotedListingSync(
   storeNumber: 1 | 2 | 3,
+  listingIds: string[] = [],
 ): Promise<Map<string, EbayPromotedListingSyncRecord>> {
   const accessToken = await getOAuthAccessToken(storeNumber);
-  const campaigns = await getEbayGeneralAdCampaigns(storeNumber, accessToken);
+  let campaigns = await getEbayGeneralAdCampaigns(storeNumber, accessToken);
+  let usedListingFallback = false;
+
+  if (campaigns.length === 0 && listingIds.length > 0) {
+    const campaignsById = new Map<string, EbayGeneralCampaignOption>();
+
+    for (const listingId of new Set(listingIds.map((id) => id.trim()).filter(Boolean))) {
+      const url = new URL(
+        `${EBAY_API_BASE_URL}/sell/marketing/v1/ad_campaign/find_campaign_by_ad_reference`,
+      );
+      url.searchParams.set("listing_id", listingId);
+
+      const data = await fetchEbayMarketingJson<EbayMarketingCampaignResponse>(
+        storeNumber,
+        accessToken,
+        url,
+      );
+
+      for (const campaign of data.campaigns ?? data.adCampaigns ?? []) {
+        const normalized = normalizeEbayGeneralCampaign(campaign);
+        if (normalized?.campaignStatus === "RUNNING") {
+          campaignsById.set(normalized.campaignId, normalized);
+        }
+      }
+    }
+
+    campaigns = Array.from(campaignsById.values());
+    usedListingFallback = true;
+  }
+
   const promotedByListingId = new Map<string, EbayPromotedListingSyncRecord>();
 
   for (const campaign of campaigns) {
@@ -843,6 +929,7 @@ export async function getEbayPromotedListingSync(
     storeNumber,
     campaignCount: campaigns.length,
     listingCount: promotedByListingId.size,
+    usedListingFallback,
   });
 
   return promotedByListingId;
@@ -933,7 +1020,7 @@ export async function createEbayGeneralCampaign(
       body: JSON.stringify({
         campaignName: input.campaignName,
         startDate,
-        marketplaceId: "EBAY_AU",
+        marketplaceId: EBAY_MARKETPLACE_ID,
         fundingStrategy: {
           fundingModel: "COST_PER_SALE",
           adRateStrategy: "FIXED",

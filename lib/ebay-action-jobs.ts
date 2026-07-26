@@ -25,7 +25,7 @@ import {
   createEbayGeneralCampaign,
   createEbayPromotedAds,
   deleteEbayPromotedAds,
-  getEbayGeneralCampaignOptions,
+  getEbayGeneralCampaign,
   getEbayPromotedListingSync,
   getEbayPromotedListingsEligibility,
   getStoreNumber,
@@ -511,7 +511,10 @@ async function runPromotedAdsJob(job: EbayActionJobRecord) {
       );
     }
 
-    const livePromotions = await getEbayPromotedListingSync(storeNumber);
+    const livePromotions = await getEbayPromotedListingSync(
+      storeNumber,
+      eligibleProducts.map((product) => String(product.ebayItemId)),
+    );
 
     if (metadata.operation === "REMOVE") {
       const grouped = new Map<string, typeof eligibleProducts>();
@@ -598,10 +601,9 @@ async function runPromotedAdsJob(job: EbayActionJobRecord) {
       });
       job.metadata = updatedJob.metadata;
     } else {
-      const campaigns = await getEbayGeneralCampaignOptions(storeNumber);
-      const campaign = campaigns.find(
-        (candidate) => candidate.campaignId === targetCampaignId,
-      );
+      const campaign = targetCampaignId
+        ? await getEbayGeneralCampaign(storeNumber, targetCampaignId)
+        : null;
       if (!campaign || !campaign.supported || campaign.rateStrategy !== "FIXED") {
         throw new Error("The selected eBay campaign is unavailable or is not fixed-rate.");
       }

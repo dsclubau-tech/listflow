@@ -940,6 +940,7 @@ type DescriptionBlock =
   | { type: "heading"; html: string }
   | { type: "paragraph"; html: string }
   | { type: "list"; items: string[] }
+  | { type: "faq"; question: string; answer: string }
   | { type: "image"; src: string; alt: string };
 
 const DESCRIPTION_INLINE_TAGS = new Set(["b", "strong", "i", "em", "br"]);
@@ -1019,10 +1020,54 @@ function getDescriptionImageSource(image: CheerioSelection) {
   );
 }
 
+function normalizeDescriptionImageUrl(value: string) {
+  const productImageUrl = normalizeProductImageUrl(value);
+  if (productImageUrl) {
+    return productImageUrl;
+  }
+
+  const raw = value
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&amp;/gi, "&")
+    .replace(/\\u0026/gi, "&")
+    .replace(/\\\//g, "/")
+    .trim();
+
+  try {
+    const url = new URL(raw);
+    const isAmazonImageHost =
+      /(^|\.)media-amazon\.com$/i.test(url.hostname) ||
+      /(^|\.)ssl-images-amazon\.com$/i.test(url.hostname);
+    const isAplusMedia =
+      /^\/images\/S\/aplus-media-library-service-media\//i.test(url.pathname) ||
+      /^\/images\/G\/.*\/aplus/i.test(url.pathname);
+
+    if (
+      !["http:", "https:"].includes(url.protocol) ||
+      !isAmazonImageHost ||
+      !isAplusMedia ||
+      /play-button|play_icon|spinner|loading|transparent|pixel|grey-pixel|sprite|video/i.test(
+        url.toString(),
+      )
+    ) {
+      return "";
+    }
+
+    url.hash = "";
+    url.search = "";
+    return url.toString();
+  } catch {
+    return "";
+  }
+}
+
 function collectDescriptionBlocks($: CheerioAPI) {
   const blocks: DescriptionBlock[] = [];
   const seenText = new Set<string>();
   const seenImages = new Set<string>();
+  const seenFaqs = new Set<string>();
+  let hasFaqHeading = false;
 
   function pushText(
     type: "heading" | "paragraph",
@@ -1082,7 +1127,7 @@ function collectDescriptionBlocks($: CheerioAPI) {
     }
 
     const src = getDescriptionImageSource(image);
-    const normalizedImage = normalizeImageUrl(normalizeText(src));
+    const normalizedImage = normalizeDescriptionImageUrl(normalizeText(src));
     if (
       !normalizedImage ||
       !/amazon|ssl-images/i.test(normalizedImage) ||
@@ -1096,6 +1141,33 @@ function collectDescriptionBlocks($: CheerioAPI) {
       type: "image",
       src: normalizedImage,
       alt: normalizeText(image.attr("alt")),
+    });
+  }
+
+  function pushFaq(item: CheerioSelection) {
+    const questionElement = item.find(".aplus-question").first();
+    const answerElement = item.find(".aplus-answer").first();
+    const questionText = normalizeText(questionElement.text());
+    const answerText = normalizeText(answerElement.text());
+    const key = `${questionText.toLowerCase()}:${answerText.toLowerCase()}`;
+
+    if (!questionText || !answerText || seenFaqs.has(key)) {
+      return;
+    }
+
+    seenFaqs.add(key);
+    if (!hasFaqHeading) {
+      blocks.push({ type: "heading", html: "Frequently Asked Questions" });
+      hasFaqHeading = true;
+    }
+
+    blocks.push({
+      type: "faq",
+      question:
+        sanitizeDescriptionInlineHtml($, questionElement) ||
+        escapeHtml(questionText),
+      answer:
+        sanitizeDescriptionInlineHtml($, answerElement) || escapeHtml(answerText),
     });
   }
 
@@ -1113,12 +1185,21 @@ function collectDescriptionBlocks($: CheerioAPI) {
   }
 
   const productDescriptionRoot = $("#productDescription").first();
-  const embeddedAplusRoot = $("#aplus").first();
-  const aplusRoot = embeddedAplusRoot.find(
-    "h1, h2, h3, h4, h5, h6, p, li, img, .a-size-base, .aplus-description",
-  ).length
+  const aplusContentSelector =
+    "h1, h2, h3, h4, h5, h6, p, li, img, .a-size-base, .aplus-description, .premium-module-11-faq .faq-block";
+  const aplusFeatureRoot = $("#aplus_feature_div").first();
+  const embeddedAplusRoot = aplusFeatureRoot.find("#aplus").first();
+  const standaloneAplusRoot = $("#aplus")
+    .filter(
+      (_, element) =>
+        $(element).closest("#aplusBrandStory_feature_div").length === 0,
+    )
+    .first();
+  const aplusRoot = embeddedAplusRoot.find(aplusContentSelector).length
     ? embeddedAplusRoot
-    : $("#aplus_feature_div").first();
+    : aplusFeatureRoot.find(aplusContentSelector).length
+      ? aplusFeatureRoot
+      : standaloneAplusRoot;
   const descriptionCandidates: Array<{
     root: CheerioSelection;
     rootSelector: string;
@@ -1132,8 +1213,7 @@ function collectDescriptionBlocks($: CheerioAPI) {
     {
       root: aplusRoot,
       rootSelector: aplusRoot.is("#aplus") ? "#aplus" : "#aplus_feature_div",
-      selector:
-        "h1, h2, h3, h4, h5, h6, p, li, img, .a-size-base, .aplus-description",
+      selector: aplusContentSelector,
     },
   ];
   const hasProductDescription = descriptionCandidates.some(
@@ -1159,6 +1239,27 @@ function collectDescriptionBlocks($: CheerioAPI) {
       root.find(selector).each((_, item) => {
         const candidate = $(item);
 
+        if (candidate.closest("#aplusBrandStory_feature_div").length > 0) {
+          return;
+        }
+
+        if (
+          candidate.closest(".premium-module-11-faq .faq-block").length > 0 &&
+          !candidate.is(".faq-block")
+        ) {
+          return;
+        }
+
+        if (candidate.is(".premium-module-11-faq .faq-block")) {
+          pushFaq(candidate);
+          return;
+        }
+
+        if (candidate.is("img")) {
+          pushImage(candidate);
+          return;
+        }
+
         if (
           candidate.parentsUntil(rootSelector).is("p, li, h1, h2, h3, h4, h5, h6") ||
           candidate.is(".a-size-base, .aplus-description") &&
@@ -1167,9 +1268,7 @@ function collectDescriptionBlocks($: CheerioAPI) {
           return;
         }
 
-        if (candidate.is("img")) {
-          pushImage(candidate);
-        } else if (candidate.is("li")) {
+        if (candidate.is("li")) {
           pushList([candidate]);
         } else if (candidate.is("h1, h2, h3, h4, h5, h6")) {
           pushText("heading", candidate);
@@ -1210,6 +1309,10 @@ export function renderAmazonDescription($: CheerioAPI) {
               `<div style="margin:0 0 8px;padding-left:18px;text-indent:-18px;font-size:16px;line-height:1.8;color:#333;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">&#8226; ${item}</div>`
           )
           .join("")}</div>`;
+      }
+
+      if (block.type === "faq") {
+        return `<div style="margin:0 0 16px;padding:14px 16px;border:1px solid #e5e7eb;border-radius:6px;"><div style="margin:0 0 6px;font-size:16px;font-weight:700;line-height:1.5;color:#111;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${block.question}</div><div style="margin:0;font-size:16px;line-height:1.7;color:#333;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${block.answer}</div></div>`;
       }
 
       return `<div style="margin:18px 0;text-align:center;"><img src="${escapeHtml(

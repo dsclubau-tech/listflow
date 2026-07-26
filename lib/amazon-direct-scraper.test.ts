@@ -420,6 +420,92 @@ test("renderAmazonDescription imports whichever requested Amazon section is avai
   assert.equal(renderAmazonDescription(load("<main>No source sections</main>")), "");
 });
 
+test("renderAmazonDescription prefers Product Description over duplicate brand-story A+ and renders collapsed FAQs", async () => {
+  const { renderAmazonDescription } = await loadAmazonDirectScraper();
+  const $ = load(`
+    <div id="aplusBrandStory_feature_div">
+      <div id="aplus">
+        <h3>From the brand</h3>
+        <img
+          src="https://m.media-amazon.com/images/I/brand-story._AC_SL1500_.jpg"
+          alt="Brand story"
+        />
+      </div>
+    </div>
+    <div id="aplus_feature_div">
+      <div id="aplus">
+        <div class="aplus-module">
+          <h3>Real product description</h3>
+          <img
+            src="https://images-na.ssl-images-amazon.com/images/G/01/x-locale/common/grey-pixel.gif"
+            data-src="https://m.media-amazon.com/images/S/aplus-media-library-service-media/product-description.__CR0,0,2928,1200_PT0_SX1464_V1___.jpg"
+            alt="Product details"
+          />
+          <img
+            src="https://images-na.ssl-images-amazon.com/images/G/01/x-locale/common/grey-pixel.gif"
+            alt=""
+          />
+          <ul class="aplus-carousel">
+            <li>
+              <img
+                src="https://m.media-amazon.com/images/S/aplus-media-library-service-media/carousel-detail.__CR0,0,2928,1200_PT0_SX1464_V1___.jpg"
+                alt="Carousel product detail"
+              />
+            </li>
+          </ul>
+          <div class="premium-module-11-faq">
+            <ul class="faq-list">
+              <li class="faq-block">
+                <h3>
+                  <span data-faq-question role="button" aria-expanded="false">
+                    <p class="aplus-question">Does it require a subscription?</p>
+                  </span>
+                </h3>
+                <p class="aplus-answer" style="visibility:hidden">
+                  No, local storage and app features are included.
+                </p>
+              </li>
+              <li class="faq-block">
+                <h3>
+                  <span data-faq-question role="button" aria-expanded="false">
+                    <p class="aplus-question">Does it support dual-band Wi-Fi?</p>
+                  </span>
+                </h3>
+                <p class="aplus-answer" style="display:none">
+                  Yes, it supports both 2.4 GHz and 5 GHz networks.
+                </p>
+              </li>
+            </ul>
+            <script>window.initAmazonFaq()</script>
+          </div>
+        </div>
+      </div>
+    </div>
+  `);
+
+  const description = renderAmazonDescription($);
+  const productImageIndex = description.indexOf(
+    "aplus-media-library-service-media/product-description",
+  );
+  const faqIndex = description.indexOf("Frequently Asked Questions");
+
+  assert.match(description, /Real product description/);
+  assert.match(
+    description,
+    /aplus-media-library-service-media\/product-description/,
+  );
+  assert.match(description, /aplus-media-library-service-media\/carousel-detail/);
+  assert.doesNotMatch(description, /From the brand|brand-story\.jpg/);
+  assert.doesNotMatch(description, /grey-pixel\.gif/);
+  assert.match(description, /Frequently Asked Questions/);
+  assert.match(description, /Does it require a subscription\?/);
+  assert.match(description, /No, local storage and app features are included\./);
+  assert.match(description, /Does it support dual-band Wi-Fi\?/);
+  assert.match(description, /Yes, it supports both 2\.4 GHz and 5 GHz networks\./);
+  assert.equal(productImageIndex >= 0 && productImageIndex < faqIndex, true);
+  assert.doesNotMatch(description, /window\.initAmazonFaq|data-faq-question|aria-expanded/);
+});
+
 test("scrapeAmazonProductDirect creates no draft data when both requested description sections are missing", async (t) => {
   const { scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
 

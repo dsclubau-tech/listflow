@@ -285,8 +285,14 @@ function ProfitCell({ product }: { product: SerializedProductRow }) {
     return <span className="text-sm text-gray-400">-</span>;
   }
 
+  const hasNegativeProfit = profits.some((profit) => profit < 0);
+
   return (
-    <span className="block max-w-full whitespace-normal break-words text-sm font-medium leading-5 text-gray-700">
+    <span
+      className={`block max-w-full whitespace-normal break-words text-sm font-medium leading-5 ${
+        hasNegativeProfit ? "text-red-700" : "text-gray-700"
+      }`}
+    >
       {formatMoneyRange(profits)}
     </span>
   );
