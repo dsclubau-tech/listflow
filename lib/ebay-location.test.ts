@@ -5,6 +5,7 @@ import {
   getEbayCountryLabel,
   getZipcodeLocationText,
   resolveEbayLocationMetadata,
+  searchAuPostcodes,
 } from "@/lib/ebay-location";
 
 test("resolves AU supplier postcode to eBay-safe location metadata", () => {
@@ -48,4 +49,13 @@ test("applies location metadata while preserving visible item specifics", () => 
 test("country labels and postcode display use the same mapping as eBay metadata", () => {
   assert.equal(getEbayCountryLabel("AU"), "Australia");
   assert.equal(getZipcodeLocationText("3170", "Australia"), "Mulgrave, VIC");
+  assert.equal(getZipcodeLocationText("2217", "Australia"), "Beverley Park, NSW");
+});
+
+test("searchAuPostcodes returns postcode and suburb suggestions by number or name", () => {
+  const byNumber = searchAuPostcodes("2217");
+  assert.ok(byNumber.some((s) => s.postcode === "2217" && s.allSuburbs.includes("Kogarah")));
+
+  const byName = searchAuPostcodes("Kogarah");
+  assert.ok(byName.some((s) => s.postcode === "2217" && s.suburb === "Kogarah"));
 });

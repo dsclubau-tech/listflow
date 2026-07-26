@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import AsinLink from "@/components/AsinLink";
+import { PostcodeAutocomplete } from "@/components/PostcodeAutocomplete";
 import type { Product, Store, User } from "@/app/generated/prisma/client";
 import type { ScrapedProduct } from "@/components/AddProductModal";
 import {
@@ -2237,11 +2238,12 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
             {/* Default Zipcode */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">Default Zipcode</label>
-              <input
-                type="text"
+              <PostcodeAutocomplete
                 value={defaultZipcode}
-                onChange={(e) => setDefaultZipcode(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                onChange={(pc) => setDefaultZipcode(pc)}
+                country={countryLocation}
+                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500 bg-white"
+                showHint={false}
               />
               <p className="mt-1 text-xs text-gray-500">
                 eBay item location: {resolvedItemLocation}

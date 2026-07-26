@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import ActionProgressBar from "@/components/ActionProgressBar";
+import { PostcodeAutocomplete } from "@/components/PostcodeAutocomplete";
 import type { SerializedProductRow } from "@/types/product-row";
 
 type ToastVariant = "success" | "error";
@@ -705,12 +706,13 @@ export default function BulkEditModal({
               </option>
             ))}
           </select>
-          <input
-            type="text"
+          <PostcodeAutocomplete
             value={item.postalCode}
-            onChange={(event) => updateItem(item.id, { postalCode: event.target.value })}
+            onChange={(pc) => updateItem(item.id, { postalCode: pc })}
+            country={item.location}
             placeholder="Postcode"
-            className="h-10 rounded-md border border-gray-300 px-3 text-sm text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+            className="h-10 w-full rounded-md border border-gray-300 px-3 text-sm text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20 bg-white"
+            showHint={false}
           />
         </div>
       );

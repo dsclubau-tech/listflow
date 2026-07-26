@@ -1,4 +1,20 @@
 import type { ItemSpecificsRecord } from "@/lib/item-specifics";
+import auPostcodesData from "@/data/au-postcodes.json";
+
+type AuPostcodeEntry = {
+  suburbs: string[];
+  state: string;
+};
+
+const AU_POSTCODES = auPostcodesData as Record<string, AuPostcodeEntry>;
+
+export type AuPostcodeSuggestion = {
+  postcode: string;
+  suburb: string;
+  state: string;
+  locationText: string;
+  allSuburbs: string[];
+};
 
 type CountryMetadata = {
   aliases: string[];
@@ -57,16 +73,6 @@ const COUNTRY_METADATA: CountryMetadata[] = [
   },
 ];
 
-const AU_POSTCODE_LOCATIONS: Record<string, string> = {
-  "2000": "Sydney, NSW",
-  "3000": "Melbourne, VIC",
-  "3170": "Mulgrave, VIC",
-  "4000": "Brisbane, QLD",
-  "5000": "Adelaide, SA",
-  "6000": "Perth, WA",
-  "7000": "Hobart, TAS",
-};
-
 function normalizeText(value: unknown) {
   return typeof value === "string" ? value.trim().replace(/\s+/g, " ") : "";
 }
@@ -104,10 +110,57 @@ export function getZipcodeLocationText(
   }
 
   if (metadata.code === "AU") {
-    return AU_POSTCODE_LOCATIONS[normalizedPostalCode] ?? "";
+    // Standardize 4-digit AU postcode formatting with leading zeros if needed
+    const paddedCode = normalizedPostalCode.padStart(4, "0");
+    const entry = AU_POSTCODES[paddedCode] || AU_POSTCODES[normalizedPostalCode];
+    if (entry && entry.suburbs.length > 0) {
+      return `${entry.suburbs[0]}, ${entry.state}`;
+    }
   }
 
   return "";
+}
+
+export function searchAuPostcodes(
+  query: string,
+  limit: number = 8,
+): AuPostcodeSuggestion[] {
+  const cleanQuery = query.trim().toLowerCase();
+  if (!cleanQuery) return [];
+
+  const results: AuPostcodeSuggestion[] = [];
+  const isNumeric = /^\d+$/.test(cleanQuery);
+
+  for (const [postcode, entry] of Object.entries(AU_POSTCODES)) {
+    if (results.length >= limit) break;
+
+    if (isNumeric) {
+      if (postcode.startsWith(cleanQuery)) {
+        results.push({
+          postcode,
+          suburb: entry.suburbs[0],
+          state: entry.state,
+          locationText: `${entry.suburbs[0]}, ${entry.state}`,
+          allSuburbs: entry.suburbs,
+        });
+      }
+    } else {
+      const matchingSuburb = entry.suburbs.find((sub) =>
+        sub.toLowerCase().includes(cleanQuery),
+      );
+      if (matchingSuburb) {
+        results.push({
+          postcode,
+          suburb: matchingSuburb,
+          state: entry.state,
+          locationText: `${matchingSuburb}, ${entry.state}`,
+          allSuburbs: entry.suburbs,
+        });
+      }
+    }
+  }
+
+  return results;
 }
 
 function isCountryOnlyLocation(value: string, metadata: CountryMetadata) {

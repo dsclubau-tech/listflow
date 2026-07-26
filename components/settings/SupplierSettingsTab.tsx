@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { getZipcodeLocationText } from "@/lib/ebay-location";
 import { calculateSellPrice } from "@/lib/variant-pricing";
+import { PostcodeAutocomplete } from "@/components/PostcodeAutocomplete";
 
 interface SupplierSettingsData {
   id: string;
@@ -304,19 +305,11 @@ export default function SupplierSettingsTab() {
                 </div>
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">Default Zipcode</label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      value={settings.defaultZipcode}
-                      onChange={(e) => updateField("defaultZipcode", e.target.value)}
-                      className="flex-1 border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
-                    />
-                    {getZipcodeLocationText(settings.defaultZipcode, settings.defaultCountry) && (
-                      <span className="text-xs text-gray-400">
-                        {getZipcodeLocationText(settings.defaultZipcode, settings.defaultCountry)}
-                      </span>
-                    )}
-                  </div>
+                  <PostcodeAutocomplete
+                    value={settings.defaultZipcode}
+                    onChange={(pc) => updateField("defaultZipcode", pc)}
+                    country={settings.defaultCountry}
+                  />
                 </div>
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">Shipping Methods</label>
@@ -748,14 +741,10 @@ export default function SupplierSettingsTab() {
                   <label className="mb-1 block text-xs text-gray-500">
                     Amazon Delivery Postcode
                   </label>
-                  <input
-                    type="text"
-                    maxLength={6}
+                  <PostcodeAutocomplete
                     value={settings.scrapePostcode}
-                    onChange={(e) =>
-                      updateField("scrapePostcode", e.target.value.replace(/\D/g, ""))
-                    }
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    onChange={(pc) => updateField("scrapePostcode", pc.replace(/\D/g, ""))}
+                    country="Australia"
                     placeholder="e.g. 2217"
                   />
                   <p className="mt-1 text-xs text-gray-400">
