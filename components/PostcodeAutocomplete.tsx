@@ -32,12 +32,15 @@ export function PostcodeAutocomplete({
   const [suggestions, setSuggestions] = useState<AuPostcodeSuggestion[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [selectedLocation, setSelectedLocation] = useState<string>("");
   const containerRef = useRef<HTMLDivElement>(null);
 
   const countryMetadata = getEbayCountryMetadata(country);
   const isAu = countryMetadata.code === "AU";
 
-  const resolvedLocation = isAu ? getZipcodeLocationText(value, country) : "";
+  const resolvedLocation = isAu
+    ? selectedLocation || getZipcodeLocationText(value, country)
+    : "";
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -54,11 +57,12 @@ export function PostcodeAutocomplete({
 
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     const rawVal = e.target.value;
+    setSelectedLocation("");
     const newLoc = isAu ? getZipcodeLocationText(rawVal, country) : "";
     onChange(rawVal, newLoc);
 
     if (isAu && rawVal.trim().length >= 1) {
-      const matches = searchAuPostcodes(rawVal.trim(), 8);
+      const matches = searchAuPostcodes(rawVal.trim(), 25);
       setSuggestions(matches);
       setIsOpen(matches.length > 0);
       setActiveIndex(-1);
@@ -69,6 +73,7 @@ export function PostcodeAutocomplete({
   }
 
   function handleSelectSuggestion(suggestion: AuPostcodeSuggestion) {
+    setSelectedLocation(suggestion.locationText);
     onChange(suggestion.postcode, suggestion.locationText);
     setIsOpen(false);
     setSuggestions([]);
@@ -101,7 +106,7 @@ export function PostcodeAutocomplete({
         onChange={handleInputChange}
         onFocus={() => {
           if (isAu && value.trim().length >= 1) {
-            const matches = searchAuPostcodes(value.trim(), 8);
+            const matches = searchAuPostcodes(value.trim(), 25);
             setSuggestions(matches);
             setIsOpen(matches.length > 0);
           }
@@ -134,14 +139,9 @@ export function PostcodeAutocomplete({
               >
                 <div className="flex items-center gap-2">
                   <span className="font-semibold text-gray-900 w-12">{item.postcode}</span>
-                  <span className="text-gray-800">{item.suburb}</span>
-                  <span className="text-gray-400 text-[10px] uppercase font-mono">{item.state}</span>
+                  <span className="text-gray-800 font-medium">{item.suburb}</span>
                 </div>
-                {item.allSuburbs.length > 1 && (
-                  <span className="text-[10px] text-gray-400 italic">
-                    +{item.allSuburbs.length - 1} more
-                  </span>
-                )}
+                <span className="text-gray-400 text-[10px] uppercase font-mono">{item.state}</span>
               </li>
             );
           })}

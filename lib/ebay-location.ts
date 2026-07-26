@@ -123,7 +123,7 @@ export function getZipcodeLocationText(
 
 export function searchAuPostcodes(
   query: string,
-  limit: number = 8,
+  limit: number = 20,
 ): AuPostcodeSuggestion[] {
   const cleanQuery = query.trim().toLowerCase();
   if (!cleanQuery) return [];
@@ -136,19 +136,34 @@ export function searchAuPostcodes(
 
     if (isNumeric) {
       if (postcode.startsWith(cleanQuery)) {
-        results.push({
-          postcode,
-          suburb: entry.suburbs[0],
-          state: entry.state,
-          locationText: `${entry.suburbs[0]}, ${entry.state}`,
-          allSuburbs: entry.suburbs,
-        });
+        // For exact postcode match or 3-4 digit query, expand all suburbs
+        if (postcode === cleanQuery || cleanQuery.length >= 3) {
+          for (const sub of entry.suburbs) {
+            if (results.length >= limit) break;
+            results.push({
+              postcode,
+              suburb: sub,
+              state: entry.state,
+              locationText: `${sub}, ${entry.state}`,
+              allSuburbs: entry.suburbs,
+            });
+          }
+        } else {
+          results.push({
+            postcode,
+            suburb: entry.suburbs[0],
+            state: entry.state,
+            locationText: `${entry.suburbs[0]}, ${entry.state}`,
+            allSuburbs: entry.suburbs,
+          });
+        }
       }
     } else {
-      const matchingSuburb = entry.suburbs.find((sub) =>
+      const matchingSuburbs = entry.suburbs.filter((sub) =>
         sub.toLowerCase().includes(cleanQuery),
       );
-      if (matchingSuburb) {
+      for (const matchingSuburb of matchingSuburbs) {
+        if (results.length >= limit) break;
         results.push({
           postcode,
           suburb: matchingSuburb,
