@@ -61,6 +61,13 @@ export function resolveLegacyEbayStoreNumber(input: {
     return 3;
   }
 
+  if (
+    /oz[\s_-]*metro/i.test(nameClean) ||
+    /oz[\s_-]*metro/i.test(loginClean)
+  ) {
+    return 2;
+  }
+
   return null;
 }
 

@@ -65,6 +65,7 @@ async function main() {
       id: "seed-store-1",
       name: "Store 1",
       loginId: "store-1",
+      storeNumber: 1,
       password:
         process.env.STORE_1_PASSWORD ||
         process.env.STORE_BOOTSTRAP_PASSWORD ||
@@ -73,8 +74,9 @@ async function main() {
     },
     {
       id: "seed-store-2",
-      name: "Store 2",
-      loginId: "store-2",
+      name: "Oz Metro",
+      loginId: "oz-metro",
+      storeNumber: 2,
       password:
         process.env.STORE_2_PASSWORD ||
         process.env.STORE_BOOTSTRAP_PASSWORD ||
@@ -85,6 +87,7 @@ async function main() {
       id: "seed-store-3",
       name: "Store 3",
       loginId: "store-3",
+      storeNumber: 3,
       password:
         process.env.STORE_3_PASSWORD ||
         process.env.STORE_BOOTSTRAP_PASSWORD ||
@@ -172,7 +175,7 @@ async function main() {
         Color: "Space Gray",
       },
       status: "DRAFT",
-      storeId: stores["Store 2"],
+      storeId: stores["Oz Metro"],
       createdById: adminUser.id,
     },
   });
@@ -272,8 +275,8 @@ async function main() {
   }
 
   // --- Seed Supplier Settings ---
-  for (const [storeName, storeId] of Object.entries(stores)) {
-    const storeNumber = Number(storeName.replace(/\D/g, "")) || 1;
+  for (const storeDefinition of storeData) {
+    const storeId = stores[storeDefinition.name];
 
     await prisma.supplierSettings.upsert({
       where: {
@@ -282,10 +285,14 @@ async function main() {
           supplierName: "Amazon AU",
         },
       },
-      update: { storeNumber },
-      create: { storeId, supplierName: "Amazon AU", storeNumber },
+      update: { storeNumber: storeDefinition.storeNumber },
+      create: {
+        storeId,
+        supplierName: "Amazon AU",
+        storeNumber: storeDefinition.storeNumber,
+      },
     });
-    console.log(`Seeded supplier settings for ${storeName}: Amazon AU`);
+    console.log(`Seeded supplier settings for ${storeDefinition.name}: Amazon AU`);
   }
 
   console.log("Seeding complete!");

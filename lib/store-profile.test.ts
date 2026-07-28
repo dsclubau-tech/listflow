@@ -41,6 +41,14 @@ test("legacy eBay account resolution prefers the stable login ID", () => {
     3,
   );
   assert.equal(
+    resolveLegacyEbayStoreNumber({ loginId: "custom", name: "Oz Metro" }),
+    2,
+  );
+  assert.equal(
+    resolveLegacyEbayStoreNumber({ loginId: "oz-metro", name: "My Store" }),
+    2,
+  );
+  assert.equal(
     resolveLegacyEbayStoreNumber({ loginId: "custom", name: "My Store" }),
     null,
   );
