@@ -3,6 +3,10 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
+import {
+  hasStoreLoginIdWhitespace,
+  STORE_LOGIN_ID_WHITESPACE_ERROR,
+} from "@/lib/store-login-id";
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -16,14 +20,24 @@ export default function RegisterPage() {
   const [isLoading, setIsLoading] = useState(false);
 
   const handleLoginIdChange = (value: string) => {
-    // Automatically sanitize login ID to lowercased hyphens/numbers
-    const sanitized = value.toLowerCase().replace(/[^a-z0-9-]/g, "");
-    setLoginId(sanitized);
+    setLoginId(value.toLowerCase());
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+
+    if (hasStoreLoginIdWhitespace(loginId)) {
+      setError(STORE_LOGIN_ID_WHITESPACE_ERROR);
+      return;
+    }
+
+    if (!/^[a-z0-9-]+$/.test(loginId)) {
+      setError(
+        "Store ID can only contain lowercase letters, numbers, and hyphens.",
+      );
+      return;
+    }
 
     if (password !== confirmPassword) {
       setError("Passwords do not match.");
@@ -112,6 +126,7 @@ export default function RegisterPage() {
               />
               <p className="mt-1 text-xs text-gray-500">
                 Used to log in. Lowercase letters, numbers, and hyphens only.
+                Spaces are not allowed.
               </p>
             </div>
 

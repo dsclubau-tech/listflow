@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
+import {
+  hasStoreLoginIdWhitespace,
+  STORE_LOGIN_ID_WHITESPACE_ERROR,
+} from "@/lib/store-login-id";
 import { validateStorePassword } from "@/lib/store-password-policy";
 import { checkLoginThrottle, clearFailedLogins } from "@/lib/login-throttle";
 import {
@@ -17,7 +21,8 @@ export async function POST(request: Request) {
   }
 
   const storeName = typeof body?.storeName === "string" ? body.storeName.trim() : "";
-  const loginId = typeof body?.loginId === "string" ? body.loginId.trim().toLowerCase() : "";
+  const rawLoginId = typeof body?.loginId === "string" ? body.loginId : "";
+  const loginId = rawLoginId.toLowerCase();
   const password = typeof body?.password === "string" ? body.password : "";
   const confirmPassword = typeof body?.confirmPassword === "string" ? body.confirmPassword : "";
 
@@ -26,6 +31,13 @@ export async function POST(request: Request) {
     return NextResponse.json(
       { error: "Store Name is required (1–100 characters)." },
       { status: 400 }
+    );
+  }
+
+  if (hasStoreLoginIdWhitespace(rawLoginId)) {
+    return NextResponse.json(
+      { error: STORE_LOGIN_ID_WHITESPACE_ERROR },
+      { status: 400 },
     );
   }
 

@@ -1,7 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import type { ComponentType, CSSProperties, ReactNode } from "react";
+import type {
+  ComponentType,
+  CSSProperties,
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+  ReactNode,
+} from "react";
 import "react-quill-new/dist/quill.snow.css";
 import { quillFormats } from "@/lib/quill-config";
 
@@ -63,6 +69,7 @@ type PickerKey = "font" | "size" | "color";
 interface RichTextEditorProps {
   value: string;
   onChange: (value: string) => void;
+  selectableImages?: boolean;
   placeholder?: string;
   minHeight?: string;
   className?: string;
@@ -83,12 +90,44 @@ interface CompactToolbarButtonProps {
   children: ReactNode;
 }
 
-let quillConfigured = false;
+interface EditableImageData {
+  src: string;
+  alt: string;
+  width: string;
+  height: string;
+  align: "" | "center" | "right" | "justify";
+}
+
+interface ImageContextMenuState {
+  clientX: number;
+  clientY: number;
+}
+
+interface ImagePropertiesState extends EditableImageData {
+  imageIndex: number;
+}
+
+interface PointerImageDragState {
+  image: HTMLImageElement;
+  startX: number;
+  startY: number;
+  moved: boolean;
+  targetBlock: HTMLElement | null;
+}
 
 type QuillRegistrar = {
+  find?: (node: Node) => unknown;
   import: (path: string) => unknown;
   register: (...args: unknown[]) => void;
 };
+
+interface QuillBlotLike {
+  domNode?: Node;
+  length?: () => number;
+}
+
+let quillConfigured = false;
+let quillRuntime: QuillRegistrar | null = null;
 
 type BlotBaseCtor = new (...args: never[]) => Record<string, unknown>;
 
@@ -125,6 +164,7 @@ function CompactToolbarButton({
 }
 
 function registerCustomFormats(Quill: QuillRegistrar) {
+  quillRuntime = Quill;
   if (quillConfigured) return;
 
   const BlockEmbed = Quill.import("blots/block/embed") as BlotBaseCtor;
@@ -195,6 +235,7 @@ function cleanImageOnlyLists(html: string) {
 export default function RichTextEditor({
   value,
   onChange,
+  selectableImages = false,
   placeholder,
   minHeight = "18rem",
   className = "",
@@ -203,7 +244,9 @@ export default function RichTextEditor({
   const toolbarId = `rich-text-toolbar-${useId().replace(/:/g, "")}`;
   const editorRef = useRef<{
     getEditor: () => {
+      root: HTMLDivElement;
       focus: () => void;
+      getIndex: (blot: unknown) => number;
       getLength: () => number;
       getModule: (name: string) => {
         insertTable?: (rows: number, columns: number) => void;
@@ -214,15 +257,39 @@ export default function RichTextEditor({
       getFormat: (index?: number, length?: number) => Record<string, unknown>;
       deleteText: (index: number, length: number, source?: string) => void;
       format: (name: string, value: unknown, source?: string) => void;
+      formatLine: (
+        index: number,
+        length: number,
+        name: string,
+        value: unknown,
+        source?: string,
+      ) => void;
+      formatText: (
+        index: number,
+        length: number,
+        formats: Record<string, unknown>,
+        source?: string,
+      ) => void;
       insertEmbed: (index: number, type: string, value: unknown, source?: string) => void;
       insertText: (index: number, text: string, source?: string) => void;
+      getLeaf: (index: number) => [QuillBlotLike | null, number];
+      getLine: (index: number) => [QuillBlotLike | null, number];
       setSelection: (index: number, length?: number, source?: string) => void;
     };
   } | null>(null);
   const [EditorComponent, setEditorComponent] = useState<ReactQuillComponent | null>(null);
   const [isSourceMode, setIsSourceMode] = useState(false);
   const [openPicker, setOpenPicker] = useState<PickerKey | null>(null);
+  const [imageContextMenu, setImageContextMenu] =
+    useState<ImageContextMenuState | null>(null);
+  const [imageClipboard, setImageClipboard] =
+    useState<EditableImageData | null>(null);
+  const [imageProperties, setImageProperties] =
+    useState<ImagePropertiesState | null>(null);
   const pickerRef = useRef<HTMLSpanElement | null>(null);
+  const selectedImageRef = useRef<HTMLImageElement | null>(null);
+  const imageMenuRef = useRef<HTMLDivElement | null>(null);
+  const pointerImageDragRef = useRef<PointerImageDragState | null>(null);
 
   useEffect(() => {
     if (!openPicker) return;
@@ -236,6 +303,39 @@ export default function RichTextEditor({
     document.addEventListener("mousedown", handleClick);
     return () => document.removeEventListener("mousedown", handleClick);
   }, [openPicker]);
+
+  useEffect(() => {
+    if (!imageContextMenu) return;
+
+    function closeImageMenu(event: PointerEvent) {
+      if (
+        imageMenuRef.current &&
+        !imageMenuRef.current.contains(event.target as Node)
+      ) {
+        setImageContextMenu(null);
+      }
+    }
+
+    function closeImageMenuOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setImageContextMenu(null);
+      }
+    }
+
+    function closeImageMenuOnScroll() {
+      setImageContextMenu(null);
+    }
+
+    document.addEventListener("pointerdown", closeImageMenu);
+    document.addEventListener("keydown", closeImageMenuOnEscape);
+    window.addEventListener("scroll", closeImageMenuOnScroll, true);
+
+    return () => {
+      document.removeEventListener("pointerdown", closeImageMenu);
+      document.removeEventListener("keydown", closeImageMenuOnEscape);
+      window.removeEventListener("scroll", closeImageMenuOnScroll, true);
+    };
+  }, [imageContextMenu]);
 
   useEffect(() => {
     let cancelled = false;
@@ -291,6 +391,15 @@ export default function RichTextEditor({
   }, [quillToolbarDisabled]);
 
   const getEditor = useCallback(() => editorRef.current?.getEditor() ?? null, []);
+
+  useEffect(() => {
+    if (!selectableImages || !EditorComponent) return;
+
+    const editor = getEditor();
+    editor?.root.querySelectorAll("img").forEach((image) => {
+      image.draggable = false;
+    });
+  }, [EditorComponent, getEditor, selectableImages, value]);
 
   const withEditorSelection = useCallback(
     (
@@ -427,6 +536,379 @@ export default function RichTextEditor({
   const rootStyle = {
     "--listflow-quill-min-height": minHeight,
   } as CSSProperties;
+
+  const getImageData = useCallback((image: HTMLImageElement): EditableImageData => {
+    const alignmentRoot = image.closest(
+      ".ql-align-center, .ql-align-right, .ql-align-justify",
+    );
+    const align = alignmentRoot?.classList.contains("ql-align-center")
+      ? "center"
+      : alignmentRoot?.classList.contains("ql-align-right")
+        ? "right"
+        : alignmentRoot?.classList.contains("ql-align-justify")
+          ? "justify"
+          : "";
+
+    return {
+      src: image.currentSrc || image.src,
+      alt: image.getAttribute("alt") || "",
+      width: image.getAttribute("width") || "",
+      height: image.getAttribute("height") || "",
+      align,
+    };
+  }, []);
+
+  const selectEditorImage = useCallback(
+    (image: HTMLImageElement) => {
+      const editor = getEditor();
+      const imageBlot = quillRuntime?.find?.(image);
+      if (!editor || !imageBlot) return null;
+
+      const imageIndex = editor.getIndex(imageBlot);
+      selectedImageRef.current = image;
+      editor.setSelection(imageIndex, 1, "user");
+      return { editor, imageIndex };
+    },
+    [getEditor],
+  );
+
+  const getSelectedImage = useCallback(() => {
+    const image = selectedImageRef.current;
+    if (!image?.isConnected) return null;
+
+    const selected = selectEditorImage(image);
+    if (!selected) return null;
+
+    return {
+      ...selected,
+      image,
+      data: getImageData(image),
+    };
+  }, [getImageData, selectEditorImage]);
+
+  const formatImage = useCallback(
+    (
+      editor: NonNullable<ReturnType<typeof getEditor>>,
+      imageIndex: number,
+      image: EditableImageData,
+    ) => {
+      editor.formatText(
+        imageIndex,
+        1,
+        {
+          alt: image.alt || false,
+          width: image.width || false,
+          height: image.height || false,
+        },
+        "user",
+      );
+      editor.formatLine(imageIndex, 1, "align", image.align || false, "user");
+    },
+    [],
+  );
+
+  const focusInsertedImage = useCallback(
+    (
+      editor: NonNullable<ReturnType<typeof getEditor>>,
+      imageIndex: number,
+    ) => {
+      const [insertedBlot] = editor.getLeaf(imageIndex);
+      if (insertedBlot?.domNode instanceof HTMLImageElement) {
+        selectedImageRef.current = insertedBlot.domNode;
+      }
+      editor.setSelection(imageIndex, 1, "user");
+    },
+    [],
+  );
+
+  const insertImageLine = useCallback(
+    (
+      editor: NonNullable<ReturnType<typeof getEditor>>,
+      imageIndex: number,
+      image: EditableImageData,
+    ) => {
+      editor.insertEmbed(imageIndex, "image", image.src, "user");
+      editor.insertText(imageIndex + 1, "\n", "user");
+      formatImage(editor, imageIndex, image);
+      focusInsertedImage(editor, imageIndex);
+    },
+    [focusInsertedImage, formatImage],
+  );
+
+  const moveSelectedImageTo = useCallback(
+    (targetIndex: number) => {
+      const selected = getSelectedImage();
+      if (!selected) return;
+
+      const { editor, image, imageIndex, data } = selected;
+      const sourceBlock = image.closest(".ql-editor > *");
+      const sourceBlockBlot = sourceBlock
+        ? (quillRuntime?.find?.(sourceBlock) as QuillBlotLike | undefined)
+        : undefined;
+      const sourceStart = sourceBlockBlot
+        ? editor.getIndex(sourceBlockBlot)
+        : imageIndex;
+      const sourceLength = sourceBlockBlot?.length?.() ?? 1;
+      const isStandaloneImage =
+        sourceBlock instanceof HTMLElement &&
+        sourceBlock.querySelectorAll("img").length === 1 &&
+        !(sourceBlock.textContent || "").trim();
+
+      if (
+        targetIndex >= sourceStart &&
+        targetIndex <= sourceStart + sourceLength
+      ) {
+        setImageContextMenu(null);
+        return;
+      }
+
+      if (isStandaloneImage) {
+        editor.deleteText(sourceStart, sourceLength, "user");
+        const adjustedTarget =
+          targetIndex > sourceStart ? targetIndex - sourceLength : targetIndex;
+        insertImageLine(editor, adjustedTarget, data);
+      } else {
+        editor.deleteText(imageIndex, 1, "user");
+        const adjustedTarget =
+          targetIndex > imageIndex ? targetIndex - 1 : targetIndex;
+        insertImageLine(editor, adjustedTarget, data);
+      }
+
+      setImageContextMenu(null);
+    },
+    [getSelectedImage, insertImageLine],
+  );
+
+  const moveSelectedImage = useCallback(
+    (direction: "up" | "down") => {
+      const selected = getSelectedImage();
+      if (!selected) return;
+
+      const sourceBlock = selected.image.closest(".ql-editor > *");
+      if (!(sourceBlock instanceof HTMLElement)) return;
+
+      const targetBlock =
+        direction === "up"
+          ? sourceBlock.previousElementSibling
+          : sourceBlock.nextElementSibling;
+      if (!(targetBlock instanceof HTMLElement)) return;
+
+      const targetBlot = quillRuntime?.find?.(targetBlock) as
+        | QuillBlotLike
+        | undefined;
+      if (!targetBlot) return;
+
+      const targetStart = selected.editor.getIndex(targetBlot);
+      const targetIndex =
+        direction === "up"
+          ? targetStart
+          : targetStart + (targetBlot.length?.() ?? 1);
+      moveSelectedImageTo(targetIndex);
+    },
+    [getSelectedImage, moveSelectedImageTo],
+  );
+
+  const handleSelectableImageClick = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (!selectableImages || isSourceMode) return;
+
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+
+      const clickedImage = target.closest(".ql-editor img");
+      if (!(clickedImage instanceof HTMLImageElement)) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      setImageContextMenu(null);
+      selectEditorImage(clickedImage);
+    },
+    [isSourceMode, selectableImages, selectEditorImage],
+  );
+
+  const handleImageContextMenu = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      if (!selectableImages || isSourceMode) return;
+
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+
+      const clickedImage = target.closest(".ql-editor img");
+      if (!(clickedImage instanceof HTMLImageElement)) return;
+
+      event.preventDefault();
+      event.stopPropagation();
+      selectEditorImage(clickedImage);
+      setImageContextMenu({
+        clientX: Math.min(event.clientX, window.innerWidth - 210),
+        clientY: Math.min(event.clientY, window.innerHeight - 280),
+      });
+    },
+    [isSourceMode, selectableImages, selectEditorImage],
+  );
+
+  const copySelectedImage = useCallback(
+    (cut: boolean) => {
+      const selected = getSelectedImage();
+      if (!selected) return;
+
+      setImageClipboard(selected.data);
+      void navigator.clipboard?.writeText(selected.data.src).catch(() => undefined);
+
+      if (cut) {
+        selected.editor.deleteText(selected.imageIndex, 1, "user");
+        selectedImageRef.current = null;
+      }
+
+      setImageContextMenu(null);
+    },
+    [getSelectedImage],
+  );
+
+  const pasteImageAfterSelection = useCallback(() => {
+    if (!imageClipboard) return;
+
+    const selected = getSelectedImage();
+    const editor = selected?.editor ?? getEditor();
+    if (!editor) return;
+
+    const referenceIndex =
+      selected?.imageIndex ?? editor.getSelection(true)?.index ?? editor.getLength() - 1;
+    const [referenceLine] = editor.getLine(referenceIndex);
+    const insertIndex = referenceLine
+      ? editor.getIndex(referenceLine) + (referenceLine.length?.() ?? 1)
+      : referenceIndex + 1;
+
+    insertImageLine(editor, insertIndex, imageClipboard);
+    setImageContextMenu(null);
+  }, [getEditor, getSelectedImage, imageClipboard, insertImageLine]);
+
+  const openImageProperties = useCallback(() => {
+    const selected = getSelectedImage();
+    if (!selected) return;
+
+    setImageProperties({
+      imageIndex: selected.imageIndex,
+      ...selected.data,
+    });
+    setImageContextMenu(null);
+  }, [getSelectedImage]);
+
+  const saveImageProperties = useCallback(() => {
+    if (!imageProperties) return;
+
+    const editor = getEditor();
+    if (!editor) return;
+
+    formatImage(editor, imageProperties.imageIndex, imageProperties);
+    focusInsertedImage(editor, imageProperties.imageIndex);
+    setImageProperties(null);
+  }, [focusInsertedImage, formatImage, getEditor, imageProperties]);
+
+  const clearPointerImageDrag = useCallback(() => {
+    const drag = pointerImageDragRef.current;
+    drag?.image.classList.remove("listflow-image-dragging");
+    drag?.targetBlock?.classList.remove("listflow-image-drop-target");
+    pointerImageDragRef.current = null;
+  }, []);
+
+  const handleImagePointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (
+        !selectableImages ||
+        isSourceMode ||
+        event.button !== 0 ||
+        !event.isPrimary
+      ) {
+        return;
+      }
+
+      const target = event.target;
+      if (!(target instanceof Element)) return;
+
+      const image = target.closest(".ql-editor img");
+      if (!(image instanceof HTMLImageElement)) return;
+
+      event.preventDefault();
+      selectEditorImage(image);
+      setImageContextMenu(null);
+      event.currentTarget.setPointerCapture(event.pointerId);
+      pointerImageDragRef.current = {
+        image,
+        startX: event.clientX,
+        startY: event.clientY,
+        moved: false,
+        targetBlock: null,
+      };
+    },
+    [isSourceMode, selectableImages, selectEditorImage],
+  );
+
+  const handleImagePointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const drag = pointerImageDragRef.current;
+      if (!drag) return;
+
+      const distance = Math.hypot(
+        event.clientX - drag.startX,
+        event.clientY - drag.startY,
+      );
+      if (!drag.moved && distance < 6) return;
+
+      event.preventDefault();
+      drag.moved = true;
+      drag.image.classList.add("listflow-image-dragging");
+
+      const hitTarget = document.elementFromPoint(event.clientX, event.clientY);
+      const targetBlock = hitTarget?.closest(".ql-editor > *");
+      const sourceBlock = drag.image.closest(".ql-editor > *");
+      const nextTarget =
+        targetBlock instanceof HTMLElement && targetBlock !== sourceBlock
+          ? targetBlock
+          : null;
+
+      if (drag.targetBlock !== nextTarget) {
+        drag.targetBlock?.classList.remove("listflow-image-drop-target");
+        nextTarget?.classList.add("listflow-image-drop-target");
+        drag.targetBlock = nextTarget;
+      }
+    },
+    [],
+  );
+
+  const handleImagePointerUp = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      const drag = pointerImageDragRef.current;
+      if (!drag) return;
+
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+
+      if (drag.moved && drag.targetBlock) {
+        const editor = getEditor();
+        const targetBlot = quillRuntime?.find?.(drag.targetBlock) as
+          | QuillBlotLike
+          | undefined;
+
+        if (editor && targetBlot) {
+          const targetStart = editor.getIndex(targetBlot);
+          const targetBounds = drag.targetBlock.getBoundingClientRect();
+          const insertAfter =
+            event.clientY >= targetBounds.top + targetBounds.height / 2;
+          const targetIndex =
+            targetStart + (insertAfter ? targetBlot.length?.() ?? 1 : 0);
+
+          event.preventDefault();
+          event.stopPropagation();
+          moveSelectedImageTo(targetIndex);
+        }
+      }
+
+      clearPointerImageDrag();
+    },
+    [clearPointerImageDrag, getEditor, moveSelectedImageTo],
+  );
 
   function renderGroupedToolbar() {
     return (
@@ -799,6 +1281,13 @@ export default function RichTextEditor({
       className={`listflow-rich-text ${className}`.trim()}
       style={rootStyle}
       data-toolbar-variant={toolbarVariant}
+      data-images-selectable={selectableImages ? "true" : undefined}
+      onClickCapture={handleSelectableImageClick}
+      onContextMenuCapture={handleImageContextMenu}
+      onPointerDownCapture={handleImagePointerDown}
+      onPointerMoveCapture={handleImagePointerMove}
+      onPointerUpCapture={handleImagePointerUp}
+      onPointerCancelCapture={clearPointerImageDrag}
     >
       <div id={toolbarId} className="listflow-quill-toolbar" role="toolbar" aria-label="Rich text editor toolbar">
         {toolbarVariant === "compact" ? renderCompactToolbar() : renderGroupedToolbar()}
@@ -830,6 +1319,193 @@ export default function RichTextEditor({
             />
           )}
         </>
+      )}
+
+      {imageContextMenu && (
+        <div
+          ref={imageMenuRef}
+          role="menu"
+          aria-label="Image actions"
+          className="fixed z-[90] w-48 overflow-hidden rounded-md border border-gray-300 bg-white py-1 text-sm shadow-xl"
+          style={{
+            left: imageContextMenu.clientX,
+            top: imageContextMenu.clientY,
+          }}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => copySelectedImage(true)}
+            className="flex w-full items-center px-3 py-2 text-left text-gray-700 hover:bg-gray-100"
+          >
+            Cut
+            <span className="ml-auto text-xs text-gray-400">Ctrl+X</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => copySelectedImage(false)}
+            className="flex w-full items-center px-3 py-2 text-left text-gray-700 hover:bg-gray-100"
+          >
+            Copy
+            <span className="ml-auto text-xs text-gray-400">Ctrl+C</span>
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={pasteImageAfterSelection}
+            disabled={!imageClipboard}
+            className="flex w-full items-center px-3 py-2 text-left text-gray-700 hover:bg-gray-100 disabled:cursor-not-allowed disabled:text-gray-300"
+          >
+            Paste
+            <span className="ml-auto text-xs text-gray-400">Ctrl+V</span>
+          </button>
+          <div className="my-1 border-t border-gray-200" />
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => moveSelectedImage("up")}
+            className="w-full px-3 py-2 text-left text-gray-700 hover:bg-gray-100"
+          >
+            Move Up
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => moveSelectedImage("down")}
+            className="w-full px-3 py-2 text-left text-gray-700 hover:bg-gray-100"
+          >
+            Move Down
+          </button>
+          <div className="my-1 border-t border-gray-200" />
+          <button
+            type="button"
+            role="menuitem"
+            onClick={openImageProperties}
+            className="w-full px-3 py-2 text-left text-gray-700 hover:bg-gray-100"
+          >
+            Image Properties
+          </button>
+        </div>
+      )}
+
+      {imageProperties && (
+        <div
+          className="fixed inset-0 z-[100] flex items-center justify-center bg-black/40 p-4"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.currentTarget === event.target) {
+              setImageProperties(null);
+            }
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby={`${toolbarId}-image-properties-title`}
+            className="w-full max-w-md rounded-xl bg-white p-5 shadow-2xl"
+          >
+            <h2
+              id={`${toolbarId}-image-properties-title`}
+              className="text-lg font-semibold text-gray-900"
+            >
+              Image Properties
+            </h2>
+
+            <div className="mt-4 space-y-4">
+              <label className="block text-sm font-medium text-gray-700">
+                Alternative text
+                <input
+                  type="text"
+                  value={imageProperties.alt}
+                  onChange={(event) =>
+                    setImageProperties((current) =>
+                      current ? { ...current, alt: event.target.value } : current
+                    )
+                  }
+                  className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-200"
+                />
+              </label>
+
+              <div className="grid grid-cols-2 gap-3">
+                <label className="block text-sm font-medium text-gray-700">
+                  Width
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="Auto"
+                    value={imageProperties.width}
+                    onChange={(event) =>
+                      setImageProperties((current) =>
+                        current
+                          ? { ...current, width: event.target.value }
+                          : current
+                      )
+                    }
+                    className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-200"
+                  />
+                </label>
+                <label className="block text-sm font-medium text-gray-700">
+                  Height
+                  <input
+                    type="number"
+                    min="1"
+                    placeholder="Auto"
+                    value={imageProperties.height}
+                    onChange={(event) =>
+                      setImageProperties((current) =>
+                        current
+                          ? { ...current, height: event.target.value }
+                          : current
+                      )
+                    }
+                    className="mt-1 w-full rounded-md border border-gray-300 px-3 py-2 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-200"
+                  />
+                </label>
+              </div>
+
+              <label className="block text-sm font-medium text-gray-700">
+                Alignment
+                <select
+                  value={imageProperties.align}
+                  onChange={(event) =>
+                    setImageProperties((current) =>
+                      current
+                        ? {
+                            ...current,
+                            align: event.target.value as EditableImageData["align"],
+                          }
+                        : current
+                    )
+                  }
+                  className="mt-1 w-full rounded-md border border-gray-300 bg-white px-3 py-2 outline-none focus:border-orange-500 focus:ring-2 focus:ring-orange-200"
+                >
+                  <option value="">Left</option>
+                  <option value="center">Center</option>
+                  <option value="right">Right</option>
+                  <option value="justify">Justify</option>
+                </select>
+              </label>
+            </div>
+
+            <div className="mt-6 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setImageProperties(null)}
+                className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={saveImageProperties}
+                className="rounded-md bg-orange-600 px-4 py-2 text-sm font-medium text-white hover:bg-orange-700"
+              >
+                Apply
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

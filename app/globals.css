@@ -59,6 +59,27 @@ body {
   margin-left: auto;
 }
 
+.listflow-rich-text[data-images-selectable="true"] .ql-editor img {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+.listflow-rich-text[data-images-selectable="true"] .ql-editor img:active {
+  cursor: grabbing;
+}
+
+.listflow-rich-text .ql-editor img.listflow-image-dragging {
+  cursor: grabbing;
+  opacity: 0.65;
+}
+
+.listflow-rich-text .ql-editor .listflow-image-drop-target {
+  outline: 3px dashed #f97316;
+  outline-offset: 4px;
+}
+
 .listflow-rich-text .ql-editor p:has(> img:only-child) {
   margin: 0;
 }

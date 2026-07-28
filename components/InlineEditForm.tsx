@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import AsinLink from "@/components/AsinLink";
+import ImageLightbox from "@/components/ImageLightbox";
 import { PostcodeAutocomplete } from "@/components/PostcodeAutocomplete";
 import type { Product, Store, User } from "@/app/generated/prisma/client";
 import type { ScrapedProduct } from "@/components/AddProductModal";
@@ -420,6 +421,10 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
   const [images, setImages] = useState<string[]>(() =>
     dedupeProductImages(product.images)
   );
+  const [imageLightbox, setImageLightbox] = useState<{
+    images: string[];
+    activeIndex: number;
+  } | null>(null);
   const [hoveredImage, setHoveredImage] = useState<number | null>(null);
   const [manualImageUrl, setManualImageUrl] = useState("");
   const [imageMessage, setImageMessage] = useState<SaveMessage | null>(null);
@@ -527,6 +532,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
     setImageMessage(null);
     setIsUploadingImage(false);
     setHoveredImage(null);
+    setImageLightbox(null);
     if (manualImageFileInputRef.current) {
       manualImageFileInputRef.current.value = "";
     }
@@ -1752,7 +1758,8 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
   const currentAsin = normalizeAsin(asin);
 
   return (
-    <div className="border-t border-gray-200 bg-gray-50">
+    <>
+      <div className="border-t border-gray-200 bg-gray-50">
       {/* ===== Header bar ===== */}
       <div className="flex flex-col gap-4 border-b border-gray-200 bg-white px-4 py-4 md:px-6 xl:flex-row xl:items-center xl:justify-between">
         {/* Left side */}
@@ -1948,13 +1955,16 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
 
       {/* ===== Tabs ===== */}
       <div className="overflow-x-auto border-b border-gray-200 px-4 md:px-6">
-        <nav className="flex min-w-max gap-6" aria-label="Draft editor sections">
+        <nav
+          className="flex min-w-max gap-4 md:gap-6"
+          aria-label="Draft editor sections"
+        >
           {tabs.map((tab, i) => (
             <button
               key={tab}
               type="button"
               onClick={() => setActiveTab(i)}
-              className={`py-3 text-sm transition-colors ${
+              className={`px-1 py-3 text-sm transition-colors ${
                 activeTab === i
                   ? "border-b-2 border-orange-500 text-orange-600 font-medium"
                   : "text-gray-500 hover:text-gray-700"
@@ -2360,7 +2370,13 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                 </Link>
               </div>
             <div className="min-h-[300px]">
-              <RichTextEditor value={description} onChange={setDescription} minHeight="300px" toolbarVariant="compact" />
+              <RichTextEditor
+                value={description}
+                onChange={setDescription}
+                selectableImages
+                minHeight="300px"
+                toolbarVariant="compact"
+              />
             </div>
           </div>
         )}
@@ -2515,11 +2531,21 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                     onMouseEnter={() => setHoveredImage(i)}
                     onMouseLeave={() => setHoveredImage(null)}
                   >
-                    <img
-                      src={url}
-                      alt={`Product image ${i + 1}`}
-                      className="w-full aspect-square object-cover rounded border border-gray-200"
-                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setImageLightbox({ images, activeIndex: i })
+                      }
+                      aria-label={`View product image ${i + 1} full size`}
+                      title="View full size"
+                      className="block w-full cursor-zoom-in overflow-hidden rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2"
+                    >
+                      <img
+                        src={url}
+                        alt={`Product image ${i + 1}`}
+                        className="aspect-square w-full rounded border border-gray-200 object-cover transition-transform duration-200 group-hover:scale-[1.02]"
+                      />
+                    </button>
 
                     {isHovered && (
                       <div className="absolute inset-0 z-20 hidden flex-col items-center justify-center gap-2 rounded bg-black/60 md:flex">
@@ -2666,7 +2692,18 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
             </button>
           </div>
         )}
+        </div>
       </div>
-    </div>
+      <ImageLightbox
+        images={imageLightbox?.images ?? []}
+        activeIndex={imageLightbox?.activeIndex ?? null}
+        onClose={() => setImageLightbox(null)}
+        onIndexChange={(activeIndex) =>
+          setImageLightbox((current) =>
+            current ? { ...current, activeIndex } : current
+          )
+        }
+      />
+    </>
   );
 }

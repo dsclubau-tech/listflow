@@ -5,6 +5,10 @@ import Link from "next/link";
 import { signIn } from "next-auth/react";
 import { useSearchParams } from "next/navigation";
 import { getSafeCallbackPath } from "@/lib/auth-navigation";
+import {
+  hasStoreLoginIdWhitespace,
+  STORE_LOGIN_ID_WHITESPACE_ERROR,
+} from "@/lib/store-login-id";
 
 function LoginForm() {
   const searchParams = useSearchParams();
@@ -24,6 +28,12 @@ function LoginForm() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
+
+    if (hasStoreLoginIdWhitespace(storeId)) {
+      setError(STORE_LOGIN_ID_WHITESPACE_ERROR);
+      return;
+    }
+
     setIsLoading(true);
 
     try {
@@ -77,10 +87,14 @@ function LoginForm() {
                 autoCapitalize="none"
                 autoCorrect="off"
                 autoComplete="username"
+                aria-describedby="storeId-hint"
                 className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-800 focus:border-gray-800 text-gray-900"
                 placeholder="store-1"
                 disabled={isLoading}
               />
+              <p id="storeId-hint" className="mt-1 text-xs text-gray-500">
+                Use letters, numbers, and hyphens only. Spaces are not allowed.
+              </p>
             </div>
 
             <div>

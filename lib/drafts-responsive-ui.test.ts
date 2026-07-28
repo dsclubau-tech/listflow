@@ -56,6 +56,52 @@ test("Drafts renderer contains card and desktop table breakpoints", () => {
   assert.match(editorSource, /Draft editor sections/);
 });
 
+test("draft editor gallery uses a lightbox while description images remain editable", () => {
+  const tableSource = readFileSync("components/DraftsTable.tsx", "utf8");
+  const editorSource = readFileSync("components/InlineEditForm.tsx", "utf8");
+  const richTextSource = readFileSync("components/RichTextEditor.tsx", "utf8");
+  const lightboxSource = readFileSync("components/ImageLightbox.tsx", "utf8");
+
+  assert.match(editorSource, /<ImageLightbox/);
+  assert.match(editorSource, /View product image \$\{i \+ 1\} full size/);
+  assert.match(editorSource, /selectableImages/);
+  assert.match(richTextSource, /target\.closest\("\.ql-editor img"\)/);
+  assert.match(
+    richTextSource,
+    /editor\.setSelection\(imageIndex, 1, "user"\)/,
+  );
+  assert.match(richTextSource, /data-images-selectable=/);
+  assert.match(richTextSource, /aria-label="Image actions"/);
+  assert.match(richTextSource, />\s*Image Properties\s*</);
+  assert.match(
+    richTextSource,
+    /onPointerDownCapture=\{handleImagePointerDown\}/,
+  );
+  assert.match(
+    richTextSource,
+    /onPointerMoveCapture=\{handleImagePointerMove\}/,
+  );
+  assert.match(
+    richTextSource,
+    /onPointerUpCapture=\{handleImagePointerUp\}/,
+  );
+  assert.match(richTextSource, /setPointerCapture\(event\.pointerId\)/);
+  assert.match(richTextSource, /listflow-image-drop-target/);
+  assert.match(richTextSource, />\s*Move Up\s*</);
+  assert.match(richTextSource, />\s*Move Down\s*</);
+  assert.doesNotMatch(tableSource, /ImageLightbox/);
+  assert.match(lightboxSource, /aria-modal="true"/);
+  assert.match(lightboxSource, /event\.key === "Escape"/);
+  assert.doesNotMatch(lightboxSource, /<a\b/);
+});
+
+test("draft editor tabs use responsive spacing and consistent padding", () => {
+  const editorSource = readFileSync("components/InlineEditForm.tsx", "utf8");
+
+  assert.match(editorSource, /gap-4 md:gap-6/);
+  assert.match(editorSource, /px-1 py-3 text-sm/);
+});
+
 test("Draft actions use full-size delete controls and persisted import progress", () => {
   const tableSource = readFileSync("components/DraftsTable.tsx", "utf8");
   const editorSource = readFileSync("components/InlineEditForm.tsx", "utf8");
