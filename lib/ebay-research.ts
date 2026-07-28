@@ -46,6 +46,7 @@ const RESEARCH_BATCH_SEARCH_COOLDOWN_MS = 10 * 1000;
 const RESEARCH_RETENTION_MS = 24 * 60 * 60 * 1000;
 const RESEARCH_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_BATCH_QUERIES = 50;
+const MAX_RESEARCH_JOB_ATTEMPTS = 3;
 const TERMINAL_RESEARCH_JOB_STATUSES: EbayResearchJobStatus[] = [
   EbayResearchJobStatus.COMPLETED,
   EbayResearchJobStatus.PARTIAL,
@@ -67,6 +68,7 @@ type EbayResearchJobRecord = {
   conditionFilter: EbayResearchConditionFilter;
   query: string;
   limit: number;
+  attempts: number;
   activeCount: number;
   soldCount: number;
   activeSummary: Prisma.JsonValue;
@@ -1174,18 +1176,42 @@ async function recoverStaleResearchJobs(storeId: string) {
       job.status === EbayResearchJobStatus.PAUSING ||
       job.batch?.status === EbayResearchBatchStatus.PAUSING ||
       job.batch?.status === EbayResearchBatchStatus.PAUSED;
+    const attemptsExhausted =
+      !shouldRemainPaused && job.attempts >= MAX_RESEARCH_JOB_ATTEMPTS;
 
-    await prisma.ebayResearchJob.update({
-      where: { id: job.id },
-      data: {
-        status: shouldRemainPaused
-          ? EbayResearchJobStatus.PAUSED
-          : EbayResearchJobStatus.QUEUED,
-        startedAt: null,
-        errorMessage: null,
-        expiresAt: null,
-      },
-    });
+    if (attemptsExhausted) {
+      const failedAt = new Date();
+
+      await prisma.ebayResearchJob.update({
+        where: { id: job.id },
+        data: {
+          status: EbayResearchJobStatus.FAILED,
+          startedAt: null,
+          errorMessage:
+            "eBay research stopped after repeated interruptions. Please run this search again.",
+          completedAt: failedAt,
+          expiresAt: getResearchExpiresAt(failedAt),
+        },
+      });
+
+      logger.warn(
+        "ebay-research/jobs",
+        "Research job failed after exhausting retry attempts",
+        { jobId: job.id, attempts: job.attempts, batchId: job.batchId }
+      );
+    } else {
+      await prisma.ebayResearchJob.update({
+        where: { id: job.id },
+        data: {
+          status: shouldRemainPaused
+            ? EbayResearchJobStatus.PAUSED
+            : EbayResearchJobStatus.QUEUED,
+          startedAt: null,
+          errorMessage: null,
+          expiresAt: null,
+        },
+      });
+    }
 
     if (job.batchId) {
       batchIds.add(job.batchId);
@@ -1400,6 +1426,7 @@ async function runEbayResearchJobClaimed(jobId: string) {
     data: {
       status: EbayResearchJobStatus.RUNNING,
       startedAt: job.startedAt ?? new Date(),
+      attempts: { increment: 1 },
       warningMessage: null,
       errorMessage: null,
       expiresAt: null,

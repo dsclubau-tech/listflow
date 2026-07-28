@@ -18,6 +18,29 @@ body {
   font-family: var(--font-listflow-sans);
 }
 
+/* ── Snappy tactile press feedback for all buttons ── */
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  button:not(:disabled):not([aria-disabled="true"]) {
+    transition-property: color, background-color, border-color, box-shadow, transform, opacity;
+    transition-duration: 0.12s;
+    transition-timing-function: ease;
+  }
+
+  button:not(:disabled):not([aria-disabled="true"]):active {
+    transform: scale(0.97);
+  }
+
+  /* The rich-text toolbar buttons have their own tuned interaction styles */
+  .ql-toolbar.ql-snow button:active,
+  .listflow-rich-text button:active {
+    transform: none;
+  }
+}
+
 @keyframes listflow-progress-slide {
   0% {
     transform: translateX(-110%);

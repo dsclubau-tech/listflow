@@ -452,6 +452,7 @@ model EbayResearchJob {
   conditionFilter EbayResearchConditionFilter @default(ANY)
   query          String
   limit          Int                   @default(50)
+  attempts       Int                   @default(0)
   activeCount    Int                   @default(0)
   soldCount      Int                   @default(0)
   activeSummary  Json                  @default("{}")
