@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
+import PageRefreshButton from "@/components/PageRefreshButton";
 
 interface SidebarProps {
   userName: string;
@@ -201,8 +202,13 @@ export default function Sidebar({
       <div className="p-3 border-t border-gray-800">
         {!collapsed ? (
           <div>
-            <p className="text-sm font-medium text-white truncate">{userName}</p>
-            <p className="text-xs text-gray-400 truncate">{userEmail}</p>
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-white">{userName}</p>
+                <p className="truncate text-xs text-gray-400">{userEmail}</p>
+              </div>
+              <PageRefreshButton />
+            </div>
             <button
               type="button"
               onClick={() => signOut({ callbackUrl: "/login" })}
@@ -227,6 +233,7 @@ export default function Sidebar({
             >
               {userInitial}
             </div>
+            <PageRefreshButton />
             <button
               type="button"
               onClick={() => signOut({ callbackUrl: "/login" })}
