@@ -25,6 +25,13 @@ import {
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { launchScraperBrowser } from "@/lib/scraper-browser";
+import type { BrowserContext, Page } from "playwright-core";
+import {
+  classifySoldPageState,
+  medianOf,
+  parsePriceText as parsePrice,
+  trimPriceOutliers,
+} from "@/lib/ebay-research-sold";
 import {
   buildSearchPlan,
   isAccessoryOnlyMismatch,
@@ -47,6 +54,15 @@ const RESEARCH_RETENTION_MS = 24 * 60 * 60 * 1000;
 const RESEARCH_CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 const MAX_BATCH_QUERIES = 50;
 const MAX_RESEARCH_JOB_ATTEMPTS = 3;
+// eBay sold-search scraping. `_ipg` (items per page) is raised to its maximum so
+// a single page-1 load captures the whole result set instead of the default ~60;
+// capturing the full page removes any price-sampling bias from the sort order.
+const SOLD_ITEMS_PER_PAGE = 240;
+// _sop=13 = "Ended recently" — verified live against eBay AU. Surfaces genuine,
+// recently-sold comps; the old _sop=15 (price lowest) surfaced cheap accessories.
+const SOLD_SEARCH_SORT = 13;
+const SOLD_SCRAPE_MAX_ATTEMPTS = 3;
+const SOLD_SCRAPE_BACKOFF_MS = [0, 2000, 5000];
 const TERMINAL_RESEARCH_JOB_STATUSES: EbayResearchJobStatus[] = [
   EbayResearchJobStatus.COMPLETED,
   EbayResearchJobStatus.PARTIAL,
@@ -125,6 +141,7 @@ export type EbayResearchResult = {
 
 type EbayResearchSummary = {
   count: number;
+  distinctSellers: number;
   lowestPrice: string | null;
   averageLowest10: string | null;
   medianPrice: string | null;
@@ -250,6 +267,8 @@ function asJsonSummary(value: Prisma.JsonValue): EbayResearchSummary {
 
   return {
     count: typeof record.count === "number" ? record.count : 0,
+    distinctSellers:
+      typeof record.distinctSellers === "number" ? record.distinctSellers : 0,
     lowestPrice:
       typeof record.lowestPrice === "string" ? record.lowestPrice : null,
     averageLowest10:
@@ -360,21 +379,6 @@ function normalizeLimit(value: unknown) {
   return 30;
 }
 
-function parsePrice(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-
-  if (typeof value !== "string") {
-    return 0;
-  }
-
-  const normalized = value.replace(/,/g, "");
-  const match = normalized.match(/(\d+(?:\.\d{1,2})?)/);
-
-  return match ? Number(match[1]) : 0;
-}
-
 function formatMoney(value: number) {
   return Number.isFinite(value) ? value.toFixed(2) : "0.00";
 }
@@ -445,12 +449,7 @@ function buildSummary(results: EbayResearchResult[]): EbayResearchSummary {
     lowestTen.length > 0
       ? lowestTen.reduce((total, price) => total + price, 0) / lowestTen.length
       : null;
-  const medianPrice =
-    prices.length === 0
-      ? null
-      : prices.length % 2 === 1
-        ? prices[Math.floor(prices.length / 2)]
-        : (prices[prices.length / 2 - 1] + prices[prices.length / 2]) / 2;
+  const medianPrice = medianOf(trimPriceOutliers(prices));
   const totalSoldQuantity = results.reduce((total, result) => {
     if (result.source !== "SOLD") {
       return total;
@@ -459,9 +458,15 @@ function buildSummary(results: EbayResearchResult[]): EbayResearchSummary {
     const quantity = Number(result.soldQuantity);
     return total + (Number.isFinite(quantity) && quantity > 0 ? quantity : 1);
   }, 0);
+  const distinctSellers = new Set(
+    results
+      .map((result) => result.seller?.trim().toLowerCase())
+      .filter((seller): seller is string => Boolean(seller)),
+  ).size;
 
   return {
     count: results.length,
+    distinctSellers,
     lowestPrice: prices.length > 0 ? formatMoney(prices[0]) : null,
     averageLowest10:
       averageLowest10 === null ? null : formatMoney(averageLowest10),
@@ -683,7 +688,9 @@ async function fetchActiveListings(
   const accessToken = await getOAuthAccessToken(storeNumber);
   const postcode = await getContextPostcode(storeId);
   const url = new URL(`${EBAY_API_BASE_URL}/buy/browse/v1/item_summary/search`);
-  const browseLimit = Math.min(200, Math.max(limit * 4, 100));
+  // Pull eBay's per-request maximum (200) so we see as many competing sellers as
+  // possible before ranking down to the display limit — no block risk on the API.
+  const browseLimit = 200;
 
   url.searchParams.set("q", query);
   url.searchParams.set("limit", String(browseLimit));
@@ -804,125 +811,232 @@ async function fetchActiveListings(
   return sortedResults;
 }
 
-async function scrapeSoldListings(
+// Scroll the whole page so eBay's lazily-rendered rows all land in the DOM
+// before we read them. Bounded to ~4s so a slow page can't hang the scrape.
+async function autoScrollSoldPage(page: Page) {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        let total = 0;
+        const step = 800;
+        const timer = setInterval(() => {
+          window.scrollBy(0, step);
+          total += step;
+
+          if (total >= document.body.scrollHeight - window.innerHeight - step) {
+            clearInterval(timer);
+            resolve();
+          }
+        }, 120);
+
+        setTimeout(() => {
+          clearInterval(timer);
+          resolve();
+        }, 4000);
+      }),
+  );
+}
+
+async function scrapeSoldQueryOnContext(
+  context: BrowserContext,
   query: string,
   limit: number,
-  conditionFilter: EbayResearchConditionFilter
+  conditionFilter: EbayResearchConditionFilter,
 ): Promise<EbayResearchResult[]> {
-  const candidateLimit = Math.min(200, Math.max(limit * 4, 100));
-  const browser = await launchScraperBrowser();
-  const context = await browser.newContext({
-    locale: "en-AU",
-    viewport: { width: 1366, height: 900 },
-    userAgent:
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
-  });
+  const candidateLimit = Math.min(SOLD_ITEMS_PER_PAGE, Math.max(limit * 6, 120));
+  const url = new URL("https://www.ebay.com.au/sch/i.html");
 
-  try {
-    const page = await context.newPage();
-    const url = new URL("https://www.ebay.com.au/sch/i.html");
+  url.searchParams.set("_nkw", query);
+  url.searchParams.set("LH_Sold", "1");
+  url.searchParams.set("LH_Complete", "1");
+  url.searchParams.set("LH_BIN", "1"); // Buy It Now only — auction sales excluded
+  url.searchParams.set("_sop", String(SOLD_SEARCH_SORT));
+  url.searchParams.set("_ipg", String(SOLD_ITEMS_PER_PAGE));
+  const conditionFilterParam = getConditionFilterParam(conditionFilter);
 
-    url.searchParams.set("_nkw", query);
-    url.searchParams.set("LH_Sold", "1");
-    url.searchParams.set("LH_Complete", "1");
-    url.searchParams.set("LH_BIN", "1");
-    url.searchParams.set("_sop", "15");
-    const conditionFilterParam = getConditionFilterParam(conditionFilter);
+  if (conditionFilterParam) {
+    url.searchParams.set("LH_ItemCondition", conditionFilterParam);
+  }
 
-    if (conditionFilterParam) {
-      url.searchParams.set("LH_ItemCondition", conditionFilterParam);
+  for (let attempt = 0; attempt < SOLD_SCRAPE_MAX_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) {
+      await sleep(
+        SOLD_SCRAPE_BACKOFF_MS[
+          Math.min(attempt, SOLD_SCRAPE_BACKOFF_MS.length - 1)
+        ],
+      );
     }
 
-    await page.goto(url.toString(), {
-      waitUntil: "domcontentloaded",
-      timeout: 30000,
-    });
-    await page.waitForSelector(".s-item", { timeout: 15000 }).catch(() => null);
+    const page = await context.newPage();
 
-    const rawResults = await page.$$eval(".s-item", (items) =>
-      items.map((item) => {
-        const getText = (selector: string) =>
-          item.querySelector(selector)?.textContent?.trim() ?? "";
-        const link = item.querySelector<HTMLAnchorElement>(".s-item__link");
-        const image = item.querySelector<HTMLImageElement>(".s-item__image img");
+    try {
+      // Block image/font/CSS downloads — the <img src> URLs stay in the DOM, so
+      // thumbnails are preserved while the page loads much faster.
+      await page.route("**/*", (route) => {
+        const type = route.request().resourceType();
 
-        return {
-          title: getText(".s-item__title"),
-          url: link?.href ?? "",
-          imageUrl: image?.src || image?.getAttribute("data-src") || "",
-          price: getText(".s-item__price"),
-          shipping: getText(".s-item__shipping"),
-          seller: getText(".s-item__seller-info-text"),
-          condition: getText(".SECONDARY_INFO"),
-          location: getText(".s-item__location"),
-          soldText:
-            getText(".s-item__quantitySold") ||
-            getText(".s-item__hotness") ||
-            getText(".s-item__dynamic") ||
-            getText(".s-item__additionalItemInfo") ||
-            getText(".s-item__subtitle") ||
-            getText(".s-item__detail--secondary"),
-          cardText: item.textContent?.trim() ?? "",
-          soldAt:
-            getText(".s-item__title--tagblock") ||
-            getText(".s-item__ended-date") ||
-            getText(".s-item__caption--signal"),
-        };
-      })
-    );
-
-    const results = rawResults
-      .map((item): EbayResearchResult | null => {
-        const title = item.title.replace(/^New Listing/i, "").trim();
-
-        if (!title || title === "Shop on eBay" || !item.url) {
-          return null;
+        if (
+          type === "image" ||
+          type === "media" ||
+          type === "font" ||
+          type === "stylesheet"
+        ) {
+          return route.abort();
         }
 
-        const itemPrice = parsePrice(item.price);
-        const shippingPrice =
-          /free/i.test(item.shipping) || item.shipping.trim() === ""
-            ? 0
-            : parsePrice(item.shipping);
+        return route.continue();
+      });
 
-        if (itemPrice <= 0) {
-          return null;
-        }
+      await page.goto(url.toString(), {
+        waitUntil: "domcontentloaded",
+        timeout: 30000,
+      });
+      await page
+        .waitForSelector(".s-item, .su-card-container, .s-card", {
+          timeout: 15000,
+        })
+        .catch(() => null);
+      await autoScrollSoldPage(page);
 
-        const soldCount = parseSoldQuantity(item.soldText, item.cardText);
-
-        return {
-          source: "SOLD",
-          itemId: extractEbayItemId(item.url),
-          title,
-          url: item.url,
-          imageUrl: item.imageUrl || null,
-          seller: item.seller || null,
-          condition: item.condition || null,
-          itemPrice: formatMoney(itemPrice),
-          shippingPrice: formatMoney(shippingPrice),
-          landedPrice: formatMoney(itemPrice + shippingPrice),
-          currency: "AUD",
-          location: item.location || null,
-          soldAt: item.soldAt || null,
-          soldQuantity: soldCount.quantity,
-          soldCountText: soldCount.text,
-        };
-      })
-      .filter((result): result is EbayResearchResult => result !== null);
-
-    const conditionFilteredResults =
-      conditionFilter === EbayResearchConditionFilter.ANY
-        ? results
-        : results.filter((result) =>
-            conditionMatchesFilter(result.condition, conditionFilter)
+      const pageData = await page.evaluate(() => {
+        const getText = (root: Element, selector: string) =>
+          root.querySelector(selector)?.textContent?.trim() ?? "";
+        const legacy = Array.from(document.querySelectorAll(".s-item"));
+        const rows = legacy.map((item) => {
+          const link = item.querySelector<HTMLAnchorElement>(".s-item__link");
+          const image = item.querySelector<HTMLImageElement>(
+            ".s-item__image img",
           );
 
-    return dedupeAndSortResults(conditionFilteredResults, candidateLimit);
-  } finally {
-    await context.close().catch(() => undefined);
-    await browser.close().catch(() => undefined);
+          return {
+            title: getText(item, ".s-item__title"),
+            url: link?.href ?? "",
+            imageUrl: image?.src || image?.getAttribute("data-src") || "",
+            price: getText(item, ".s-item__price"),
+            shipping: getText(item, ".s-item__shipping"),
+            seller: getText(item, ".s-item__seller-info-text"),
+            condition: getText(item, ".SECONDARY_INFO"),
+            location: getText(item, ".s-item__location"),
+            soldText:
+              getText(item, ".s-item__quantitySold") ||
+              getText(item, ".s-item__hotness") ||
+              getText(item, ".s-item__dynamic") ||
+              getText(item, ".s-item__additionalItemInfo") ||
+              getText(item, ".s-item__subtitle") ||
+              getText(item, ".s-item__detail--secondary"),
+            cardText: item.textContent?.trim() ?? "",
+            soldAt:
+              getText(item, ".s-item__title--tagblock") ||
+              getText(item, ".s-item__ended-date") ||
+              getText(item, ".s-item__caption--signal"),
+          };
+        });
+        const countText =
+          document.querySelector(".srp-controls__count-heading")?.textContent ??
+          "";
+
+        return {
+          url: location.href,
+          title: document.title,
+          legacyCards: legacy.length,
+          newLayoutCards: document.querySelectorAll(
+            ".su-card-container, .s-card",
+          ).length,
+          hasZeroResultsMarker:
+            /\b0\s+results?\b/i.test(countText) ||
+            Boolean(document.querySelector(".srp-save-null-search")),
+          rows,
+        };
+      });
+
+      const state = classifySoldPageState(pageData);
+
+      if (state === "auth") {
+        // Retrying a sign-in wall is futile — surface it once as a best-effort
+        // miss. Active listings (the official API) carry the job regardless.
+        throw new Error(
+          "eBay now requires sign-in to view sold listings, so sold comps are unavailable. Active listing data is unaffected.",
+        );
+      }
+
+      if (state === "empty") {
+        return [];
+      }
+
+      if (state === "unsupported") {
+        throw new Error(
+          "eBay served an unrecognised sold-results layout; the scraper needs updating.",
+        );
+      }
+
+      if (state === "ok") {
+        const mapped = pageData.rows
+          .map((item): EbayResearchResult | null => {
+            const title = item.title.replace(/^New Listing/i, "").trim();
+
+            if (!title || title === "Shop on eBay" || !item.url) {
+              return null;
+            }
+
+            const itemPrice = parsePrice(item.price);
+            const shippingPrice =
+              /free/i.test(item.shipping) || item.shipping.trim() === ""
+                ? 0
+                : parsePrice(item.shipping);
+
+            if (itemPrice <= 0) {
+              return null;
+            }
+
+            const soldCount = parseSoldQuantity(item.soldText, item.cardText);
+
+            return {
+              source: "SOLD",
+              itemId: extractEbayItemId(item.url),
+              title,
+              url: item.url,
+              imageUrl: item.imageUrl || null,
+              seller: item.seller || null,
+              condition: item.condition || null,
+              itemPrice: formatMoney(itemPrice),
+              shippingPrice: formatMoney(shippingPrice),
+              landedPrice: formatMoney(itemPrice + shippingPrice),
+              currency: "AUD",
+              location: item.location || null,
+              soldAt: item.soldAt || null,
+              soldQuantity: soldCount.quantity,
+              soldCountText: soldCount.text,
+            };
+          })
+          .filter((result): result is EbayResearchResult => result !== null);
+
+        const conditionFilteredResults =
+          conditionFilter === EbayResearchConditionFilter.ANY
+            ? mapped
+            : mapped.filter((result) =>
+                conditionMatchesFilter(result.condition, conditionFilter),
+              );
+
+        return dedupeAndSortResults(conditionFilteredResults, candidateLimit);
+      }
+
+      logger.warn(
+        "ebay-research/sold",
+        "Sold search looked blocked; retrying",
+        {
+          query,
+          attempt: attempt + 1,
+          pageTitle: pageData.title.slice(0, 80),
+        },
+      );
+    } finally {
+      await page.close().catch(() => undefined);
+    }
   }
+
+  throw new Error(
+    `eBay blocked the sold search for "${query}" after ${SOLD_SCRAPE_MAX_ATTEMPTS} attempts. Try again shortly.`,
+  );
 }
 
 async function fetchActiveForQueries(
@@ -959,15 +1073,44 @@ async function scrapeSoldForQueries(
 ): Promise<QuerySetResult> {
   const results: EbayResearchResult[] = [];
   const errors: string[] = [];
+
+  if (queries.length === 0) {
+    return { results, succeeded: true, errors };
+  }
+
+  // Reuse a single browser across every query in the job instead of launching a
+  // fresh one per query — faster and a smaller footprint for eBay to flag.
+  const browser = await launchScraperBrowser();
+  const context = await browser.newContext({
+    locale: "en-AU",
+    viewport: { width: 1366, height: 900 },
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36",
+  });
   let succeeded = false;
 
-  for (const query of queries) {
-    try {
-      results.push(...(await scrapeSoldListings(query, limit, conditionFilter)));
-      succeeded = true;
-    } catch (error) {
-      errors.push(getErrorMessage(error));
+  try {
+    for (const query of queries) {
+      try {
+        results.push(
+          ...(await scrapeSoldQueryOnContext(
+            context,
+            query,
+            limit,
+            conditionFilter,
+          )),
+        );
+        succeeded = true;
+      } catch (error) {
+        errors.push(getErrorMessage(error));
+      }
+
+      // Small randomised gap between queries so the traffic looks less robotic.
+      await sleep(400 + Math.floor(Math.random() * 600));
     }
+  } finally {
+    await context.close().catch(() => undefined);
+    await browser.close().catch(() => undefined);
   }
 
   return { results, succeeded, errors };
@@ -1454,6 +1597,11 @@ async function runEbayResearchJobClaimed(jobId: string) {
   const quickLimit = Math.min(job.limit, 30);
   const quickQueries = buildQueryList(searchPlan, false);
   const deepQueries = buildQueryList(searchPlan, true);
+  // Sold comps have no cache, so don't re-scrape the queries the quick phase
+  // already covered — only the extra strict/broad variants add new data.
+  const deepSoldQueries = deepQueries.filter(
+    (query) => !quickQueries.includes(query),
+  );
   let activeResults: EbayResearchResult[] = [];
   let soldResults: EbayResearchResult[] = [];
   const activeErrors: string[] = [];
@@ -1490,7 +1638,7 @@ async function runEbayResearchJobClaimed(jobId: string) {
       ? fetchActive(deepQueries, job.limit)
       : Promise.resolve({ results: [], succeeded: true, errors: [] }),
     soldRequested
-      ? scrapeSoldForQueries(deepQueries, job.limit, conditionFilter)
+      ? scrapeSoldForQueries(deepSoldQueries, job.limit, conditionFilter)
       : Promise.resolve({ results: [], succeeded: true, errors: [] }),
   ]);
 

@@ -48,12 +48,15 @@ const BATCH_GROUP_COOLDOWN_MINUTES = 2;
 
 type ResearchSummary = {
   count: number;
+  distinctSellers: number;
   lowestPrice: string | null;
   averageLowest10: string | null;
   medianPrice: string | null;
   totalSoldQuantity: number;
   generatedAt: string;
 };
+
+type ResultSortDirection = "asc" | "desc";
 
 type ResearchResult = {
   source: "ACTIVE" | "SOLD";
@@ -581,6 +584,7 @@ export default function EbayResearchClient({
     initialJobs[0] ?? null
   );
   const [activeTab, setActiveTab] = useState<ResultTab>("ACTIVE");
+  const [resultSort, setResultSort] = useState<ResultSortDirection>("asc");
   const [submitting, setSubmitting] = useState(false);
   const [batchSubmitting, setBatchSubmitting] = useState(false);
   const [batchActionId, setBatchActionId] = useState<string | null>(null);
@@ -600,7 +604,21 @@ export default function EbayResearchClient({
       : selectedJob?.mode === "SOLD"
         ? ["SOLD"]
         : ["ACTIVE", "SOLD"];
-  const visibleResults = activeTab === "ACTIVE" ? activeResults : soldResults;
+  const unsortedResults = activeTab === "ACTIVE" ? activeResults : soldResults;
+  const visibleResults = useMemo(() => {
+    const sorted = [...unsortedResults];
+    sorted.sort((left, right) => {
+      const leftPrice = parseMoney(left.landedPrice) ?? Number.POSITIVE_INFINITY;
+      const rightPrice =
+        parseMoney(right.landedPrice) ?? Number.POSITIVE_INFINITY;
+
+      return resultSort === "asc"
+        ? leftPrice - rightPrice
+        : rightPrice - leftPrice;
+    });
+
+    return sorted;
+  }, [unsortedResults, resultSort]);
   const emptyLabel =
     activeTab === "ACTIVE"
       ? "No active listings saved for this job."
@@ -1343,7 +1361,7 @@ export default function EbayResearchClient({
               <SummaryStat
                 label="Lowest active"
                 value={formatMoney(selectedJob.activeSummary.lowestPrice)}
-                subtext={`${selectedJob.activeCount} active results`}
+                subtext={`${selectedJob.activeCount} listings · ${selectedJob.activeSummary.distinctSellers} sellers`}
               />
             )}
             {selectedJob.mode === "ACTIVE" ? (
@@ -1368,7 +1386,7 @@ export default function EbayResearchClient({
                 <SummaryStat
                   label="Lowest sold"
                   value={formatMoney(selectedJob.soldSummary.lowestPrice)}
-                  subtext={`${selectedJob.soldCount} sold comps`}
+                  subtext={`${selectedJob.soldCount} comps · ${selectedJob.soldSummary.distinctSellers} sellers`}
                 />
                 <SummaryStat
                   label="Sold units"
@@ -1464,23 +1482,38 @@ export default function EbayResearchClient({
               )}
             </div>
 
-            <div className="flex border-b border-gray-200 px-4 pt-3">
-              {availableTabs.map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => setActiveTab(tab)}
-                  className={`border-b-2 px-4 py-2 text-sm font-medium ${
-                    activeTab === tab
-                      ? "border-orange-500 text-orange-600"
-                      : "border-transparent text-gray-500 hover:text-gray-900"
-                  }`}
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-200 px-4 pt-3">
+              <div className="flex">
+                {availableTabs.map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setActiveTab(tab)}
+                    className={`border-b-2 px-4 py-2 text-sm font-medium ${
+                      activeTab === tab
+                        ? "border-orange-500 text-orange-600"
+                        : "border-transparent text-gray-500 hover:text-gray-900"
+                    }`}
+                  >
+                    {tab === "ACTIVE"
+                      ? `Active listings (${activeResults.length})`
+                      : `Sold comps (${soldResults.length})`}
+                  </button>
+                ))}
+              </div>
+              <label className="flex items-center gap-2 pb-2 text-xs text-gray-500">
+                Sort
+                <select
+                  value={resultSort}
+                  onChange={(event) =>
+                    setResultSort(event.target.value as ResultSortDirection)
+                  }
+                  className="rounded-md border border-gray-300 bg-white px-2 py-1 text-xs text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
                 >
-                  {tab === "ACTIVE"
-                    ? `Active listings (${activeResults.length})`
-                    : `Sold comps (${soldResults.length})`}
-                </button>
-              ))}
+                  <option value="asc">Lowest price first</option>
+                  <option value="desc">Highest price first</option>
+                </select>
+              </label>
             </div>
 
             <ResultsTable results={visibleResults} emptyLabel={emptyLabel} tab={activeTab} />
