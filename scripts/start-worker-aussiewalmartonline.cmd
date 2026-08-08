@@ -1,5 +1,6 @@
 @echo off
 setlocal
+set "LISTFLOW_WORKER_DATABASE_PROFILE=deployed"
 cd /d "%~dp0\.."
 title ListFlow Worker - Aussie Walmart
 

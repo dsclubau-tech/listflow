@@ -16,7 +16,12 @@ import {
   type ProductsSearchParams,
   type SearchParamValue,
 } from "@/lib/product-filter-query";
-import { getProductIdsMatchingDisplayProfitRange } from "@/lib/product-profit";
+import { productMatchesDisplayProfitRange } from "@/lib/product-profit";
+import {
+  sortProductsByDisplayValue,
+  type ProductSortField,
+  type ProductSortOrder,
+} from "@/lib/product-sort";
 import { prisma } from "@/lib/prisma";
 import type { SerializedProductRow } from "@/types/product-row";
 
@@ -33,6 +38,8 @@ export interface ProductsPageData {
   totalCount: number;
   page: number;
   pageSize: number;
+  sortBy: ProductSortField | null;
+  sortOrder: ProductSortOrder;
   importedFilter: "today" | null;
   productFilter: ProductFilter;
   hasAdvancedFilters: boolean;
@@ -110,7 +117,7 @@ type ProductRowPayload = Prisma.ProductGetPayload<{
   select: typeof productRowSelect;
 }>;
 
-const profitCandidateSelect = {
+const productSortCandidateSelect = {
   id: true,
   price: true,
   amazonPrice: true,
@@ -162,21 +169,33 @@ function getPage(totalCount: number, query: NormalizedProductsQuery) {
   return Math.min(query.requestedPage, totalPages);
 }
 
-async function getProfitFilteredProductIds(
+async function getComputedProductOrderIds(
   where: Prisma.ProductWhereInput,
   query: NormalizedProductsQuery
 ) {
   const candidates = await prisma.product.findMany({
     where,
-    orderBy: { createdAt: "desc" },
-    select: profitCandidateSelect,
+    orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+    select: productSortCandidateSelect,
   });
+  const filteredCandidates = hasProfitRangeFilter(query)
+    ? candidates.filter((product) =>
+        productMatchesDisplayProfitRange(
+          product,
+          query.profitMin,
+          query.profitMax
+        )
+      )
+    : candidates;
 
-  return getProductIdsMatchingDisplayProfitRange(
-    candidates,
-    query.profitMin,
-    query.profitMax
-  );
+  return (query.sortBy
+    ? sortProductsByDisplayValue(
+        filteredCandidates,
+        query.sortBy,
+        query.sortOrder
+      )
+    : filteredCandidates
+  ).map((product) => product.id);
 }
 
 async function getProductRowsByIds(storeId: string, ids: string[]) {
@@ -211,13 +230,13 @@ export async function getCachedProductsPageData(
   const where = buildProductsWhere(storeId, query);
   const supplierOptions = [{ id: storeId, name: storeName }];
 
-  if (hasProfitRangeFilter(query)) {
-    // Profit is computed from variant pricing, so filter every matching
-    // inventory row first, then paginate the filtered IDs.
-    const filteredIds = await getProfitFilteredProductIds(where, query);
-    const totalCount = filteredIds.length;
+  if (hasProfitRangeFilter(query) || query.sortBy) {
+    // Visible prices and profits can come from variant ranges. Compute the
+    // complete filtered order first so sorting remains correct across pages.
+    const orderedIds = await getComputedProductOrderIds(where, query);
+    const totalCount = orderedIds.length;
     const page = getPage(totalCount, query);
-    const pageIds = filteredIds.slice(
+    const pageIds = orderedIds.slice(
       (page - 1) * query.pageSize,
       page * query.pageSize
     );
@@ -228,6 +247,8 @@ export async function getCachedProductsPageData(
       totalCount,
       page,
       pageSize: query.pageSize,
+      sortBy: query.sortBy,
+      sortOrder: query.sortOrder,
       importedFilter: query.importedFilter,
       productFilter: query.productFilter,
       hasAdvancedFilters: query.hasAdvancedFilters,
@@ -240,7 +261,7 @@ export async function getCachedProductsPageData(
     prisma.product.count({ where }),
     prisma.product.findMany({
       where,
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "asc" }],
       skip: (requestedPage - 1) * query.pageSize,
       take: query.pageSize,
       select: productRowSelect,
@@ -252,7 +273,7 @@ export async function getCachedProductsPageData(
       ? requestedProducts
       : await prisma.product.findMany({
           where,
-          orderBy: { createdAt: "desc" },
+          orderBy: [{ createdAt: "desc" }, { id: "asc" }],
           skip: (page - 1) * query.pageSize,
           take: query.pageSize,
           select: productRowSelect,
@@ -263,6 +284,8 @@ export async function getCachedProductsPageData(
     totalCount,
     page,
     pageSize: query.pageSize,
+    sortBy: query.sortBy,
+    sortOrder: query.sortOrder,
     importedFilter: query.importedFilter,
     productFilter: query.productFilter,
     hasAdvancedFilters: query.hasAdvancedFilters,

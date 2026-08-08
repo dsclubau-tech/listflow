@@ -28,8 +28,10 @@ import {
 } from "@/lib/product-filter-definitions";
 import {
   buildProductFilterUrl,
+  buildProductSortUrl,
   type ProductQuickFilter,
 } from "@/lib/product-filter-navigation";
+import type { ProductSortField, ProductSortOrder } from "@/lib/product-sort";
 import type { SerializedProductRow } from "@/types/product-row";
 
 interface ProductsPageClientProps {
@@ -37,6 +39,8 @@ interface ProductsPageClientProps {
   totalCount: number;
   page: number;
   pageSize: number;
+  sortBy: ProductSortField | null;
+  sortOrder: ProductSortOrder;
   importedFilter: "today" | null;
   productFilter: ProductQuickFilter;
   hasAdvancedFilters: boolean;
@@ -363,6 +367,8 @@ export default function ProductsPageClient({
   totalCount,
   page,
   pageSize,
+  sortBy,
+  sortOrder,
   importedFilter,
   productFilter,
   hasAdvancedFilters,
@@ -397,6 +403,7 @@ export default function ProductsPageClient({
   const [pendingProductFilter, setPendingProductFilter] =
     useState<ProductQuickFilter | null>(null);
   const [isProductFilterPending, startProductFilterTransition] = useTransition();
+  const [isProductSortPending, startProductSortTransition] = useTransition();
   const [searchDraft, setSearchDraft] = useState(searchQuery);
   const [searchSuggestions, setSearchSuggestions] = useState<
     ProductSearchSuggestion[]
@@ -1056,6 +1063,12 @@ export default function ProductsPageClient({
 
     window.localStorage.setItem(PAGE_SIZE_STORAGE_KEY, String(parsed));
     navigateProductsPage(1, parsed);
+  }
+
+  function handleProductSortChange(nextSortBy: ProductSortField) {
+    startProductSortTransition(() => {
+      router.push(buildProductSortUrl(pathname, searchParamsString, nextSortBy));
+    });
   }
 
   function handlePageJumpSubmit(event: FormEvent<HTMLFormElement>) {
@@ -2127,6 +2140,10 @@ export default function ProductsPageClient({
         products={products}
         onToast={showToast}
         view="products"
+        sortBy={sortBy}
+        sortOrder={sortOrder}
+        isSortPending={isProductSortPending}
+        onSortChange={handleProductSortChange}
         autoExpandProductId={focusedProductId}
         onSelectionChange={setSelectedProductIds}
         onPriceCheckSelected={startPriceCheckJob}

@@ -57,6 +57,8 @@ export default async function ProductsPage({
         totalCount={data.totalCount}
         page={data.page}
         pageSize={data.pageSize}
+        sortBy={data.sortBy}
+        sortOrder={data.sortOrder}
         importedFilter={data.importedFilter}
         productFilter={data.productFilter}
         hasAdvancedFilters={data.hasAdvancedFilters}

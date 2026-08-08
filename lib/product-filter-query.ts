@@ -5,6 +5,12 @@ import {
 } from "@/app/generated/prisma/enums";
 import type { Prisma } from "@/app/generated/prisma/client";
 import { PRODUCT_ADVANCED_FILTER_IDS } from "@/lib/product-filter-definitions";
+import {
+  PRODUCT_SORT_FIELDS,
+  PRODUCT_SORT_ORDERS,
+  type ProductSortField,
+  type ProductSortOrder,
+} from "@/lib/product-sort";
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 export const DEFAULT_PRODUCTS_PAGE_SIZE = 100;
@@ -21,6 +27,8 @@ export type ProductsSearchParams = Record<string, SearchParamValue>;
 export interface NormalizedProductsQuery {
   pageSize: number;
   requestedPage: number;
+  sortBy: ProductSortField | null;
+  sortOrder: ProductSortOrder;
   importedFilter: "today" | null;
   productFilter: ProductFilter;
   hasAdvancedFilters: boolean;
@@ -75,6 +83,22 @@ function parseProductFilter(value: SearchParamValue): ProductFilter {
   return PRODUCT_FILTERS.includes(filter as ProductFilter)
     ? (filter as ProductFilter)
     : "all";
+}
+
+function parseProductSortField(value: SearchParamValue) {
+  const sortBy = getSingleParam(value);
+
+  return PRODUCT_SORT_FIELDS.includes(sortBy as ProductSortField)
+    ? (sortBy as ProductSortField)
+    : null;
+}
+
+function parseProductSortOrder(value: SearchParamValue): ProductSortOrder {
+  const sortOrder = getSingleParam(value);
+
+  return PRODUCT_SORT_ORDERS.includes(sortOrder as ProductSortOrder)
+    ? (sortOrder as ProductSortOrder)
+    : "asc";
 }
 
 function getTextParam(params: ProductsSearchParams, key: string) {
@@ -138,6 +162,8 @@ export function normalizeProductsQuery(
   return {
     pageSize: parsePageSize(params.pageSize),
     requestedPage: parsePositiveInteger(params.page, 1),
+    sortBy: parseProductSortField(params.sortBy),
+    sortOrder: parseProductSortOrder(params.sortOrder),
     importedFilter,
     productFilter: parseProductFilter(params.filter),
     hasAdvancedFilters: hasActiveAdvancedFilters(params),

@@ -192,6 +192,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
   const [skuText, setSkuText] = useState("");
   const [sortDirection, setSortDirection] = useState<"ASC" | "DESC">("DESC");
   const [modalState, setModalState] = useState<ModalState | null>(null);
+  const [dismissedImportJobId, setDismissedImportJobId] = useState<string | null>(null);
   const [pendingQuantity, setPendingQuantity] = useState(100);
   const [pendingSkuList, setPendingSkuList] = useState<string[]>([]);
   const [pendingSortDirection, setPendingSortDirection] = useState<"ASC" | "DESC">("DESC");
@@ -503,6 +504,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
   const applyImportJob = useCallback(
     (job: ImportJob) => {
       const jobSortDirection = normalizeJobSortDirection(job.metadata);
+      const keepModalHidden = dismissedImportJobId === job.id;
       setLastJobStatus(job.status);
       setActiveJob(job);
       setPendingQuantity(job.quantity);
@@ -512,7 +514,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
       if (isActiveImportJob(job)) {
         writeStoredImportJob(job);
         setImporting(true);
-        setModalState("importing");
+        setModalState(keepModalHidden ? null : "importing");
         setProgress({
           processed: job.processed,
           total: job.total || job.requested || job.quantity,
@@ -529,7 +531,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
       setActiveJob(null);
       setImporting(false);
       setProgress(null);
-      setModalState("complete");
+      setModalState(keepModalHidden ? null : "complete");
 
       if (job.status === "FAILED") {
         setResult(null);
@@ -554,7 +556,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
       router.refresh();
       void loadStats();
     },
-    [loadStats, router],
+    [dismissedImportJobId, loadStats, router],
   );
 
   const fetchImportJob = useCallback(async (jobId: string) => {
@@ -587,6 +589,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
 
     setImporting(true);
     setLastJobStatus("QUEUED");
+    setDismissedImportJobId(null);
     setModalState("importing");
     setProgress({
       processed: 0,
@@ -739,7 +742,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
           setError(getErrorMessage(caughtError));
           setImporting(false);
           setProgress(null);
-          setModalState("complete");
+          setModalState(dismissedImportJobId === jobId ? null : "complete");
         }
       }
     }
@@ -751,13 +754,34 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [activeImportRunning, activeJobId, applyImportJob, fetchImportJob]);
+  }, [
+    activeImportRunning,
+    activeJobId,
+    applyImportJob,
+    dismissedImportJobId,
+    fetchImportJob,
+  ]);
+
+  function runImportInBackground() {
+    if (!activeJobId || !isActiveImportJob(activeJob)) {
+      return;
+    }
+
+    setDismissedImportJobId(activeJobId);
+    setModalState(null);
+  }
+
+  function reopenImportModal() {
+    setDismissedImportJobId(null);
+    setModalState(isActiveImportJob(activeJob) ? "importing" : "complete");
+  }
 
   function closeModal() {
     if (importing) {
       return;
     }
 
+    setDismissedImportJobId(null);
     setModalState(null);
     setProgress(null);
     setResult(null);
@@ -768,6 +792,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
   function resetForNextBatch() {
     setActiveJob(null);
     setLastJobStatus(null);
+    setDismissedImportJobId(null);
     setModalState(null);
     setProgress(null);
     setResult(null);
@@ -782,6 +807,39 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
       <div className="mb-6">
         <h1 className="text-xl font-semibold text-gray-900">Import eBay Listings</h1>
       </div>
+
+      {modalState === null && dismissedImportJobId && (activeJob || result || error) && (
+        <div
+          className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-orange-200 bg-orange-50 px-4 py-3"
+          role="status"
+        >
+          <div>
+            <p className="text-sm font-semibold text-orange-950">
+              {error
+                ? "Import needs attention"
+                : isActiveImportJob(activeJob)
+                  ? activeJob?.status === "PAUSED"
+                    ? "Import paused"
+                    : "Import running in background"
+                  : lastJobStatus === "CANCELLED"
+                    ? "Import cancelled"
+                    : "Import complete"}
+            </p>
+            <p className="mt-0.5 text-xs text-orange-800">
+              {isActiveImportJob(activeJob)
+                ? `${progress?.processed ?? 0} of ${progress?.total ?? pendingQuantity} processed`
+                : error ?? `${result?.created ?? 0} imported, ${result?.skipped ?? 0} skipped, ${result?.failed ?? 0} failed`}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={reopenImportModal}
+            className="rounded-md border border-orange-300 bg-white px-3 py-1.5 text-sm font-medium text-orange-800 transition-colors hover:bg-orange-100"
+          >
+            {isActiveImportJob(activeJob) ? "View progress" : "View results"}
+          </button>
+        </div>
+      )}
 
       <section className="rounded-lg border border-gray-200 bg-white p-6">
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px_220px] lg:items-end">
@@ -1040,7 +1098,11 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
 
       {modalState && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/50 px-4 py-6">
-          <div className="max-h-full w-full max-w-2xl overflow-y-auto rounded-lg bg-white shadow-xl">
+          <div
+            className="max-h-full w-full max-w-2xl overflow-y-auto rounded-lg bg-white shadow-xl"
+            role="dialog"
+            aria-modal="true"
+          >
             {modalState === "confirm" && (
               <div className="p-6">
                 <h2 className="text-lg font-semibold text-gray-900">Confirm Import</h2>
@@ -1096,17 +1158,35 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
 
             {modalState === "importing" && (
               <div className="p-6" aria-live="polite">
-                <h2 className="text-lg font-semibold text-gray-900">
-                  {activeJobStatus === "QUEUED"
-                    ? "Preparing Import"
-                    : activeJobStatus === "PAUSED"
-                      ? "Import Paused"
-                      : activeJobStatus === "PAUSING"
-                        ? "Pausing Import"
-                        : activeJobStatus === "CANCELLING"
-                          ? "Cancelling Import"
-                          : "Importing Listings"}
-                </h2>
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <h2 className="text-lg font-semibold text-gray-900">
+                      {activeJobStatus === "QUEUED"
+                        ? "Preparing Import"
+                        : activeJobStatus === "PAUSED"
+                          ? "Import Paused"
+                          : activeJobStatus === "PAUSING"
+                            ? "Pausing Import"
+                            : activeJobStatus === "CANCELLING"
+                              ? "Cancelling Import"
+                              : "Importing Listings"}
+                    </h2>
+                    <p className="mt-1 text-sm text-gray-500">
+                      You can close this window. The worker will continue the import in the background.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={runImportInBackground}
+                    className="rounded p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-700"
+                    aria-label="Run import in background"
+                    title="Run in background"
+                  >
+                    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18 18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
                 <div className="mt-5">
                   <ActionProgressBar
                     label={
@@ -1136,6 +1216,13 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
                   <span>Failed: {progress?.failed ?? 0}</span>
                 </div>
                 <div className="mt-6 flex flex-wrap justify-end gap-3">
+                  <button
+                    type="button"
+                    onClick={runImportInBackground}
+                    className="rounded-md border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                  >
+                    Run in background
+                  </button>
                   {activeJob?.canPause && (
                     <button
                       type="button"

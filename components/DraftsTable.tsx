@@ -26,12 +26,21 @@ import {
   normalizeAmazonPriceTrackingMode,
 } from "@/lib/amazon-price-tracking";
 import { getStoreBadgeClass } from "@/lib/store-badge";
+import {
+  getProductDisplaySellPrices,
+  type ProductSortField,
+  type ProductSortOrder,
+} from "@/lib/product-sort";
 import type { SerializedProductRow } from "@/types/product-row";
 
 interface DraftsTableProps {
   products: SerializedProductRow[];
   onToast: (message: string, variant: "success" | "error") => void;
   view?: "drafts" | "products";
+  sortBy?: ProductSortField | null;
+  sortOrder?: ProductSortOrder;
+  isSortPending?: boolean;
+  onSortChange?: (sortBy: ProductSortField) => void;
   autoExpandProductId?: string | null;
   onSelectionChange?: (selectedIds: string[]) => void;
   onPriceCheckSelected?: (productIds: string[]) => Promise<void>;
@@ -233,9 +242,7 @@ function PriceCell({ product }: { product: SerializedProductRow }) {
   const buyPrices = variants
     .map((variant) => parseMoney(variant.buyPrice))
     .filter((value): value is number => value !== null);
-  const sellPrices = variants
-    .map((variant) => parseMoney(variant.sellPrice))
-    .filter((value): value is number => value !== null);
+  const sellPrices = getProductDisplaySellPrices(product);
   const fallbackBuyPrice = parseMoney(product.amazonPrice ?? product.price);
   const fallbackSellPrice = parseMoney(product.price);
   const hasAmazonTracking = Boolean(product.asin);
@@ -295,6 +302,55 @@ function ProfitCell({ product }: { product: SerializedProductRow }) {
     >
       {formatMoneyRange(profits)}
     </span>
+  );
+}
+
+function ProductSortHeader({
+  label,
+  field,
+  sortBy,
+  sortOrder,
+  isSortPending,
+  onSortChange,
+}: {
+  label: string;
+  field: ProductSortField;
+  sortBy: ProductSortField | null;
+  sortOrder: ProductSortOrder;
+  isSortPending: boolean;
+  onSortChange?: (sortBy: ProductSortField) => void;
+}) {
+  const isActive = sortBy === field;
+  const nextOrder = isActive && sortOrder === "asc" ? "descending" : "ascending";
+
+  return (
+    <th
+      className="px-3 py-3 text-left"
+      aria-sort={
+        isActive ? (sortOrder === "asc" ? "ascending" : "descending") : "none"
+      }
+    >
+      <button
+        type="button"
+        onClick={() => onSortChange?.(field)}
+        disabled={isSortPending || !onSortChange}
+        aria-label={`Sort ${label.toLowerCase()} ${nextOrder}`}
+        title={`Sort ${label.toLowerCase()} ${nextOrder}`}
+        className="group inline-flex items-center gap-1.5 rounded-sm text-left transition-colors hover:text-gray-900 focus:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
+      >
+        <span>{label}</span>
+        <span
+          aria-hidden="true"
+          className={
+            isActive
+              ? "text-orange-600"
+              : "text-gray-400 group-hover:text-gray-600"
+          }
+        >
+          {isActive ? (sortOrder === "asc" ? "▲" : "▼") : "↕"}
+        </span>
+      </button>
+    </th>
   );
 }
 
@@ -426,6 +482,10 @@ export default function DraftsTable({
   products,
   onToast,
   view = "drafts",
+  sortBy = null,
+  sortOrder = "asc",
+  isSortPending = false,
+  onSortChange,
   autoExpandProductId = null,
   onSelectionChange,
   onPriceCheckSelected,
@@ -1838,8 +1898,22 @@ export default function DraftsTable({
               <th className="px-3 py-3 text-left">Title</th>
               {isProductsView && (
                 <>
-                  <th className="px-3 py-3 text-left">Price</th>
-                  <th className="px-3 py-3 text-left">Profit</th>
+                  <ProductSortHeader
+                    label="Price"
+                    field="price"
+                    sortBy={sortBy}
+                    sortOrder={sortOrder}
+                    isSortPending={isSortPending}
+                    onSortChange={onSortChange}
+                  />
+                  <ProductSortHeader
+                    label="Profit"
+                    field="profit"
+                    sortBy={sortBy}
+                    sortOrder={sortOrder}
+                    isSortPending={isSortPending}
+                    onSortChange={onSortChange}
+                  />
                   <th className="px-3 py-3 text-left">Item ID</th>
                 </>
               )}

@@ -14,6 +14,8 @@ test("normalizeProductsQuery parses range and select filters", () => {
   const query = normalizeProductsQuery({
     pageSize: "50",
     page: "3",
+    sortBy: "profit",
+    sortOrder: "desc",
     profitMin: "4",
     profitMax: "12",
     sellPriceMin: "100",
@@ -31,6 +33,8 @@ test("normalizeProductsQuery parses range and select filters", () => {
 
   assert.equal(query.pageSize, 50);
   assert.equal(query.requestedPage, 3);
+  assert.equal(query.sortBy, "profit");
+  assert.equal(query.sortOrder, "desc");
   assert.equal(query.profitMin, 4);
   assert.equal(query.profitMax, 12);
   assert.equal(query.sellPriceMin, 100);
@@ -44,6 +48,16 @@ test("normalizeProductsQuery parses range and select filters", () => {
   assert.equal(query.priceMonitoring, "checked");
   assert.equal(query.autoOrder, "configured");
   assert.equal(query.veroViolation, "potential");
+});
+
+test("normalizeProductsQuery ignores unsupported product sorting", () => {
+  const query = normalizeProductsQuery({
+    sortBy: "title",
+    sortOrder: "sideways",
+  });
+
+  assert.equal(query.sortBy, null);
+  assert.equal(query.sortOrder, "asc");
 });
 
 test("buildProductsWhere keeps profit out of Prisma filters", () => {

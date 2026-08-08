@@ -5,6 +5,42 @@ import Module from "node:module";
 import os from "node:os";
 import path from "node:path";
 
+function configureWorkerDatabaseProfile() {
+  const profile =
+    process.env.LISTFLOW_WORKER_DATABASE_PROFILE?.trim().toLowerCase() ||
+    "default";
+
+  if (profile === "default") {
+    return profile;
+  }
+
+  if (profile !== "deployed") {
+    throw new Error(`Unsupported worker database profile: ${profile}`);
+  }
+
+  const databaseUrl =
+    process.env.LISTFLOW_DEPLOYED_DATABASE_URL?.trim() ||
+    process.env.MIGRATION_SOURCE_DATABASE_URL?.trim();
+  const directUrl =
+    process.env.LISTFLOW_DEPLOYED_DIRECT_URL?.trim() ||
+    process.env.MIGRATION_SOURCE_DIRECT_URL?.trim();
+
+  if (!databaseUrl) {
+    throw new Error(
+      "The deployed worker database URL is missing. Configure LISTFLOW_DEPLOYED_DATABASE_URL or MIGRATION_SOURCE_DATABASE_URL."
+    );
+  }
+
+  process.env.DATABASE_URL = databaseUrl;
+  if (directUrl) {
+    process.env.DIRECT_URL = directUrl;
+  }
+
+  return profile;
+}
+
+const workerDatabaseProfile = configureWorkerDatabaseProfile();
+
 const moduleWithLoad = Module as unknown as {
   _load: (
     request: string,
@@ -300,6 +336,7 @@ async function main() {
 
   console.log(`ListFlow Worker online — ${workerName}`);
   console.log(`Worker ID: ${workerId}`);
+  console.log(`Database profile: ${workerDatabaseProfile}`);
   console.log("Waiting for jobs...");
   if (STOCK_REPLENISH_ENABLED) {
     console.log(
