@@ -18,6 +18,9 @@ function parsePoolMax() {
 function getDatabaseConnectionString() {
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
+    if (process.env.NEXT_PHASE === "phase-production-build") {
+      return "postgresql://dummy:dummy@localhost:5432/dummy";
+    }
     throw new Error("DATABASE_URL is not configured");
   }
 
