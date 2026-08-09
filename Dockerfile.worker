@@ -1,0 +1,23 @@
+FROM mcr.microsoft.com/playwright:v1.58.2-noble
+
+WORKDIR /app
+
+# The Playwright image already contains the browser binaries and Linux system
+# packages. Install the repository's exact npm dependencies without running the
+# postinstall Prisma generation before the schema has been copied.
+COPY package.json package-lock.json ./
+RUN npm ci --include=dev --ignore-scripts
+
+COPY . .
+
+# Prisma 7 reads its datasource URL while loading prisma.config.ts. Generation
+# does not connect to this placeholder database; the real DATABASE_URL is
+# supplied to each Railway worker at runtime.
+RUN DATABASE_URL=postgresql://build:build@localhost:5432/listflow npx prisma generate
+
+ENV NODE_ENV=production
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+ENV LISTFLOW_USE_LOCAL_PLAYWRIGHT=true
+
+# Start Node directly so Railway's SIGTERM reaches the worker process.
+CMD ["node", "--import", "tsx", "scripts/listflow-worker.ts"]

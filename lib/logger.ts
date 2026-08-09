@@ -198,15 +198,28 @@ async function persistEntryToDatabase(entry: LogEntry): Promise<void> {
 }
 
 function persistEntry(entry: LogEntry): void {
-  try {
-    ensureLogDir();
-    void fs.promises
-      .appendFile(LOG_FILE_PATH, `${JSON.stringify(entry)}\n`, "utf8")
-      .catch(() => {
-        process.stderr.write(`[LOGGER ERROR] ${JSON.stringify(entry)}\n`);
-      });
-  } catch {
-    process.stderr.write(`[LOGGER ERROR] ${JSON.stringify(entry)}\n`);
+  const serialized = JSON.stringify(entry);
+  const isRailway = Boolean(process.env.RAILWAY_ENVIRONMENT_NAME);
+  const writeToStdout =
+    isRailway || process.env.LISTFLOW_LOG_STDOUT === "true";
+  const writeToFile =
+    !isRailway && process.env.LISTFLOW_DISABLE_FILE_LOGS !== "true";
+
+  if (writeToStdout) {
+    process.stdout.write(`${serialized}\n`);
+  }
+
+  if (writeToFile) {
+    try {
+      ensureLogDir();
+      void fs.promises
+        .appendFile(LOG_FILE_PATH, `${serialized}\n`, "utf8")
+        .catch(() => {
+          process.stderr.write(`[LOGGER ERROR] ${serialized}\n`);
+        });
+    } catch {
+      process.stderr.write(`[LOGGER ERROR] ${serialized}\n`);
+    }
   }
 
   void persistEntryToDatabase(entry);

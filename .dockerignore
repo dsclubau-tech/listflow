@@ -1,0 +1,17 @@
+.git
+.next
+node_modules
+logs
+scratch
+playwright-report
+test-results
+
+.env
+.env.*
+!.env.example
+
+*.tsbuildinfo
+npm-debug.log*
+
+lisflow ss
+listflow ss
