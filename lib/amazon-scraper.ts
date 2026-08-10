@@ -1192,7 +1192,7 @@ export async function scrapeAmazonProduct(
       function isVisible(element: Element): boolean {
         if (
           element.closest(
-            "script,style,noscript,template,[hidden],[aria-hidden='true']"
+            "script,style,noscript,template,[hidden],[aria-hidden='true'],#reviewFeatureGroup,#averageCustomerReviews,#customer-reviews"
           )
         ) {
           return false;
@@ -1264,7 +1264,12 @@ export async function scrapeAmazonProduct(
 
       function pushParagraph(text: string): void {
         const normalized = normalizeText(text);
-        if (!normalized) return;
+        if (
+          !normalized ||
+          /^\d+(\.\d+)?\s+out\s+of\s+\d+\s+stars?\s*\d*$/i.test(normalized)
+        ) {
+          return;
+        }
 
         const key = `paragraph:${normalized.toLowerCase()}`;
         if (seenTexts.has(key)) return;

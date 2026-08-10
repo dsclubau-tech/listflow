@@ -360,6 +360,37 @@ const tabs = ["Product", "Description", "Variants", "Images", "Item Specificatio
 export default function InlineEditForm({ product, onImported }: InlineEditFormProps) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState(0);
+  const editorContainerRef = useRef<HTMLDivElement | null>(null);
+  const [showBackToTop, setShowBackToTop] = useState(false);
+
+  useEffect(() => {
+    const updateBackToTopVisibility = () => {
+      const editorContainer = editorContainerRef.current;
+      if (!editorContainer) {
+        setShowBackToTop(false);
+        return;
+      }
+
+      const editorBounds = editorContainer.getBoundingClientRect();
+      setShowBackToTop(editorBounds.top < -200 && editorBounds.bottom > 0);
+    };
+
+    updateBackToTopVisibility();
+    window.addEventListener("scroll", updateBackToTopVisibility, { passive: true });
+    window.addEventListener("resize", updateBackToTopVisibility);
+
+    return () => {
+      window.removeEventListener("scroll", updateBackToTopVisibility);
+      window.removeEventListener("resize", updateBackToTopVisibility);
+    };
+  }, []);
+
+  const scrollEditorToTop = useCallback(() => {
+    editorContainerRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }, []);
 
   // Policies
   const [policies, setPolicies] = useState<Policies | null>(null);
@@ -1759,7 +1790,10 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
 
   return (
     <>
-      <div className="border-t border-gray-200 bg-gray-50">
+      <div
+        ref={editorContainerRef}
+        className="border-t border-gray-200 bg-gray-50"
+      >
       {/* ===== Header bar ===== */}
       <div className="flex flex-col gap-4 border-b border-gray-200 bg-white px-4 py-4 md:px-6 xl:flex-row xl:items-center xl:justify-between">
         {/* Left side */}
@@ -1943,7 +1977,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
         <div className="px-6 py-2 bg-red-50 border-b border-red-200 text-sm text-red-700">
           Product title contains a VERO word, keyword ({veroMatch}).{" "}
           <a
-            href="https://www.ebay.com.au/help/policies/listing-policies/vero-program"
+            href="https://www.ebay.com.au/help/policies/listing-policies/intellectual-property-rights-policy?id=4349"
             target="_blank"
             rel="noopener noreferrer"
             className="underline font-medium hover:text-red-900"
@@ -2693,6 +2727,30 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
           </div>
         )}
         </div>
+        {showBackToTop && (
+          <button
+            type="button"
+            onClick={scrollEditorToTop}
+            className="fixed bottom-6 right-6 z-40 flex h-12 w-12 items-center justify-center rounded-full border border-orange-600 bg-orange-500 text-white shadow-lg transition-colors hover:bg-orange-600 focus:outline-none focus:ring-2 focus:ring-orange-500 focus:ring-offset-2"
+            aria-label="Back to top of product editor"
+            title="Back to top"
+          >
+            <svg
+              aria-hidden="true"
+              className="h-6 w-6"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+              strokeWidth={2.5}
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M5 15l7-7 7 7"
+              />
+            </svg>
+          </button>
+        )}
       </div>
       <ImageLightbox
         images={imageLightbox?.images ?? []}

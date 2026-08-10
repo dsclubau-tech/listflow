@@ -420,6 +420,38 @@ test("renderAmazonDescription imports whichever requested Amazon section is avai
   assert.equal(renderAmazonDescription(load("<main>No source sections</main>")), "");
 });
 
+test("renderAmazonDescription excludes Amazon ratings and review containers", async () => {
+  const { renderAmazonDescription } = await loadAmazonDirectScraper();
+  const $ = load(`
+    <div id="aplus">
+      <h3>Product highlights</h3>
+      <p>Useful product detail.</p>
+      <span class="a-size-base">4.5 out of 5 stars 211</span>
+      <span class="a-size-base">3.6 out of 5 stars 16</span>
+      <span class="a-size-base">4.3 out of 5 stars</span>
+      <div id="reviewFeatureGroup">
+        <p>Review feature group content.</p>
+      </div>
+      <div id="averageCustomerReviews">
+        <p>Average customer review content.</p>
+      </div>
+      <div id="customer-reviews">
+        <p>Customer review content.</p>
+      </div>
+    </div>
+  `);
+
+  const description = renderAmazonDescription($);
+
+  assert.match(description, /Product highlights/);
+  assert.match(description, /Useful product detail/);
+  assert.doesNotMatch(description, /out of 5 stars/i);
+  assert.doesNotMatch(
+    description,
+    /Review feature group|Average customer review|Customer review content/i,
+  );
+});
+
 test("renderAmazonDescription prefers Product Description over duplicate brand-story A+ and renders collapsed FAQs", async () => {
   const { renderAmazonDescription } = await loadAmazonDirectScraper();
   const $ = load(`

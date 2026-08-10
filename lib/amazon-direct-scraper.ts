@@ -1081,6 +1081,7 @@ function collectDescriptionBlocks($: CheerioAPI) {
     const key = `${type}:${normalized.toLowerCase()}`;
     if (
       !normalized ||
+      /^\d+(\.\d+)?\s+out\s+of\s+\d+\s+stars?\s*\d*$/i.test(normalized) ||
       /^(product description|see more product details|report an issue)$/i.test(
         normalized,
       ) ||
@@ -1185,6 +1186,8 @@ function collectDescriptionBlocks($: CheerioAPI) {
   }
 
   const productDescriptionRoot = $("#productDescription").first();
+  const excludedDescriptionContainerSelector =
+    "#aplusBrandStory_feature_div, #reviewFeatureGroup, #averageCustomerReviews, #customer-reviews";
   const aplusContentSelector =
     "h1, h2, h3, h4, h5, h6, p, li, img, .a-size-base, .aplus-description, .premium-module-11-faq .faq-block";
   const aplusFeatureRoot = $("#aplus_feature_div").first();
@@ -1192,7 +1195,7 @@ function collectDescriptionBlocks($: CheerioAPI) {
   const standaloneAplusRoot = $("#aplus")
     .filter(
       (_, element) =>
-        $(element).closest("#aplusBrandStory_feature_div").length === 0,
+        $(element).closest(excludedDescriptionContainerSelector).length === 0,
     )
     .first();
   const aplusRoot = embeddedAplusRoot.find(aplusContentSelector).length
@@ -1223,6 +1226,7 @@ function collectDescriptionBlocks($: CheerioAPI) {
         const candidate = $(item);
         return (
           !isHiddenDescriptionElement(candidate) &&
+          candidate.closest(excludedDescriptionContainerSelector).length === 0 &&
           (candidate.is("img") || Boolean(normalizeText(candidate.text())))
         );
       }),
@@ -1239,7 +1243,7 @@ function collectDescriptionBlocks($: CheerioAPI) {
       root.find(selector).each((_, item) => {
         const candidate = $(item);
 
-        if (candidate.closest("#aplusBrandStory_feature_div").length > 0) {
+        if (candidate.closest(excludedDescriptionContainerSelector).length > 0) {
           return;
         }
 

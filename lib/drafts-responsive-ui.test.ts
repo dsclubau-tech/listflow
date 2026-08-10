@@ -102,6 +102,21 @@ test("draft editor tabs use responsive spacing and consistent padding", () => {
   assert.match(editorSource, /px-1 py-3 text-sm/);
 });
 
+test("draft editor provides a contextual back-to-top control and working VeRO link", () => {
+  const editorSource = readFileSync("components/InlineEditForm.tsx", "utf8");
+
+  assert.match(editorSource, /editorBounds\.top < -200/);
+  assert.match(editorSource, /editorBounds\.bottom > 0/);
+  assert.match(editorSource, /scrollIntoView\(\{/);
+  assert.match(editorSource, /behavior: "smooth"/);
+  assert.match(editorSource, /aria-label="Back to top of product editor"/);
+  assert.match(
+    editorSource,
+    /intellectual-property-rights-policy\?id=4349/,
+  );
+  assert.doesNotMatch(editorSource, /listing-policies\/vero-program/);
+});
+
 test("Draft actions use full-size delete controls and persisted import progress", () => {
   const tableSource = readFileSync("components/DraftsTable.tsx", "utf8");
   const editorSource = readFileSync("components/InlineEditForm.tsx", "utf8");
