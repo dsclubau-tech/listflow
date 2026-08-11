@@ -1225,7 +1225,7 @@ export default function DraftEditForm({
                     <button
                       type="button"
                       onClick={() => removeSpecific(index)}
-                      className="w-10 flex items-center justify-center text-red-400 hover:text-red-600 transition-colors"
+                      className="flex w-10 items-center justify-center text-quaternary transition-colors hover:text-quaternary-hover"
                     >
                       <svg
                         className="w-4 h-4"

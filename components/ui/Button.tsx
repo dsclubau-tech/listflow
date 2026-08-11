@@ -19,7 +19,7 @@ const variantClasses: Record<ButtonVariant, string> = {
   secondary:
     "border-gray-300 bg-white text-gray-700 shadow-sm hover:border-gray-400 hover:bg-gray-50 active:bg-gray-100",
   danger:
-    "border-red-200 bg-white text-red-700 shadow-sm hover:border-red-300 hover:bg-red-50 active:bg-red-100",
+    "border-quaternary bg-quaternary text-white shadow-sm hover:border-quaternary-hover hover:bg-quaternary-hover active:border-quaternary-active active:bg-quaternary-active",
   ghost:
     "border-transparent bg-transparent text-gray-600 hover:bg-gray-100 hover:text-gray-900 active:bg-gray-200",
 };

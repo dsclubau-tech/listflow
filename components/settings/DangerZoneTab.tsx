@@ -244,7 +244,7 @@ export default function DangerZoneTab() {
                   type="button"
                   onClick={() => void handleRemoveAll()}
                   disabled={!canRemove}
-                  className="rounded-md bg-red-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="rounded-md bg-quaternary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-quaternary-hover disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {removing ? "Removing..." : "Remove all from ListFlow"}
                 </button>

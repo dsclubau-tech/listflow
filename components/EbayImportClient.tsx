@@ -1248,7 +1248,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
                       type="button"
                       onClick={() => void updateImportJob("cancel")}
                       disabled={jobActionLoading !== null}
-                      className="rounded-md border border-red-300 bg-white px-4 py-2 text-sm font-medium text-red-700 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                      className="rounded-md border border-quaternary bg-white px-4 py-2 text-sm font-medium text-quaternary transition-colors hover:bg-quaternary-soft disabled:cursor-not-allowed disabled:opacity-60"
                     >
                       {jobActionLoading === "cancel" ? "Cancelling..." : "Cancel Import"}
                     </button>

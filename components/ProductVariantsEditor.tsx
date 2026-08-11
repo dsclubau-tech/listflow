@@ -227,7 +227,7 @@ export default function ProductVariantsEditor({
                           type="button"
                           onClick={() => void handleDelete(variant)}
                           disabled={deletingId === variant.id}
-                          className="text-sm font-medium text-red-600 hover:text-red-700 disabled:opacity-40"
+                          className="text-sm font-medium text-quaternary hover:text-quaternary-hover disabled:opacity-40"
                         >
                           {deletingId === variant.id ? "Deleting..." : "Delete"}
                         </button>

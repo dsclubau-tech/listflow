@@ -247,7 +247,7 @@ export default function DiagnosticsTab() {
               type="button"
               onClick={() => void clearLogs()}
               disabled={loading}
-              className="rounded-md border border-red-200 px-3 py-2 text-sm font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+              className="rounded-md border border-quaternary px-3 py-2 text-sm font-medium text-quaternary hover:bg-quaternary-soft disabled:opacity-50"
             >
               Clear logs
             </button>

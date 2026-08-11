@@ -887,7 +887,7 @@ export default function BulkEditModal({
                   type="button"
                   onClick={() => removeItem(item.id)}
                   disabled={activeJob || terminalJob}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded text-gray-400 transition-colors hover:bg-gray-100 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="inline-flex h-8 w-8 items-center justify-center rounded text-gray-400 transition-colors hover:bg-quaternary-soft hover:text-quaternary disabled:cursor-not-allowed disabled:opacity-50"
                   aria-label={`Remove ${fieldLabel(item.field)}`}
                 >
                   <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>

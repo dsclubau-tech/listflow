@@ -144,7 +144,7 @@ export default function KeywordsTab() {
                     </button>
                     <button
                       onClick={() => handleDelete(k.id)}
-                      className="text-gray-400 hover:text-red-500 transition-colors p-1"
+                      className="p-1 text-gray-400 transition-colors hover:text-quaternary"
                       title="Delete"
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5}>

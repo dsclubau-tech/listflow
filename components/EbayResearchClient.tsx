@@ -1529,7 +1529,7 @@ export default function EbayResearchClient({
               <button
                 type="button"
                 onClick={() => void clearAllResearch()}
-                className="text-sm font-medium text-red-500 hover:text-red-700"
+            className="text-sm font-medium text-quaternary hover:text-quaternary-hover"
               >
                 Clear All
               </button>

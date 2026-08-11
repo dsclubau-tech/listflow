@@ -465,7 +465,7 @@ export default function SupplierSettingsTab() {
                           <td className="px-3 py-2 text-center">
                             <button
                               onClick={() => removeItemSpecific(k)}
-                              className="text-red-400 hover:text-red-600 transition-colors"
+                              className="text-quaternary transition-colors hover:text-quaternary-hover"
                             >
                               x
                             </button>

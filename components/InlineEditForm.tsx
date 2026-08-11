@@ -2705,7 +2705,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                     <button
                       type="button"
                       onClick={() => removeSpecific(index)}
-                      className="flex min-h-10 w-full items-center justify-center self-end rounded-md text-red-500 transition-colors hover:bg-red-50 hover:text-red-700 md:w-10"
+                      className="flex min-h-10 w-full items-center justify-center self-end rounded-md text-quaternary transition-colors hover:bg-quaternary-soft hover:text-quaternary-hover md:w-10"
                       aria-label={`Remove ${spec.key || "item specification"}`}
                     >
                       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">

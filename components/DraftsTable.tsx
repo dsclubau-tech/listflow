@@ -2294,7 +2294,7 @@ export default function DraftsTable({
                                 variant="danger"
                                 size="md"
                                 fullWidth
-                                className="border-red-600 bg-red-600 text-white hover:border-red-700 hover:bg-red-700 xl:w-auto"
+                                className="xl:w-auto"
                               >
                                 Retry upload
                               </Button>
@@ -2410,7 +2410,7 @@ export default function DraftsTable({
                                         void handleDelete(product.id);
                                       }}
                                       disabled={deletingId === product.id}
-                                      className="flex min-h-10 w-full items-center rounded-lg px-3 text-left text-sm font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                                      className="flex min-h-10 w-full items-center rounded-lg px-3 text-left text-sm font-semibold text-quaternary hover:bg-quaternary-soft disabled:opacity-50"
                                       role="menuitem"
                                     >
                                       {deletingId === product.id ? "Deleting…" : "Delete draft"}
@@ -2427,7 +2427,7 @@ export default function DraftsTable({
                             <button
                               onClick={() => openRemovalDialog(product)}
                               disabled={endingId === product.id || deletingId === product.id}
-                              className="flex items-center gap-1 whitespace-nowrap rounded bg-red-500 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-40"
+                              className="flex items-center gap-1 whitespace-nowrap rounded bg-quaternary px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-quaternary-hover disabled:opacity-40"
                               title="Choose how to remove this product"
                             >
                               {endingId === product.id || deletingId === product.id ? "Removing..." : "Remove"}
@@ -2533,7 +2533,7 @@ export default function DraftsTable({
           <button
             type="button"
             onClick={() => openRemovalDialog(contextMenu.product)}
-            className="block w-full px-3 py-2 text-left text-sm font-medium text-red-600 transition-colors hover:bg-red-50"
+            className="block w-full px-3 py-2 text-left text-sm font-medium text-quaternary transition-colors hover:bg-quaternary-soft"
           >
             Remove...
           </button>
@@ -2579,12 +2579,12 @@ export default function DraftsTable({
                 type="button"
                 onClick={() => void handleEndListing(removalProduct.id)}
                 disabled={Boolean(deletingId || endingId)}
-                className="w-full rounded-md border border-red-200 bg-red-50 px-4 py-3 text-left transition-colors hover:bg-red-100 disabled:opacity-50"
+                className="w-full rounded-md border border-quaternary bg-quaternary-soft px-4 py-3 text-left transition-colors hover:border-quaternary-hover disabled:opacity-50"
               >
-                <span className="block text-sm font-semibold text-red-700">
+                <span className="block text-sm font-semibold text-quaternary-hover">
                   End on eBay and remove from ListFlow
                 </span>
-                <span className="mt-1 block text-xs text-red-600">
+                <span className="mt-1 block text-xs text-quaternary">
                   Ends the eBay listing, then deletes the local product record.
                 </span>
               </button>
@@ -2842,7 +2842,7 @@ export default function DraftsTable({
                   <button
                     onClick={handleBulkRemoveFromListflowSelected}
                     disabled={isBulkRemovingListflow || isBulkEnding}
-                    className="px-4 py-2 border border-red-200 text-red-700 text-sm font-medium rounded-md hover:bg-red-50 transition-colors disabled:opacity-60 flex items-center gap-2"
+                    className="flex items-center gap-2 rounded-md border border-quaternary px-4 py-2 text-sm font-medium text-quaternary transition-colors hover:bg-quaternary-soft disabled:opacity-60"
                   >
                     {isBulkRemovingListflow ? (
                       <>
@@ -2861,7 +2861,7 @@ export default function DraftsTable({
                   <button
                     onClick={handleBulkEndAndRemoveSelected}
                     disabled={isBulkEnding || isBulkRemovingListflow}
-                    className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
+                    className="flex items-center gap-2 rounded-md bg-quaternary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-quaternary-hover disabled:opacity-60"
                   >
                     {isBulkEnding ? (
                       <>

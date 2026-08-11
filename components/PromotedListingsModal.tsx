@@ -262,7 +262,7 @@ export default function PromotedListingsModal({
                 <button
                   type="button"
                   onClick={() => setOperation("REMOVE")}
-                  className={`border-l border-gray-300 px-4 py-2 text-sm font-medium ${operation === "REMOVE" ? "bg-red-600 text-white" : "bg-white text-gray-700 hover:bg-gray-50"}`}
+                  className={`border-l border-gray-300 px-4 py-2 text-sm font-medium ${operation === "REMOVE" ? "bg-quaternary text-white" : "bg-white text-gray-700 hover:bg-gray-50"}`}
                 >
                   Remove promotion
                 </button>
@@ -516,7 +516,7 @@ export default function PromotedListingsModal({
               type="button"
               onClick={() => void submit()}
               disabled={!canSubmit}
-              className={`rounded px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 ${operation === "REMOVE" ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 hover:bg-blue-700"}`}
+              className={`rounded px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50 ${operation === "REMOVE" ? "bg-quaternary hover:bg-quaternary-hover" : "bg-blue-600 hover:bg-blue-700"}`}
             >
               {isSubmitting
                 ? "Queuing..."

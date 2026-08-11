@@ -365,7 +365,7 @@ function ActionButton({
     tone === "primary"
       ? "border-emerald-600 bg-emerald-600 text-white hover:bg-emerald-700"
       : tone === "danger"
-        ? "border-red-200 bg-white text-red-700 hover:bg-red-50"
+        ? "border-quaternary bg-quaternary text-white hover:border-quaternary-hover hover:bg-quaternary-hover"
         : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50";
 
   return (

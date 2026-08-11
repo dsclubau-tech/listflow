@@ -4,6 +4,10 @@
   --primary: #0d47a1;
   --secondary: #2196f3;
   --tertiary: #e3f2fd;
+  --quaternary: #e03f4f;
+  --quaternary-hover: #c83242;
+  --quaternary-active: #ad2737;
+  --quaternary-soft: #fdecee;
   --background: var(--tertiary);
   --foreground: #171717;
   --font-listflow-sans: "Segoe UI", Arial, Helvetica, sans-serif;
@@ -13,6 +17,10 @@
   --color-primary: var(--primary);
   --color-secondary: var(--secondary);
   --color-tertiary: var(--tertiary);
+  --color-quaternary: var(--quaternary);
+  --color-quaternary-hover: var(--quaternary-hover);
+  --color-quaternary-active: var(--quaternary-active);
+  --color-quaternary-soft: var(--quaternary-soft);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-listflow-sans);

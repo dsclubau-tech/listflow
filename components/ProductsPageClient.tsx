@@ -1608,7 +1608,7 @@ export default function ProductsPageClient({
                 type="button"
                 onClick={cancelActivePriceCheckJob}
                 disabled={isPriceCheckJobStopping}
-                className="rounded-md border border-red-200 bg-white px-3 py-1.5 text-sm font-medium text-red-700 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-md border border-quaternary bg-white px-3 py-1.5 text-sm font-medium text-quaternary transition-colors hover:bg-quaternary-soft disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {isPriceCheckJobStopping ? "Stopping..." : "Stop"}
               </button>
