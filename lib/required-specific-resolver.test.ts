@@ -116,6 +116,63 @@ test("resolveRequiredItemSpecifics infers Compatible Brand from product Brand", 
   );
 });
 
+test("resolveRequiredItemSpecifics infers Compatible Brand from a brand named in the title", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: 'Teamgee 14" Laptop Screen Extender for Dell XPS',
+    categoryName: "Laptop Screens & LCD Panels",
+    brand: "Teamgee",
+    itemSpecifics: { Brand: "Teamgee" },
+    requiredItemSpecifics: [
+      { name: "Compatible Brand", values: ["For Dell", "Universal"] },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics["Compatible Brand"], "For Dell");
+  assert.deepEqual(result.missingItemSpecifics, []);
+  assert.equal(
+    result.decisions.find((d) => d.name === "Compatible Brand")?.source,
+    "title",
+  );
+});
+
+test("resolveRequiredItemSpecifics matches a For Brand compatible option", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: '14" Laptop Screen Extender',
+    categoryName: "Laptop Screens & LCD Panels",
+    brand: "Teamgee",
+    itemSpecifics: { Brand: "Teamgee" },
+    requiredItemSpecifics: [
+      { name: "Compatible Brand", values: ["For Teamgee", "Universal"] },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics["Compatible Brand"], "For Teamgee");
+  assert.deepEqual(result.missingItemSpecifics, []);
+  assert.equal(
+    result.decisions.find((d) => d.name === "Compatible Brand")?.source,
+    "amazon",
+  );
+});
+
+test("resolveRequiredItemSpecifics uses Universal as the Compatible Brand fallback", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: 'Teamgee 14" Laptop Screen Extender',
+    categoryName: "Laptop Screens & LCD Panels",
+    brand: "Teamgee",
+    itemSpecifics: { Brand: "Teamgee" },
+    requiredItemSpecifics: [
+      { name: "Compatible Brand", values: ["For Dell", "Universal"] },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics["Compatible Brand"], "Universal");
+  assert.deepEqual(result.missingItemSpecifics, []);
+  assert.equal(
+    result.decisions.find((d) => d.name === "Compatible Brand")?.source,
+    "ebay_allowed_default",
+  );
+});
+
 test("resolveRequiredItemSpecifics infers Compatible Model from Amazon item specifics", () => {
   const result = resolveRequiredItemSpecifics({
     title: "BRITA MAXTRA PRO Limescale Expert Water Filter Cartridges",

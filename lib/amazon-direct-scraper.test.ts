@@ -861,6 +861,94 @@ test("scrapeAmazonProductDirect uses a rendered selected-variant price fallback"
   ]);
 });
 
+test("renderAmazonDescription excludes comparison table content and other-product variant images", async () => {
+  const { renderAmazonDescription } = await loadAmazonDirectScraper();
+  const $ = load(`
+    <div id="feature-bullets">
+      <ul><li><span>Main product feature.</span></li></ul>
+    </div>
+    <div id="aplus_feature_div">
+      <div id="aplus">
+        <div class="aplus-module">
+          <h3>Product Highlights</h3>
+          <p>This is the actual product description.</p>
+          <img
+            src="https://m.media-amazon.com/images/S/aplus-media-library-service-media/real-product.__CR0,0,2928,1200_PT0_SX1464_V1___.jpg"
+            alt="Product photo"
+          />
+        </div>
+        <div class="apm-tablemodule">
+          <h3>Compare Similar Items</h3>
+          <img
+            src="https://m.media-amazon.com/images/S/aplus-media-library-service-media/other-product.__CR0,0,2928,1200_PT0_SX1464_V1___.jpg"
+            alt="Other product variant"
+          />
+          <p>Single Size</p>
+          <p>King Size</p>
+        </div>
+        <div class="aplus-comparison-table">
+          <p>Comparison item details that should be excluded.</p>
+        </div>
+      </div>
+    </div>
+  `);
+
+  const description = renderAmazonDescription($);
+  assert.match(description, /Main product feature/);
+  assert.match(description, /Product Highlights/);
+  assert.match(description, /This is the actual product description/);
+  assert.match(description, /real-product/);
+  assert.doesNotMatch(description, /other-product/);
+  assert.doesNotMatch(description, /Compare Similar Items/);
+  assert.doesNotMatch(description, /Single Size/);
+  assert.doesNotMatch(description, /King Size/);
+  assert.doesNotMatch(description, /Comparison item details/);
+});
+
+test("renderAmazonDescription filters out 'From the manufacturer' and 'From the brand' heading text", async () => {
+  const { renderAmazonDescription } = await loadAmazonDirectScraper();
+  const $ = load(`
+    <div id="aplus_feature_div">
+      <div id="aplus">
+        <h3>From the manufacturer</h3>
+        <p>Useful product info that appears after the heading.</p>
+        <h3>From the brand</h3>
+        <p>Brand story text that also appears.</p>
+        <h3>Compare with similar items</h3>
+        <p>Comparison blurb.</p>
+      </div>
+    </div>
+  `);
+
+  const description = renderAmazonDescription($);
+  assert.doesNotMatch(description, /From the manufacturer/i);
+  assert.doesNotMatch(description, /From the brand/i);
+  assert.doesNotMatch(description, /Compare with similar items/i);
+  assert.match(description, /Useful product info/);
+  assert.match(description, /Brand story text/);
+  assert.match(description, /Comparison blurb/);
+});
+
+test("renderAmazonDescription strips literal img tags from paragraph text", async () => {
+  const { renderAmazonDescription } = await loadAmazonDirectScraper();
+  const $ = load(`
+    <div id="productDescription">
+      <p>POWERFUL. COMPACT. CONVENIENT.</p>
+      <p>&lt;img alt="handheld vacuum" src="https://m.media-amazon.com/images/S/aplus-media/vc/product-image.jpg"&gt;</p>
+      <p>High Efficiency Motor</p>
+      <p>A high-speed motor. &lt;img alt="vacuum" src="https://m.media-amazon.com/images/S/aplus-media/vc/another.jpg"&gt;</p>
+    </div>
+  `);
+
+  const description = renderAmazonDescription($);
+  assert.match(description, /POWERFUL\. COMPACT\. CONVENIENT\./);
+  assert.match(description, /High Efficiency Motor/);
+  assert.match(description, /A high-speed motor\./);
+  assert.doesNotMatch(description, /&lt;img/);
+  assert.doesNotMatch(description, /<img alt="handheld/);
+  assert.doesNotMatch(description, /product-image\.jpg/);
+});
+
 test("scrapeAmazonProductDirect fails when only page-wide prices exist after postcode check", async (t) => {
   const { AmazonDirectScrapeError, scrapeAmazonProductDirect } =
     await loadAmazonDirectScraper();

@@ -238,12 +238,13 @@ function inferCompatibleBrand(
   specifics: ItemSpecificsRecord,
   allowedValues?: string[],
 ) {
+  // Keep the raw Amazon brand for fallback matching. Passing allowedValues here
+  // would discard brands that eBay only exposes as a "For [Brand]" option.
   const brandValue =
     inferBrandItemSpecific({
       itemSpecifics: specifics,
       brand: input.brand,
       title: input.title,
-      allowedValues,
     }) ??
     readItemSpecificValue(specifics, ["Compatible Brand"]);
 
@@ -251,6 +252,49 @@ function inferCompatibleBrand(
 
   if (matched && !isUnavailableBrandValue(matched)) {
     return { value: matched, source: "amazon" as const };
+  }
+
+  if (input.title && allowedValues && allowedValues.length > 0) {
+    const titleText = normalizeName(
+      input.title.replace(/[()[\]{};:,.]+/g, " "),
+    );
+
+    for (const value of allowedValues) {
+      const normalizedValue = normalizeName(value).replace(
+        /^(?:for|compatible with)\s+/,
+        "",
+      );
+
+      if (
+        normalizedValue.length >= 3 &&
+        !isUnavailableBrandValue(value) &&
+        titleText.includes(normalizedValue)
+      ) {
+        return { value, source: "title" as const };
+      }
+    }
+  }
+
+  if (brandValue && allowedValues && allowedValues.length > 0) {
+    const forBrand = `for ${normalizeName(brandValue)}`;
+    const prefixedBrand = allowedValues.find(
+      (value) => normalizeName(value) === forBrand,
+    );
+
+    if (prefixedBrand && !isUnavailableBrandValue(prefixedBrand)) {
+      return { value: prefixedBrand, source: "amazon" as const };
+    }
+  }
+
+  const universal =
+    allowedValues && allowedValues.length > 0
+      ? matchAllowedSpecificValue("Universal", allowedValues)
+      : null;
+  if (universal) {
+    return {
+      value: universal,
+      source: "ebay_allowed_default" as const,
+    };
   }
 
   return { value: null, source: "missing" as const };
