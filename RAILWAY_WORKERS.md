@@ -37,7 +37,9 @@ Copy production values securely into Railway; never commit them:
 
 - `DATABASE_URL`
 - `LISTFLOW_DB_POOL_MAX=1`
-- `LISTFLOW_SUPABASE_TRANSACTION_POOLER=true`
+- `LISTFLOW_SUPABASE_TRANSACTION_POOLER=false`
+- `LISTFLOW_WORKER_ENABLED=false` while provisioning; change to `true` only
+  after the database cutover has passed validation
 - `LISTFLOW_USE_LOCAL_PLAYWRIGHT=true`
 - `LISTFLOW_WORKER_IDLE_SLEEP_MS=1000`
 - `LISTFLOW_WORKER_ERROR_SLEEP_MS=30000`
@@ -52,6 +54,10 @@ Copy production values securely into Railway; never commit them:
 
 `DIRECT_URL`, authentication secrets, bootstrap passwords, and `CRON_SECRET`
 are not required by the worker process.
+
+Railway workers are persistent processes, so they use the Supabase session
+pooler on port 5432. Vercel's short-lived serverless functions use transaction
+pooling on port 6543 instead.
 
 ## Cutover
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useSyncExternalStore } from "react";
 import Sidebar from "@/components/Sidebar";
 
 interface SidebarLayoutProps {
@@ -10,37 +10,52 @@ interface SidebarLayoutProps {
 }
 
 const STORAGE_KEY = "listflow_sidebar_collapsed";
+const STORAGE_EVENT = "listflow-sidebar-change";
+
+function subscribeToSidebarPreference(callback: () => void) {
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === STORAGE_KEY) callback();
+  };
+
+  window.addEventListener("storage", handleStorage);
+  window.addEventListener(STORAGE_EVENT, callback);
+
+  return () => {
+    window.removeEventListener("storage", handleStorage);
+    window.removeEventListener(STORAGE_EVENT, callback);
+  };
+}
+
+function getSidebarPreference() {
+  try {
+    return localStorage.getItem(STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
+
+function getServerSidebarPreference() {
+  return false;
+}
 
 export default function SidebarLayout({
   userName,
   userEmail,
   children,
 }: SidebarLayoutProps) {
-  const [collapsed, setCollapsed] = useState(false);
-  const [isMounted, setIsMounted] = useState(false);
+  const collapsed = useSyncExternalStore(
+    subscribeToSidebarPreference,
+    getSidebarPreference,
+    getServerSidebarPreference
+  );
 
-  useEffect(() => {
-    setIsMounted(true);
+  const handleToggle = () => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved !== null) {
-        setCollapsed(saved === "true");
-      }
+      localStorage.setItem(STORAGE_KEY, String(!collapsed));
+      window.dispatchEvent(new Event(STORAGE_EVENT));
     } catch {
       // Ignore localStorage errors
     }
-  }, []);
-
-  const handleToggle = () => {
-    setCollapsed((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(STORAGE_KEY, String(next));
-      } catch {
-        // Ignore localStorage errors
-      }
-      return next;
-    });
   };
 
   return (
@@ -48,12 +63,12 @@ export default function SidebarLayout({
       <Sidebar
         userName={userName}
         userEmail={userEmail}
-        collapsed={isMounted ? collapsed : false}
+        collapsed={collapsed}
         onToggle={handleToggle}
       />
       <main
         className={`flex-1 transition-all duration-300 ease-in-out ${
-          isMounted && collapsed ? "ml-16" : "ml-64"
+          collapsed ? "ml-16" : "ml-64"
         } overflow-auto bg-tertiary`}
       >
         {children}

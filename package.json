@@ -16,6 +16,7 @@
     "worker:store": "tsx scripts/listflow-worker.ts",
     "worker:shortcut": "powershell -ExecutionPolicy Bypass -File scripts/install-worker-shortcut.ps1",
     "worker:shortcuts": "powershell -ExecutionPolicy Bypass -File scripts/install-store-worker-shortcuts.ps1",
+    "migration:preflight": "powershell -ExecutionPolicy Bypass -File scripts/database-migration/Invoke-ListFlowMigration.ps1 -Mode Preflight",
     "browser:install": "playwright install chromium",
     "store:reset-password": "tsx scripts/reset-store-password.ts",
     "postinstall": "prisma generate"

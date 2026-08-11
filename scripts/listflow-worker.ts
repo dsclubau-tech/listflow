@@ -4,6 +4,7 @@ import fs from "node:fs";
 import Module from "node:module";
 import os from "node:os";
 import path from "node:path";
+import { isWorkerEnabled } from "../lib/worker-enabled";
 
 function configureWorkerDatabaseProfile() {
   const profile =
@@ -284,6 +285,19 @@ async function processStore(store: { id: string; name: string; loginId: string |
 }
 
 async function main() {
+  if (!isWorkerEnabled()) {
+    console.log(
+      "ListFlow Worker is parked because LISTFLOW_WORKER_ENABLED=false."
+    );
+    console.log("No database connection will be opened and no jobs will be claimed.");
+
+    while (!stopping) {
+      await sleep(30_000);
+    }
+
+    return;
+  }
+
   if (!process.env.DATABASE_URL) {
     throw new Error("DATABASE_URL is missing. Add it to .env before starting the worker.");
   }

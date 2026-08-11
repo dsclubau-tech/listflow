@@ -4,6 +4,11 @@ import {
   getSafeCallbackPath,
   isPrivateAppPath,
 } from "@/lib/auth-navigation";
+import {
+  getMaintenanceResponse,
+  isMaintenanceBypassPath,
+  isMaintenanceModeEnabled,
+} from "@/lib/maintenance-mode";
 
 function getBaseOrigin(nextUrl: URL) {
   // Authentication redirects must stay on the host the user opened. Asset URL
@@ -42,7 +47,17 @@ export const authConfig = {
       }
       return session;
     },
-    authorized({ auth, request: { nextUrl } }) {
+    authorized({ auth, request }) {
+      const { nextUrl } = request;
+      if (
+        isMaintenanceModeEnabled() &&
+        !isMaintenanceBypassPath(nextUrl.pathname)
+      ) {
+        const requestId =
+          request.headers.get("x-request-id") ?? crypto.randomUUID();
+        return getMaintenanceResponse(nextUrl.pathname, requestId);
+      }
+
       const isStoreSession = !!auth?.user?.storeId;
       const isProtected = isPrivateAppPath(nextUrl.pathname);
       const isAuthPage =
