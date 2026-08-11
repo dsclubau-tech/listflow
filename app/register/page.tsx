@@ -73,11 +73,11 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen flex items-center justify-center bg-tertiary py-12 px-4 sm:px-6 lg:px-8">
       <div className="w-full max-w-md">
         <div className="bg-white rounded-lg shadow-md p-8">
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold text-gray-900">ListFlow</h1>
+            <h1 className="text-3xl font-bold text-primary">ListFlow</h1>
             <p className="text-sm text-gray-500 mt-1">Create your Store Account</p>
           </div>
 
@@ -96,7 +96,7 @@ export default function RegisterPage() {
                 onChange={(e) => setStoreName(e.target.value)}
                 required
                 maxLength={100}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-800 focus:border-gray-800 text-gray-900"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary focus:border-secondary text-gray-900"
                 placeholder="e.g. My eBay Store"
                 disabled={isLoading}
               />
@@ -120,7 +120,7 @@ export default function RegisterPage() {
                 autoCapitalize="none"
                 autoCorrect="off"
                 autoComplete="username"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-800 focus:border-gray-800 text-gray-900"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary focus:border-secondary text-gray-900"
                 placeholder="e.g. my-store-1"
                 disabled={isLoading}
               />
@@ -151,7 +151,7 @@ export default function RegisterPage() {
                   }
                   required
                   autoComplete="new-password"
-                  className="w-full px-3 py-2 pr-20 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-800 focus:border-gray-800 text-gray-900"
+                  className="w-full px-3 py-2 pr-20 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary focus:border-secondary text-gray-900"
                   placeholder="********"
                   disabled={isLoading}
                 />
@@ -190,7 +190,7 @@ export default function RegisterPage() {
                 }
                 required
                 autoComplete="new-password"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-800 focus:border-gray-800 text-gray-900"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary focus:border-secondary text-gray-900"
                 placeholder="********"
                 disabled={isLoading}
               />
@@ -202,7 +202,7 @@ export default function RegisterPage() {
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full py-2.5 px-4 bg-orange-600 text-white font-medium rounded-md hover:bg-orange-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-orange-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="w-full py-2.5 px-4 bg-primary text-white font-medium rounded-md hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-secondary disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {isLoading ? "Creating Account..." : "Create Account"}
             </button>
@@ -217,7 +217,7 @@ export default function RegisterPage() {
               Already have a store account?{" "}
               <Link
                 href="/login"
-                className="font-medium text-orange-600 hover:text-orange-500 underline underline-offset-2"
+                className="font-medium text-primary hover:text-blue-800 underline underline-offset-2"
               >
                 Sign in
               </Link>

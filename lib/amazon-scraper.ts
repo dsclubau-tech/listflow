@@ -1442,7 +1442,7 @@ export async function scrapeAmazonProduct(
           section[0]?.type === "image" &&
           block.text.length <= 120
         ) {
-          return `<div style="margin:24px 0 12px;font-size:28px;font-weight:700;line-height:1.35;color:#ef3b2d;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${escapeHtml(
+          return `<div style="margin:24px 0 12px;font-size:28px;font-weight:700;line-height:1.35;color:#0D47A1;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${escapeHtml(
             block.text
           )}</div>`;
         }
@@ -1450,7 +1450,7 @@ export async function scrapeAmazonProduct(
         if (block.type === "heading") {
           const fontSize =
             block.level <= 2 ? "24px" : block.level === 3 ? "20px" : "18px";
-          return `<div style="margin:${index === 0 ? "0" : "24px"} 0 12px;font-size:${fontSize};font-weight:700;line-height:1.35;color:#ef3b2d;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${escapeHtml(
+          return `<div style="margin:${index === 0 ? "0" : "24px"} 0 12px;font-size:${fontSize};font-weight:700;line-height:1.35;color:#0D47A1;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${escapeHtml(
             block.text
           )}</div>`;
         }

@@ -6,28 +6,8 @@ import {
 } from "@/lib/auth-navigation";
 
 function getBaseOrigin(nextUrl: URL) {
-  if (
-    nextUrl.host &&
-    !nextUrl.host.includes("localhost") &&
-    !nextUrl.host.includes("127.0.0.1")
-  ) {
-    const protocol =
-      nextUrl.protocol && nextUrl.protocol.startsWith("http")
-        ? nextUrl.protocol
-        : "https:";
-    return `${protocol}//${nextUrl.host}`;
-  }
-
-  const vercelUrl =
-    process.env.LISTFLOW_PUBLIC_IMAGE_BASE_URL ||
-    process.env.NEXTAUTH_URL ||
-    process.env.VERCEL_PROJECT_PRODUCTION_URL ||
-    process.env.VERCEL_URL;
-
-  if (vercelUrl && !vercelUrl.includes("localhost")) {
-    return vercelUrl.startsWith("http") ? vercelUrl : `https://${vercelUrl}`;
-  }
-
+  // Authentication redirects must stay on the host the user opened. Asset URL
+  // configuration must never turn localhost navigation into live-site navigation.
   return nextUrl.origin;
 }
 

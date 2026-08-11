@@ -18,35 +18,35 @@ const COLOR_OPTIONS = [
   "#ff9900",
   "#ffff00",
   "#008a00",
-  "#0066cc",
+  "#2196F3",
   "#9933ff",
   "#ffffff",
   "#facccc",
   "#ffebcc",
   "#ffffcc",
   "#cce8cc",
-  "#cce0f5",
+  "#E3F2FD",
   "#ebd6ff",
   "#bbbbbb",
   "#f06666",
   "#ffc266",
   "#ffff66",
   "#66b966",
-  "#66a3e0",
+  "#64B5F6",
   "#c285ff",
   "#888888",
   "#a10000",
   "#b26b00",
   "#b2b200",
   "#006100",
-  "#0047b2",
+  "#0D47A1",
   "#6b24b2",
   "#444444",
   "#5c0000",
   "#663d00",
   "#666600",
   "#003700",
-  "#002966",
+  "#082F6C",
   "#3d1466",
 ];
 
@@ -1236,7 +1236,7 @@ export default function RichTextEditor({
                         position: "relative",
                       }}
                       onMouseEnter={(event) => {
-                        (event.target as HTMLElement).style.outline = "2px solid #f97316";
+                        (event.target as HTMLElement).style.outline = "2px solid #2196F3";
                         (event.target as HTMLElement).style.outlineOffset = "1px";
                       }}
                       onMouseLeave={(event) => {

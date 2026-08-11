@@ -29,7 +29,7 @@ export default function PageRefreshButton({
       aria-label={label}
       aria-busy={isRefreshing || undefined}
       title={label}
-      className={`inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md text-gray-400 transition-colors hover:bg-gray-800 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500 focus-visible:ring-offset-2 focus-visible:ring-offset-gray-900 disabled:cursor-wait disabled:opacity-70 ${className}`}
+      className={`inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md text-tertiary/70 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-secondary focus-visible:ring-offset-2 focus-visible:ring-offset-primary disabled:cursor-wait disabled:opacity-70 ${className}`}
     >
       <svg
         className={`h-4 w-4 ${isRefreshing ? "animate-spin" : ""}`}

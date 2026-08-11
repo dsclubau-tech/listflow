@@ -1,21 +1,90 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
+  --primary: #0d47a1;
+  --secondary: #2196f3;
+  --tertiary: #e3f2fd;
+  --background: var(--tertiary);
   --foreground: #171717;
   --font-listflow-sans: "Segoe UI", Arial, Helvetica, sans-serif;
 }
 
 @theme inline {
+  --color-primary: var(--primary);
+  --color-secondary: var(--secondary);
+  --color-tertiary: var(--tertiary);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-listflow-sans);
+
+  /* Application blue palette. Legacy orange utilities are mapped here so every
+     existing brand-accent surface adopts the new application palette. */
+  --color-blue-50: #e3f2fd;
+  --color-blue-100: #bbdefb;
+  --color-blue-200: #90caf9;
+  --color-blue-300: #64b5f6;
+  --color-blue-400: #42a5f5;
+  --color-blue-500: #2196f3;
+  --color-blue-600: #0d47a1;
+  --color-blue-700: #1565c0;
+  --color-blue-800: #1565c0;
+  --color-blue-900: #0d47a1;
+  --color-blue-950: #082f6c;
+  --color-orange-50: #e3f2fd;
+  --color-orange-100: #bbdefb;
+  --color-orange-200: #90caf9;
+  --color-orange-300: #64b5f6;
+  --color-orange-400: #42a5f5;
+  --color-orange-500: #0d47a1;
+  --color-orange-600: #1565c0;
+  --color-orange-700: #0d47a1;
+  --color-orange-800: #082f6c;
+  --color-orange-900: #061f49;
+  --color-orange-950: #082f6c;
 }
 
 body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-listflow-sans);
+}
+
+/* Dark neutral utilities were historically used for primary actions. Keep
+   their text-neutral counterparts intact while moving those surfaces into the
+   new brand palette. Opacity variants such as modal backdrops remain neutral. */
+.bg-gray-900 {
+  background-color: var(--primary);
+}
+
+.border-gray-900 {
+  border-color: var(--primary);
+}
+
+.hover\:bg-gray-700:hover,
+.hover\:bg-gray-800:hover {
+  background-color: #1565c0;
+}
+
+.hover\:border-gray-700:hover {
+  border-color: #1565c0;
+}
+
+.active\:bg-gray-950:active {
+  background-color: #082f6c;
+}
+
+.active\:border-gray-950:active {
+  border-color: #082f6c;
+}
+
+.focus\:border-gray-800:focus,
+.focus-visible\:border-gray-800:focus-visible {
+  border-color: var(--secondary);
+}
+
+.focus\:ring-gray-800:focus,
+.focus-visible\:ring-gray-800:focus-visible {
+  --tw-ring-color: var(--secondary);
 }
 
 /* ── Snappy tactile press feedback for all buttons ── */
@@ -99,7 +168,7 @@ button {
 }
 
 .listflow-rich-text .ql-editor .listflow-image-drop-target {
-  outline: 3px dashed #f97316;
+  outline: 3px dashed var(--secondary);
   outline-offset: 4px;
 }
 
@@ -167,17 +236,17 @@ button {
 }
 
 .ql-toolbar.ql-snow button.ql-active {
-  background: #fff7ed;
-  border-color: #fb923c;
-  color: #c2410c;
+  background: var(--tertiary);
+  border-color: var(--secondary);
+  color: var(--primary);
 }
 
 .ql-toolbar.ql-snow button.ql-active .ql-stroke {
-  stroke: #c2410c;
+  stroke: var(--primary);
 }
 
 .ql-toolbar.ql-snow button.ql-active .ql-fill {
-  fill: #c2410c;
+  fill: var(--primary);
 }
 
 /* SVG icons */
@@ -299,8 +368,8 @@ button {
 }
 
 .listflow-rich-text .listflow-quill-action[data-active="true"] {
-  background: #fff7ed;
-  color: #c2410c;
+  background: var(--tertiary);
+  color: var(--primary);
 }
 
 .listflow-rich-text .listflow-quill-action:disabled {
@@ -325,7 +394,7 @@ button {
 }
 
 .listflow-rich-text .listflow-quill-source:focus {
-  box-shadow: inset 0 0 0 2px #f97316;
+  box-shadow: inset 0 0 0 2px var(--secondary);
 }
 
 [data-toolbar-variant="grouped"] .ql-toolbar.ql-snow {
@@ -401,9 +470,9 @@ button {
 
 [data-toolbar-variant="grouped"] .ql-toolbar.ql-snow button.ql-active,
 [data-toolbar-variant="grouped"] .ql-toolbar.ql-snow .listflow-quill-action[data-active="true"] {
-  border-color: #fb923c;
-  background: #fff7ed;
-  color: #c2410c;
+  border-color: var(--secondary);
+  background: var(--tertiary);
+  color: var(--primary);
 }
 
 [data-toolbar-variant="grouped"] .ql-toolbar.ql-snow button svg {
@@ -435,8 +504,8 @@ button {
 }
 
 [data-toolbar-variant="grouped"] .listflow-quill-action[data-active="true"] {
-  background: #fff7ed;
-  color: #c2410c;
+  background: var(--tertiary);
+  color: var(--primary);
 }
 
 [data-toolbar-variant="compact"] .ql-toolbar.ql-snow {
@@ -525,13 +594,13 @@ button {
 
 [data-toolbar-variant="compact"] .ql-toolbar.ql-snow button.ql-active,
 [data-toolbar-variant="compact"] .ql-toolbar.ql-snow .listflow-quill-action[data-active="true"] {
-  border-color: #fb923c;
-  background: #fff7ed;
-  color: #c2410c;
+  border-color: var(--secondary);
+  background: var(--tertiary);
+  color: var(--primary);
 }
 
 [data-toolbar-variant="compact"] .listflow-quill-action[data-active="true"] {
-  color: #c2410c;
+  color: var(--primary);
 }
 
 /* ── Styled tooltip on hover ── */

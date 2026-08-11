@@ -1,17 +1,36 @@
+const TITLE_COLOR = "#0D47A1";
+const TITLE_COLOR_PATTERN = String.raw`(?:#(?:0d47a1|e60000)|rgb\((?:13,\s*71,\s*161|230,\s*0,\s*0)\))`;
+
+const titleDescriptionPatterns = [
+  new RegExp(
+    String.raw`^\s*<p[^>]*>\s*<strong[^>]*style="[^"]*color:\s*${TITLE_COLOR_PATTERN}[^"]*"[^>]*>`,
+    "i",
+  ),
+  new RegExp(
+    String.raw`^\s*<p[^>]*>\s*<span[^>]*style="[^"]*color:\s*${TITLE_COLOR_PATTERN}[^"]*"[^>]*>\s*<strong`,
+    "i",
+  ),
+  new RegExp(
+    String.raw`^\s*<p[^>]*>\s*<strong[^>]*>\s*<span[^>]*style="[^"]*color:\s*${TITLE_COLOR_PATTERN}[^"]*"[^>]*>`,
+    "i",
+  ),
+];
+
+const topTitleRegex = new RegExp(
+  String.raw`^\s*<p[^>]*>(?:\s*<strong[^>]*style="[^"]*color:\s*${TITLE_COLOR_PATTERN}[^"]*"[^>]*>|\s*<span[^>]*style="[^"]*color:\s*${TITLE_COLOR_PATTERN}[^"]*"[^>]*>\s*<strong[^>]*>|\s*<strong[^>]*>\s*<span[^>]*style="[^"]*color:\s*${TITLE_COLOR_PATTERN}[^"]*"[^>]*>)[\s\S]*?<\/p>\s*`,
+  "i",
+);
+
 export function buildTitleHtml(title: string): string {
   const clean = (title || "").trim();
   if (!clean) return "";
-  return `<p><strong style="color: #e60000; font-size: 24px;">${clean}</strong></p>`;
+  return `<p><strong style="color: ${TITLE_COLOR}; font-size: 24px;">${clean}</strong></p>`;
 }
 
 export function hasTitleInDescription(description: string): boolean {
   if (!description) return false;
   const trimmed = description.trim();
-  return (
-    /^\s*<p[^>]*>\s*<strong[^>]*style="[^"]*color:\s*(?:#e60000|rgb\(230,\s*0,\s*0\))[^"]*"[^>]*>/i.test(trimmed) ||
-    /^\s*<p[^>]*>\s*<span[^>]*style="[^"]*color:\s*(?:#e60000|rgb\(230,\s*0,\s*0\))[^"]*"[^>]*>\s*<strong/i.test(trimmed) ||
-    /^\s*<p[^>]*>\s*<strong[^>]*>\s*<span[^>]*style="[^"]*color:\s*(?:#e60000|rgb\(230,\s*0,\s*0\))[^"]*"[^>]*>/i.test(trimmed)
-  );
+  return titleDescriptionPatterns.some((pattern) => pattern.test(trimmed));
 }
 
 export function prependTitleToDescription(title: string, description: string): string {
@@ -35,8 +54,6 @@ export function updateDescriptionTitle(newTitle: string, description: string): s
   if (!cleanDesc) {
     return buildTitleHtml(cleanTitle);
   }
-
-  const topTitleRegex = /^\s*<p[^>]*>(?:\s*<strong[^>]*style="[^"]*color:\s*(?:#e60000|rgb\(230,\s*0,\s*0\))[^"]*"[^>]*>|\s*<span[^>]*style="[^"]*color:\s*(?:#e60000|rgb\(230,\s*0,\s*0\))[^"]*"[^>]*>\s*<strong[^>]*>|\s*<strong[^>]*>\s*<span[^>]*style="[^"]*color:\s*(?:#e60000|rgb\(230,\s*0,\s*0\))[^"]*"[^>]*>)[\s\S]*?<\/p>\s*/i;
 
   if (topTitleRegex.test(cleanDesc)) {
     if (!cleanTitle) {

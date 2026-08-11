@@ -117,16 +117,16 @@ export default function Sidebar({
 
   return (
     <aside
-      className={`fixed inset-y-0 left-0 bg-gray-900 flex flex-col z-30 transition-all duration-300 ease-in-out ${
+      className={`fixed inset-y-0 left-0 bg-primary flex flex-col z-30 transition-all duration-300 ease-in-out ${
         collapsed ? "w-16" : "w-64"
       }`}
     >
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-5 border-b border-gray-800 h-16">
+      <div className="flex items-center justify-between px-4 py-5 border-b border-white/15 h-16">
         {!collapsed ? (
           <div>
             <h1 className="text-xl font-bold text-white leading-none">ListFlow</h1>
-            <p className="text-xs text-gray-400 mt-1">eBay listing tool</p>
+            <p className="text-xs text-tertiary/70 mt-1">eBay listing tool</p>
           </div>
         ) : (
           <div className="mx-auto font-bold text-white text-lg tracking-wider">
@@ -139,7 +139,7 @@ export default function Sidebar({
             type="button"
             onClick={onToggle}
             title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className={`p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-gray-800 transition-colors ${
+            className={`p-1.5 rounded-lg text-tertiary/70 hover:text-white hover:bg-white/10 transition-colors ${
               collapsed ? "mx-auto" : ""
             }`}
           >
@@ -187,8 +187,8 @@ export default function Sidebar({
                 collapsed ? "justify-center px-0" : ""
               } ${
                 isActive
-                  ? "bg-orange-600 text-white"
-                  : "text-gray-300 hover:text-white hover:bg-gray-800"
+                  ? "bg-tertiary text-primary ring-1 ring-inset ring-secondary"
+                  : "text-tertiary/80 hover:text-white hover:bg-white/10"
               }`}
             >
               {link.icon}
@@ -199,20 +199,20 @@ export default function Sidebar({
       </nav>
 
       {/* User Section */}
-      <div className="p-3 border-t border-gray-800">
+      <div className="p-3 border-t border-white/15">
         {!collapsed ? (
           <div>
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium text-white">{userName}</p>
-                <p className="truncate text-xs text-gray-400">{userEmail}</p>
+                <p className="truncate text-xs text-tertiary/70">{userEmail}</p>
               </div>
               <PageRefreshButton />
             </div>
             <button
               type="button"
               onClick={() => signOut({ callbackUrl: "/login" })}
-              className="mt-3 flex items-center gap-2 text-sm text-gray-400 hover:text-white transition-colors"
+              className="mt-3 flex items-center gap-2 text-sm text-tertiary/70 hover:text-white transition-colors"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path
@@ -229,7 +229,7 @@ export default function Sidebar({
           <div className="flex flex-col items-center gap-2">
             <div
               title={`${userName} (${userEmail})`}
-              className="w-8 h-8 rounded-full bg-orange-600 text-white font-bold text-xs flex items-center justify-center"
+              className="w-8 h-8 rounded-full bg-tertiary text-primary font-bold text-xs flex items-center justify-center"
             >
               {userInitial}
             </div>
@@ -238,7 +238,7 @@ export default function Sidebar({
               type="button"
               onClick={() => signOut({ callbackUrl: "/login" })}
               title="Sign out"
-              className="p-1 text-gray-400 hover:text-white hover:bg-gray-800 rounded transition-colors"
+              className="p-1 text-tertiary/70 hover:text-white hover:bg-white/10 rounded transition-colors"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path

@@ -17,6 +17,20 @@ test("auth config redirects signed-out private pages to login with a local callb
 
   assert.equal(result instanceof Response, true);
   const location = new URL((result as Response).headers.get("location") || "");
+  assert.equal(location.origin, "https://listflow.local");
+  assert.equal(location.pathname, "/login");
+  assert.equal(location.searchParams.get("callbackUrl"), "/products?page=2");
+});
+
+test("auth config keeps localhost redirects on localhost", async () => {
+  const result = await authorized({
+    auth: null,
+    request: { nextUrl: new URL("http://localhost:3000/products?page=2") },
+  });
+
+  assert.equal(result instanceof Response, true);
+  const location = new URL((result as Response).headers.get("location") || "");
+  assert.equal(location.origin, "http://localhost:3000");
   assert.equal(location.pathname, "/login");
   assert.equal(location.searchParams.get("callbackUrl"), "/products?page=2");
 });
@@ -36,8 +50,7 @@ test("auth config leaves login public and sends signed-in stores to products", a
   });
 
   assert.equal(result instanceof Response, true);
-  assert.equal(
-    new URL((result as Response).headers.get("location") || "").pathname,
-    "/products"
-  );
+  const location = new URL((result as Response).headers.get("location") || "");
+  assert.equal(location.origin, "https://listflow.local");
+  assert.equal(location.pathname, "/products");
 });

@@ -56,11 +56,11 @@ function LoginForm() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen flex items-center justify-center bg-tertiary py-12 px-4 sm:px-6 lg:px-8">
       <div className="w-full max-w-md">
         <div className="bg-white rounded-lg shadow-md p-8">
           <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold text-gray-900">ListFlow</h1>
+            <h1 className="text-3xl font-bold text-primary">ListFlow</h1>
             <p className="text-sm text-gray-500 mt-1">eBay listing tool</p>
           </div>
 
@@ -88,7 +88,7 @@ function LoginForm() {
                 autoCorrect="off"
                 autoComplete="username"
                 aria-describedby="storeId-hint"
-                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-800 focus:border-gray-800 text-gray-900"
+                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary focus:border-secondary text-gray-900"
                 placeholder="store-1"
                 disabled={isLoading}
               />
@@ -118,7 +118,7 @@ function LoginForm() {
                   }
                   required
                   autoComplete="current-password"
-                  className="w-full px-3 py-2 pr-20 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-gray-800 focus:border-gray-800 text-gray-900"
+                  className="w-full px-3 py-2 pr-20 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-2 focus:ring-secondary focus:border-secondary text-gray-900"
                   placeholder="********"
                   disabled={isLoading}
                 />
@@ -140,7 +140,7 @@ function LoginForm() {
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full py-2.5 px-4 bg-gray-900 text-white font-medium rounded-md hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-800 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="w-full py-2.5 px-4 bg-primary text-white font-medium rounded-md hover:bg-blue-800 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-secondary disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {isLoading ? "Signing in..." : "Sign in"}
             </button>
@@ -162,7 +162,7 @@ function LoginForm() {
               Don&apos;t have a store account?{" "}
               <Link
                 href="/register"
-                className="font-medium text-orange-600 hover:text-orange-500 underline underline-offset-2"
+                className="font-medium text-primary hover:text-blue-800 underline underline-offset-2"
               >
                 Register
               </Link>

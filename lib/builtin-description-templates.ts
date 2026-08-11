@@ -177,9 +177,9 @@ OUR GOAL IS FOR 100% POSITIVE CUSTOMER SATISFACTION</li>
 <div class="col-md-12">
 <p style="margin: 5px; text-align: center;"><font rwr="1" size="4" style="font-family:Arial">For any questions, reach out to us using eBay contact system&nbsp;</font></p>
 
-<h4 style="color : #296192;text-align:center"><a href="https://www.ebay.com.au/str/rkecommercestore"><font rwr="1" size="4" style="font-family:Arial">Please visit our eBay store to check out other items for sale!</font></a></h4>
+<h4 style="color : #0D47A1;text-align:center"><a href="https://www.ebay.com.au/str/rkecommercestore"><font rwr="1" size="4" style="font-family:Arial">Please visit our eBay store to check out other items for sale!</font></a></h4>
 
-<h3 style="color : #296192;text-align:center"><a href="https://www.ebay.com.au/str/rkecommercestore"><font rwr="1" size="4" style="font-family:Arial">Thank you for shopping at our store.</font></a></h3>
+<h3 style="color : #0D47A1;text-align:center"><a href="https://www.ebay.com.au/str/rkecommercestore"><font rwr="1" size="4" style="font-family:Arial">Thank you for shopping at our store.</font></a></h3>
 </div>
 </div>
 </div>`;

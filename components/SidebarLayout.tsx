@@ -44,7 +44,7 @@ export default function SidebarLayout({
   };
 
   return (
-    <div className="flex min-h-screen bg-gray-50">
+    <div className="flex min-h-screen bg-tertiary">
       <Sidebar
         userName={userName}
         userEmail={userEmail}
@@ -54,7 +54,7 @@ export default function SidebarLayout({
       <main
         className={`flex-1 transition-all duration-300 ease-in-out ${
           isMounted && collapsed ? "ml-16" : "ml-64"
-        } overflow-auto bg-gray-50`}
+        } overflow-auto bg-tertiary`}
       >
         {children}
       </main>
