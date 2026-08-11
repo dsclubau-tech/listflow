@@ -1175,10 +1175,17 @@ export async function scrapeAmazonProduct(
     const description = await page.evaluate(() => {
       function normalizeText(value: string | null | undefined): string {
         return (value ?? "")
+          .replace(
+            /(?:<|&lt;|&amp;lt;)\s*img\b[\s\S]*?(?:>|&gt;|&amp;gt;)/gi,
+            " "
+          )
           .replace(/\u200e/g, "")
           .replace(/\s+/g, " ")
           .trim();
       }
+
+      const excludedDescriptionTextPattern =
+        /^(?:product description|see more product details|report an issue|from the manufacturer|from the brand|compare with similar items?|looking for specific info\??|customers who viewed this item also viewed)[.:!]?$/i;
 
       function escapeHtml(value: string): string {
         return value
@@ -1192,7 +1199,7 @@ export async function scrapeAmazonProduct(
       function isVisible(element: Element): boolean {
         if (
           element.closest(
-            "script,style,noscript,template,[hidden],[aria-hidden='true'],#reviewFeatureGroup,#averageCustomerReviews,#customer-reviews"
+            "script,style,noscript,template,[hidden],[aria-hidden='true'],#aplusBrandStory_feature_div,#reviewFeatureGroup,#averageCustomerReviews,#customer-reviews,.apm-tablemodule,.apm-comparison-table,[data-cel-widget*='aplus_comparison'],[id*='HLCXComparisonWidget'],[id*='comparisonTable'],.aplus-comparison-table,.comparison-table-module,table.a-bordered.comparison"
           )
         ) {
           return false;
@@ -1249,7 +1256,7 @@ export async function scrapeAmazonProduct(
 
       function pushHeading(text: string, level = 2): void {
         const normalized = normalizeText(text);
-        if (!normalized) return;
+        if (!normalized || excludedDescriptionTextPattern.test(normalized)) return;
 
         const key = `heading:${normalized.toLowerCase()}`;
         if (seenTexts.has(key)) return;
@@ -1266,7 +1273,8 @@ export async function scrapeAmazonProduct(
         const normalized = normalizeText(text);
         if (
           !normalized ||
-          /^\d+(\.\d+)?\s+out\s+of\s+\d+\s+stars?\s*\d*$/i.test(normalized)
+          /^\d+(\.\d+)?\s+out\s+of\s+\d+\s+stars?\s*\d*$/i.test(normalized) ||
+          excludedDescriptionTextPattern.test(normalized)
         ) {
           return;
         }
@@ -1280,7 +1288,12 @@ export async function scrapeAmazonProduct(
 
       function pushList(items: string[]): void {
         const normalizedItems = uniqueItems(
-          items.map((item) => normalizeText(item)).filter(Boolean)
+          items
+            .map((item) => normalizeText(item))
+            .filter(
+              (item) =>
+                Boolean(item) && !excludedDescriptionTextPattern.test(item)
+            )
         );
 
         if (normalizedItems.length === 0) return;
@@ -1386,11 +1399,7 @@ export async function scrapeAmazonProduct(
       collectBlocks(aplus);
 
       if (blocks.length === 0) {
-        let html = "";
-        if (featureBullets) html += featureBullets.outerHTML;
-        if (productDescription) html += productDescription.outerHTML;
-        if (aplus) html += aplus.outerHTML;
-        return html;
+        return "";
       }
 
       const sections: DescriptionBlock[][] = [];
@@ -1425,7 +1434,7 @@ export async function scrapeAmazonProduct(
         section: DescriptionBlock[]
       ): string => {
         const textBlockStyle =
-          "margin:0 0 14px;font-size:16px;line-height:1.75;color:#333;white-space:normal;overflow-wrap:anywhere;word-break:break-word;";
+          "margin:0 0 16px;font-size:16px;line-height:1.75;color:#333;white-space:normal;overflow-wrap:anywhere;word-break:break-word;";
 
         if (
           block.type === "paragraph" &&
@@ -1433,7 +1442,7 @@ export async function scrapeAmazonProduct(
           section[0]?.type === "image" &&
           block.text.length <= 120
         ) {
-          return `<div style="margin:16px 0 10px;font-size:28px;font-weight:700;line-height:1.35;color:#ef3b2d;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${escapeHtml(
+          return `<div style="margin:24px 0 12px;font-size:28px;font-weight:700;line-height:1.35;color:#ef3b2d;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${escapeHtml(
             block.text
           )}</div>`;
         }
@@ -1441,7 +1450,7 @@ export async function scrapeAmazonProduct(
         if (block.type === "heading") {
           const fontSize =
             block.level <= 2 ? "24px" : block.level === 3 ? "20px" : "18px";
-          return `<div style="margin:16px 0 10px;font-size:${fontSize};font-weight:700;line-height:1.35;color:#ef3b2d;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${escapeHtml(
+          return `<div style="margin:${index === 0 ? "0" : "24px"} 0 12px;font-size:${fontSize};font-weight:700;line-height:1.35;color:#ef3b2d;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${escapeHtml(
             block.text
           )}</div>`;
         }
@@ -1468,7 +1477,7 @@ export async function scrapeAmazonProduct(
         )}" style="max-width:100%;height:auto;display:block;margin:0 auto;" /></div>`;
       };
 
-      return sections
+      const rendered = sections
         .map(
           (section) =>
             `<div style="margin:0 0 18px;">${section
@@ -1476,6 +1485,8 @@ export async function scrapeAmazonProduct(
               .join("")}</div>`
         )
         .join("");
+
+      return `<div style="font-family:Arial,sans-serif;font-size:14px;line-height:1.6;color:#333;max-width:800px;margin:0 auto;">${rendered}</div>`;
     });
 
     // Item specifics — merge both Amazon AU layouts:

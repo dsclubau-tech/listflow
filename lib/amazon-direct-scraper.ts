@@ -946,6 +946,33 @@ type DescriptionBlock =
 const DESCRIPTION_INLINE_TAGS = new Set(["b", "strong", "i", "em", "br"]);
 const DESCRIPTION_HIDDEN_SELECTOR =
   "[hidden], [aria-hidden='true'], .aok-hidden, .a-hidden, .celwidget[style*='display: none']";
+const DESCRIPTION_EXCLUDED_CONTAINER_SELECTOR = [
+  "#aplusBrandStory_feature_div",
+  "#reviewFeatureGroup",
+  "#averageCustomerReviews",
+  "#customer-reviews",
+  ".apm-tablemodule",
+  ".apm-comparison-table",
+  "[data-cel-widget*='aplus_comparison']",
+  "[id*='HLCXComparisonWidget']",
+  "[id*='comparisonTable']",
+  ".aplus-comparison-table",
+  ".comparison-table-module",
+  "table.a-bordered.comparison",
+].join(", ");
+const DESCRIPTION_EXCLUDED_TEXT_PATTERN =
+  /^(?:product description|see more product details|report an issue|from the manufacturer|from the brand|compare with similar items?|looking for specific info\??|customers who viewed this item also viewed)[.:!]?$/i;
+
+function stripLiteralDescriptionImageMarkup(value: string) {
+  return value.replace(
+    /(?:<|&lt;|&amp;lt;)\s*img\b[\s\S]*?(?:>|&gt;|&amp;gt;)/gi,
+    " ",
+  );
+}
+
+function normalizeDescriptionText(value: string | null | undefined) {
+  return normalizeText(stripLiteralDescriptionImageMarkup(value ?? ""));
+}
 
 function isHiddenDescriptionElement(element: CheerioSelection) {
   if (element.closest(DESCRIPTION_HIDDEN_SELECTOR).length > 0) {
@@ -987,7 +1014,7 @@ function sanitizeDescriptionInlineHtml(
     }
   });
 
-  return (clone.html() ?? "")
+  return stripLiteralDescriptionImageMarkup(clone.html() ?? "")
     .replace(/\s+/g, " ")
     .replace(/\s*<br\s*\/?\s*>\s*/gi, "<br>")
     .trim();
@@ -1077,14 +1104,12 @@ function collectDescriptionBlocks($: CheerioAPI) {
       return;
     }
 
-    const normalized = normalizeText(element.text());
+    const normalized = normalizeDescriptionText(element.text());
     const key = `${type}:${normalized.toLowerCase()}`;
     if (
       !normalized ||
       /^\d+(\.\d+)?\s+out\s+of\s+\d+\s+stars?\s*\d*$/i.test(normalized) ||
-      /^(product description|see more product details|report an issue)$/i.test(
-        normalized,
-      ) ||
+      DESCRIPTION_EXCLUDED_TEXT_PATTERN.test(normalized) ||
       seenText.has(key)
     ) {
       return;
@@ -1105,9 +1130,14 @@ function collectDescriptionBlocks($: CheerioAPI) {
         continue;
       }
 
-      const text = normalizeText(item.text());
+      const text = normalizeDescriptionText(item.text());
       const key = text.toLowerCase();
-      if (!text || /^make sure this fits/i.test(text) || seenItems.has(key)) {
+      if (
+        !text ||
+        /^make sure this fits/i.test(text) ||
+        DESCRIPTION_EXCLUDED_TEXT_PATTERN.test(text) ||
+        seenItems.has(key)
+      ) {
         continue;
       }
 
@@ -1123,7 +1153,10 @@ function collectDescriptionBlocks($: CheerioAPI) {
   }
 
   function pushImage(image: CheerioSelection) {
-    if (isHiddenDescriptionElement(image)) {
+    if (
+      isHiddenDescriptionElement(image) ||
+      image.closest(DESCRIPTION_EXCLUDED_CONTAINER_SELECTOR).length > 0
+    ) {
       return;
     }
 
@@ -1186,8 +1219,6 @@ function collectDescriptionBlocks($: CheerioAPI) {
   }
 
   const productDescriptionRoot = $("#productDescription").first();
-  const excludedDescriptionContainerSelector =
-    "#aplusBrandStory_feature_div, #reviewFeatureGroup, #averageCustomerReviews, #customer-reviews";
   const aplusContentSelector =
     "h1, h2, h3, h4, h5, h6, p, li, img, .a-size-base, .aplus-description, .premium-module-11-faq .faq-block";
   const aplusFeatureRoot = $("#aplus_feature_div").first();
@@ -1195,7 +1226,7 @@ function collectDescriptionBlocks($: CheerioAPI) {
   const standaloneAplusRoot = $("#aplus")
     .filter(
       (_, element) =>
-        $(element).closest(excludedDescriptionContainerSelector).length === 0,
+        $(element).closest(DESCRIPTION_EXCLUDED_CONTAINER_SELECTOR).length === 0,
     )
     .first();
   const aplusRoot = embeddedAplusRoot.find(aplusContentSelector).length
@@ -1226,8 +1257,14 @@ function collectDescriptionBlocks($: CheerioAPI) {
         const candidate = $(item);
         return (
           !isHiddenDescriptionElement(candidate) &&
-          candidate.closest(excludedDescriptionContainerSelector).length === 0 &&
-          (candidate.is("img") || Boolean(normalizeText(candidate.text())))
+          candidate.closest(DESCRIPTION_EXCLUDED_CONTAINER_SELECTOR).length === 0 &&
+          (candidate.is("img") ||
+            Boolean(
+              normalizeDescriptionText(candidate.text()) &&
+                !DESCRIPTION_EXCLUDED_TEXT_PATTERN.test(
+                  normalizeDescriptionText(candidate.text()),
+                ),
+            ))
         );
       }),
   );
@@ -1243,7 +1280,9 @@ function collectDescriptionBlocks($: CheerioAPI) {
       root.find(selector).each((_, item) => {
         const candidate = $(item);
 
-        if (candidate.closest(excludedDescriptionContainerSelector).length > 0) {
+        if (
+          candidate.closest(DESCRIPTION_EXCLUDED_CONTAINER_SELECTOR).length > 0
+        ) {
           return;
         }
 
@@ -1299,11 +1338,11 @@ export function renderAmazonDescription($: CheerioAPI) {
         const sectionHeading =
           block.html === "About this item" || block.html === "Product Description";
         const color = block.html === "About this item" ? "#ef3b2d" : "#111";
-        return `<div style="margin:${index === 0 ? "0" : "20px"} 0 10px;font-size:${sectionHeading ? "22px" : "20px"};font-weight:700;line-height:1.35;color:${color};white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${block.html}</div>`;
+        return `<div style="margin:${index === 0 ? "0" : "24px"} 0 12px;font-size:${sectionHeading ? "22px" : "20px"};font-weight:700;line-height:1.35;color:${color};white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${block.html}</div>`;
       }
 
       if (block.type === "paragraph") {
-        return `<div style="margin:0 0 14px;font-size:16px;line-height:1.75;color:#333;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${block.html}</div>`;
+        return `<div style="margin:0 0 16px;font-size:16px;line-height:1.75;color:#333;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${block.html}</div>`;
       }
 
       if (block.type === "list") {

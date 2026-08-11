@@ -452,6 +452,58 @@ test("renderAmazonDescription excludes Amazon ratings and review containers", as
   );
 });
 
+test("renderAmazonDescription excludes comparison products and literal image markup from new scrapes", async () => {
+  const { renderAmazonDescription } = await loadAmazonDirectScraper();
+  const $ = load(`
+    <div id="aplus">
+      <h3>From the manufacturer</h3>
+      <h3>From the brand</h3>
+      <p>Compare with similar items</p>
+      <p>Looking for specific info?</p>
+      <p>Customers who viewed this item also viewed</p>
+
+      <div class="aplus-module">
+        <h3>Selected product benefits</h3>
+        <p>Useful details about the selected product.</p>
+        <p>&lt;img src=&quot;https://example.com/raw-image.jpg&quot; alt=&quot;Raw image&quot;&gt;</p>
+        <img
+          src="https://m.media-amazon.com/images/I/selected-product._AC_SL1500_.jpg"
+          alt="Selected product detail"
+        />
+      </div>
+
+      <div class="apm-tablemodule">
+        <p>Variant one</p>
+        <img src="https://m.media-amazon.com/images/I/variant-one._AC_SL1500_.jpg" />
+      </div>
+      <div data-cel-widget="aplus_comparison_table">
+        <p>Variant two</p>
+        <img src="https://m.media-amazon.com/images/I/variant-two._AC_SL1500_.jpg" />
+      </div>
+      <div id="HLCXComparisonWidget_feature_div"><p>Variant three</p></div>
+      <div id="comparisonTable_feature_div"><p>Variant four</p></div>
+      <div class="aplus-comparison-table"><p>Variant five</p></div>
+      <div class="comparison-table-module"><p>Variant six</p></div>
+      <table class="a-bordered comparison"><tr><td><p>Variant seven</p></td></tr></table>
+    </div>
+  `);
+
+  const description = renderAmazonDescription($);
+
+  assert.match(description, /Selected product benefits/);
+  assert.match(description, /Useful details about the selected product/);
+  assert.match(description, /selected-product\.jpg/);
+  assert.match(description, /margin:24px 0 12px/);
+  assert.match(description, /margin:0 0 16px;font-size:16px/);
+  assert.doesNotMatch(
+    description,
+    /From the manufacturer|From the brand|Compare with similar|Looking for specific info|Customers who viewed/i,
+  );
+  assert.doesNotMatch(description, /Variant (?:one|two|three|four|five|six|seven)/i);
+  assert.doesNotMatch(description, /variant-(?:one|two)\.jpg/i);
+  assert.doesNotMatch(description, /&lt;img|raw-image\.jpg|Raw image/i);
+});
+
 test("renderAmazonDescription prefers Product Description over duplicate brand-story A+ and renders collapsed FAQs", async () => {
   const { renderAmazonDescription } = await loadAmazonDirectScraper();
   const $ = load(`
