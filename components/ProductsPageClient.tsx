@@ -702,42 +702,51 @@ export default function ProductsPageClient({
     return data.job ?? null;
   }, []);
 
-  const cancelActivePriceCheckJob = useCallback(async () => {
-    if (!priceCheckJob || !isActivePriceCheckJob(priceCheckJob)) {
-      return;
-    }
+  const cancelActivePriceCheckJob = useCallback(
+    async (force = false) => {
+      if (!priceCheckJob || !isActivePriceCheckJob(priceCheckJob)) {
+        return;
+      }
 
-    setIsCancellingPriceCheckJob(true);
+      const isForce = force || priceCheckJob.status === "CANCELLING";
+      setIsCancellingPriceCheckJob(true);
 
-    try {
-      const response = await fetch(
-        `/api/price-check/jobs/${priceCheckJob.id}/cancel`,
-        {
-          method: "POST",
-          cache: "no-store",
+      try {
+        const response = await fetch(
+          `/api/price-check/jobs/${priceCheckJob.id}/cancel`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ force: isForce }),
+            cache: "no-store",
+          }
+        );
+        const data = (await response.json().catch(() => ({}))) as {
+          job?: PriceCheckJob | null;
+          error?: string;
+        };
+
+        if (!response.ok || !data.job) {
+          throw new Error(data.error || "Failed to stop price check.");
         }
-      );
-      const data = (await response.json().catch(() => ({}))) as {
-        job?: PriceCheckJob | null;
-        error?: string;
-      };
 
-      if (!response.ok || !data.job) {
-        throw new Error(data.error || "Failed to stop price check.");
+        applyPriceCheckJob(data.job, true);
+
+        if (data.job.status === "CANCELLING") {
+          showToast("Stopping after current product...", "success");
+        } else if (data.job.status === "CANCELLED") {
+          showToast("Price check force-cancelled.", "success");
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failed to stop price check.";
+        showToast(message, "error");
+      } finally {
+        setIsCancellingPriceCheckJob(false);
       }
-
-      applyPriceCheckJob(data.job, true);
-
-      if (data.job.status === "CANCELLING") {
-        showToast("Stopping after current product...", "success");
-      }
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Failed to stop price check.";
-      showToast(message, "error");
-      setIsCancellingPriceCheckJob(false);
-    }
-  }, [applyPriceCheckJob, priceCheckJob, showToast]);
+    },
+    [applyPriceCheckJob, priceCheckJob, showToast]
+  );
 
   const resumeCancelledPriceCheckJob = useCallback(async () => {
     const jobToResume = priceCheckJob;
@@ -1603,30 +1612,49 @@ export default function ProductsPageClient({
           </div>
           <div className="flex items-center gap-3">
             {isActivePriceCheckJob(priceCheckJob) && (
-              <button
-                type="button"
-                onClick={cancelActivePriceCheckJob}
-                disabled={isPriceCheckJobStopping}
-                className="rounded-md border border-quaternary bg-white px-3 py-1.5 text-sm font-medium text-quaternary transition-colors hover:bg-quaternary-soft disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isPriceCheckJobStopping
-                  ? "Stopping..."
-                  : priceCheckJob?.status === "CANCELLING"
-                    ? "Force Stop"
-                    : "Stop"}
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={() => cancelActivePriceCheckJob(false)}
+                  disabled={isPriceCheckJobStopping}
+                  className="rounded-md border border-quaternary bg-white px-3 py-1.5 text-sm font-medium text-quaternary transition-colors hover:bg-quaternary-soft disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isPriceCheckJobStopping
+                    ? "Stopping..."
+                    : priceCheckJob?.status === "CANCELLING"
+                      ? "Stopping..."
+                      : "Stop"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => cancelActivePriceCheckJob(true)}
+                  disabled={isPriceCheckJobStopping}
+                  className="rounded-md border border-red-300 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-700 transition-colors hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  Force Stop
+                </button>
+              </>
             )}
             {isPriceCheckJobResumable && (
-              <button
-                type="button"
-                onClick={resumeCancelledPriceCheckJob}
-                disabled={isResumingPriceCheckJob}
-                className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {isResumingPriceCheckJob ? "Resuming..." : "Resume"}
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={resumeCancelledPriceCheckJob}
+                  disabled={isResumingPriceCheckJob}
+                  className="rounded-md border border-amber-300 bg-white px-3 py-1.5 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {isResumingPriceCheckJob ? "Resuming..." : "Resume"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void dismissPriceCheckJob()}
+                  className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50"
+                >
+                  Dismiss
+                </button>
+              </>
             )}
-            {isTerminalPriceCheckJob(priceCheckJob) && (
+            {!isPriceCheckJobResumable && isTerminalPriceCheckJob(priceCheckJob) && (
               <button
                 type="button"
                 onClick={() => void dismissPriceCheckJob()}

@@ -734,10 +734,13 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
     });
   }
 
-  function cancelPriceJob(job: ActionCenterPriceCheckJob) {
+  function cancelPriceJob(job: ActionCenterPriceCheckJob, force = false) {
+    const isForce = force || job.status === "CANCELLING";
     void runAction(`stop-job:${job.id}`, async () => {
-      await postJson(`/api/price-check/jobs/${job.id}/cancel`);
-      return "Pausing price check after current product.";
+      await postJson(`/api/price-check/jobs/${job.id}/cancel`, { force: isForce });
+      return isForce
+        ? "Price check force-cancelled."
+        : "Pausing price check after current product.";
     });
   }
 
@@ -1408,32 +1411,49 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                         </div>
                         <div className="flex items-center gap-2">
                           {isActivePriceJob(job) && (
-                            <ActionButton
-                              onClick={() => cancelPriceJob(job)}
-                              disabled={
-                                runningAction === `stop-job:${job.id}`
-                              }
-                              tone="danger"
-                            >
-                              {runningAction === `stop-job:${job.id}`
-                                ? "Stopping..."
-                                : job.status === "CANCELLING"
-                                  ? "Force Stop"
-                                  : "Pause"}
-                            </ActionButton>
+                            <>
+                              <ActionButton
+                                onClick={() => cancelPriceJob(job, false)}
+                                disabled={runningAction === `stop-job:${job.id}`}
+                                tone="danger"
+                              >
+                                {runningAction === `stop-job:${job.id}`
+                                  ? "Stopping..."
+                                  : job.status === "CANCELLING"
+                                    ? "Stopping..."
+                                    : "Pause"}
+                              </ActionButton>
+                              <ActionButton
+                                onClick={() => cancelPriceJob(job, true)}
+                                disabled={runningAction === `stop-job:${job.id}`}
+                                tone="danger"
+                              >
+                                Force Stop
+                              </ActionButton>
+                            </>
                           )}
                           {isResumablePriceJob(job) && (
-                            <ActionButton
-                              onClick={() => resumePriceJob(job)}
-                              disabled={
-                                workerOffline || runningAction === `resume-job:${job.id}`
-                              }
-                              tone="primary"
-                            >
-                              {runningAction === `resume-job:${job.id}`
-                                ? "Resuming..."
-                                : "Resume"}
-                            </ActionButton>
+                            <>
+                              <ActionButton
+                                onClick={() => resumePriceJob(job)}
+                                disabled={
+                                  workerOffline || runningAction === `resume-job:${job.id}`
+                                }
+                                tone="primary"
+                              >
+                                {runningAction === `resume-job:${job.id}`
+                                  ? "Resuming..."
+                                  : "Resume"}
+                              </ActionButton>
+                              <ActionButton
+                                onClick={() => dismissPriceJob(job)}
+                                disabled={runningAction === `dismiss-price-job:${job.id}`}
+                              >
+                                {runningAction === `dismiss-price-job:${job.id}`
+                                  ? "Dismissing..."
+                                  : "Dismiss"}
+                              </ActionButton>
+                            </>
                           )}
                           <Link
                             href="/products"
@@ -1492,18 +1512,28 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                             </ActionButton>
                           )}
                           {job.canResume && (
-                            <ActionButton
-                              onClick={() => resumeImportJob(job)}
-                              disabled={
-                                workerOffline ||
-                                runningAction === `resume-import-job:${job.id}`
-                              }
-                              tone="primary"
-                            >
-                              {runningAction === `resume-import-job:${job.id}`
-                                ? "Resuming..."
-                                : "Resume"}
-                            </ActionButton>
+                            <>
+                              <ActionButton
+                                onClick={() => resumeImportJob(job)}
+                                disabled={
+                                  workerOffline ||
+                                  runningAction === `resume-import-job:${job.id}`
+                                }
+                                tone="primary"
+                              >
+                                {runningAction === `resume-import-job:${job.id}`
+                                  ? "Resuming..."
+                                  : "Resume"}
+                              </ActionButton>
+                              <ActionButton
+                                onClick={() => dismissImportJob(job)}
+                                disabled={runningAction === `dismiss-import-job:${job.id}`}
+                              >
+                                {runningAction === `dismiss-import-job:${job.id}`
+                                  ? "Dismissing..."
+                                  : "Dismiss"}
+                              </ActionButton>
+                            </>
                           )}
                           {job.canCancel && (
                             <ActionButton

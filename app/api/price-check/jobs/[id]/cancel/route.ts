@@ -24,7 +24,10 @@ export async function POST(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const job = await cancelPriceCheckJob(id, storeSession.storeId);
+  const body = await request.json().catch(() => ({})) as { force?: boolean };
+  const job = await cancelPriceCheckJob(id, storeSession.storeId, {
+    force: body.force === true,
+  });
 
   if (!job) {
     return NextResponse.json({ error: "Job not found" }, { status: 404 });
@@ -33,6 +36,7 @@ export async function POST(
   log.info("price-check/jobs/[id]/cancel/POST", "Price check cancel requested", {
     jobId: job.id,
     status: job.status,
+    force: body.force === true,
   });
 
   invalidateJobCaches(storeSession.storeId);

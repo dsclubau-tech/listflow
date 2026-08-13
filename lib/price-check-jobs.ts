@@ -635,7 +635,11 @@ export async function runPriceCheckJob(jobId: string, worker?: WorkerContext) {
   await withJobLeases(leaseInput, () => runPriceCheckJobClaimed(job.id));
 }
 
-export async function cancelPriceCheckJob(jobId: string, storeId: string) {
+export async function cancelPriceCheckJob(
+  jobId: string,
+  storeId: string,
+  options?: { force?: boolean }
+) {
   const job = await prisma.priceCheckJob.findFirst({
     where: { id: jobId, storeId },
   });
@@ -643,6 +647,8 @@ export async function cancelPriceCheckJob(jobId: string, storeId: string) {
   if (!job) {
     return null;
   }
+
+  const forceCancel = options?.force === true;
 
   if (
     job.status === PriceCheckJobStatus.QUEUED ||
@@ -660,6 +666,21 @@ export async function cancelPriceCheckJob(jobId: string, storeId: string) {
   }
 
   if (job.status === PriceCheckJobStatus.RUNNING) {
+    // Force-cancel: immediately mark as cancelled even if worker is online.
+    // Used when the worker is stuck on a long-running scrape and the
+    // graceful CANCELLING approach hasn't resolved.
+    if (forceCancel) {
+      return markPriceCheckJobCancelled(job.id, {
+        checked: job.checked,
+        changed: job.changed,
+        pendingReview: job.pendingReview,
+        failed: job.failed,
+        skipped: job.skipped,
+        reason: "Price check force-cancelled.",
+        cancelled: true,
+      });
+    }
+
     const isOnline = await isWorkerOnlineForStore(storeId);
     if (!isOnline) {
       return markPriceCheckJobCancelled(job.id, {
