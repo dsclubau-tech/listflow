@@ -1550,8 +1550,7 @@ export default function ProductsPageClient({
       selectedHasNoEligiblePriceChecks ? undefined : selectedProductIds
     );
   };
-  const isPriceCheckJobStopping =
-    isCancellingPriceCheckJob || priceCheckJob?.status === "CANCELLING";
+  const isPriceCheckJobStopping = isCancellingPriceCheckJob;
   const isPriceCheckJobResumable = isResumablePriceCheckJob(priceCheckJob);
   const priceCheckProgressPercent = priceCheckJob?.total
     ? Math.min(100, Math.round((priceCheckJob.checked / priceCheckJob.total) * 100))
@@ -1610,7 +1609,11 @@ export default function ProductsPageClient({
                 disabled={isPriceCheckJobStopping}
                 className="rounded-md border border-quaternary bg-white px-3 py-1.5 text-sm font-medium text-quaternary transition-colors hover:bg-quaternary-soft disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {isPriceCheckJobStopping ? "Stopping..." : "Stop"}
+                {isPriceCheckJobStopping
+                  ? "Stopping..."
+                  : priceCheckJob?.status === "CANCELLING"
+                    ? "Force Stop"
+                    : "Stop"}
               </button>
             )}
             {isPriceCheckJobResumable && (

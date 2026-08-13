@@ -1411,15 +1411,15 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                             <ActionButton
                               onClick={() => cancelPriceJob(job)}
                               disabled={
-                                job.status === "CANCELLING" ||
                                 runningAction === `stop-job:${job.id}`
                               }
                               tone="danger"
                             >
-                              {job.status === "CANCELLING" ||
-                              runningAction === `stop-job:${job.id}`
-                                ? "Pausing..."
-                                : "Pause"}
+                              {runningAction === `stop-job:${job.id}`
+                                ? "Stopping..."
+                                : job.status === "CANCELLING"
+                                  ? "Force Stop"
+                                  : "Pause"}
                             </ActionButton>
                           )}
                           {isResumablePriceJob(job) && (

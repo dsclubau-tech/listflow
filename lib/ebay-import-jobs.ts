@@ -164,7 +164,8 @@ function canCancelImportJob(status: EbayImportJobStatus) {
     status === EbayImportJobStatus.QUEUED ||
     status === EbayImportJobStatus.RUNNING ||
     status === EbayImportJobStatus.PAUSING ||
-    status === EbayImportJobStatus.PAUSED
+    status === EbayImportJobStatus.PAUSED ||
+    status === EbayImportJobStatus.CANCELLING
   );
 }
 
@@ -507,8 +508,16 @@ export async function pauseEbayImportJob(jobId: string, storeId: string) {
     return null;
   }
 
-  if (job.status === EbayImportJobStatus.PAUSED || job.status === EbayImportJobStatus.PAUSING) {
+  if (job.status === EbayImportJobStatus.PAUSED) {
     return serializeEbayImportJob(job);
+  }
+
+  if (job.status === EbayImportJobStatus.PAUSING) {
+    const updated = await prisma.ebayImportJob.update({
+      where: { id: job.id },
+      data: { status: EbayImportJobStatus.PAUSED, pausedAt: new Date() },
+    });
+    return serializeEbayImportJob(updated);
   }
 
   if (!canPauseImportJob(job.status)) {
@@ -565,8 +574,32 @@ export async function cancelEbayImportJob(jobId: string, storeId: string) {
     return null;
   }
 
-  if (job.status === EbayImportJobStatus.CANCELLED || job.status === EbayImportJobStatus.CANCELLING) {
+  if (job.status === EbayImportJobStatus.CANCELLED) {
     return serializeEbayImportJob(job);
+  }
+
+  if (job.status === EbayImportJobStatus.CANCELLING) {
+    const now = new Date();
+    const updated = await prisma.ebayImportJob.update({
+      where: { id: job.id },
+      data: {
+        status: EbayImportJobStatus.CANCELLED,
+        cancelledAt: now,
+        completedAt: now,
+      },
+    });
+    // Release any worker leases held for this job so new jobs
+    // can acquire overlapping resources immediately.
+    await prisma.jobLease
+      .deleteMany({
+        where: {
+          storeId: job.storeId,
+          jobType: "EBAY_IMPORT",
+          jobId: job.id,
+        },
+      })
+      .catch(() => {});
+    return serializeEbayImportJob(updated);
   }
 
   if (!canCancelImportJob(job.status)) {

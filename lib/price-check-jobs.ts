@@ -24,6 +24,7 @@ import {
   type PriceCheckResult,
 } from "@/lib/price-checker";
 import { finalizePriceCheckAutoHoldForJob } from "@/lib/price-check-auto-hold";
+import { isWorkerOnlineForStore } from "@/lib/worker-heartbeat";
 
 const ACTIVE_JOB_STATUSES: PriceCheckJobStatus[] = [
   PriceCheckJobStatus.QUEUED,
@@ -454,6 +455,20 @@ async function markPriceCheckJobCancelled(
 
   invalidatePriceCheckJobCaches(job);
 
+  // Release any worker leases held for this job so resumed/new jobs
+  // can acquire overlapping resources immediately.
+  if (job.storeId) {
+    await prisma.jobLease
+      .deleteMany({
+        where: {
+          storeId: job.storeId,
+          jobType: "PRICE_CHECK",
+          jobId: job.id,
+        },
+      })
+      .catch(() => {});
+  }
+
   return serializePriceCheckJob(job);
 }
 
@@ -629,7 +644,10 @@ export async function cancelPriceCheckJob(jobId: string, storeId: string) {
     return null;
   }
 
-  if (job.status === PriceCheckJobStatus.QUEUED) {
+  if (
+    job.status === PriceCheckJobStatus.QUEUED ||
+    job.status === PriceCheckJobStatus.CANCELLING
+  ) {
     return markPriceCheckJobCancelled(job.id, {
       checked: job.checked,
       changed: job.changed,
@@ -642,6 +660,19 @@ export async function cancelPriceCheckJob(jobId: string, storeId: string) {
   }
 
   if (job.status === PriceCheckJobStatus.RUNNING) {
+    const isOnline = await isWorkerOnlineForStore(storeId);
+    if (!isOnline) {
+      return markPriceCheckJobCancelled(job.id, {
+        checked: job.checked,
+        changed: job.changed,
+        pendingReview: job.pendingReview,
+        failed: job.failed,
+        skipped: job.skipped,
+        reason: "Price check cancelled.",
+        cancelled: true,
+      });
+    }
+
     const updated = await prisma.priceCheckJob.update({
       where: { id: job.id },
       data: {
@@ -701,12 +732,22 @@ export async function resumePriceCheckJob(
   storeId: string,
   userId: string
 ) {
-  const sourceJob = await prisma.priceCheckJob.findFirst({
+  let sourceJob = await prisma.priceCheckJob.findFirst({
     where: { id: jobId, storeId },
   });
 
   if (!sourceJob) {
     return null;
+  }
+
+  if (sourceJob.status === PriceCheckJobStatus.CANCELLING) {
+    await markPriceCheckJobCancelled(sourceJob.id);
+    sourceJob = await prisma.priceCheckJob.findFirst({
+      where: { id: jobId, storeId },
+    });
+    if (!sourceJob) {
+      return null;
+    }
   }
 
   if (sourceJob.status !== PriceCheckJobStatus.CANCELLED) {
