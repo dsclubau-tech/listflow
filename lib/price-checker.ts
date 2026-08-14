@@ -1,3 +1,4 @@
+import type { Browser } from "playwright-core";
 import { Prisma } from "@/app/generated/prisma/client";
 import {
   PriceCheckFailureCode,
@@ -5,6 +6,7 @@ import {
 } from "@/app/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { scrapeAmazonPrice } from "@/lib/amazon-scraper";
+import { launchScraperBrowser } from "@/lib/scraper-browser";
 import { calculateSellPrice } from "@/lib/variant-pricing";
 import { buildReviseInventoryStatusXML } from "@/lib/ebay-xml";
 import { callEbayReviseInventoryStatus, getStoreNumber } from "@/lib/ebay";
@@ -382,22 +384,41 @@ export async function runPriceCheck(
 
   await reportProgress();
 
+  let sharedBrowser: Browser | null = null;
+  const getSharedBrowser = async () => {
+    if (!sharedBrowser || !sharedBrowser.isConnected()) {
+      sharedBrowser = await launchScraperBrowser();
+    }
+    return sharedBrowser;
+  };
+  const closeSharedBrowser = async () => {
+    if (sharedBrowser) {
+      const browserToClose = sharedBrowser;
+      sharedBrowser = null;
+      await browserToClose.close().catch(() => {});
+    }
+  };
+
   const scrapeAmazonPriceWithRetry = async (
     productId: string,
     asin: string,
     priceTrackingMode: AmazonPriceTrackingMode
   ) => {
-    const scrapeWithOwnedBrowser = () =>
-      scrapeAmazonPrice(
+    const scrapeWithBrowser = async () => {
+      const browser = await getSharedBrowser();
+      return scrapeAmazonPrice(
         asin,
-        undefined,
+        browser,
         supplierSettings.scrapePostcode || undefined,
         priceTrackingMode
       );
+    };
 
     try {
-      return await scrapeWithOwnedBrowser();
+      return await scrapeWithBrowser();
     } catch (error) {
+      await closeSharedBrowser();
+
       logger.warn(
         "price-checker/run",
         "Amazon scrape failed; retrying with a fresh browser",
@@ -410,8 +431,10 @@ export async function runPriceCheck(
       );
 
       try {
-        return await scrapeWithOwnedBrowser();
+        return await scrapeWithBrowser();
       } catch (retryError) {
+        await closeSharedBrowser();
+
         logger.warn("price-checker/run", "Amazon scrape retry failed", {
           productId,
           asin,
@@ -424,7 +447,8 @@ export async function runPriceCheck(
     }
   };
 
-  for (const [index, product] of products.entries()) {
+  try {
+    for (const [index, product] of products.entries()) {
     if (await checkCancelled()) {
       return finishCancelled();
     }
@@ -891,9 +915,11 @@ export async function runPriceCheck(
 
         await sleep(getProductDelayMs());
       }
+    }
+  } finally {
+    await closeSharedBrowser();
+    invalidateRunCaches();
   }
-
-  invalidateRunCaches();
 
   return result;
 }

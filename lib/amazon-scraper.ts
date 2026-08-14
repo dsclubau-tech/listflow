@@ -565,8 +565,8 @@ async function extractAmazonBuyingOptionsPrice(
 
   await page
     .goto(`https://www.amazon.com.au/gp/offer-listing/${normalizedAsin}`, {
-      waitUntil: "load",
-      timeout: options.offerListingTimeoutMs ?? 30000,
+      waitUntil: "domcontentloaded",
+      timeout: options.offerListingTimeoutMs ?? 20000,
     })
     .catch(() => null);
 
@@ -592,6 +592,15 @@ export async function scrapeAmazonPrice(
   });
   const page = await context.newPage();
 
+  // Block heavy assets (images, videos, fonts) to prevent OOM renderer crashes and accelerate DOM loading.
+  await page.route("**/*", (route) => {
+    const type = route.request().resourceType();
+    if (["image", "media", "font"].includes(type)) {
+      return route.abort();
+    }
+    return route.continue();
+  });
+
   try {
     // Hide the "webdriver" flag so Amazon doesn't detect headless automation
     await page.addInitScript(() => {
@@ -601,8 +610,8 @@ export async function scrapeAmazonPrice(
     });
 
     await page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
-      waitUntil: "load",
-      timeout: 30000,
+      waitUntil: "domcontentloaded",
+      timeout: 20000,
     });
 
     // Set delivery postcode so Amazon shows AU-local prices and availability.
@@ -630,8 +639,8 @@ export async function scrapeAmazonPrice(
           // Reload the page before retrying — Amazon sometimes needs a
           // fresh page load to show the location popup again.
           await page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
-            waitUntil: "load",
-            timeout: 30000,
+            waitUntil: "domcontentloaded",
+            timeout: 20000,
           });
         }
       }
@@ -639,8 +648,8 @@ export async function scrapeAmazonPrice(
       // Reload after postcode is set to get updated prices
       if (postcodeApplied) {
         await page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
-          waitUntil: "load",
-          timeout: 30000,
+          waitUntil: "domcontentloaded",
+          timeout: 20000,
         });
       }
     }
