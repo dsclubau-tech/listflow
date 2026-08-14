@@ -288,27 +288,40 @@ async function setAmazonDeliveryPostcode(
         actionSource: "glow",
       });
 
-      const response = await fetch(
-        "/gp/delivery/ajax/address-change.html",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/x-www-form-urlencoded",
-          },
-          body: formData.toString(),
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 8000);
+
+      try {
+        const response = await fetch(
+          "/gp/delivery/ajax/address-change.html",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded",
+            },
+            body: formData.toString(),
+            signal: controller.signal,
+          }
+        );
+
+        if (!response.ok) {
+          return { success: false, reason: `HTTP ${response.status}` };
         }
-      );
 
-      if (!response.ok) {
-        return { success: false, reason: `HTTP ${response.status}` };
+        const text = await response.text();
+        // Amazon returns JSON — a successful response contains "isValidAddress":1
+        const isValid =
+          text.includes('"isValidAddress":1') ||
+          text.includes('"isValidAddress": 1');
+        return { success: isValid, reason: isValid ? "ok" : "invalid address response" };
+      } catch (fetchError) {
+        return {
+          success: false,
+          reason: fetchError instanceof Error ? fetchError.message : "fetch timed out or failed",
+        };
+      } finally {
+        clearTimeout(timeoutId);
       }
-
-      const text = await response.text();
-      // Amazon returns JSON — a successful response contains "isValidAddress":1
-      const isValid =
-        text.includes('"isValidAddress":1') ||
-        text.includes('"isValidAddress": 1');
-      return { success: isValid, reason: isValid ? "ok" : "invalid address response" };
     }, postcode);
 
     if (ajaxResult.success) {
@@ -338,7 +351,7 @@ async function setAmazonDeliveryPostcode(
       if (!(await locationLink.isVisible({ timeout: 3000 }).catch(() => false))) {
         return false;
       }
-      await locationLink.click();
+      await locationLink.click({ timeout: 5000 }).catch(() => {});
       popupOpen = await page
         .locator("#GLUXZipUpdateInput")
         .isVisible({ timeout: 5000 })
@@ -351,13 +364,13 @@ async function setAmazonDeliveryPostcode(
 
     // Type the postcode
     const zipInput = page.locator("#GLUXZipUpdateInput");
-    await zipInput.fill(postcode);
+    await zipInput.fill(postcode, { timeout: 5000 });
 
     // Click Apply
     const applyBtn = page.locator(
       '#GLUXZipUpdate input[type="submit"], #GLUXZipUpdate .a-button-input, #GLUXZipUpdate .a-button'
     );
-    await applyBtn.first().click();
+    await applyBtn.first().click({ timeout: 5000 });
 
     // Wait for Amazon to process
     await page.waitForTimeout(2000);
@@ -365,7 +378,7 @@ async function setAmazonDeliveryPostcode(
     // If a city selection appears, pick the first option
     const cityList = page.locator("#GLUXCityList select, #GLUXCityPopover select");
     if (await cityList.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await cityList.first().selectOption({ index: 1 });
+      await cityList.first().selectOption({ index: 1 }, { timeout: 5000 }).catch(() => {});
       await page.waitForTimeout(1000);
     }
 
@@ -376,12 +389,12 @@ async function setAmazonDeliveryPostcode(
     if (await doneBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
       await Promise.all([
         page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => {}),
-        doneBtn.first().click(),
+        doneBtn.first().click({ timeout: 5000 }).catch(() => {}),
       ]);
     }
 
     // Ensure page is stable after any reload
-    await page.waitForLoadState("domcontentloaded").catch(() => {});
+    await page.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {});
     await page.waitForTimeout(1000);
 
     return true;

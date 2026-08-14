@@ -59,7 +59,15 @@ export async function launchScraperBrowser(
   }
 
   const { chromium } = await import("playwright");
-  return chromium.launch({ headless });
+  return chromium.launch({
+    headless,
+    args: [
+      "--disable-dev-shm-usage",
+      "--no-sandbox",
+      "--disable-setuid-sandbox",
+      "--disable-gpu",
+    ],
+  });
 }
 
 export function getBrowserLaunchUserMessage(error: unknown) {

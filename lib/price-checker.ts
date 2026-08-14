@@ -37,6 +37,14 @@ const PRODUCT_DELAY_MAX_MS = Math.max(
     DEFAULT_PRODUCT_DELAY_MAX_MS
   )
 );
+const DEFAULT_PRODUCT_CHECK_TIMEOUT_MS = 75_000;
+const PRODUCT_CHECK_TIMEOUT_MS = Math.max(
+  15_000,
+  readDelayMs(
+    "LISTFLOW_PRICE_CHECK_PRODUCT_TIMEOUT_MS",
+    DEFAULT_PRODUCT_CHECK_TIMEOUT_MS
+  )
+);
 const SUPPLIER_NAME = "Amazon AU";
 
 /** Guard 1: reject price changes larger than this percentage in either direction. */
@@ -121,6 +129,25 @@ function getProductDelayMs() {
     PRODUCT_DELAY_MIN_MS +
     Math.random() * (PRODUCT_DELAY_MAX_MS - PRODUCT_DELAY_MIN_MS)
   );
+}
+
+function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutMessage: string
+): Promise<T> {
+  let timer: NodeJS.Timeout | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(timeoutMessage));
+    }, timeoutMs);
+  });
+
+  return Promise.race([promise, timeoutPromise]).finally(() => {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  });
 }
 
 async function getSupplierSettings(storeId?: string) {
@@ -451,10 +478,14 @@ export async function runPriceCheck(
         if (simulatedAmazonPrice !== null) {
           currentAmazonPrice = simulatedAmazonPrice;
         } else {
-          const scrapeResult = await scrapeAmazonPriceWithRetry(
-            product.id,
-            product.asin,
-            priceTrackingMode
+          const scrapeResult = await withTimeout(
+            scrapeAmazonPriceWithRetry(
+              product.id,
+              product.asin,
+              priceTrackingMode
+            ),
+            PRODUCT_CHECK_TIMEOUT_MS,
+            `Price check timed out after ${Math.round(PRODUCT_CHECK_TIMEOUT_MS / 1000)}s while scraping Amazon.`
           );
           currentAmazonPrice = scrapeResult.price;
           scrapedAmazonStockLeft = scrapeResult.stockLeft;
