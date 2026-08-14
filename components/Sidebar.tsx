@@ -66,7 +66,7 @@ export default function Sidebar({
     },
     {
       href: "/drafts",
-      label: "Drafts",
+      label: "Upload Products",
       icon: (
         <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
           <path

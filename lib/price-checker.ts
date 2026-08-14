@@ -49,9 +49,6 @@ const PRODUCT_CHECK_TIMEOUT_MS = Math.max(
 );
 const SUPPLIER_NAME = "Amazon AU";
 
-/** Guard 1: reject price changes larger than this percentage in either direction. */
-const MAX_CHANGE_PERCENT = 80;
-
 export interface PriceCheckResult {
   checked: number;
   changed: number;
@@ -743,35 +740,6 @@ export async function runPriceCheck(
         const changePercent =
           ((currentAmazonPrice - previousAmazonPrice) / previousAmazonPrice) * 100;
 
-        // --- Guard 1: Reject implausible price swings ---
-        // If the Amazon price supposedly changed by more than MAX_CHANGE_PERCENT
-        // in either direction, stop and flag it. A $999 product doesn't drop
-        // to $5 overnight through normal market movement.
-        if (Math.abs(changePercent) > MAX_CHANGE_PERCENT) {
-          const message =
-            `Price change of ${changePercent.toFixed(1)}% exceeds the ` +
-            `${MAX_CHANGE_PERCENT}% safety limit. Amazon price went from ` +
-            `A$${previousAmazonPrice.toFixed(2)} to A$${currentAmazonPrice.toFixed(2)}. ` +
-            `Manual review required.`;
-          await recordProductFailure({
-            productId: product.id,
-            code: PriceCheckFailureCode.UNSAFE_PRICE_CHANGE,
-            message,
-            checkedAt,
-          });
-
-          logger.warn("price-checker/run", "Guard 1: price change exceeds threshold", {
-            productId: product.id,
-            asin: product.asin,
-            previousAmazonPrice,
-            currentAmazonPrice,
-            changePercent: roundMoney(changePercent),
-            threshold: MAX_CHANGE_PERCENT,
-          });
-
-          await reportProductComplete(product.id);
-          continue;
-        }
         const nextVariants = product.variants.map((variant, variantIndex) => {
           const previousBuyPrice = decimalToNumber(variant.buyPrice) ?? 0;
           const previousSellPrice = decimalToNumber(variant.sellPrice) ?? 0;

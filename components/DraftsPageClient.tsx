@@ -153,7 +153,7 @@ export default function DraftsPageClient({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-3">
               <h1 className="text-2xl font-bold tracking-tight text-gray-950">
-                Drafts
+                Upload Products
               </h1>
               <span className="inline-flex min-h-7 items-center rounded-full bg-orange-50 px-3 text-sm font-semibold text-orange-700 ring-1 ring-inset ring-orange-200">
                 {products.length} {products.length === 1 ? "product" : "products"}

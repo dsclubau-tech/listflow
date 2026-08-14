@@ -383,21 +383,41 @@ function ActionButton({
 function SectionHeader({
   title,
   count,
+  selectedCount = 0,
+  onClearSelection,
   viewAllHref,
   children,
 }: {
   title: string;
   count: number;
+  selectedCount?: number;
+  onClearSelection?: () => void;
   viewAllHref?: string;
   children?: React.ReactNode;
 }) {
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-200 px-4 py-3">
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <h2 className="text-sm font-semibold text-gray-900">{title}</h2>
         <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
           {count}
         </span>
+        {selectedCount > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-semibold text-orange-800">
+              {selectedCount} selected
+            </span>
+            {onClearSelection && (
+              <button
+                type="button"
+                onClick={onClearSelection}
+                className="text-xs font-medium text-gray-500 hover:text-gray-800 underline transition-colors"
+              >
+                Deselect all
+              </button>
+            )}
+          </div>
+        )}
       </div>
       <div className="flex flex-wrap items-center gap-2">
         {children}
@@ -479,6 +499,55 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
   );
   const [jobPanelFilter, setJobPanelFilter] =
     useState<JobPanelFilter>("current");
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+
+  const visibleProductIds = useMemo(() => {
+    if (activeFilter === "pendingReviews") {
+      return data.queues.pendingReviews.map((item) => item.product.id);
+    }
+    if (activeFilter === "failedChecks") {
+      return data.queues.failedChecks.map((item) => item.product.id);
+    }
+    if (activeFilter === "lowStock") {
+      return data.queues.lowStock.map((item) => item.product.id);
+    }
+    if (activeFilter === "onHold") {
+      return data.queues.onHold.map((item) => item.product.id);
+    }
+    return [];
+  }, [activeFilter, data.queues]);
+
+  const selectedInActiveTab = useMemo(() => {
+    const visibleSet = new Set(visibleProductIds);
+    return selectedProductIds.filter((id) => visibleSet.has(id));
+  }, [selectedProductIds, visibleProductIds]);
+
+  const isAllSelected =
+    visibleProductIds.length > 0 &&
+    visibleProductIds.every((id) => selectedInActiveTab.includes(id));
+  const isSomeSelected =
+    selectedInActiveTab.length > 0 && !isAllSelected;
+
+  const toggleSelectAll = () => {
+    if (isAllSelected) {
+      setSelectedProductIds([]);
+    } else {
+      setSelectedProductIds([...visibleProductIds]);
+    }
+  };
+
+  const toggleSelectProduct = (productId: string) => {
+    setSelectedProductIds((current) =>
+      current.includes(productId)
+        ? current.filter((id) => id !== productId)
+        : [...current, productId]
+    );
+  };
+
+  const clearSelection = () => {
+    setSelectedProductIds([]);
+  };
+
   const activePriceJobs = useMemo(
     () => data.jobs.priceChecks.filter(isActivePriceJob),
     [data.jobs.priceChecks]
@@ -609,14 +678,17 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
     });
   }
 
-  function bulkReview(action: "apply" | "dismiss") {
-    const productIds = data.queues.pendingReviews.map((item) => item.product.id);
+  function bulkReview(action: "apply" | "dismiss", explicitProductIds?: string[]) {
+    const productIds =
+      explicitProductIds && explicitProductIds.length > 0
+        ? explicitProductIds
+        : data.queues.pendingReviews.map((item) => item.product.id);
     const endpoint =
       action === "apply" ? "/api/price-check/bulk-apply" : "/api/price-check/bulk-dismiss";
 
     void runAction(`bulk-${action}`, async () => {
       if (productIds.length === 0) {
-        return "No visible pending reviews to update.";
+        return "No pending reviews selected.";
       }
 
       const result = await postJson<{
@@ -625,11 +697,13 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
         failed?: number;
       }>(endpoint, { productIds });
 
+      setSelectedProductIds((prev) => prev.filter((id) => !productIds.includes(id)));
+
       if (action === "apply") {
-        return `Applied ${result.applied ?? 0} visible price change(s). ${result.failed ?? 0} failed.`;
+        return `Applied ${result.applied ?? 0} price change(s). ${result.failed ?? 0} failed.`;
       }
 
-      return `Dismissed ${result.dismissed ?? 0} visible price change(s).`;
+      return `Dismissed ${result.dismissed ?? 0} price change(s).`;
     });
   }
 
@@ -672,12 +746,54 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
     );
   }
 
+  function bulkRetryFailedChecks(explicitProductIds?: string[]) {
+    const targetProductIds =
+      explicitProductIds && explicitProductIds.length > 0
+        ? explicitProductIds
+        : data.queues.failedChecks.map((item) => item.product.id);
+
+    if (targetProductIds.length === 0) {
+      showToast("No failed price checks to retry.", "error");
+      return;
+    }
+
+    startPriceCheckJob(
+      "bulk-retry",
+      { productIds: targetProductIds },
+      "No failed price checks to retry.",
+      (total) => `Price check started for ${total} product${total === 1 ? "" : "s"}.`
+    );
+    setSelectedProductIds([]);
+  }
+
   function holdProduct(product: ActionCenterProductSummary) {
     void runAction(`hold:${product.id}`, async () => {
       const result = await postJson<{ held?: number; failed?: number; message?: string }>(
         "/api/products/bulk-hold",
         { productIds: [product.id] }
       );
+      if (result.message) return result.message;
+      return `Put ${result.held ?? 0} product(s) on hold. ${result.failed ?? 0} failed.`;
+    });
+  }
+
+  function bulkHoldProducts(explicitProductIds?: string[]) {
+    const targetProductIds =
+      explicitProductIds && explicitProductIds.length > 0
+        ? explicitProductIds
+        : visibleProductIds;
+
+    if (targetProductIds.length === 0) {
+      showToast("No products selected to put on hold.", "error");
+      return;
+    }
+
+    void runAction("bulk-hold", async () => {
+      const result = await postJson<{ held?: number; failed?: number; message?: string }>(
+        "/api/products/bulk-hold",
+        { productIds: targetProductIds }
+      );
+      setSelectedProductIds((prev) => prev.filter((id) => !targetProductIds.includes(id)));
       if (result.message) return result.message;
       return `Put ${result.held ?? 0} product(s) on hold. ${result.failed ?? 0} failed.`;
     });
@@ -715,6 +831,28 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
     });
   }
 
+  function bulkResumeProducts(explicitProductIds?: string[]) {
+    const productIds =
+      explicitProductIds && explicitProductIds.length > 0
+        ? explicitProductIds
+        : data.queues.onHold.map((item) => item.product.id);
+
+    if (productIds.length === 0) {
+      showToast("No products selected to resume.", "error");
+      return;
+    }
+
+    void runAction("bulk-resume", async () => {
+      const result = await postJson<{ resumed?: number; failed?: number; message?: string }>(
+        "/api/products/bulk-resume",
+        { productIds }
+      );
+      setSelectedProductIds((prev) => prev.filter((id) => !productIds.includes(id)));
+      if (result.message) return result.message;
+      return `Resumed ${result.resumed ?? 0} product(s). ${result.failed ?? 0} failed.`;
+    });
+  }
+
   function endProduct(product: ActionCenterProductSummary) {
     const confirmed = window.confirm(
       `End this eBay listing and delete it from ListFlow?\n\n${product.title}`
@@ -729,6 +867,36 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
         "/api/products/bulk-end",
         { productIds: [product.id] }
       );
+      if (result.message) return result.message;
+      return `Ended ${result.ended ?? 0} listing(s). ${result.failed ?? 0} failed.`;
+    });
+  }
+
+  function bulkEndProducts(explicitProductIds?: string[]) {
+    const targetProductIds =
+      explicitProductIds && explicitProductIds.length > 0
+        ? explicitProductIds
+        : visibleProductIds;
+
+    if (targetProductIds.length === 0) {
+      showToast("No products selected to end.", "error");
+      return;
+    }
+
+    const confirmed = window.confirm(
+      `End and delete ${targetProductIds.length} selected eBay listing(s) from ListFlow?\n\nThis action cannot be undone.`
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    void runAction("bulk-end", async () => {
+      const result = await postJson<{ ended?: number; failed?: number; message?: string }>(
+        "/api/products/bulk-end",
+        { productIds: targetProductIds }
+      );
+      setSelectedProductIds((prev) => prev.filter((id) => !targetProductIds.includes(id)));
       if (result.message) return result.message;
       return `Ended ${result.ended ?? 0} listing(s). ${result.failed ?? 0} failed.`;
     });
@@ -986,7 +1154,10 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
             <button
               key={option.id}
               type="button"
-              onClick={() => setActiveFilter(option.id)}
+              onClick={() => {
+                setActiveFilter(option.id);
+                setSelectedProductIds([]);
+              }}
               aria-pressed={selected}
               className={`rounded-md border px-4 py-3 text-left transition-colors ${
                 selected
@@ -1031,32 +1202,66 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
             <SectionHeader
               title="Needs Price Review"
               count={data.summary.pendingReviews}
+              selectedCount={selectedInActiveTab.length}
+              onClearSelection={clearSelection}
               viewAllHref="/products?filter=needs-changing-price"
             >
               <ActionButton
-                onClick={() => bulkReview("apply")}
+                onClick={() =>
+                  bulkReview(
+                    "apply",
+                    selectedInActiveTab.length > 0 ? selectedInActiveTab : undefined
+                  )
+                }
                 disabled={
                   data.queues.pendingReviews.length === 0 ||
                   runningAction === "bulk-apply"
                 }
                 tone="primary"
               >
-                {runningAction === "bulk-apply" ? "Applying..." : "Apply visible"}
+                {runningAction === "bulk-apply"
+                  ? "Applying..."
+                  : selectedInActiveTab.length > 0
+                    ? `Apply selected (${selectedInActiveTab.length})`
+                    : "Apply visible"}
               </ActionButton>
               <ActionButton
-                onClick={() => bulkReview("dismiss")}
+                onClick={() =>
+                  bulkReview(
+                    "dismiss",
+                    selectedInActiveTab.length > 0 ? selectedInActiveTab : undefined
+                  )
+                }
                 disabled={
                   data.queues.pendingReviews.length === 0 ||
                   runningAction === "bulk-dismiss"
                 }
               >
-                {runningAction === "bulk-dismiss" ? "Dismissing..." : "Dismiss visible"}
+                {runningAction === "bulk-dismiss"
+                  ? "Dismissing..."
+                  : selectedInActiveTab.length > 0
+                    ? `Dismiss selected (${selectedInActiveTab.length})`
+                    : "Dismiss visible"}
               </ActionButton>
             </SectionHeader>
             <div className="overflow-x-auto">
             <table className="min-w-[980px] w-full text-left">
               <thead className="bg-gray-50 text-xs font-medium uppercase tracking-wide text-gray-500">
                 <tr>
+                  <th className="w-10 px-4 py-3">
+                    <input
+                      type="checkbox"
+                      aria-label="Select all pending reviews"
+                      checked={isAllSelected}
+                      ref={(input) => {
+                        if (input) {
+                          input.indeterminate = isSomeSelected;
+                        }
+                      }}
+                      onChange={toggleSelectAll}
+                      className="h-4 w-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                    />
+                  </th>
                   <th className="px-4 py-3">Product</th>
                   <th className="px-4 py-3">Buy Price</th>
                   <th className="px-4 py-3">Sell Price</th>
@@ -1068,72 +1273,87 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {data.queues.pendingReviews.length === 0 ? (
-                  <EmptyRow colSpan={7} message="No pending price reviews." />
+                  <EmptyRow colSpan={8} message="No pending price reviews." />
                 ) : (
-                  data.queues.pendingReviews.map((item) => (
-                    <tr key={item.product.id}>
-                      <td className="px-4 py-3 align-top">
-                        <div className="font-medium text-gray-900">{item.product.title}</div>
-                        {item.pendingCount > 1 && (
-                          <div className="mt-1 text-xs text-amber-700">
-                            {item.pendingCount} pending variant changes
-                          </div>
-                        )}
-                        <ProductLinks product={item.product} />
-                      </td>
-                      <td className="px-4 py-3 text-sm text-gray-700">
-                        {formatMoney(item.previousPrice)} {"->"} {formatMoney(item.newPrice)}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-gray-700">
-                        {formatMoney(item.previousSellPrice)} {"->"}{" "}
-                        {formatMoney(item.newSellPrice)}
-                      </td>
-                      <td
-                        className={`px-4 py-3 text-sm font-medium ${
-                          Number(item.changeAmount) > 0
-                            ? "text-red-700"
-                            : Number(item.changeAmount) < 0
-                              ? "text-emerald-700"
-                              : "text-gray-700"
-                        }`}
+                  data.queues.pendingReviews.map((item) => {
+                    const isSelected = selectedProductIds.includes(item.product.id);
+                    return (
+                      <tr
+                        key={item.product.id}
+                        className={isSelected ? "bg-orange-50/40" : undefined}
                       >
-                        {formatSignedMoney(item.changeAmount)}
-                      </td>
-                      <td
-                        className={`px-4 py-3 text-sm font-medium ${
-                          item.profit === null
-                            ? "text-gray-500"
-                            : Number(item.profit) < 0
+                        <td className="w-10 px-4 py-3 align-top">
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${item.product.title}`}
+                            checked={isSelected}
+                            onChange={() => toggleSelectProduct(item.product.id)}
+                            className="mt-1 h-4 w-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                          />
+                        </td>
+                        <td className="px-4 py-3 align-top">
+                          <div className="font-medium text-gray-900">{item.product.title}</div>
+                          {item.pendingCount > 1 && (
+                            <div className="mt-1 text-xs text-amber-700">
+                              {item.pendingCount} pending variant changes
+                            </div>
+                          )}
+                          <ProductLinks product={item.product} />
+                        </td>
+                        <td className="px-4 py-3 text-sm text-gray-700">
+                          {formatMoney(item.previousPrice)} {"->"} {formatMoney(item.newPrice)}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-gray-700">
+                          {formatMoney(item.previousSellPrice)} {"->"}{" "}
+                          {formatMoney(item.newSellPrice)}
+                        </td>
+                        <td
+                          className={`px-4 py-3 text-sm font-medium ${
+                            Number(item.changeAmount) > 0
                               ? "text-red-700"
-                              : "text-emerald-700"
-                        }`}
-                      >
-                        {formatMoney(item.profit)}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-gray-500">
-                        {formatDateTime(item.createdAt)}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex justify-end gap-2">
-                          <ActionButton
-                            onClick={() => applyReview(item)}
-                            disabled={runningAction === `apply:${item.product.id}`}
-                            tone="primary"
-                          >
-                            {runningAction === `apply:${item.product.id}` ? "Applying..." : "Apply"}
-                          </ActionButton>
-                          <ActionButton
-                            onClick={() => dismissReview(item)}
-                            disabled={runningAction === `dismiss:${item.product.id}`}
-                          >
-                            {runningAction === `dismiss:${item.product.id}`
-                              ? "Dismissing..."
-                              : "Dismiss"}
-                          </ActionButton>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+                              : Number(item.changeAmount) < 0
+                                ? "text-emerald-700"
+                                : "text-gray-700"
+                          }`}
+                        >
+                          {formatSignedMoney(item.changeAmount)}
+                        </td>
+                        <td
+                          className={`px-4 py-3 text-sm font-medium ${
+                            item.profit === null
+                              ? "text-gray-500"
+                              : Number(item.profit) < 0
+                                ? "text-red-700"
+                                : "text-emerald-700"
+                          }`}
+                        >
+                          {formatMoney(item.profit)}
+                        </td>
+                        <td className="px-4 py-3 text-sm text-gray-500">
+                          {formatDateTime(item.createdAt)}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex justify-end gap-2">
+                            <ActionButton
+                              onClick={() => applyReview(item)}
+                              disabled={runningAction === `apply:${item.product.id}`}
+                              tone="primary"
+                            >
+                              {runningAction === `apply:${item.product.id}` ? "Applying..." : "Apply"}
+                            </ActionButton>
+                            <ActionButton
+                              onClick={() => dismissReview(item)}
+                              disabled={runningAction === `dismiss:${item.product.id}`}
+                            >
+                              {runningAction === `dismiss:${item.product.id}`
+                                ? "Dismissing..."
+                                : "Dismiss"}
+                            </ActionButton>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>
@@ -1146,11 +1366,67 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
           <SectionHeader
             title="Failed Price Checks"
             count={data.summary.failedChecks}
+            selectedCount={selectedInActiveTab.length}
+            onClearSelection={clearSelection}
             viewAllHref="/products?filter=failed-on-hold"
-          />
+          >
+            <ActionButton
+              onClick={() =>
+                bulkRetryFailedChecks(
+                  selectedInActiveTab.length > 0 ? selectedInActiveTab : undefined
+                )
+              }
+              disabled={
+                data.queues.failedChecks.length === 0 ||
+                runningAction === "bulk-retry"
+              }
+              tone="primary"
+            >
+              {runningAction === "bulk-retry"
+                ? "Starting..."
+                : selectedInActiveTab.length > 0
+                  ? `Retry selected (${selectedInActiveTab.length})`
+                  : `Retry all (${data.queues.failedChecks.length})`}
+            </ActionButton>
+            {selectedInActiveTab.length > 0 && (
+              <>
+                <ActionButton
+                  onClick={() => bulkHoldProducts(selectedInActiveTab)}
+                  disabled={runningAction === "bulk-hold"}
+                >
+                  {runningAction === "bulk-hold"
+                    ? "Holding..."
+                    : `Hold selected (${selectedInActiveTab.length})`}
+                </ActionButton>
+                <ActionButton
+                  onClick={() => bulkEndProducts(selectedInActiveTab)}
+                  disabled={runningAction === "bulk-end"}
+                  tone="danger"
+                >
+                  {runningAction === "bulk-end"
+                    ? "Ending..."
+                    : `End selected (${selectedInActiveTab.length})`}
+                </ActionButton>
+              </>
+            )}
+          </SectionHeader>
           <table className="w-full text-left">
             <thead className="bg-gray-50 text-xs font-medium uppercase tracking-wide text-gray-500">
               <tr>
+                <th className="w-10 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all failed checks"
+                    checked={isAllSelected}
+                    ref={(input) => {
+                      if (input) {
+                        input.indeterminate = isSomeSelected;
+                      }
+                    }}
+                    onChange={toggleSelectAll}
+                    className="h-4 w-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                  />
+                </th>
                 <th className="px-4 py-3">Product</th>
                 <th className="px-4 py-3">Error</th>
                 <th className="px-4 py-3">Last Check</th>
@@ -1159,48 +1435,63 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
             </thead>
             <tbody className="divide-y divide-gray-100">
               {data.queues.failedChecks.length === 0 ? (
-                <EmptyRow colSpan={4} message="No failed price checks." />
+                <EmptyRow colSpan={5} message="No failed price checks." />
               ) : (
-                data.queues.failedChecks.map((item: FailedCheckActionItem) => (
-                  <tr key={item.product.id}>
-                    <td className="px-4 py-3 align-top">
-                      <div className="font-medium text-gray-900">{item.product.title}</div>
-                      <ProductLinks product={item.product} />
-                    </td>
-                    <td className="max-w-lg px-4 py-3 text-sm text-red-700">
-                      <div className="line-clamp-2" title={item.errorMessage}>
-                        {item.errorMessage}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-sm text-gray-500">
-                      {formatDateTime(item.lastPriceCheck)}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end gap-2">
-                        <ActionButton
-                          onClick={() => retryCheck(item.product)}
-                          disabled={runningAction === `retry:${item.product.id}`}
-                          tone="primary"
-                        >
-                          {runningAction === `retry:${item.product.id}` ? "Starting..." : "Retry"}
-                        </ActionButton>
-                        <ActionButton
-                          onClick={() => holdProduct(item.product)}
-                          disabled={runningAction === `hold:${item.product.id}`}
-                        >
-                          Hold
-                        </ActionButton>
-                        <ActionButton
-                          onClick={() => endProduct(item.product)}
-                          disabled={runningAction === `end:${item.product.id}`}
-                          tone="danger"
-                        >
-                          End
-                        </ActionButton>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                data.queues.failedChecks.map((item: FailedCheckActionItem) => {
+                  const isSelected = selectedProductIds.includes(item.product.id);
+                  return (
+                    <tr
+                      key={item.product.id}
+                      className={isSelected ? "bg-orange-50/40" : undefined}
+                    >
+                      <td className="w-10 px-4 py-3 align-top">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${item.product.title}`}
+                          checked={isSelected}
+                          onChange={() => toggleSelectProduct(item.product.id)}
+                          className="mt-1 h-4 w-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                        />
+                      </td>
+                      <td className="px-4 py-3 align-top">
+                        <div className="font-medium text-gray-900">{item.product.title}</div>
+                        <ProductLinks product={item.product} />
+                      </td>
+                      <td className="max-w-lg px-4 py-3 text-sm text-red-700">
+                        <div className="line-clamp-2" title={item.errorMessage}>
+                          {item.errorMessage}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-500">
+                        {formatDateTime(item.lastPriceCheck)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex justify-end gap-2">
+                          <ActionButton
+                            onClick={() => retryCheck(item.product)}
+                            disabled={runningAction === `retry:${item.product.id}`}
+                            tone="primary"
+                          >
+                            {runningAction === `retry:${item.product.id}` ? "Starting..." : "Retry"}
+                          </ActionButton>
+                          <ActionButton
+                            onClick={() => holdProduct(item.product)}
+                            disabled={runningAction === `hold:${item.product.id}`}
+                          >
+                            Hold
+                          </ActionButton>
+                          <ActionButton
+                            onClick={() => endProduct(item.product)}
+                            disabled={runningAction === `end:${item.product.id}`}
+                            tone="danger"
+                          >
+                            End
+                          </ActionButton>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -1212,28 +1503,56 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
           <SectionHeader
             title="Low Amazon Stock"
             count={data.summary.lowStock}
+            selectedCount={selectedInActiveTab.length}
+            onClearSelection={clearSelection}
             viewAllHref="/products?stockMonitoring=low-stock"
           >
-            <ActionButton
-              onClick={holdAllLowStockProducts}
-              disabled={
-                workerOffline ||
-                hasActiveLowStockHoldJob ||
-                data.summary.lowStock === 0 ||
-                runningAction === "hold-all-low-stock"
-              }
-              tone="primary"
-            >
-              {runningAction === "hold-all-low-stock"
-                ? "Queueing..."
-                : hasActiveLowStockHoldJob
-                  ? "Hold queued"
-                : `Hold all (${data.summary.lowStock})`}
-            </ActionButton>
+            {selectedInActiveTab.length > 0 ? (
+              <ActionButton
+                onClick={() => bulkHoldProducts(selectedInActiveTab)}
+                disabled={workerOffline || runningAction === "bulk-hold"}
+                tone="primary"
+              >
+                {runningAction === "bulk-hold"
+                  ? "Holding..."
+                  : `Hold selected (${selectedInActiveTab.length})`}
+              </ActionButton>
+            ) : (
+              <ActionButton
+                onClick={holdAllLowStockProducts}
+                disabled={
+                  workerOffline ||
+                  hasActiveLowStockHoldJob ||
+                  data.summary.lowStock === 0 ||
+                  runningAction === "hold-all-low-stock"
+                }
+                tone="primary"
+              >
+                {runningAction === "hold-all-low-stock"
+                  ? "Queueing..."
+                  : hasActiveLowStockHoldJob
+                    ? "Hold queued"
+                  : `Hold all (${data.summary.lowStock})`}
+              </ActionButton>
+            )}
           </SectionHeader>
           <table className="w-full text-left">
             <thead className="bg-gray-50 text-xs font-medium uppercase tracking-wide text-gray-500">
               <tr>
+                <th className="w-10 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all low stock items"
+                    checked={isAllSelected}
+                    ref={(input) => {
+                      if (input) {
+                        input.indeterminate = isSomeSelected;
+                      }
+                    }}
+                    onChange={toggleSelectAll}
+                    className="h-4 w-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                  />
+                </th>
                 <th className="px-4 py-3">Product</th>
                 <th className="px-4 py-3">Stock Left</th>
                 <th className="px-4 py-3 text-right">Actions</th>
@@ -1241,32 +1560,47 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
             </thead>
             <tbody className="divide-y divide-gray-100">
               {data.queues.lowStock.length === 0 ? (
-                <EmptyRow colSpan={3} message="No low-stock products." />
+                <EmptyRow colSpan={4} message="No low-stock products." />
               ) : (
-                data.queues.lowStock.map((item: LowStockActionItem) => (
-                  <tr key={item.product.id}>
-                    <td className="px-4 py-3 align-top">
-                      <div className="font-medium text-gray-900">{item.product.title}</div>
-                      <ProductLinks product={item.product} />
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-800">
-                        {item.amazonStockLeft ?? "?"} left
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end gap-2">
-                        <ActionButton
-                          onClick={() => holdProduct(item.product)}
-                          disabled={runningAction === `hold:${item.product.id}`}
-                          tone="primary"
-                        >
-                          Hold
-                        </ActionButton>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                data.queues.lowStock.map((item: LowStockActionItem) => {
+                  const isSelected = selectedProductIds.includes(item.product.id);
+                  return (
+                    <tr
+                      key={item.product.id}
+                      className={isSelected ? "bg-orange-50/40" : undefined}
+                    >
+                      <td className="w-10 px-4 py-3 align-top">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${item.product.title}`}
+                          checked={isSelected}
+                          onChange={() => toggleSelectProduct(item.product.id)}
+                          className="mt-1 h-4 w-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                        />
+                      </td>
+                      <td className="px-4 py-3 align-top">
+                        <div className="font-medium text-gray-900">{item.product.title}</div>
+                        <ProductLinks product={item.product} />
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="rounded-full bg-amber-100 px-2 py-1 text-xs font-medium text-amber-800">
+                          {item.amazonStockLeft ?? "?"} left
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="flex justify-end gap-2">
+                          <ActionButton
+                            onClick={() => holdProduct(item.product)}
+                            disabled={runningAction === `hold:${item.product.id}`}
+                            tone="primary"
+                          >
+                            Hold
+                          </ActionButton>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -1278,11 +1612,64 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
           <SectionHeader
             title="On Hold"
             count={data.summary.onHold}
+            selectedCount={selectedInActiveTab.length}
+            onClearSelection={clearSelection}
             viewAllHref="/products?filter=failed-on-hold"
-          />
+          >
+            <ActionButton
+              onClick={() =>
+                bulkResumeProducts(
+                  selectedInActiveTab.length > 0 ? selectedInActiveTab : undefined
+                )
+              }
+              disabled={
+                data.queues.onHold.length === 0 ||
+                runningAction === "bulk-resume"
+              }
+              tone="primary"
+            >
+              {runningAction === "bulk-resume"
+                ? "Resuming..."
+                : selectedInActiveTab.length > 0
+                  ? `Resume selected (${selectedInActiveTab.length})`
+                  : `Resume visible (${data.queues.onHold.length})`}
+            </ActionButton>
+            <ActionButton
+              onClick={() =>
+                bulkEndProducts(
+                  selectedInActiveTab.length > 0 ? selectedInActiveTab : undefined
+                )
+              }
+              disabled={
+                data.queues.onHold.length === 0 ||
+                runningAction === "bulk-end"
+              }
+              tone="danger"
+            >
+              {runningAction === "bulk-end"
+                ? "Ending..."
+                : selectedInActiveTab.length > 0
+                  ? `End selected (${selectedInActiveTab.length})`
+                  : `End visible (${data.queues.onHold.length})`}
+            </ActionButton>
+          </SectionHeader>
           <table className="w-full text-left">
             <thead className="bg-gray-50 text-xs font-medium uppercase tracking-wide text-gray-500">
               <tr>
+                <th className="w-10 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all on hold products"
+                    checked={isAllSelected}
+                    ref={(input) => {
+                      if (input) {
+                        input.indeterminate = isSomeSelected;
+                      }
+                    }}
+                    onChange={toggleSelectAll}
+                    className="h-4 w-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                  />
+                </th>
                 <th className="px-4 py-3">Product</th>
                 <th className="px-4 py-3">Reason</th>
                 <th className="px-4 py-3">Quantity</th>
@@ -1291,40 +1678,55 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
             </thead>
             <tbody className="divide-y divide-gray-100">
               {data.queues.onHold.length === 0 ? (
-                <EmptyRow colSpan={4} message="No on-hold products." />
+                <EmptyRow colSpan={5} message="No on-hold products." />
               ) : (
-                data.queues.onHold.map((item: OnHoldActionItem) => (
-                  <tr key={item.product.id}>
-                    <td className="px-4 py-3 align-top">
-                      <div className="font-medium text-gray-900">{item.product.title}</div>
-                      <ProductLinks product={item.product} />
-                    </td>
-                    <td className="max-w-xl px-4 py-3 align-top text-sm text-gray-700">
-                      <div className="line-clamp-3" title={item.reason}>
-                        {item.reason}
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 text-sm text-gray-700">{item.quantity}</td>
-                    <td className="px-4 py-3">
-                      <div className="flex justify-end gap-2">
-                        <ActionButton
-                          onClick={() => resumeProduct(item.product)}
-                          disabled={runningAction === `resume:${item.product.id}`}
-                          tone="primary"
-                        >
-                          Resume
-                        </ActionButton>
-                        <ActionButton
-                          onClick={() => endProduct(item.product)}
-                          disabled={runningAction === `end:${item.product.id}`}
-                          tone="danger"
-                        >
-                          End
-                        </ActionButton>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                data.queues.onHold.map((item: OnHoldActionItem) => {
+                  const isSelected = selectedProductIds.includes(item.product.id);
+                  return (
+                    <tr
+                      key={item.product.id}
+                      className={isSelected ? "bg-orange-50/40" : undefined}
+                    >
+                      <td className="w-10 px-4 py-3 align-top">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${item.product.title}`}
+                          checked={isSelected}
+                          onChange={() => toggleSelectProduct(item.product.id)}
+                          className="mt-1 h-4 w-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                        />
+                      </td>
+                      <td className="px-4 py-3 align-top">
+                        <div className="font-medium text-gray-900">{item.product.title}</div>
+                        <ProductLinks product={item.product} />
+                      </td>
+                      <td className="max-w-xl px-4 py-3 align-top text-sm text-gray-700">
+                        <div className="line-clamp-3" title={item.reason}>
+                          {item.reason}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-gray-700">{item.quantity}</td>
+                      <td className="px-4 py-3">
+                        <div className="flex justify-end gap-2">
+                          <ActionButton
+                            onClick={() => resumeProduct(item.product)}
+                            disabled={runningAction === `resume:${item.product.id}`}
+                            tone="primary"
+                          >
+                            Resume
+                          </ActionButton>
+                          <ActionButton
+                            onClick={() => endProduct(item.product)}
+                            disabled={runningAction === `end:${item.product.id}`}
+                            tone="danger"
+                          >
+                            End
+                          </ActionButton>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>

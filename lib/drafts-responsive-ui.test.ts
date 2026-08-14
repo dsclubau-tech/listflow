@@ -40,7 +40,7 @@ test("indeterminate progress remains accessible without a fake percentage", () =
 test("Drafts route loading screen announces itself and mirrors both layouts", () => {
   const markup = renderToStaticMarkup(createElement(DraftsLoading));
 
-  assert.match(markup, /aria-label="Loading drafts"/);
+  assert.match(markup, /aria-label="Loading products to upload"/);
   assert.match(markup, /xl:hidden/);
   assert.match(markup, /xl:block/);
   assert.match(markup, /motion-reduce:animate-none/);

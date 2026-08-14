@@ -1797,7 +1797,7 @@ export default function DraftsTable({
         </svg>
         <p className="text-sm font-medium text-gray-600">
           {isDraftsView
-            ? "No drafts yet. Click 'Add Product' to get started."
+            ? "No products to upload yet. Click 'Normal Upload' or 'Advanced Upload' to get started."
             : "No active listings yet. Import a draft to publish it on eBay."}
         </p>
       </div>

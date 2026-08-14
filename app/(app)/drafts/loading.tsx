@@ -12,9 +12,9 @@ export default function DraftsLoading() {
       className="min-h-full px-4 py-5 md:px-6 md:py-7 2xl:p-8"
       role="status"
       aria-live="polite"
-      aria-label="Loading drafts"
+      aria-label="Loading products to upload"
     >
-      <span className="sr-only">Loading drafts</span>
+      <span className="sr-only">Loading products to upload</span>
 
       <div className="mb-6 rounded-2xl border border-gray-200 bg-white p-5 shadow-sm md:p-6">
         <div className="flex flex-col gap-5 xl:flex-row xl:items-center xl:justify-between">
