@@ -1,4 +1,5 @@
-import { fetchRailwayUsageReport } from "@/lib/railway-api";
+import { redirect } from "next/navigation";
+import { getCurrentStoreSession } from "@/lib/store-session";
 import RailwayUsageClient from "@/components/RailwayUsageClient";
 
 export const metadata = {
@@ -6,10 +7,12 @@ export const metadata = {
   description: "Monitor Railway resource consumption, per-service worker costs, and live process telemetry.",
 };
 
-export const dynamic = "force-dynamic";
-
 export default async function RailwayPage() {
-  const initialReport = await fetchRailwayUsageReport();
+  const storeSession = await getCurrentStoreSession();
 
-  return <RailwayUsageClient initialReport={initialReport} />;
+  if (!storeSession) {
+    redirect("/login");
+  }
+
+  return <RailwayUsageClient />;
 }

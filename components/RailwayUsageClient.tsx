@@ -1,19 +1,20 @@
 "use client";
 
-import { useState, useEffect, useTransition } from "react";
+import { useState, useEffect, useTransition, useCallback } from "react";
 import type { RailwayUsageReport } from "@/lib/railway-api";
 
 interface RailwayUsageClientProps {
-  initialReport: RailwayUsageReport;
+  initialReport?: RailwayUsageReport | null;
 }
 
-export default function RailwayUsageClient({ initialReport }: RailwayUsageClientProps) {
-  const [report, setReport] = useState<RailwayUsageReport>(initialReport);
+export default function RailwayUsageClient({ initialReport = null }: RailwayUsageClientProps) {
+  const [report, setReport] = useState<RailwayUsageReport | null>(initialReport);
   const [isRefreshing, startRefreshing] = useTransition();
+  const [isLoading, setIsLoading] = useState(!initialReport);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [error, setError] = useState<string | null>(initialReport.error ?? null);
+  const [error, setError] = useState<string | null>(initialReport?.error ?? null);
 
-  async function refreshData() {
+  const refreshData = useCallback(() => {
     startRefreshing(async () => {
       try {
         const res = await fetch("/api/railway/usage", { cache: "no-store" });
@@ -24,19 +25,48 @@ export default function RailwayUsageClient({ initialReport }: RailwayUsageClient
         setReport(data);
         setError(data.error ?? null);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to refresh Railway data");
+        setError(err instanceof Error ? err.message : "Failed to fetch Railway usage data");
+      } finally {
+        setIsLoading(false);
       }
     });
-  }
+  }, []);
+
+  // Fetch on mount if no initial report
+  useEffect(() => {
+    if (!report) {
+      refreshData();
+    }
+  }, [report, refreshData]);
 
   // Periodic polling every 30 seconds when autoRefresh is active
   useEffect(() => {
     if (!autoRefresh) return;
     const interval = setInterval(() => {
-      void refreshData();
+      refreshData();
     }, 30_000);
     return () => clearInterval(interval);
-  }, [autoRefresh]);
+  }, [autoRefresh, refreshData]);
+
+  if (isLoading || !report) {
+    return (
+      <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-6 animate-pulse">
+        <div className="flex items-center justify-between border-b border-gray-200 pb-5">
+          <div className="space-y-2">
+            <div className="h-7 bg-gray-200 rounded-md w-64" />
+            <div className="h-4 bg-gray-200 rounded-md w-96" />
+          </div>
+          <div className="h-9 bg-gray-200 rounded-lg w-28" />
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[1, 2, 3, 4].map((i) => (
+            <div key={i} className="bg-white border border-gray-200 rounded-xl p-5 h-36" />
+          ))}
+        </div>
+        <div className="bg-white border border-gray-200 rounded-xl p-6 h-64" />
+      </div>
+    );
+  }
 
   const { billingPeriod, services, workerTelemetry } = report;
   const currentCost = billingPeriod.currentPeriodCost;
@@ -94,7 +124,7 @@ export default function RailwayUsageClient({ initialReport }: RailwayUsageClient
 
           <button
             type="button"
-            onClick={() => void refreshData()}
+            onClick={refreshData}
             disabled={isRefreshing}
             className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 shadow-xs active:bg-gray-100 transition-colors disabled:opacity-50 cursor-pointer"
           >
