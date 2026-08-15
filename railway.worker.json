@@ -18,7 +18,7 @@
     ]
   },
   "deploy": {
-    "startCommand": "node --import tsx scripts/listflow-worker.ts",
+    "startCommand": "node --max-old-space-size=512 --import tsx scripts/listflow-worker.ts",
     "restartPolicyType": "ALWAYS",
     "overlapSeconds": 0,
     "drainingSeconds": 300

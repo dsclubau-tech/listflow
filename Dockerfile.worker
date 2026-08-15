@@ -20,4 +20,4 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 ENV LISTFLOW_USE_LOCAL_PLAYWRIGHT=true
 
 # Start Node directly so Railway's SIGTERM reaches the worker process.
-CMD ["node", "--import", "tsx", "scripts/listflow-worker.ts"]
+CMD ["node", "--max-old-space-size=512", "--import", "tsx", "scripts/listflow-worker.ts"]

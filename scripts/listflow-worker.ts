@@ -385,6 +385,55 @@ async function main() {
     });
   }, modules.heartbeatIntervalMs);
 
+  const METRICS_INTERVAL_MS = parsePositiveMs(
+    process.env.LISTFLOW_WORKER_METRICS_INTERVAL_MS,
+    60_000
+  );
+  let previousCpu = process.cpuUsage();
+  let previousMetricsTime = Date.now();
+  let completedJobsSinceMetrics = 0;
+
+  const emitTelemetryMetrics = () => {
+    const memory = process.memoryUsage();
+    const currentCpu = process.cpuUsage(previousCpu);
+    previousCpu = process.cpuUsage();
+    const now = Date.now();
+    const durationSec = Math.max((now - previousMetricsTime) / 1000, 1);
+    previousMetricsTime = now;
+
+    const cpuUserMs = Math.round(currentCpu.user / 1000);
+    const cpuSystemMs = Math.round(currentCpu.system / 1000);
+    const cpuPercent = Number(
+      ((cpuUserMs + cpuSystemMs) / (durationSec * 10)).toFixed(1)
+    );
+
+    modules.logger.info("worker/metrics", "Worker telemetry snapshot", {
+      workerId,
+      workerName,
+      rssMB: Number((memory.rss / (1024 * 1024)).toFixed(2)),
+      heapUsedMB: Number((memory.heapUsed / (1024 * 1024)).toFixed(2)),
+      heapTotalMB: Number((memory.heapTotal / (1024 * 1024)).toFixed(2)),
+      externalMB: Number((memory.external / (1024 * 1024)).toFixed(2)),
+      cpuUserMs,
+      cpuSystemMs,
+      cpuPercent,
+      uptimeSeconds: Math.round(process.uptime()),
+      jobsProcessed: completedJobsSinceMetrics,
+    });
+    completedJobsSinceMetrics = 0;
+  };
+
+  const metricsTimer = setInterval(() => {
+    try {
+      emitTelemetryMetrics();
+    } catch (error) {
+      console.error(
+        "Worker metrics emit failed:",
+        error instanceof Error ? error.message : error
+      );
+    }
+  }, METRICS_INTERVAL_MS);
+
   try {
     while (!stopping) {
       try {
@@ -423,7 +472,11 @@ async function main() {
             break;
           }
 
-          didWork = (await processStore(store)) || didWork;
+          const storeWork = await processStore(store);
+          if (storeWork) {
+            completedJobsSinceMetrics += 1;
+            didWork = true;
+          }
         }
 
         if (!didWork && !stopping) {
@@ -445,6 +498,7 @@ async function main() {
     }
   } finally {
     clearInterval(heartbeatTimer);
+    clearInterval(metricsTimer);
     modules.logger.info("worker/stop", "ListFlow Worker stopped", {
       workerId,
       workerName,
