@@ -66,6 +66,14 @@ export async function launchScraperBrowser(
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-gpu",
+      "--disable-extensions",
+      "--disable-background-networking",
+      "--disable-default-apps",
+      "--disable-sync",
+      "--disable-translate",
+      "--metrics-recording-only",
+      "--no-first-run",
+      "--js-flags=--max-old-space-size=128",
     ],
   });
 }
