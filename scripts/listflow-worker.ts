@@ -142,6 +142,10 @@ function isProcessAlive(pid: number) {
 }
 
 function acquireLocalWorkerGuard() {
+  if (process.env.RAILWAY_ENVIRONMENT || process.env.NODE_ENV === "production") {
+    return;
+  }
+
   const logsDir = path.join(process.cwd(), "logs");
   fs.mkdirSync(logsDir, { recursive: true });
   const lockPath = path.join(logsDir, `${workerId}.worker.lock`);
@@ -149,7 +153,11 @@ function acquireLocalWorkerGuard() {
   if (fs.existsSync(lockPath)) {
     const existingPid = Number.parseInt(fs.readFileSync(lockPath, "utf8"), 10);
 
-    if (Number.isFinite(existingPid) && isProcessAlive(existingPid)) {
+    if (
+      Number.isFinite(existingPid) &&
+      existingPid !== process.pid &&
+      isProcessAlive(existingPid)
+    ) {
       throw new Error(
         `Another ListFlow Worker window is already running for ${workerName} (${workerId}). Close it before starting a second one.`
       );
