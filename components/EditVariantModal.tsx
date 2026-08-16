@@ -494,7 +494,7 @@ export default function EditVariantModal({
       let optimisticProductStatus: string | undefined =
         typeof data.productStatus === "string" ? data.productStatus : undefined;
 
-      if (isProductOnHold && normalizedQuantity > 0) {
+      if (normalizedQuantity > 0) {
         optimisticProductStatus = "IMPORTED";
         const resumeResponse = await fetch("/api/products/bulk-resume", {
           method: "POST",
@@ -509,13 +509,13 @@ export default function EditVariantModal({
 
         if (!resumeResponse.ok) {
           setError(
-            `Quantity was saved, but the listing could not be queued to resume: ${
+            `Quantity was saved, but the listing could not be queued to resume on eBay: ${
               resumeData.error || "Unknown resume error"
             }`
           );
           return;
         }
-      } else if (!isProductOnHold && normalizedQuantity === 0) {
+      } else if (normalizedQuantity === 0) {
         optimisticProductStatus = "ON_HOLD";
         const holdResponse = await fetch("/api/products/bulk-hold", {
           method: "POST",
@@ -530,7 +530,7 @@ export default function EditVariantModal({
 
         if (!holdResponse.ok) {
           setError(
-            `Quantity was saved, but the listing could not be queued to hold: ${
+            `Quantity was saved, but the listing could not be queued to hold on eBay: ${
               holdData.error || "Unknown hold error"
             }`
           );

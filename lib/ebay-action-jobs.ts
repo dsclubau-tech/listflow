@@ -1175,7 +1175,11 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       return { ok: true, failure: null };
     }
 
-    if (product.status !== ProductStatus.IMPORTED || !product.ebayItemId) {
+    if (
+      (product.status !== ProductStatus.IMPORTED &&
+        product.status !== ProductStatus.ON_HOLD) ||
+      !product.ebayItemId
+    ) {
       return {
         ok: false,
         failure: {
@@ -1207,6 +1211,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       where: { id: product.id },
       data: {
         status: ProductStatus.ON_HOLD,
+        quantity: 0,
         ...(automaticPriceCheckHold
           ? {}
           : { priceCheckError: null, priceCheckFailureCode: null }),
@@ -1216,7 +1221,11 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
   }
 
   if (job.type === EbayActionJobType.RESUME) {
-    if (product.status !== ProductStatus.ON_HOLD || !product.ebayItemId) {
+    if (
+      (product.status !== ProductStatus.ON_HOLD &&
+        product.status !== ProductStatus.IMPORTED) ||
+      !product.ebayItemId
+    ) {
       return {
         ok: false,
         failure: {
