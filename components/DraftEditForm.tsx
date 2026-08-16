@@ -145,6 +145,34 @@ export default function DraftEditForm({
       })
       .catch(() => {});
   }, []);
+  // Auto-fetch category on mount / change if missing or non-numeric
+  const autoFetchedCategoryRef = useRef(false);
+
+  useEffect(() => {
+    if (autoFetchedCategoryRef.current) return;
+    const isNumericCategory = category && /^\d+$/.test(category.trim());
+    const queryTitle = (fullTitle || title || "").trim();
+
+    if (!isNumericCategory && queryTitle) {
+      autoFetchedCategoryRef.current = true;
+      setCatLoading(true);
+      fetch("/api/suggest-category", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: queryTitle }),
+      })
+        .then((res) => (res.ok ? res.json() : []))
+        .then((data: Array<{ categoryId: string; categoryName: string }>) => {
+          if (Array.isArray(data) && data.length > 0) {
+            setCatSuggestions(data);
+            setCategory((current) => (!current || !/^\d+$/.test(current.trim()) ? data[0].categoryId : current));
+            setCategoryName((current) => (!current ? data[0].categoryName : current));
+          }
+        })
+        .catch(() => {})
+        .finally(() => setCatLoading(false));
+    }
+  }, [category, fullTitle, title]);
 
   // Form state
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -461,6 +489,35 @@ export default function DraftEditForm({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+
+    let activeCategory = category.trim();
+    let activeCategoryName = categoryName.trim();
+
+    if (!activeCategory || !/^\d+$/.test(activeCategory)) {
+      const queryTitle = (fullTitle || title || "").trim();
+      if (queryTitle) {
+        try {
+          const res = await fetch("/api/suggest-category", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: queryTitle }),
+          });
+          if (res.ok) {
+            const data: Array<{ categoryId: string; categoryName: string }> =
+              await res.json();
+            if (Array.isArray(data) && data.length > 0) {
+              activeCategory = data[0].categoryId;
+              activeCategoryName = data[0].categoryName || activeCategoryName;
+              setCategory(activeCategory);
+              setCategoryName(activeCategoryName);
+            }
+          }
+        } catch {
+          // ignore error
+        }
+      }
+    }
+
     if (!validate()) return;
 
     // Block import if Amazon keyword is in description
@@ -879,12 +936,11 @@ export default function DraftEditForm({
                         setCatLoading(true);
                         setShowCatDropdown(false);
                         try {
-                          const selectedStore = stores.find((s) => s.id === storeId);
-                          const storeNum = selectedStore?.name === "Store 2" ? 2 : selectedStore?.name === "Store 3" ? 3 : 1;
+                          const queryTitle = (fullTitle || title || "").trim();
                           const res = await fetch("/api/suggest-category", {
                             method: "POST",
                             headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ title: title.trim(), storeNumber: storeNum }),
+                            body: JSON.stringify({ title: queryTitle }),
                           });
                           if (res.ok) {
                             const data = await res.json();

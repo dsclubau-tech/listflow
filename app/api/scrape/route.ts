@@ -5,7 +5,7 @@ import {
   scrapeAmazonProductDirect,
   type AmazonScrapeStage,
 } from "@/lib/amazon-direct-scraper";
-import { getEbaySuggestedCategories } from "@/lib/ebay";
+import { getEbaySuggestedCategories, getStoreNumber } from "@/lib/ebay";
 import { createRequestLogger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { getCurrentStoreSession } from "@/lib/store-session";
@@ -189,9 +189,16 @@ export async function POST(request: Request) {
     const categoryStartedAt = Date.now();
 
     try {
+      let storeNumber: 1 | 2 | 3 = 1;
+      try {
+        storeNumber = await getStoreNumber(storeSession.storeId);
+      } catch {
+        storeNumber = (supplierSettings?.storeNumber as 1 | 2 | 3) ?? 1;
+      }
+
       const suggestions = await withTimeout(
-        getEbaySuggestedCategories(product.title, 1),
-        5000,
+        getEbaySuggestedCategories(product.title, storeNumber),
+        15000,
         "eBay category detection timed out"
       );
       logStage("category_suggest", Date.now() - categoryStartedAt, {

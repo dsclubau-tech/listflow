@@ -466,6 +466,35 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
   const [itemSpecifics, setItemSpecifics] = useState<{ key: string; value: string }[]>([]);
   const [requiredItemSpecifics, setRequiredItemSpecifics] = useState<RequiredItemSpecific[]>([]);
 
+  // Category auto-fetch on mount if category is missing or non-numeric
+  const autoFetchedCategoryRef = useRef(false);
+
+  useEffect(() => {
+    if (autoFetchedCategoryRef.current) return;
+    const isNumericCategory = category && /^\d+$/.test(category.trim());
+    const queryTitle = (fullTitle || title || "").trim();
+
+    if (!isNumericCategory && queryTitle) {
+      autoFetchedCategoryRef.current = true;
+      setCatLoading(true);
+      fetch("/api/suggest-category", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: queryTitle }),
+      })
+        .then((res) => (res.ok ? res.json() : []))
+        .then((data: Array<{ categoryId: string; categoryName: string }>) => {
+          if (Array.isArray(data) && data.length > 0) {
+            setCatSuggestions(data);
+            setCategory((current) => (!current || !/^\d+$/.test(current.trim()) ? data[0].categoryId : current));
+            setCategoryName((current) => (!current ? data[0].categoryName : current));
+          }
+        })
+        .catch(() => {})
+        .finally(() => setCatLoading(false));
+    }
+  }, [category, fullTitle, title]);
+
   // Fetch templates on mount
   useEffect(() => {
     fetch("/api/templates")
@@ -1122,8 +1151,37 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
     setIsSaving(true);
     setSaveMessage(null);
 
+    let activeCategory = category.trim();
+    let activeCategoryName = categoryName.trim();
+
+    // If category is not numeric, try auto-resolving before giving up
+    if (!activeCategory || !/^\d+$/.test(activeCategory)) {
+      const queryTitle = (fullTitle || title || "").trim();
+      if (queryTitle) {
+        try {
+          const res = await fetch("/api/suggest-category", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: queryTitle }),
+          });
+          if (res.ok) {
+            const data: Array<{ categoryId: string; categoryName: string }> =
+              await res.json();
+            if (Array.isArray(data) && data.length > 0) {
+              activeCategory = data[0].categoryId;
+              activeCategoryName = data[0].categoryName || activeCategoryName;
+              setCategory(activeCategory);
+              setCategoryName(activeCategoryName);
+            }
+          }
+        } catch {
+          // ignore error and proceed to validation
+        }
+      }
+    }
+
     // Validate category is numeric before saving
-    if (!category.trim() || !/^\d+$/.test(category.trim())) {
+    if (!activeCategory || !/^\d+$/.test(activeCategory)) {
       setSaveMessage({
         variant: "error",
         title: "Save failed",
@@ -1185,8 +1243,8 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       description,
       quantity: normalizedQuantity,
       condition,
-      category: category.trim(),
-      categoryName: categoryName.trim() || null,
+      category: activeCategory,
+      categoryName: activeCategoryName || null,
       asin: normalizedAsin,
       images: dedupeProductImages(images),
       itemSpecifics: sanitizeEbayItemSpecifics(specificsObj),
