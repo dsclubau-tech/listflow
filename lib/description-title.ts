@@ -1,4 +1,4 @@
-const TITLE_COLOR = "#0D47A1";
+const TITLE_COLOR = "#e60000";
 const TITLE_COLOR_PATTERN = String.raw`(?:#(?:0d47a1|e60000)|rgb\((?:13,\s*71,\s*161|230,\s*0,\s*0)\))`;
 
 const titleDescriptionPatterns = [

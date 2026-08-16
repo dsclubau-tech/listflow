@@ -1337,7 +1337,7 @@ export function renderAmazonDescription($: CheerioAPI) {
       if (block.type === "heading") {
         const sectionHeading =
           block.html === "About this item" || block.html === "Product Description";
-        const color = block.html === "About this item" ? "#0D47A1" : "#111";
+        const color = block.html === "About this item" ? "#e60000" : "#111";
         return `<div style="margin:${index === 0 ? "0" : "24px"} 0 12px;font-size:${sectionHeading ? "22px" : "20px"};font-weight:700;line-height:1.35;color:${color};white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${block.html}</div>`;
       }
 

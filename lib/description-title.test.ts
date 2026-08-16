@@ -8,10 +8,10 @@ import {
 } from "./description-title";
 
 describe("description-title utility", () => {
-  test("buildTitleHtml builds correct primary-blue bold 24px title paragraph", () => {
+  test("buildTitleHtml builds correct red bold 24px title paragraph", () => {
     assert.equal(
       buildTitleHtml("  Test Product Title  "),
-      '<p><strong style="color: #0D47A1; font-size: 24px;">Test Product Title</strong></p>'
+      '<p><strong style="color: #e60000; font-size: 24px;">Test Product Title</strong></p>'
     );
     assert.equal(buildTitleHtml(""), "");
   });
@@ -50,7 +50,7 @@ describe("description-title utility", () => {
     const result = prependTitleToDescription(title, desc);
     assert.equal(
       result,
-      '<p><strong style="color: #0D47A1; font-size: 24px;">My Product</strong></p>\n<p>Description body</p>'
+      '<p><strong style="color: #e60000; font-size: 24px;">My Product</strong></p>\n<p>Description body</p>'
     );
 
     // Should not double prepend if title already present
@@ -63,22 +63,22 @@ describe("description-title utility", () => {
     const updated = updateDescriptionTitle("New Title", initial);
     assert.equal(
       updated,
-      '<p><strong style="color: #0D47A1; font-size: 24px;">New Title</strong></p>\n<p>Body</p>'
+      '<p><strong style="color: #e60000; font-size: 24px;">New Title</strong></p>\n<p>Body</p>'
     );
 
     const fromPlain = updateDescriptionTitle("New Title", "<p>Body only</p>");
     assert.equal(
       fromPlain,
-      '<p><strong style="color: #0D47A1; font-size: 24px;">New Title</strong></p>\n<p>Body only</p>'
+      '<p><strong style="color: #e60000; font-size: 24px;">New Title</strong></p>\n<p>Body only</p>'
     );
 
-    const fromLegacyRed = updateDescriptionTitle(
+    const fromLegacyBlue = updateDescriptionTitle(
       "Updated Legacy Title",
-      '<p><strong style="color: #e60000; font-size: 24px;">Legacy Title</strong></p>\n<p>Legacy body</p>'
+      '<p><strong style="color: #0D47A1; font-size: 24px;">Legacy Title</strong></p>\n<p>Legacy body</p>'
     );
     assert.equal(
-      fromLegacyRed,
-      '<p><strong style="color: #0D47A1; font-size: 24px;">Updated Legacy Title</strong></p>\n<p>Legacy body</p>'
+      fromLegacyBlue,
+      '<p><strong style="color: #e60000; font-size: 24px;">Updated Legacy Title</strong></p>\n<p>Legacy body</p>'
     );
   });
 });
