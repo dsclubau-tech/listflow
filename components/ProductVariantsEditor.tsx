@@ -188,15 +188,21 @@ export default function ProductVariantsEditor({
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      <span
-                        className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                          variant.status === "IN_STOCK"
-                            ? "bg-green-100 text-green-700"
-                            : "bg-gray-100 text-gray-600"
-                        }`}
-                      >
-                        {variant.status === "IN_STOCK" ? "In Stock" : "Out of Stock"}
-                      </span>
+                      {product.status === "ON_HOLD" ? (
+                        <span className="inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800">
+                          On Hold
+                        </span>
+                      ) : (
+                        <span
+                          className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                            variant.status === "IN_STOCK"
+                              ? "bg-green-100 text-green-700"
+                              : "bg-gray-100 text-gray-600"
+                          }`}
+                        >
+                          {variant.status === "IN_STOCK" ? "In Stock" : "Out of Stock"}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-500">
                       {variant.sku || "-"}
