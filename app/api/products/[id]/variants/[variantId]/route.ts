@@ -48,6 +48,8 @@ export async function PATCH(
       data.status = VariantStatus.OUT_OF_STOCK;
     }
 
+    let finalProductStatus: ProductStatus | undefined = undefined;
+
     const variant = await prisma.$transaction(async (tx) => {
       const updatedVariant = await tx.variant.update({
         where: { id: variantId },
@@ -63,17 +65,27 @@ export async function PATCH(
       });
 
       if (parent && parent._count.variants === 1) {
+        if (
+          data.quantity === 0 &&
+          (parent.status === ProductStatus.IMPORTED ||
+            parent.status === ProductStatus.ON_HOLD)
+        ) {
+          finalProductStatus = ProductStatus.ON_HOLD;
+        } else if (data.quantity > 0 && parent.status === ProductStatus.ON_HOLD) {
+          finalProductStatus = ProductStatus.IMPORTED;
+        } else {
+          finalProductStatus = parent.status;
+        }
+
         await tx.product.update({
           where: { id: productId },
           data: {
             quantity: data.quantity,
-            ...(data.quantity === 0 &&
-            (parent.status === ProductStatus.IMPORTED ||
-              parent.status === ProductStatus.ON_HOLD)
-              ? { status: ProductStatus.ON_HOLD }
-              : {}),
+            status: finalProductStatus,
           },
         });
+      } else if (parent) {
+        finalProductStatus = parent.status;
       }
 
       return updatedVariant;
@@ -81,7 +93,10 @@ export async function PATCH(
 
     invalidateProductCaches(storeSession.storeId);
 
-    return NextResponse.json(serializeVariant(variant));
+    return NextResponse.json({
+      ...serializeVariant(variant),
+      productStatus: finalProductStatus,
+    });
   } catch (error) {
     const message =
       error instanceof Error ? error.message : "Failed to update variant";

@@ -27,7 +27,11 @@ interface EditVariantModalProps {
   defaultSku: string | null;
   variant: VariantRecord | null;
   onClose: () => void;
-  onSaved: (variant: VariantRecord, mode: "create" | "edit") => void;
+  onSaved: (
+    variant: VariantRecord,
+    mode: "create" | "edit",
+    newProductStatus?: string
+  ) => void;
 }
 
 type ModalTab = "pricing" | "general";
@@ -487,7 +491,11 @@ export default function EditVariantModal({
         return;
       }
 
+      let optimisticProductStatus: string | undefined =
+        typeof data.productStatus === "string" ? data.productStatus : undefined;
+
       if (isProductOnHold && normalizedQuantity > 0) {
+        optimisticProductStatus = "IMPORTED";
         const resumeResponse = await fetch("/api/products/bulk-resume", {
           method: "POST",
           headers: {
@@ -507,9 +515,34 @@ export default function EditVariantModal({
           );
           return;
         }
+      } else if (!isProductOnHold && normalizedQuantity === 0) {
+        optimisticProductStatus = "ON_HOLD";
+        const holdResponse = await fetch("/api/products/bulk-hold", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ productIds: [productId] }),
+        });
+        const holdData = (await holdResponse.json().catch(() => ({}))) as {
+          error?: string;
+        };
+
+        if (!holdResponse.ok) {
+          setError(
+            `Quantity was saved, but the listing could not be queued to hold: ${
+              holdData.error || "Unknown hold error"
+            }`
+          );
+          return;
+        }
       }
 
-      onSaved(data as VariantRecord, variant ? "edit" : "create");
+      onSaved(
+        data as VariantRecord,
+        variant ? "edit" : "create",
+        optimisticProductStatus
+      );
     } catch {
       setError("Network error while saving variant.");
     } finally {

@@ -2,6 +2,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import EditVariantModal from "@/components/EditVariantModal";
 import { calculateNetProfit } from "@/lib/variant-pricing";
 import type { VariantRecord } from "@/types/variant";
@@ -26,12 +27,22 @@ function toNumber(value: string | number) {
 export default function ProductVariantsEditor({
   product,
 }: ProductVariantsEditorProps) {
+  const router = useRouter();
   const [variants, setVariants] = useState<VariantRecord[]>([]);
+  const [productStatus, setProductStatus] = useState<string>(
+    product.status ?? "IMPORTED"
+  );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [editingVariant, setEditingVariant] = useState<VariantRecord | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (product.status) {
+      setProductStatus(product.status);
+    }
+  }, [product.status]);
 
   const loadVariants = useCallback(async () => {
     setLoading(true);
@@ -60,7 +71,15 @@ export default function ProductVariantsEditor({
     void loadVariants();
   }, [loadVariants]);
 
-  function handleSaved(variant: VariantRecord, mode: "create" | "edit") {
+  function handleSaved(
+    variant: VariantRecord,
+    mode: "create" | "edit",
+    newProductStatus?: string
+  ) {
+    if (newProductStatus) {
+      setProductStatus(newProductStatus);
+    }
+
     setVariants((prev) => {
       if (mode === "create") {
         return [...prev, variant];
@@ -68,8 +87,15 @@ export default function ProductVariantsEditor({
 
       return prev.map((item) => (item.id === variant.id ? variant : item));
     });
+
     setModalOpen(false);
     setEditingVariant(null);
+
+    try {
+      router.refresh();
+    } catch {
+      // safe fallback in test / isolated environments
+    }
   }
 
   async function handleDelete(variant: VariantRecord) {
@@ -188,7 +214,7 @@ export default function ProductVariantsEditor({
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      {product.status === "ON_HOLD" ? (
+                      {productStatus === "ON_HOLD" ? (
                         <span className="inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-medium text-amber-800">
                           On Hold
                         </span>
@@ -251,7 +277,7 @@ export default function ProductVariantsEditor({
         isOpen={modalOpen}
         productId={product.id}
         productTitle={product.title}
-        isProductOnHold={product.status === "ON_HOLD"}
+        isProductOnHold={productStatus === "ON_HOLD"}
         defaultBuyPrice={toNumber(product.price)}
         defaultQuantity={product.quantity}
         defaultImages={product.images}

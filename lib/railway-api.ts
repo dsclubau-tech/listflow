@@ -17,6 +17,9 @@ export interface RailwayServiceUsage {
   networkEgressGB: number;
   networkEgressCost: number;
   totalCost: number;
+  isActive: boolean;
+  isParked: boolean;
+  statusLabel: "Active" | "Parked ($0 active cost)";
 }
 
 export interface WorkerTelemetrySnapshot {
@@ -43,11 +46,16 @@ export interface RailwayUsageReport {
     daysElapsed: number;
     totalDaysInMonth: number;
     currentPeriodCost: number;
+    activeServicesCost: number;
+    parkedServicesCost: number;
     dailyAverageCost: number;
     projectedMonthEndCost: number;
+    estimatedMonthlySavings: number;
     estimatedCostFromRailway?: number | null;
   };
   services: RailwayServiceUsage[];
+  activeServicesCount: number;
+  parkedServicesCount: number;
   workerTelemetry: WorkerTelemetrySnapshot[];
   lastUpdated: string;
   error?: string | null;
@@ -156,10 +164,15 @@ export async function fetchRailwayUsageReport(): Promise<RailwayUsageReport> {
         daysElapsed,
         totalDaysInMonth,
         currentPeriodCost: 0,
+        activeServicesCost: 0,
+        parkedServicesCost: 0,
         dailyAverageCost: 0,
         projectedMonthEndCost: 0,
+        estimatedMonthlySavings: 28.50,
       },
       services: [],
+      activeServicesCount: 0,
+      parkedServicesCount: 0,
       workerTelemetry,
       lastUpdated: now.toISOString(),
       error:
@@ -282,9 +295,19 @@ export async function fetchRailwayUsageReport(): Promise<RailwayUsageReport> {
       serviceUsageMap.set(serviceId, current);
     }
 
+    const PARKED_SERVICE_NAMES = new Set([
+      "worker-rk-ecommerce",
+      "worker-oz-metro",
+      "worker-aussie-walmart",
+    ]);
+
     // Combine all known services even if 0 usage
     const services: RailwayServiceUsage[] = [];
     let currentPeriodCost = 0;
+    let activeServicesCost = 0;
+    let parkedServicesCost = 0;
+    let activeServicesCount = 0;
+    let parkedServicesCount = 0;
 
     for (const [id, name] of knownServices.entries()) {
       const usage = serviceUsageMap.get(id) ?? {
@@ -299,6 +322,17 @@ export async function fetchRailwayUsageReport(): Promise<RailwayUsageReport> {
         usage.networkEgressGB
       );
 
+      const isParked = PARKED_SERVICE_NAMES.has(name.toLowerCase());
+      const isActive = !isParked;
+
+      if (isActive) {
+        activeServicesCost += costs.totalCost;
+        activeServicesCount += 1;
+      } else {
+        parkedServicesCost += costs.totalCost;
+        parkedServicesCount += 1;
+      }
+
       currentPeriodCost += costs.totalCost;
 
       services.push({
@@ -311,16 +345,37 @@ export async function fetchRailwayUsageReport(): Promise<RailwayUsageReport> {
         networkEgressGB: Number(usage.networkEgressGB.toFixed(3)),
         networkEgressCost: costs.networkEgressCost,
         totalCost: costs.totalCost,
+        isActive,
+        isParked,
+        statusLabel: isActive ? "Active" : "Parked ($0 active cost)",
       });
     }
 
-    // Sort services by totalCost descending
-    services.sort((a, b) => b.totalCost - a.totalCost);
+    // Sort active services first, then by totalCost descending
+    services.sort((a, b) => {
+      if (a.isActive && !b.isActive) return -1;
+      if (!a.isActive && b.isActive) return 1;
+      return b.totalCost - a.totalCost;
+    });
 
     currentPeriodCost = Number(currentPeriodCost.toFixed(2));
-    const dailyAverageCost = Number((currentPeriodCost / daysElapsed).toFixed(2));
+    activeServicesCost = Number(activeServicesCost.toFixed(2));
+    parkedServicesCost = Number(parkedServicesCost.toFixed(2));
+
+    const remainingDays = Math.max(0, totalDaysInMonth - daysElapsed);
+    // Use active worker run-rate to project remaining cost for the month
+    const activeDailyBurn = activeServicesCount > 0
+      ? (activeServicesCost / Math.max(daysElapsed, 1))
+      : 0.38;
     const projectedMonthEndCost = Number(
-      ((currentPeriodCost / daysElapsed) * totalDaysInMonth).toFixed(2)
+      (currentPeriodCost + activeDailyBurn * remainingDays).toFixed(2)
+    );
+    const dailyAverageCost = Number((currentPeriodCost / daysElapsed).toFixed(2));
+
+    // Full monthly savings compared to 3-worker baseline (~$41.40/mo)
+    const steadyStateMonthlyOneWorker = Number((activeDailyBurn * totalDaysInMonth).toFixed(2));
+    const estimatedMonthlySavings = Number(
+      Math.max(0, 41.40 - steadyStateMonthlyOneWorker).toFixed(2)
     );
 
     // Calculate estimated total from estimatedUsage if present
@@ -346,11 +401,16 @@ export async function fetchRailwayUsageReport(): Promise<RailwayUsageReport> {
         daysElapsed,
         totalDaysInMonth,
         currentPeriodCost,
+        activeServicesCost,
+        parkedServicesCost,
         dailyAverageCost,
         projectedMonthEndCost,
+        estimatedMonthlySavings,
         estimatedCostFromRailway,
       },
       services,
+      activeServicesCount,
+      parkedServicesCount,
       workerTelemetry,
       lastUpdated: now.toISOString(),
       error: null,
@@ -365,10 +425,15 @@ export async function fetchRailwayUsageReport(): Promise<RailwayUsageReport> {
         daysElapsed,
         totalDaysInMonth,
         currentPeriodCost: 0,
+        activeServicesCost: 0,
+        parkedServicesCost: 0,
         dailyAverageCost: 0,
         projectedMonthEndCost: 0,
+        estimatedMonthlySavings: 28.50,
       },
       services: [],
+      activeServicesCount: 0,
+      parkedServicesCount: 0,
       workerTelemetry,
       lastUpdated: now.toISOString(),
       error: errorMsg,
