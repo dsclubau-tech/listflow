@@ -93,13 +93,17 @@ export function calculateServiceCost(
   };
 }
 
+const DEFAULT_RAILWAY_PROJECT_ID = "4a0fe8f3-9265-445f-90d0-adbdcee67d5b";
+const DEFAULT_RAILWAY_API_TOKEN = "4121c9a6-cd87-4a06-b05e-22d5c0dcca5b";
+
 export async function fetchRailwayUsageReport(): Promise<RailwayUsageReport> {
   const token =
     process.env.RAILWAY_API_TOKEN?.trim() ||
-    process.env.RAILWAY_TOKEN?.trim();
+    process.env.RAILWAY_TOKEN?.trim() ||
+    DEFAULT_RAILWAY_API_TOKEN;
   const projectId =
     process.env.RAILWAY_PROJECT_ID?.trim() ||
-    "4a0fe8f3-9265-445f-90d0-adbdcee67d5b";
+    DEFAULT_RAILWAY_PROJECT_ID;
 
   const now = new Date();
   const daysElapsed = Math.max(now.getDate(), 1);
