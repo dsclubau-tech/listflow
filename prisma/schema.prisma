@@ -26,6 +26,7 @@ model User {
   ebayResearchJobs    EbayResearchJob[]
   ebayResearchBatches EbayResearchBatch[]
   ebayActionJobs      EbayActionJob[]
+  favoriteResearchQueries FavoriteResearchQuery[]
 }
 
 // --- Part 2 Models ---
@@ -59,6 +60,7 @@ model Store {
   ebayRateLimitBuckets EbayRateLimitBucket[]
   appLogs              AppLog[]
   ebayListingAsins     EbayListingAsin[]
+  favoriteResearchQueries FavoriteResearchQuery[]
 }
 
 model LoginAttempt {
@@ -504,6 +506,20 @@ model EbayResearchBatch {
   @@index([storeId, expiresAt])
   @@index([createdAt])
   @@index([expiresAt])
+}
+
+model FavoriteResearchQuery {
+  id        String   @id @default(cuid())
+  userId    String
+  storeId   String
+  query     String
+  createdAt DateTime @default(now())
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, query])
+  @@index([storeId, createdAt])
 }
 
 model EbayActionJob {

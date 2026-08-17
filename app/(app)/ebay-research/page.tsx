@@ -5,6 +5,10 @@ import {
   getEbayResearchJobForStore,
   getRecentEbayResearchJobs,
 } from "@/lib/ebay-research";
+import {
+  getFavoriteResearchQueries,
+  type FavoriteResearchQueryItem,
+} from "@/lib/favorite-research-queries";
 import { logger } from "@/lib/logger";
 import { getSafeResearchLoadErrorMessage } from "@/lib/page-load-errors";
 import { getCurrentStoreSession } from "@/lib/store-session";
@@ -18,6 +22,7 @@ export default async function EbayResearchPage() {
 
   let jobs: Awaited<ReturnType<typeof getRecentEbayResearchJobs>> = [];
   let batches: Awaited<ReturnType<typeof getCurrentEbayResearchBatches>> = [];
+  let favorites: FavoriteResearchQueryItem[] = [];
   let initialError: string | null = null;
 
   try {
@@ -51,13 +56,26 @@ export default async function EbayResearchPage() {
     );
   }
 
+  try {
+    favorites = await getFavoriteResearchQueries(storeSession.storeId);
+  } catch (error) {
+    logger.error(
+      "ebay-research/page",
+      "Failed to load favorite research queries",
+      error,
+      { storeId: storeSession.storeId }
+    );
+  }
+
   return (
     <div className="p-8">
       <EbayResearchClient
         initialJobs={jobs}
         initialBatches={batches}
+        initialFavorites={favorites}
         initialError={initialError}
       />
     </div>
   );
 }
+

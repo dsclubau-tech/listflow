@@ -128,9 +128,16 @@ type ResearchBatch = {
   jobs: ResearchJob[];
 };
 
+type FavoriteQuery = {
+  id: string;
+  query: string;
+  createdAt: string;
+};
+
 interface EbayResearchClientProps {
   initialJobs: ResearchJob[];
   initialBatches: ResearchBatch[];
+  initialFavorites?: FavoriteQuery[];
   initialError?: string | null;
 }
 
@@ -570,11 +577,16 @@ function ResultsTable({
 export default function EbayResearchClient({
   initialJobs,
   initialBatches,
+  initialFavorites = [],
   initialError = null,
 }: EbayResearchClientProps) {
   const [query, setQuery] = useState("");
   const [batchInput, setBatchInput] = useState("");
-  const [searchTab, setSearchTab] = useState<"single" | "batch">("single");
+  const [searchTab, setSearchTab] = useState<"single" | "batch" | "favorites">("single");
+  const [favorites, setFavorites] = useState<FavoriteQuery[]>(initialFavorites);
+  const [selectedFavoriteIds, setSelectedFavoriteIds] = useState<Set<string>>(new Set());
+  const [favoriteSearchFilter, setFavoriteSearchFilter] = useState("");
+  const [togglingFavoriteQuery, setTogglingFavoriteQuery] = useState<string | null>(null);
   const [selectedBatchId, setSelectedBatchId] = useState<string>("all");
   const [listFilterQuery, setListFilterQuery] = useState("");
   const [mode, setMode] = useState<ResearchMode>("BOTH");
@@ -997,6 +1009,199 @@ export default function EbayResearchClient({
     });
   }
 
+  const favoritedQuerySet = useMemo(() => {
+    const set = new Set<string>();
+    for (const fav of favorites) {
+      set.add(fav.query.trim().toLowerCase());
+    }
+    return set;
+  }, [favorites]);
+
+  const isQueryFavorited = useCallback(
+    (q: string | null | undefined) => {
+      if (!q) return false;
+      return favoritedQuerySet.has(q.trim().toLowerCase());
+    },
+    [favoritedQuerySet]
+  );
+
+  const filteredFavorites = useMemo(() => {
+    if (!favoriteSearchFilter.trim()) {
+      return favorites;
+    }
+    const filter = favoriteSearchFilter.trim().toLowerCase();
+    return favorites.filter((fav) => fav.query.toLowerCase().includes(filter));
+  }, [favorites, favoriteSearchFilter]);
+
+  const refreshFavorites = useCallback(async () => {
+    try {
+      const response = await fetch("/api/ebay-research/favorites", {
+        cache: "no-store",
+      });
+      if (response.ok) {
+        const data = (await response.json()) as { favorites?: FavoriteQuery[] };
+        if (data.favorites) {
+          setFavorites(data.favorites);
+        }
+      }
+    } catch {
+      // Ignore silent refresh error
+    }
+  }, []);
+
+  async function toggleFavorite(targetQuery: string) {
+    const normalized = targetQuery.trim();
+    if (!normalized) return;
+
+    const alreadyFavorited = isQueryFavorited(normalized);
+    setTogglingFavoriteQuery(normalized);
+
+    // Optimistic UI update
+    if (alreadyFavorited) {
+      setFavorites((prev) =>
+        prev.filter((f) => f.query.trim().toLowerCase() !== normalized.toLowerCase())
+      );
+      setSelectedFavoriteIds((prev) => {
+        const matching = favorites.filter(
+          (f) => f.query.trim().toLowerCase() === normalized.toLowerCase()
+        );
+        const next = new Set(prev);
+        for (const m of matching) next.delete(m.id);
+        return next;
+      });
+    } else {
+      const optimisticItem: FavoriteQuery = {
+        id: `opt-${Date.now()}`,
+        query: normalized,
+        createdAt: new Date().toISOString(),
+      };
+      setFavorites((prev) => [optimisticItem, ...prev]);
+    }
+
+    try {
+      const response = await fetch("/api/ebay-research/favorites", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: normalized, action: "toggle" }),
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        favorite?: FavoriteQuery;
+        isFavorite?: boolean;
+        error?: string;
+      };
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to update favorite");
+      }
+
+      if (data.isFavorite && data.favorite) {
+        setFavorites((prev) => {
+          const cleaned = prev.filter(
+            (f) =>
+              f.query.trim().toLowerCase() !== normalized.toLowerCase() &&
+              !f.id.startsWith("opt-")
+          );
+          return [data.favorite!, ...cleaned];
+        });
+      } else if (!data.isFavorite) {
+        setFavorites((prev) =>
+          prev.filter(
+            (f) => f.query.trim().toLowerCase() !== normalized.toLowerCase()
+          )
+        );
+      }
+    } catch (caughtError) {
+      void refreshFavorites().catch(() => undefined);
+      setError(getErrorMessage(caughtError));
+    } finally {
+      setTogglingFavoriteQuery(null);
+    }
+  }
+
+  async function removeFavorite(id: string) {
+    setFavorites((prev) => prev.filter((f) => f.id !== id));
+    setSelectedFavoriteIds((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+
+    try {
+      const response = await fetch(
+        `/api/ebay-research/favorites?id=${encodeURIComponent(id)}`,
+        { method: "DELETE" }
+      );
+      if (!response.ok) {
+        const data = (await response.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || "Failed to remove favorite");
+      }
+    } catch (caughtError) {
+      void refreshFavorites().catch(() => undefined);
+      setError(getErrorMessage(caughtError));
+    }
+  }
+
+  function toggleFavoriteSelection(id: string) {
+    setSelectedFavoriteIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }
+
+  function toggleAllFavoritesSelection() {
+    const visibleIds = filteredFavorites.map((f) => f.id);
+    const allVisibleSelected =
+      visibleIds.length > 0 &&
+      visibleIds.every((id) => selectedFavoriteIds.has(id));
+
+    setSelectedFavoriteIds((prev) => {
+      const next = new Set(prev);
+      if (allVisibleSelected) {
+        for (const id of visibleIds) {
+          next.delete(id);
+        }
+      } else {
+        for (const id of visibleIds) {
+          next.add(id);
+        }
+      }
+      return next;
+    });
+  }
+
+  function loadSelectedFavoritesIntoBatch(mode: "replace" | "append" = "replace") {
+    const itemsToLoad =
+      selectedFavoriteIds.size > 0
+        ? favorites.filter((f) => selectedFavoriteIds.has(f.id))
+        : filteredFavorites;
+
+    if (itemsToLoad.length === 0) {
+      setError("No favorite searches to load. Please select at least one.");
+      return;
+    }
+
+    const newQueries = itemsToLoad.map((f) => f.query);
+
+    if (mode === "append" && batchInput.trim()) {
+      const existing = batchInput.trim();
+      const existingSet = new Set(
+        existing.split(/\r?\n/).map((line) => line.trim().toLowerCase())
+      );
+      const toAdd = newQueries.filter((q) => !existingSet.has(q.toLowerCase()));
+      setBatchInput(toAdd.length > 0 ? `${existing}\n${toAdd.join("\n")}` : existing);
+    } else {
+      setBatchInput(newQueries.join("\n"));
+    }
+
+    setSearchTab("batch");
+    setError(null);
+  }
+
   useEffect(() => {
     if (!selectedJob?.id || !selectedActive) {
       return;
@@ -1106,6 +1311,34 @@ export default function EbayResearchClient({
             >
               Batch Safe Search
             </button>
+            <button
+              type="button"
+              onClick={() => setSearchTab("favorites")}
+              className={`inline-flex items-center gap-1.5 rounded-lg px-3.5 py-1.5 text-xs font-semibold transition-colors ${
+                searchTab === "favorites"
+                  ? "bg-gray-900 text-white shadow-xs"
+                  : "text-gray-600 hover:text-gray-900 hover:bg-gray-100"
+              }`}
+            >
+              <svg
+                className={`h-3.5 w-3.5 ${
+                  searchTab === "favorites" ? "text-amber-300 fill-current" : "text-amber-500 fill-current"
+                }`}
+                viewBox="0 0 20 20"
+              >
+                <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+              </svg>
+              <span>Favorite Searches</span>
+              <span
+                className={`rounded-full px-1.5 py-0.2 text-[10px] font-bold ${
+                  searchTab === "favorites"
+                    ? "bg-gray-700 text-amber-300"
+                    : "bg-amber-100 text-amber-800"
+                }`}
+              >
+                {favorites.length}
+              </span>
+            </button>
           </div>
 
           <div className="flex items-center gap-3">
@@ -1143,14 +1376,39 @@ export default function EbayResearchClient({
               <label htmlFor="research-query" className="block text-xs font-semibold uppercase tracking-wider text-gray-700">
                 Product name
               </label>
-              <input
-                id="research-query"
-                value={query}
-                maxLength={100}
-                onChange={(event) => setQuery(event.target.value)}
-                placeholder="e.g. Sony WH-1000XM5 headphones"
-                className="mt-1.5 w-full rounded-lg border border-gray-300 px-3.5 py-2 text-sm text-gray-900 shadow-xs focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
-              />
+              <div className="relative mt-1.5">
+                <input
+                  id="research-query"
+                  value={query}
+                  maxLength={100}
+                  onChange={(event) => setQuery(event.target.value)}
+                  placeholder="e.g. Sony WH-1000XM5 headphones"
+                  className="w-full rounded-lg border border-gray-300 px-3.5 py-2 pr-10 text-sm text-gray-900 shadow-xs focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+                />
+                {query.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => void toggleFavorite(query)}
+                    title={
+                      isQueryFavorited(query)
+                        ? "Remove query from favorites"
+                        : "Save query to favorites"
+                    }
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-amber-500 transition-colors"
+                  >
+                    <svg
+                      className={`h-4 w-4 ${
+                        isQueryFavorited(query)
+                          ? "text-amber-500 fill-current"
+                          : "text-gray-300 hover:text-amber-400 fill-current"
+                      }`}
+                      viewBox="0 0 20 20"
+                    >
+                      <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                    </svg>
+                  </button>
+                )}
+              </div>
             </div>
             <div>
               <label htmlFor="research-condition" className="block text-xs font-semibold uppercase tracking-wider text-gray-700">
@@ -1197,17 +1455,29 @@ export default function EbayResearchClient({
                   : "Search Safe Mode"}
             </button>
           </form>
-        ) : (
+        ) : searchTab === "batch" ? (
           <div className="p-5">
             <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px] lg:items-end">
               <div>
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <label
-                    htmlFor="research-batch"
-                    className="block text-xs font-semibold uppercase tracking-wider text-gray-700"
-                  >
-                    Batch Safe Search Queries
-                  </label>
+                  <div className="flex items-center gap-2">
+                    <label
+                      htmlFor="research-batch"
+                      className="block text-xs font-semibold uppercase tracking-wider text-gray-700"
+                    >
+                      Batch Safe Search Queries
+                    </label>
+                    {favorites.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSearchTab("favorites")}
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-orange-600 hover:text-orange-700 hover:underline"
+                      >
+                        <span>★</span>
+                        <span>Pick from Favorites ({favorites.length})</span>
+                      </button>
+                    )}
+                  </div>
                   <span
                     className={`text-xs font-medium ${
                       batchQueries.length > MAX_BATCH_QUERIES
@@ -1274,6 +1544,158 @@ export default function EbayResearchClient({
                 </button>
               </div>
             </div>
+          </div>
+        ) : (
+          /* Favorites Tab */
+          <div className="p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 pb-3">
+              <div className="flex items-center gap-3">
+                <label className="inline-flex items-center gap-2 text-xs font-semibold text-gray-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={
+                      filteredFavorites.length > 0 &&
+                      filteredFavorites.every((f) => selectedFavoriteIds.has(f.id))
+                    }
+                    onChange={toggleAllFavoritesSelection}
+                    disabled={filteredFavorites.length === 0}
+                    className="h-4 w-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                  />
+                  <span>Select All ({filteredFavorites.length})</span>
+                </label>
+                {selectedFavoriteIds.size > 0 && (
+                  <span className="rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-semibold text-orange-800">
+                    {selectedFavoriteIds.size} selected
+                  </span>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  value={favoriteSearchFilter}
+                  onChange={(e) => setFavoriteSearchFilter(e.target.value)}
+                  placeholder="Filter favorites..."
+                  className="w-48 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs text-gray-900 shadow-xs focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+                />
+
+                <button
+                  type="button"
+                  onClick={() => loadSelectedFavoritesIntoBatch("replace")}
+                  disabled={favorites.length === 0}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-gray-900 px-3.5 py-1.5 text-xs font-semibold text-white shadow-xs transition-colors hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <svg className="h-3.5 w-3.5 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  {selectedFavoriteIds.size > 0
+                    ? `Load ${selectedFavoriteIds.size} Selected into Batch`
+                    : `Load All (${favorites.length}) into Batch`}
+                </button>
+
+                {batchInput.trim() && (
+                  <button
+                    type="button"
+                    onClick={() => loadSelectedFavoritesIntoBatch("append")}
+                    disabled={favorites.length === 0}
+                    className="inline-flex items-center gap-1 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 shadow-xs transition-colors hover:bg-gray-50 disabled:opacity-50"
+                    title="Append to existing queries in batch without overwriting"
+                  >
+                    + Append to Batch
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {filteredFavorites.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/50 p-8 text-center">
+                {favorites.length === 0 ? (
+                  <div className="space-y-2">
+                    <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-amber-50 ring-1 ring-amber-200 text-amber-500">
+                      <svg className="h-5 w-5 fill-current" viewBox="0 0 20 20">
+                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                      </svg>
+                    </div>
+                    <h4 className="text-sm font-semibold text-gray-900">No favorite searches yet</h4>
+                    <p className="max-w-md mx-auto text-xs text-gray-500">
+                      Click the star <span className="text-amber-500 font-bold">★</span> icon next to any search query or result to save it here. You can then pick and load them into batch searches anytime.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-xs text-gray-500">
+                      No favorites matching &ldquo;{favoriteSearchFilter}&rdquo;
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setFavoriteSearchFilter("")}
+                      className="text-xs font-semibold text-orange-600 hover:underline"
+                    >
+                      Clear filter
+                    </button>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3 max-h-[340px] overflow-y-auto pr-1">
+                {filteredFavorites.map((fav) => {
+                  const isChecked = selectedFavoriteIds.has(fav.id);
+                  return (
+                    <div
+                      key={fav.id}
+                      onClick={() => toggleFavoriteSelection(fav.id)}
+                      className={`flex items-start gap-3 rounded-xl border p-3 transition-all cursor-pointer ${
+                        isChecked
+                          ? "border-orange-300 bg-orange-50/60 shadow-xs"
+                          : "border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50/50"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => toggleFavoriteSelection(fav.id)}
+                        onClick={(e) => e.stopPropagation()}
+                        className="mt-0.5 h-4 w-4 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer shrink-0"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-bold text-gray-900 truncate" title={fav.query}>
+                          {fav.query}
+                        </div>
+                        <div className="mt-1.5 flex items-center justify-between gap-2">
+                          <span className="text-[10px] text-gray-400">
+                            Saved {formatDate(fav.createdAt)}
+                          </span>
+                          <div className="flex items-center gap-1.5" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setQuery(fav.query);
+                                setSearchTab("single");
+                                void startResearch({ query: fav.query });
+                              }}
+                              title="Search this query now"
+                              className="rounded px-2 py-0.5 text-[10px] font-semibold text-gray-700 bg-gray-100 hover:bg-gray-200 transition-colors"
+                            >
+                              Search
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void removeFavorite(fav.id)}
+                              title="Remove from favorites"
+                              className="rounded p-1 text-gray-400 hover:bg-red-50 hover:text-red-600 transition-colors"
+                            >
+                              <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
 
@@ -1488,13 +1910,14 @@ export default function EbayResearchClient({
               <div className="max-h-[calc(100vh-280px)] overflow-y-auto divide-y divide-gray-100">
                 {displayedJobs.map((job, index) => {
                   const isSelected = selectedJob?.id === job.id;
+                  const isFavorited = isQueryFavorited(job.query);
                   return (
                     <button
                       key={job.id}
                       type="button"
                       onClick={() => void openJob(job.id)}
                       disabled={loadingJobId === job.id}
-                      className={`w-full text-left p-3.5 transition-all flex flex-col gap-1.5 ${
+                      className={`group w-full text-left p-3.5 transition-all flex flex-col gap-1.5 ${
                         isSelected
                           ? "bg-orange-50/70 border-l-4 border-l-orange-500 pl-3"
                           : "hover:bg-gray-50 bg-white"
@@ -1514,13 +1937,48 @@ export default function EbayResearchClient({
                             {job.query}
                           </span>
                         </div>
-                        <span
-                          className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-semibold ${statusClasses(
-                            job.status
-                          )}`}
-                        >
-                          {job.status}
-                        </span>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span
+                            role="button"
+                            tabIndex={0}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              void toggleFavorite(job.query);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.stopPropagation();
+                                void toggleFavorite(job.query);
+                              }
+                            }}
+                            title={
+                              isFavorited
+                                ? "Remove from favorite searches"
+                                : "Add to favorite searches"
+                            }
+                            className={`rounded-md p-1 transition-colors ${
+                              isFavorited
+                                ? "text-amber-500 hover:text-amber-600 hover:bg-amber-100/50"
+                                : "text-gray-300 hover:text-amber-500 hover:bg-gray-100 opacity-60 group-hover:opacity-100"
+                            }`}
+                          >
+                            <svg
+                              className={`h-3.5 w-3.5 ${
+                                isFavorited ? "fill-current" : "fill-current"
+                              }`}
+                              viewBox="0 0 20 20"
+                            >
+                              <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                            </svg>
+                          </span>
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-xs font-semibold ${statusClasses(
+                              job.status
+                            )}`}
+                          >
+                            {job.status}
+                          </span>
+                        </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500 pl-5">
                         <span>{job.activeCount} results</span>
@@ -1571,6 +2029,27 @@ export default function EbayResearchClient({
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void toggleFavorite(selectedJob.query)}
+                      className={`inline-flex items-center gap-1.5 rounded-lg border px-3.5 py-1.5 text-xs font-semibold shadow-xs transition-colors ${
+                        isQueryFavorited(selectedJob.query)
+                          ? "border-amber-300 bg-amber-50 text-amber-900 hover:bg-amber-100"
+                          : "border-gray-300 bg-white text-gray-700 hover:bg-gray-50"
+                      }`}
+                    >
+                      <svg
+                        className={`h-3.5 w-3.5 ${
+                          isQueryFavorited(selectedJob.query)
+                            ? "text-amber-500 fill-current"
+                            : "text-gray-400 fill-current"
+                        }`}
+                        viewBox="0 0 20 20"
+                      >
+                        <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                      </svg>
+                      {isQueryFavorited(selectedJob.query) ? "Favorited" : "Favorite"}
+                    </button>
                     <button
                       type="button"
                       onClick={() => rerunJob(selectedJob)}

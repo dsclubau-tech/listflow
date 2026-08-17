@@ -49,6 +49,7 @@ next-env.d.ts
 
 # reports (local docs, not committed to git)
 *_REPORT.md
+*_AUDIT.md
 /RAILWAY_OPTIMIZATION_REPORT.md
 [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md
 /DATABASE_SCHEMA.md
@@ -57,5 +58,10 @@ next-env.d.ts
 /.migration-backups/
 /.migration-work/
 
+# local scratch / temporary scripts
+/scratch/
+/txt
+
 # local cost calculator
 /railway-cost-calculator.html
+
