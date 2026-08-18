@@ -389,6 +389,7 @@ async function getCachedActionCenterQueues(
       quantity: true,
       amazonStockLeft: true,
       priceCheckError: true,
+      holdReason: true,
     },
   });
   const onHoldCount = await prisma.product.count({ where: onHoldWhere });
@@ -457,6 +458,7 @@ async function getCachedActionCenterQueues(
         product: serializeProduct(product),
         quantity: getEffectiveListingQuantity(product.status, product.quantity),
         reason: getOnHoldReason({
+          holdReason: product.holdReason,
           priceCheckError: product.priceCheckError,
           amazonStockLeft: product.amazonStockLeft,
           savedQuantity: product.quantity,

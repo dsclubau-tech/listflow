@@ -68,6 +68,7 @@ const productRowSelect = {
   lastPriceCheck: true,
   priceCheckError: true,
   priceCheckFailureCode: true,
+  holdReason: true,
   internalNote: true,
   storeId: true,
   createdById: true,

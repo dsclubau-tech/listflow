@@ -207,3 +207,39 @@ test("extractLocalizedBuyboxPriceForMode does not fall back to another mode", ()
     63.99
   );
 });
+
+test("extractLocalizedBuyboxPriceChoices reads Exclusive Prime price labels", () => {
+  const $ = load(`
+    <main>
+      <div id="corePrice_feature_div">
+        <div>
+          <span>-15%</span>
+          <span class="a-price priceToPay">
+            <span class="a-offscreen">$152.99</span>
+          </span>
+        </div>
+        <div>
+          <span>RRP: $179.99</span>
+        </div>
+        <div>
+          <span>Exclusive Prime price</span>
+        </div>
+      </div>
+      <div id="desktop_buybox">
+        <div>
+          <span>Regular Price</span>
+          <span class="a-price">
+            <span class="a-offscreen">$179.99</span>
+          </span>
+        </div>
+      </div>
+    </main>
+  `);
+
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0WOODBURN1");
+
+  assert.equal(choices.deal?.price, 152.99);
+  assert.equal(choices.deal?.mode, "DEAL");
+  assert.equal(choices.regular?.price, 179.99);
+  assert.equal(choices.regular?.mode, "REGULAR");
+});

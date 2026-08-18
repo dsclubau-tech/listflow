@@ -60,6 +60,7 @@ import {
   isAutoHoldPriceCheckFailureCode,
   isPriceCheckAutoHoldMetadata,
 } from "@/lib/price-check-failures";
+import { isLowStockHoldJobMetadata } from "@/lib/low-stock-products";
 import {
   canonicalizePackageItemSpecifics,
   compareEbayPackageDimensions,
@@ -261,12 +262,17 @@ type SuccessfulBulkEditRevisionInput = {
 };
 
 function getSuccessfulBulkEditRevisionData(input: SuccessfulBulkEditRevisionInput) {
+  const status = getBulkEditQuantityStatus({
+    quantityChanged: input.quantityChanged,
+    quantity: input.product.quantity,
+    currentStatus: input.product.status,
+  });
+
   return {
-    status: getBulkEditQuantityStatus({
-      quantityChanged: input.quantityChanged,
-      quantity: input.product.quantity,
-      currentStatus: input.product.status,
-    }),
+    status,
+    ...(input.quantityChanged
+      ? { holdReason: status === ProductStatus.ON_HOLD ? "Listing quantity was set to 0." : null }
+      : {}),
     errorMessage: null,
     priceCheckError: null,
     priceCheckFailureCode: null,
@@ -304,6 +310,11 @@ async function applySuccessfulBulkEditRevisions(
         where: { id: { in: ids } },
         data: {
           status,
+          ...(status === ProductStatus.ON_HOLD
+            ? { holdReason: "Listing quantity was set to 0." }
+            : status === ProductStatus.IMPORTED
+              ? { holdReason: null }
+              : {}),
           errorMessage: null,
           priceCheckError: null,
           priceCheckFailureCode: null,
@@ -1207,11 +1218,31 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       };
     }
 
+    let holdReason = "Put on hold manually.";
+    if (automaticPriceCheckHold) {
+      holdReason = product.priceCheckError?.trim()
+        ? `Automatic hold after failed price check: ${product.priceCheckError.trim()}`
+        : "Automatic hold after failed price check.";
+    } else if (isLowStockHoldJobMetadata(job.metadata)) {
+      holdReason =
+        product.amazonStockLeft !== null
+          ? `Low Amazon stock (${product.amazonStockLeft} left).`
+          : "Low Amazon stock.";
+    } else if (product.quantity <= 0) {
+      holdReason = "Listing quantity was set to 0.";
+    } else if (
+      product.amazonStockLeft !== null &&
+      product.amazonStockLeft <= 3
+    ) {
+      holdReason = `Low Amazon stock (${product.amazonStockLeft} left).`;
+    }
+
     await prisma.product.update({
       where: { id: product.id },
       data: {
         status: ProductStatus.ON_HOLD,
         quantity: 0,
+        holdReason,
         ...(automaticPriceCheckHold
           ? {}
           : { priceCheckError: null, priceCheckFailureCode: null }),
@@ -1256,7 +1287,10 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
 
     await prisma.product.update({
       where: { id: product.id },
-      data: { status: ProductStatus.IMPORTED },
+      data: {
+        status: ProductStatus.IMPORTED,
+        holdReason: null,
+      },
     });
     return { ok: true, failure: null };
   }

@@ -57,11 +57,17 @@ export function getEffectiveListingQuantity(
 }
 
 export function getOnHoldReason(input: {
+  holdReason?: string | null;
   priceCheckError: string | null;
   amazonStockLeft: number | null;
   savedQuantity: number;
   lowStockThreshold?: number;
 }) {
+  const explicitReason = input.holdReason?.trim();
+  if (explicitReason) {
+    return explicitReason;
+  }
+
   const priceCheckError = input.priceCheckError?.trim();
 
   if (priceCheckError) {

@@ -214,6 +214,13 @@ export async function PATCH(
         product.status === ProductStatus.ON_HOLD)
     ) {
       data.status = ProductStatus.ON_HOLD;
+      data.holdReason = "Listing quantity was set to 0.";
+    } else if (
+      numericQuantity > 0 &&
+      product.status === ProductStatus.ON_HOLD
+    ) {
+      data.status = ProductStatus.IMPORTED;
+      data.holdReason = null;
     }
   }
 

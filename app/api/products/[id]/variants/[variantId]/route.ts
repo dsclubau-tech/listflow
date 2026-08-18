@@ -65,14 +65,17 @@ export async function PATCH(
       });
 
       if (parent && parent._count.variants === 1) {
+        let holdReasonUpdate: string | null | undefined = undefined;
         if (
           data.quantity === 0 &&
           (parent.status === ProductStatus.IMPORTED ||
             parent.status === ProductStatus.ON_HOLD)
         ) {
           finalProductStatus = ProductStatus.ON_HOLD;
+          holdReasonUpdate = "Listing quantity was set to 0.";
         } else if (data.quantity > 0 && parent.status === ProductStatus.ON_HOLD) {
           finalProductStatus = ProductStatus.IMPORTED;
+          holdReasonUpdate = null;
         } else {
           finalProductStatus = parent.status;
         }
@@ -82,6 +85,7 @@ export async function PATCH(
           data: {
             quantity: data.quantity,
             status: finalProductStatus,
+            ...(holdReasonUpdate !== undefined ? { holdReason: holdReasonUpdate } : {}),
           },
         });
       } else if (parent) {

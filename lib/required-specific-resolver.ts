@@ -314,11 +314,38 @@ function inferCompatibleModel(
       "Fits Model",
       "Fit Type",
     ]),
-    readItemSpecificValue(specifics, ["Model", "Model Number", "Item Model Number"]),
+    readItemSpecificValue(specifics, [
+      "Model",
+      "Model Number",
+      "Item Model Number",
+      "Model Name",
+    ]),
   ];
 
   for (const candidate of directCandidates) {
+    if (!candidate) {
+      continue;
+    }
+    if (!allowedValues || allowedValues.length === 0) {
+      return { value: candidate, source: "amazon" as const };
+    }
     const matched = matchAllowedSpecificValue(candidate, allowedValues);
+    if (matched) {
+      return { value: matched, source: "amazon" as const };
+    }
+  }
+
+  // Try building a "For [Brand] [Model]" pattern from brand and model
+  const productBrand = input.brand?.trim();
+  const productModel = readItemSpecificValue(specifics, [
+    "Model",
+    "Model Number",
+    "Item Model Number",
+    "Model Name",
+  ]);
+  if (productBrand && productModel && allowedValues && allowedValues.length > 0) {
+    const forPattern = `For ${productBrand} ${productModel}`;
+    const matched = matchAllowedSpecificValue(forPattern, allowedValues);
     if (matched) {
       return { value: matched, source: "amazon" as const };
     }
@@ -329,15 +356,38 @@ function inferCompatibleModel(
       .filter(Boolean)
       .join(" ")
       .toLowerCase()
-      .replace(/[()[]{};:,.]+/g, " ");
+      .replace(/[()[\]{};:,.]+/g, " ");
 
     for (const value of allowedValues) {
+      const normalizedValue = value
+        .trim()
+        .toLowerCase()
+        .replace(/^(?:for|compatible with|fits)\s+/, "");
+
       if (
-        value.trim().length >= 3 &&
-        searchText.includes(value.toLowerCase())
+        normalizedValue.length >= 3 &&
+        searchText.includes(normalizedValue)
       ) {
         return { value, source: "title" as const };
       }
+    }
+
+    const universal = matchAllowedSpecificValue("Universal", allowedValues);
+    if (universal) {
+      return {
+        value: universal,
+        source: "ebay_allowed_default" as const,
+      };
+    }
+
+    const doesNotApply =
+      matchAllowedSpecificValue("Does Not Apply", allowedValues) ??
+      matchAllowedSpecificValue("Not Applicable", allowedValues);
+    if (doesNotApply) {
+      return {
+        value: doesNotApply,
+        source: "ebay_allowed_default" as const,
+      };
     }
   }
 

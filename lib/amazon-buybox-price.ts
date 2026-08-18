@@ -196,12 +196,15 @@ export function extractLocalizedBuyboxPriceChoices(
     }
 
     const containerText = normalizeText(container.text());
-    const hasLabelledPriceSection = /deal price|regular price/i.test(
-      containerText
+    const hasLabelledPriceSection =
+      /deal price|exclusive prime price|prime exclusive price|exclusive prime|prime deal|regular price/i.test(
+        containerText
+      );
+    const labelledDeal = extractLabelledPrice(
+      containerText,
+      /deal price|exclusive prime price|prime exclusive price|exclusive prime|prime deal/i,
+      [/regular price/i]
     );
-    const labelledDeal = extractLabelledPrice(containerText, /deal price/i, [
-      /regular price/i,
-    ]);
     if (
       labelledDeal !== null &&
       (!choices.deal || !isLabelledPriceResult(choices.deal))
@@ -218,7 +221,9 @@ export function extractLocalizedBuyboxPriceChoices(
     const labelledRegular = extractLabelledPrice(
       containerText,
       /regular price/i,
-      [/deal price/i]
+      [
+        /deal price|exclusive prime price|prime exclusive price|exclusive prime|prime deal/i,
+      ]
     );
     if (
       labelledRegular !== null &&
@@ -253,30 +258,43 @@ export function extractLocalizedBuyboxPriceChoices(
           return;
         }
 
-        const nearbyText = normalizeText(
+        const localNearbyText = normalizeText(
           [
             priceElement.parent().text(),
-            priceElement.closest("div").text(),
-            priceElement.closest("li, td, tr").text(),
+            priceElement
+              .closest(
+                ".a-accordion-row, .a-box, [class*='accordion'], li, td, tr, div:not(#corePrice_feature_div):not(#corePriceDisplay_desktop_feature_div):not(#apex_desktop):not(#buybox):not(#desktop_buybox)"
+              )
+              .text(),
           ].join(" ")
         );
         const selectorLooksDeal = selector.includes("dealprice");
-        const contextLooksDeal = /deal price|prime exclusive|prime deal/i.test(
-          nearbyText
-        );
-        const contextLooksRegular = /regular price/i.test(nearbyText);
-        if (
-          hasLabelledPriceSection &&
-          contextLooksDeal &&
-          contextLooksRegular
-        ) {
-          return;
-        }
+        const localLooksDeal =
+          /deal price|prime exclusive|exclusive prime|prime deal|with prime/i.test(
+            localNearbyText
+          );
+        const localLooksRegular = /regular price/i.test(localNearbyText);
 
-        const mode: AmazonPriceTrackingMode =
-          selectorLooksDeal || (contextLooksDeal && !contextLooksRegular)
-            ? "DEAL"
-            : "REGULAR";
+        const containerLooksDeal =
+          /deal price|prime exclusive|exclusive prime|prime deal|with prime/i.test(
+            containerText
+          );
+        const containerLooksRegular = /regular price/i.test(containerText);
+
+        let mode: AmazonPriceTrackingMode;
+        if (selectorLooksDeal) {
+          mode = "DEAL";
+        } else if (localLooksDeal && !localLooksRegular) {
+          mode = "DEAL";
+        } else if (localLooksRegular && !localLooksDeal) {
+          mode = "REGULAR";
+        } else if (containerLooksDeal && !containerLooksRegular) {
+          mode = "DEAL";
+        } else if (containerLooksRegular && !containerLooksDeal) {
+          mode = "REGULAR";
+        } else {
+          mode = "REGULAR";
+        }
 
         if (mode === "DEAL" && !choices.deal) {
           choices.deal = buildResult(

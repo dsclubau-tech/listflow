@@ -536,6 +536,10 @@ export async function applyBulkProductEdits(input: ApplyBulkProductEditsInput) {
           productData.quantity = operation.value;
           if (operation.value === 0) {
             productData.status = ProductStatus.ON_HOLD;
+            productData.holdReason = "Listing quantity was set to 0.";
+          } else if (product.status === ProductStatus.ON_HOLD) {
+            productData.status = ProductStatus.IMPORTED;
+            productData.holdReason = null;
           }
         }
       }

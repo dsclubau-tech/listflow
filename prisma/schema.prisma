@@ -223,6 +223,7 @@ model Product {
   lastPriceCheck DateTime?
   priceCheckError String?     @db.Text
   priceCheckFailureCode PriceCheckFailureCode?
+  holdReason      String?     @db.Text
   internalNote    String?     @db.Text
   shippingPolicyId String?
   returnPolicyId   String?

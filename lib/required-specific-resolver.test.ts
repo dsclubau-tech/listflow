@@ -234,7 +234,7 @@ test("resolveRequiredItemSpecifics infers Compatible Model from title", () => {
   );
 });
 
-test("resolveRequiredItemSpecifics reports Compatible Model missing when no data matches", () => {
+test("resolveRequiredItemSpecifics reports Compatible Model missing when no data matches and no fallback exists", () => {
   const result = resolveRequiredItemSpecifics({
     title: "Generic Water Filter Cartridge",
     categoryName: "Water Filter Cartridges",
@@ -249,6 +249,70 @@ test("resolveRequiredItemSpecifics reports Compatible Model missing when no data
 
   assert.equal(result.itemSpecifics["Compatible Model"], undefined);
   assert.deepEqual(result.missingItemSpecifics, ["Compatible Model"]);
+});
+
+test("resolveRequiredItemSpecifics falls back to Universal for Compatible Model when no specific data matches", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "Shark WandVac 2.0 Cordless Handheld Vacuum Cleaner",
+    categoryName: "Vacuum Cleaners",
+    brand: "Shark",
+    itemSpecifics: {
+      Brand: "Shark",
+    },
+    requiredItemSpecifics: [
+      { name: "Compatible Model", values: ["WV200", "WV201", "WV205", "Universal"] },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics["Compatible Model"], "Universal");
+  assert.deepEqual(result.missingItemSpecifics, []);
+  assert.equal(
+    result.decisions.find((d) => d.name === "Compatible Model")?.source,
+    "ebay_allowed_default",
+  );
+});
+
+test("resolveRequiredItemSpecifics falls back to Does Not Apply for Compatible Model when no specific data matches", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "Shark WandVac 2.0 Cordless Handheld Vacuum Cleaner",
+    categoryName: "Vacuum Cleaners",
+    brand: "Shark",
+    itemSpecifics: {
+      Brand: "Shark",
+    },
+    requiredItemSpecifics: [
+      { name: "Compatible Model", values: ["WV200", "WV201", "Does Not Apply"] },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics["Compatible Model"], "Does Not Apply");
+  assert.deepEqual(result.missingItemSpecifics, []);
+  assert.equal(
+    result.decisions.find((d) => d.name === "Compatible Model")?.source,
+    "ebay_allowed_default",
+  );
+});
+
+test("resolveRequiredItemSpecifics matches For Brand Model pattern for Compatible Model", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "Shark WandVac Cordless Handheld Vacuum Cleaner",
+    categoryName: "Vacuum Cleaners",
+    brand: "Shark",
+    itemSpecifics: {
+      Brand: "Shark",
+      Model: "WandVac 2.0",
+    },
+    requiredItemSpecifics: [
+      { name: "Compatible Model", values: ["For Dyson V8", "For Shark WandVac 2.0", "For Roomba 690"] },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics["Compatible Model"], "For Shark WandVac 2.0");
+  assert.deepEqual(result.missingItemSpecifics, []);
+  assert.equal(
+    result.decisions.find((d) => d.name === "Compatible Model")?.source,
+    "amazon",
+  );
 });
 
 test("resolveRequiredItemSpecifics infers Model from Amazon item specifics and title", () => {

@@ -89,6 +89,31 @@ const statusBadgeLabels: Record<string, string> = {
   ON_HOLD: "On Hold",
 };
 
+function getProductHoldReason(product: Pick<SerializedProductRow, "status" | "holdReason" | "priceCheckError" | "amazonStockLeft" | "quantity">) {
+  if (product.status !== "ON_HOLD") {
+    return null;
+  }
+  const explicitReason = product.holdReason?.trim();
+  if (explicitReason) {
+    return explicitReason;
+  }
+  const priceCheckError = product.priceCheckError?.trim();
+  if (priceCheckError) {
+    return `Automatic hold after failed price check: ${priceCheckError}`;
+  }
+  if (product.quantity <= 0) {
+    return "Listing quantity was set to 0.";
+  }
+  if (
+    product.amazonStockLeft !== null &&
+    product.amazonStockLeft !== undefined &&
+    product.amazonStockLeft <= 3
+  ) {
+    return `Low Amazon stock (${product.amazonStockLeft} left).`;
+  }
+  return "Put on hold manually.";
+}
+
 function formatMoney(value: string | number | null | undefined) {
   if (value === null || value === undefined) {
     return "A$0.00";
@@ -2090,9 +2115,22 @@ export default function DraftsTable({
                             </span>
                             <span
                               className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusBadgeClasses(product.status)}`}
+                              title={
+                                product.status === "ON_HOLD"
+                                  ? getProductHoldReason(product) ?? undefined
+                                  : undefined
+                              }
                             >
                               {statusBadgeLabels[product.status] || product.status}
                             </span>
+                            {product.status === "ON_HOLD" && (
+                              <span
+                                className="basis-full text-xs text-amber-700 font-medium"
+                                title={getProductHoldReason(product) ?? undefined}
+                              >
+                                {getProductHoldReason(product)}
+                              </span>
+                            )}
                             <span className="basis-full text-xs text-gray-500 sm:basis-auto">
                               Created by {product.createdBy.name}
                             </span>
@@ -2140,9 +2178,22 @@ export default function DraftsTable({
                     <td className={isDraftsView ? "hidden px-3 py-4 xl:table-cell" : "px-3 py-3"}>
                       <span
                         className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusBadgeClasses(product.status)}`}
+                        title={
+                          product.status === "ON_HOLD"
+                            ? getProductHoldReason(product) ?? undefined
+                            : undefined
+                        }
                       >
                         {statusBadgeLabels[product.status] || product.status}
                       </span>
+                      {product.status === "ON_HOLD" && (
+                        <span
+                          className="mt-1 block max-w-[12rem] truncate text-xs text-amber-700 font-normal"
+                          title={getProductHoldReason(product) ?? undefined}
+                        >
+                          {getProductHoldReason(product)}
+                        </span>
+                      )}
                     </td>
 
                     {isProductsView && trackingState && promotedAdState && (

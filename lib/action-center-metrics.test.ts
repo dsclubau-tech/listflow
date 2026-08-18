@@ -134,6 +134,15 @@ test("on-hold quantity is displayed as zero without changing resume quantity", (
 test("on-hold reason explains every supported hold path", () => {
   assert.equal(
     getOnHoldReason({
+      holdReason: "Custom hold reason.",
+      priceCheckError: "Amazon price is unavailable.",
+      amazonStockLeft: 0,
+      savedQuantity: 1,
+    }),
+    "Custom hold reason.",
+  );
+  assert.equal(
+    getOnHoldReason({
       priceCheckError: "Amazon price is unavailable.",
       amazonStockLeft: 0,
       savedQuantity: 1,
