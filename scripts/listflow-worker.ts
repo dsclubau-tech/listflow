@@ -337,7 +337,10 @@ async function main() {
         .replace(/[^a-z0-9-]+/g, "-");
       workerId = `worker-${sanitized}`;
     } else {
-      workerId = `manual-${os.hostname().toLowerCase().replace(/[^a-z0-9-]+/g, "-")}`;
+      const railwayServiceName = process.env.RAILWAY_SERVICE_NAME?.trim();
+      workerId = railwayServiceName
+        ? railwayServiceName.toLowerCase().replace(/[^a-z0-9-]+/g, "-")
+        : `manual-${os.hostname().toLowerCase().replace(/[^a-z0-9-]+/g, "-")}`;
     }
   }
 
@@ -464,6 +467,19 @@ async function main() {
         }
 
         await heartbeat();
+
+        // On first iteration, clean up orphaned heartbeat records left by
+        // previous deployments that used a different workerId (e.g. Railway
+        // hostname change). Without this, old records show as "Stale" in the UI.
+        if (!loggedOnlineStoreIds.has("__cleanup_done__")) {
+          loggedOnlineStoreIds.add("__cleanup_done__");
+          await modules.prisma.workerHeartbeat.deleteMany({
+            where: {
+              workerId: { not: workerId },
+              workerName,
+            },
+          }).catch(() => undefined);
+        }
 
         let didWork = false;
 
