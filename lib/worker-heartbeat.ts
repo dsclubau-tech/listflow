@@ -8,6 +8,7 @@ import {
 
 export const WORKER_HEARTBEAT_INTERVAL_MS = 20_000;
 export const WORKER_STALE_AFTER_MS = 60_000;
+export const WORKER_CLEANUP_AFTER_MS = 24 * 60 * 60 * 1000; // 24 hours — hide workers not seen since
 export const WORKER_OFFLINE_MESSAGE =
   "Worker offline. Open Start ListFlow Worker on a trusted PC to run price checks, imports, research batches, or quantity changes.";
 
@@ -106,8 +107,9 @@ export async function getWorkerStatusForStore(storeId: string) {
 }
 
 export async function getWorkerStatusesForStore(storeId: string) {
+  const cleanupCutoff = new Date(Date.now() - WORKER_CLEANUP_AFTER_MS);
   const heartbeats = await prisma.workerHeartbeat.findMany({
-    where: { storeId },
+    where: { storeId, lastSeenAt: { gt: cleanupCutoff } },
     orderBy: { lastSeenAt: "desc" },
     take: 10,
     select: {

@@ -472,6 +472,10 @@ async function main() {
             break;
           }
 
+          // Keep this store's heartbeat fresh before processing its jobs.
+          // Without this, a long job for the previous store could let this
+          // store's heartbeat go stale and block new job submissions.
+          await heartbeat([store.id]).catch(() => undefined);
           const storeWork = await processStore(store);
           if (storeWork) {
             completedJobsSinceMetrics += 1;
