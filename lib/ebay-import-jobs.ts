@@ -216,14 +216,15 @@ async function findActiveEbayImportJob(storeId: string) {
   });
 }
 
-async function findNextRunnableEbayImportJob(storeId: string) {
-  return prisma.ebayImportJob.findFirst({
+async function findRunnableEbayImportJobs(storeId: string) {
+  return prisma.ebayImportJob.findMany({
     where: {
       storeId,
       status: { in: [...RUNNABLE_IMPORT_JOB_STATUSES] },
       dismissedAt: null,
     },
     orderBy: { createdAt: "asc" },
+    take: 5,
   });
 }
 
@@ -455,22 +456,22 @@ export async function runNextEbayImportJobForStore(
   storeId: string,
   worker?: WorkerContext
 ) {
-  const job = await findNextRunnableEbayImportJob(storeId);
+  const jobs = await findRunnableEbayImportJobs(storeId);
 
-  if (!job) {
-    return false;
-  }
+  for (const job of jobs) {
+    try {
+      await runEbayImportJob(job.id, worker);
+      return true;
+    } catch (error) {
+      if (error instanceof JobConflictError) {
+        continue;
+      }
 
-  try {
-    await runEbayImportJob(job.id, worker);
-    return true;
-  } catch (error) {
-    if (error instanceof JobConflictError) {
-      return false;
+      throw error;
     }
-
-    throw error;
   }
+
+  return false;
 }
 
 export async function dismissEbayImportJob(jobId: string, storeId: string) {

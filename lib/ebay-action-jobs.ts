@@ -1991,27 +1991,28 @@ export async function runNextEbayActionJobForStore(
   storeId: string,
   worker?: WorkerContext
 ) {
-  const job = await prisma.ebayActionJob.findFirst({
+  const jobs = await prisma.ebayActionJob.findMany({
     where: {
       storeId,
       status: { in: ACTIVE_ACTION_JOB_STATUSES },
       dismissedAt: null,
     },
     orderBy: { createdAt: "asc" },
+    take: 5,
   });
 
-  if (!job) {
-    return false;
-  }
+  for (const job of jobs) {
+    try {
+      await runEbayActionJob(job.id, worker);
+      return true;
+    } catch (error) {
+      if (error instanceof JobConflictError) {
+        continue;
+      }
 
-  try {
-    await runEbayActionJob(job.id, worker);
-    return true;
-  } catch (error) {
-    if (error instanceof JobConflictError) {
-      return false;
+      throw error;
     }
-
-    throw error;
   }
+
+  return false;
 }

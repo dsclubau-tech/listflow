@@ -316,17 +316,26 @@ async function main() {
   const storeFilters = parseStoreFilter();
 
   if (!workerName) {
+    const railwayServiceName = process.env.RAILWAY_SERVICE_NAME?.trim();
     if (storeFilters.length === 1 && stores.length === 1) {
       workerName = `${stores[0].name} Worker`;
     } else if (storeFilters.length > 0) {
       workerName = `Store (${storeFilters.join(", ")}) Worker`;
+    } else if (railwayServiceName) {
+      workerName =
+        railwayServiceName === "worker-all-stores"
+          ? "All Stores Unified Worker"
+          : `${railwayServiceName} Worker`;
     } else {
       workerName = `${os.hostname()} manual worker`;
     }
   }
 
   if (!workerId) {
-    if (storeFilters.length === 1 && stores.length === 1) {
+    const railwayServiceName = process.env.RAILWAY_SERVICE_NAME?.trim();
+    if (railwayServiceName) {
+      workerId = railwayServiceName.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+    } else if (storeFilters.length === 1 && stores.length === 1) {
       const sanitized = (stores[0].loginId || stores[0].id)
         .toLowerCase()
         .replace(/[^a-z0-9-]+/g, "-");
@@ -337,10 +346,7 @@ async function main() {
         .replace(/[^a-z0-9-]+/g, "-");
       workerId = `worker-${sanitized}`;
     } else {
-      const railwayServiceName = process.env.RAILWAY_SERVICE_NAME?.trim();
-      workerId = railwayServiceName
-        ? railwayServiceName.toLowerCase().replace(/[^a-z0-9-]+/g, "-")
-        : `manual-${os.hostname().toLowerCase().replace(/[^a-z0-9-]+/g, "-")}`;
+      workerId = `manual-${os.hostname().toLowerCase().replace(/[^a-z0-9-]+/g, "-")}`;
     }
   }
 
@@ -470,13 +476,21 @@ async function main() {
 
         // On first iteration, clean up orphaned heartbeat records left by
         // previous deployments that used a different workerId (e.g. Railway
-        // hostname change). Without this, old records show as "Stale" in the UI.
+        // hostname change) or heartbeats older than 24h.
         if (!loggedOnlineStoreIds.has("__cleanup_done__")) {
           loggedOnlineStoreIds.add("__cleanup_done__");
+          const staleCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
           await modules.prisma.workerHeartbeat.deleteMany({
             where: {
-              workerId: { not: workerId },
-              workerName,
+              OR: [
+                {
+                  workerId: { not: workerId },
+                  workerName,
+                },
+                {
+                  lastSeenAt: { lt: staleCutoff },
+                },
+              ],
             },
           }).catch(() => undefined);
         }

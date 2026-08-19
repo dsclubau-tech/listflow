@@ -299,11 +299,30 @@ export async function fetchRailwayUsageReport(): Promise<RailwayUsageReport> {
       serviceUsageMap.set(serviceId, current);
     }
 
-    const PARKED_SERVICE_NAMES = new Set([
-      "worker-rk-ecommerce",
-      "worker-oz-metro",
-      "worker-aussie-walmart",
-    ]);
+    // Check recent active worker heartbeats from the database to determine live service status
+    const activeWorkerIds = new Set<string>();
+    const activeWorkerNames = new Set<string>();
+    try {
+      const { prisma } = await import("@/lib/prisma");
+      const recentCutoff = new Date(Date.now() - 5 * 60 * 1000); // 5 minutes
+      const activeHeartbeats = await prisma.workerHeartbeat.findMany({
+        where: { lastSeenAt: { gt: recentCutoff } },
+        select: { workerId: true, workerName: true },
+      });
+      for (const hb of activeHeartbeats) {
+        activeWorkerIds.add(hb.workerId.toLowerCase());
+        activeWorkerNames.add(hb.workerName.toLowerCase());
+      }
+    } catch {
+      // Fallback if DB query fails
+    }
+
+    const explicitParkedNames = new Set(
+      (process.env.LISTFLOW_PARKED_SERVICES ?? "")
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean)
+    );
 
     // Combine all known services even if 0 usage
     const services: RailwayServiceUsage[] = [];
@@ -326,8 +345,23 @@ export async function fetchRailwayUsageReport(): Promise<RailwayUsageReport> {
         usage.networkEgressGB
       );
 
-      const isParked = PARKED_SERVICE_NAMES.has(name.toLowerCase());
-      const isActive = !isParked;
+      const sanitizedName = name.toLowerCase().replace(/[^a-z0-9-]+/g, "-");
+      const isExplicitlyParked =
+        explicitParkedNames.has(name.toLowerCase()) ||
+        explicitParkedNames.has(sanitizedName);
+
+      const hasActiveHeartbeat =
+        activeWorkerIds.has(name.toLowerCase()) ||
+        activeWorkerIds.has(sanitizedName) ||
+        activeWorkerIds.has(`worker-${sanitizedName}`) ||
+        Array.from(activeWorkerNames).some(
+          (wn) => wn.includes(sanitizedName) || sanitizedName.includes(wn)
+        );
+
+      const isActive =
+        !isExplicitlyParked &&
+        (hasActiveHeartbeat || activeWorkerIds.size === 0);
+      const isParked = !isActive;
 
       if (isActive) {
         activeServicesCost += costs.totalCost;
