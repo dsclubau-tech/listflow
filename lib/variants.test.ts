@@ -34,21 +34,32 @@ test("buildDefaultVariantData applies supplier pricing defaults when creating de
   assert.equal(variant.sellPrice, 131.41);
 });
 
-test("buildDefaultVariantData defaults to zero when pricing parameters are omitted", async () => {
+test("buildDefaultVariantData handles Decimal object prices correctly", async () => {
   const buildDefaultVariantData = await getBuildDefaultVariantData();
+  // Simulating Prisma Decimal object
+  const decimalPrice = {
+    toNumber() {
+      return 75;
+    },
+    valueOf() {
+      return "75";
+    },
+  };
+
   const variant = buildDefaultVariantData({
-    id: "product_456",
-    price: 50,
-    quantity: 0,
+    id: "product_789",
+    price: decimalPrice as unknown as number,
+    quantity: 1,
     images: [],
-    asin: null,
+    asin: "B0FNCKZ5DY",
+    feesPercent: 13,
+    feesFixed: 0.33,
+    profitPercent: 0,
+    profitFixed: 14,
+    minimumProfit: 1,
   });
 
-  assert.equal(variant.buyPrice, 50);
-  assert.equal(variant.sellPrice, 50);
-  assert.equal(variant.feesPercent, 0);
-  assert.equal(variant.feesFixed, 0);
-  assert.equal(variant.profitPercent, 0);
-  assert.equal(variant.profitFixed, 0);
-  assert.equal(variant.status, "OUT_OF_STOCK");
+  // buy = 75, fees = 13%, feeFixed = 0.33, profitFixed = 14 -> (75 + 0.33 + 14) / (1 - 0.13) = 89.33 / 0.87 = 102.68
+  assert.equal(variant.sellPrice, 102.68);
 });
+

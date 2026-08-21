@@ -36,6 +36,22 @@ function toNumber(value: unknown, fallback = 0) {
     }
   }
 
+  if (value !== null && value !== undefined && typeof value === "object") {
+    const asDecimal = value as { toNumber?: () => number; valueOf?: () => unknown };
+    if (typeof asDecimal.toNumber === "function") {
+      const parsed = asDecimal.toNumber();
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    if (typeof asDecimal.valueOf === "function") {
+      const parsed = Number(asDecimal.valueOf());
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+  }
+
   return fallback;
 }
 
