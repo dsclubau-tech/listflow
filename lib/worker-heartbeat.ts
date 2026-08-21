@@ -5,6 +5,7 @@ import {
   listActiveJobLeasesForStore,
   type SerializedJobLease,
 } from "@/lib/job-coordination";
+import type { WorkerRole } from "@/lib/worker-routing";
 
 export const WORKER_HEARTBEAT_INTERVAL_MS = 20_000;
 export const WORKER_STALE_AFTER_MS = 60_000;
@@ -16,6 +17,7 @@ export type SerializedWorkerStatus = {
   online: boolean;
   workerId: string | null;
   workerName: string | null;
+  workerRole: WorkerRole;
   lastSeenAt: string | null;
   staleAfterSeconds: number;
   message: string | null;
@@ -26,6 +28,7 @@ type WorkerHeartbeatInput = {
   storeId: string;
   workerId: string;
   workerName: string;
+  workerRole: WorkerRole;
   startedAt: Date;
   version?: string | null;
 };
@@ -35,6 +38,7 @@ function serializeWorkerStatus(
     | {
         workerId: string;
         workerName: string;
+        workerRole: string;
         lastSeenAt: Date;
       }
     | null,
@@ -48,6 +52,7 @@ function serializeWorkerStatus(
     online,
     workerId: heartbeat?.workerId ?? null,
     workerName: heartbeat?.workerName ?? null,
+    workerRole: normalizeWorkerRole(heartbeat?.workerRole),
     lastSeenAt: heartbeat?.lastSeenAt.toISOString() ?? null,
     staleAfterSeconds: Math.round(WORKER_STALE_AFTER_MS / 1000),
     message: online ? null : WORKER_OFFLINE_MESSAGE,
@@ -62,6 +67,7 @@ export function getOfflineWorkerStatus(
     online: false,
     workerId: null,
     workerName: null,
+    workerRole: "legacy",
     lastSeenAt: null,
     staleAfterSeconds: Math.round(WORKER_STALE_AFTER_MS / 1000),
     message,
@@ -83,6 +89,7 @@ export async function touchWorkerHeartbeat(input: WorkerHeartbeatInput) {
       storeId: input.storeId,
       workerId: input.workerId,
       workerName: input.workerName,
+      workerRole: input.workerRole,
       status: "ONLINE",
       startedAt: input.startedAt,
       lastSeenAt: now,
@@ -90,6 +97,7 @@ export async function touchWorkerHeartbeat(input: WorkerHeartbeatInput) {
     },
     update: {
       workerName: input.workerName,
+      workerRole: input.workerRole,
       status: "ONLINE",
       lastSeenAt: now,
       version: input.version ?? null,
@@ -115,6 +123,7 @@ export async function getWorkerStatusesForStore(storeId: string) {
     select: {
       workerId: true,
       workerName: true,
+      workerRole: true,
       lastSeenAt: true,
     },
   });
@@ -130,6 +139,10 @@ export async function getWorkerStatusesForStore(storeId: string) {
   return heartbeats.map((heartbeat) =>
     serializeWorkerStatus(heartbeat, leasesByWorker.get(heartbeat.workerId) ?? [])
   );
+}
+
+function normalizeWorkerRole(value: string | null | undefined): WorkerRole {
+  return value === "unified" || value === "store-specific" ? value : "legacy";
 }
 
 export async function isWorkerOnlineForStore(storeId: string) {

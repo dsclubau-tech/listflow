@@ -4,7 +4,13 @@ import fs from "node:fs";
 import Module from "node:module";
 import os from "node:os";
 import path from "node:path";
-import { isWorkerEnabled } from "../lib/worker-enabled";
+import {
+  parsePositiveWorkerMs,
+  resolveWorkerEnabled,
+  resolveWorkerRole,
+  rotateForRoundRobin,
+  type WorkerRole,
+} from "../lib/worker-routing";
 
 function configureWorkerDatabaseProfile() {
   const profile =
@@ -64,29 +70,34 @@ moduleWithLoad._load = function loadWithServerOnlyShim(
   return originalLoad.call(this, request, parent, isMain);
 };
 
-const IDLE_SLEEP_MS = parsePositiveMs(
+const IDLE_SLEEP_MS = parsePositiveWorkerMs(
   process.env.LISTFLOW_WORKER_IDLE_SLEEP_MS,
   10_000
 );
-const ERROR_SLEEP_MS = parsePositiveMs(
+const ERROR_SLEEP_MS = parsePositiveWorkerMs(
   process.env.LISTFLOW_WORKER_ERROR_SLEEP_MS,
   Math.max(IDLE_SLEEP_MS, 30_000)
 );
 const STOCK_REPLENISH_ENABLED =
   process.env.LISTFLOW_STOCK_REPLENISH_ENABLED !== "false";
-const STOCK_REPLENISH_INTERVAL_MS = parsePositiveMs(
+const STOCK_REPLENISH_INTERVAL_MS = parsePositiveWorkerMs(
   process.env.LISTFLOW_STOCK_REPLENISH_INTERVAL_MS,
   10 * 60 * 1000
+);
+const JOB_LEASE_TTL_MS = parsePositiveWorkerMs(
+  process.env.LISTFLOW_WORKER_LEASE_TTL_MS,
+  90_000,
 );
 
 let workerName = process.env.LISTFLOW_WORKER_NAME || "";
 let workerId = process.env.LISTFLOW_WORKER_ID || "";
+let workerRole: WorkerRole = "legacy";
 const startedAt = new Date();
 let stopping = false;
 let heartbeatStoreIds: string[] = [];
 let localGuardPath: string | null = null;
 const loggedOnlineStoreIds = new Set<string>();
-const nextStockReplenishAtByStoreId = new Map<string, number>();
+let roundRobinStartIndex = 0;
 
 async function loadWorkerModules() {
   const [
@@ -97,6 +108,7 @@ async function loadWorkerModules() {
     priceCheckJobs,
     stockReplenishment,
     workerHeartbeat,
+    workerSchedule,
     loggerModule,
   ] = await Promise.all([
     import("../lib/prisma"),
@@ -106,6 +118,7 @@ async function loadWorkerModules() {
     import("../lib/price-check-jobs"),
     import("../lib/stock-replenishment"),
     import("../lib/worker-heartbeat"),
+    import("../lib/worker-schedule"),
     import("../lib/logger"),
   ]);
 
@@ -118,6 +131,10 @@ async function loadWorkerModules() {
     runStockReplenishmentForStore: stockReplenishment.runStockReplenishmentForStore,
     touchWorkerHeartbeat: workerHeartbeat.touchWorkerHeartbeat,
     heartbeatIntervalMs: workerHeartbeat.WORKER_HEARTBEAT_INTERVAL_MS,
+    tryClaimWorkerSchedule: workerSchedule.tryClaimWorkerSchedule,
+    withWorkerScheduleClaim: workerSchedule.withWorkerScheduleClaim,
+    completeWorkerSchedule: workerSchedule.completeWorkerSchedule,
+    retryWorkerSchedule: workerSchedule.retryWorkerSchedule,
     logger: loggerModule.logger.child({
       source: "worker",
       runtime: "worker",
@@ -129,7 +146,7 @@ async function loadWorkerModules() {
 }
 
 function getWorkerContext() {
-  return { workerId, workerName };
+  return { workerId, workerName, workerRole };
 }
 
 function isProcessAlive(pid: number) {
@@ -178,11 +195,6 @@ function releaseLocalWorkerGuard() {
 }
 
 let modules: Awaited<ReturnType<typeof loadWorkerModules>>;
-
-function parsePositiveMs(raw: string | undefined, fallback: number) {
-  const value = Number.parseInt(raw ?? "", 10);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
-}
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -248,6 +260,7 @@ async function heartbeat(storeIds = heartbeatStoreIds) {
         storeId,
         workerId,
         workerName,
+        workerRole,
         startedAt,
         version: process.env.npm_package_version ?? null,
       })
@@ -270,30 +283,59 @@ async function processStore(store: { id: string; name: string; loginId: string |
     return true;
   }
 
-  await modules.runEbayResearchQueueForStore(store.id, worker);
+  if (await modules.runEbayResearchQueueForStore(store.id, worker)) {
+    return true;
+  }
 
   if (!STOCK_REPLENISH_ENABLED) {
     return false;
   }
 
-  const now = Date.now();
-  const nextRunAt = nextStockReplenishAtByStoreId.get(store.id) ?? 0;
+  const claim = await modules.tryClaimWorkerSchedule({
+    storeId: store.id,
+    taskKey: "stock-replenishment",
+    worker,
+    leaseTtlMs: JOB_LEASE_TTL_MS,
+  });
 
-  if (now < nextRunAt) {
+  if (!claim) {
     return false;
   }
 
-  nextStockReplenishAtByStoreId.set(
-    store.id,
-    now + STOCK_REPLENISH_INTERVAL_MS
-  );
-  const result = await modules.runStockReplenishmentForStore(store.id, worker);
+  try {
+    const result = await modules.withWorkerScheduleClaim(
+      claim,
+      JOB_LEASE_TTL_MS,
+      () => modules.runStockReplenishmentForStore(store.id, worker),
+    );
 
-  return result.replenished > 0 || result.failed > 0;
+    if (result.skippedConflict) {
+      await modules.retryWorkerSchedule(claim, Math.max(IDLE_SLEEP_MS, 5_000));
+      return false;
+    }
+
+    await modules.completeWorkerSchedule(claim, STOCK_REPLENISH_INTERVAL_MS);
+    return result.replenished > 0 || result.failed > 0;
+  } catch (error) {
+    await modules.retryWorkerSchedule(claim, ERROR_SLEEP_MS, getErrorMessage(error));
+    throw error;
+  }
 }
 
 async function main() {
-  if (!isWorkerEnabled()) {
+  const storeFilters = parseStoreFilter();
+  const isRailway = Boolean(
+    process.env.RAILWAY_SERVICE_NAME || process.env.RAILWAY_ENVIRONMENT,
+  );
+  const workerEnabled = resolveWorkerEnabled({
+    value: process.env.LISTFLOW_WORKER_ENABLED,
+    isRailway,
+  });
+  workerRole = resolveWorkerRole(process.env.LISTFLOW_WORKER_ROLE, storeFilters, {
+    requireExplicit: isRailway,
+  });
+
+  if (!workerEnabled) {
     console.log(
       "ListFlow Worker is parked because LISTFLOW_WORKER_ENABLED=false."
     );
@@ -313,7 +355,6 @@ async function main() {
   modules = await loadWorkerModules();
 
   const stores = await getActiveStores();
-  const storeFilters = parseStoreFilter();
 
   if (!workerName) {
     const railwayServiceName = process.env.RAILWAY_SERVICE_NAME?.trim();
@@ -367,6 +408,7 @@ async function main() {
 
   console.log(`ListFlow Worker online — ${workerName}`);
   console.log(`Worker ID: ${workerId}`);
+  console.log(`Worker role: ${workerRole}`);
   console.log(`Database profile: ${workerDatabaseProfile}`);
   console.log("Waiting for jobs...");
   if (STOCK_REPLENISH_ENABLED) {
@@ -377,6 +419,7 @@ async function main() {
   modules.logger.info("worker/start", "ListFlow Worker online", {
     workerId,
     workerName,
+    workerRole,
     storeFilter: storeFilters,
     stockReplenishEnabled: STOCK_REPLENISH_ENABLED,
     stockReplenishIntervalMs: STOCK_REPLENISH_INTERVAL_MS,
@@ -394,7 +437,7 @@ async function main() {
     });
   }, modules.heartbeatIntervalMs);
 
-  const METRICS_INTERVAL_MS = parsePositiveMs(
+  const METRICS_INTERVAL_MS = parsePositiveWorkerMs(
     process.env.LISTFLOW_WORKER_METRICS_INTERVAL_MS,
     60_000
   );
@@ -419,6 +462,7 @@ async function main() {
     modules.logger.info("worker/metrics", "Worker telemetry snapshot", {
       workerId,
       workerName,
+      workerRole,
       rssMB: Number((memory.rss / (1024 * 1024)).toFixed(2)),
       heapUsedMB: Number((memory.heapUsed / (1024 * 1024)).toFixed(2)),
       heapTotalMB: Number((memory.heapTotal / (1024 * 1024)).toFixed(2)),
@@ -448,6 +492,10 @@ async function main() {
       try {
         const currentStores = await getActiveStores();
         heartbeatStoreIds = currentStores.map((store) => store.id);
+        const scheduledStores =
+          workerRole === "unified"
+            ? rotateForRoundRobin(currentStores, roundRobinStartIndex++)
+            : currentStores;
 
         for (const store of currentStores) {
           if (!loggedOnlineStoreIds.has(store.id)) {
@@ -458,6 +506,7 @@ async function main() {
               {
                 workerId,
                 workerName,
+                workerRole,
                 storeName: store.name,
                 storeLoginId: store.loginId,
               },
@@ -497,7 +546,7 @@ async function main() {
 
         let didWork = false;
 
-        for (const store of currentStores) {
+        for (const store of scheduledStores) {
           if (stopping) {
             break;
           }
@@ -536,6 +585,7 @@ async function main() {
     modules.logger.info("worker/stop", "ListFlow Worker stopped", {
       workerId,
       workerName,
+      workerRole,
     });
     await modules.prisma.$disconnect();
     releaseLocalWorkerGuard();

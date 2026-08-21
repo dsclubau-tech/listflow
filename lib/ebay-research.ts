@@ -22,6 +22,10 @@ import {
   withJobLeases,
   type WorkerContext,
 } from "@/lib/job-coordination";
+import {
+  filterRunnableJobsForWorker,
+  getWorkerClaimPolicy,
+} from "@/lib/worker-claim-policy";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { launchScraperBrowser } from "@/lib/scraper-browser";
@@ -1299,6 +1303,7 @@ function sleep(ms: number) {
 
 async function recoverStaleResearchJobs(storeId: string) {
   const runningJobIds = getRunningJobIds();
+  const now = new Date();
   const staleJobs = await prisma.ebayResearchJob.findMany({
     where: {
       storeId,
@@ -1308,10 +1313,23 @@ async function recoverStaleResearchJobs(storeId: string) {
     },
     include: { batch: true },
   });
+  const activeLeases =
+    staleJobs.length > 0
+      ? await prisma.jobLease.findMany({
+          where: {
+            storeId,
+            jobType: "EBAY_RESEARCH",
+            jobId: { in: staleJobs.map((job) => job.id) },
+            expiresAt: { gt: now },
+          },
+          select: { jobId: true },
+        })
+      : [];
+  const leasedJobIds = new Set(activeLeases.map((lease) => lease.jobId));
   const batchIds = new Set<string>();
 
   for (const job of staleJobs) {
-    if (runningJobIds.has(job.id)) {
+    if (runningJobIds.has(job.id) || leasedJobIds.has(job.id)) {
       continue;
     }
 
@@ -1354,6 +1372,11 @@ async function recoverStaleResearchJobs(storeId: string) {
           expiresAt: null,
         },
       });
+      logger.info(
+        "ebay-research/jobs",
+        "Recovered research job after its worker lease expired",
+        { jobId: job.id, batchId: job.batchId, storeId },
+      );
     }
 
     if (job.batchId) {
@@ -1366,8 +1389,12 @@ async function recoverStaleResearchJobs(storeId: string) {
   }
 }
 
-async function findNextQueuedResearchJob(storeId: string) {
-  return prisma.ebayResearchJob.findFirst({
+async function findNextQueuedResearchJob(
+  storeId: string,
+  worker?: WorkerContext,
+) {
+  const now = new Date();
+  const jobs = await prisma.ebayResearchJob.findMany({
     where: {
       storeId,
       status: EbayResearchJobStatus.QUEUED,
@@ -1384,13 +1411,20 @@ async function findNextQueuedResearchJob(storeId: string) {
                 EbayResearchBatchStatus.FAILED,
               ],
             },
+            OR: [
+              { cooldownUntil: null },
+              { cooldownUntil: { lte: now } },
+            ],
           },
         },
       ],
     },
     orderBy: { createdAt: "asc" },
     include: { batch: true },
+    take: 10,
   });
+  const policy = worker ? await getWorkerClaimPolicy(storeId, worker, now) : null;
+  return filterRunnableJobsForWorker(jobs, worker, policy)[0] ?? null;
 }
 
 async function hasQueuedJobsInBatch(batchId: string) {
@@ -1468,8 +1502,11 @@ async function completeResearchJobFromReusableCache(job: EbayResearchJobRecord) 
     });
   }
 
-  await prisma.ebayResearchJob.update({
-    where: { id: job.id },
+  const started = await prisma.ebayResearchJob.updateMany({
+    where: {
+      id: job.id,
+      status: EbayResearchJobStatus.QUEUED,
+    },
     data: {
       status: reusableJob.status,
       startedAt: job.startedAt ?? now,
@@ -1485,6 +1522,10 @@ async function completeResearchJobFromReusableCache(job: EbayResearchJobRecord) 
       expiresAt: getResearchExpiresAt(now),
     },
   });
+
+  if (started.count !== 1) {
+    return;
+  }
 
   logger.info("ebay-research/jobs", "Reused cached eBay research result", {
     jobId: job.id,
@@ -1564,8 +1605,11 @@ async function runEbayResearchJobClaimed(jobId: string) {
     return;
   }
 
-  await prisma.ebayResearchJob.update({
-    where: { id: job.id },
+  const started = await prisma.ebayResearchJob.updateMany({
+    where: {
+      id: job.id,
+      status: EbayResearchJobStatus.QUEUED,
+    },
     data: {
       status: EbayResearchJobStatus.RUNNING,
       startedAt: job.startedAt ?? new Date(),
@@ -1575,6 +1619,10 @@ async function runEbayResearchJobClaimed(jobId: string) {
       expiresAt: null,
     },
   });
+
+  if (started.count !== 1) {
+    return;
+  }
 
   if (job.batchId) {
     await prisma.ebayResearchBatch.update({
@@ -1732,7 +1780,8 @@ async function runEbayResearchJob(jobId: string, worker?: WorkerContext) {
       "EBAY_RESEARCH",
       job.id,
       worker,
-      job.batchId ? "eBay research batch" : "eBay research"
+      job.batchId ? "eBay research batch" : "eBay research",
+      job.createdAt,
     ),
     () => runEbayResearchJobClaimed(job.id)
   );
@@ -1741,28 +1790,19 @@ async function runEbayResearchJob(jobId: string, worker?: WorkerContext) {
 async function runEbayResearchQueue(storeId: string, worker?: WorkerContext) {
   await recoverStaleResearchJobs(storeId);
 
-  while (true) {
-    const nextJob = await findNextQueuedResearchJob(storeId);
+  const nextJob = await findNextQueuedResearchJob(storeId, worker);
+  if (!nextJob) {
+    return false;
+  }
 
-    if (!nextJob) {
-      return;
-    }
+  const runningJobIds = getRunningJobIds();
+  runningJobIds.add(nextJob.id);
 
-    const cooldownUntil = nextJob.batch?.cooldownUntil;
-
-    if (cooldownUntil && cooldownUntil.getTime() > Date.now()) {
-      await sleep(cooldownUntil.getTime() - Date.now());
-      continue;
-    }
-
-    const runningJobIds = getRunningJobIds();
-    runningJobIds.add(nextJob.id);
-
-    try {
-      await runEbayResearchJob(nextJob.id, worker);
-    } finally {
-      runningJobIds.delete(nextJob.id);
-    }
+  try {
+    await runEbayResearchJob(nextJob.id, worker);
+    return true;
+  } finally {
+    runningJobIds.delete(nextJob.id);
   }
 }
 
@@ -1771,10 +1811,10 @@ export async function runEbayResearchQueueForStore(
   worker?: WorkerContext
 ) {
   try {
-    await runEbayResearchQueue(storeId, worker);
+    return await runEbayResearchQueue(storeId, worker);
   } catch (error) {
     if (error instanceof JobConflictError) {
-      return;
+      return false;
     }
 
     throw error;

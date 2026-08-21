@@ -72,9 +72,10 @@ export default function RailwayUsageClient({ initialReport = null }: RailwayUsag
   const currentCost = billingPeriod.currentPeriodCost;
   const projectedCost = billingPeriod.projectedMonthEndCost;
   const dailyAverage = billingPeriod.dailyAverageCost;
-  const estimatedSavings = billingPeriod.estimatedMonthlySavings ?? 28.50;
   const activeCount = report.activeServicesCount ?? services.filter((s) => s.isActive).length;
   const parkedCount = report.parkedServicesCount ?? services.filter((s) => s.isParked).length;
+  const inactiveCount = Math.max(0, services.length - activeCount - parkedCount);
+  const specialistCount = services.filter((s) => s.workerRole === "store-specific").length;
 
   // Calculate memory cost vs total
   const totalMemoryCost = services.reduce((sum, s) => sum + s.memoryCost, 0);
@@ -114,6 +115,11 @@ export default function RailwayUsageClient({ initialReport = null }: RailwayUsag
             {parkedCount > 0 ? (
               <span className="text-gray-500">
                 {" "}· <span className="font-semibold text-amber-700">{parkedCount} parked</span> (on-demand standby)
+              </span>
+            ) : null}
+            {inactiveCount > 0 ? (
+              <span className="text-gray-500">
+                {" "}· <span className="font-semibold text-red-700">{inactiveCount} stale/deployed</span>
               </span>
             ) : null}
           </p>
@@ -231,25 +237,25 @@ export default function RailwayUsageClient({ initialReport = null }: RailwayUsag
           </div>
         </div>
 
-        {/* Monthly Savings */}
+        {/* Worker Coverage */}
         <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-xs hover:border-gray-300 transition-colors">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-              Monthly Savings
+              Worker Coverage
             </span>
-            <span className="p-1.5 rounded-lg bg-emerald-50 text-emerald-700 font-bold text-xs">
-              ~70% OFF
+            <span className="p-1.5 rounded-lg bg-blue-50 text-blue-700 font-bold text-xs">
+              {services.length} services
             </span>
           </div>
           <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-emerald-700 tracking-tight">
-              +${estimatedSavings.toFixed(2)}
+            <span className="text-3xl font-bold text-blue-700 tracking-tight">
+              {activeCount}/{services.length}
             </span>
-            <span className="text-xs text-gray-500 font-medium">/ month</span>
+            <span className="text-xs text-gray-500 font-medium">online</span>
           </div>
           <div className="mt-3 text-xs text-gray-500 flex items-center justify-between">
-            <span>Vs. 3 separate workers</span>
-            <span className="font-medium text-gray-700">~$41.40 baseline</span>
+            <span>{specialistCount} specialist workers</span>
+            <span className="font-medium text-gray-700">1 unified overflow</span>
           </div>
         </div>
 
@@ -288,7 +294,7 @@ export default function RailwayUsageClient({ initialReport = null }: RailwayUsag
             </p>
           </div>
           <span className="text-xs font-medium text-gray-500 bg-gray-100 px-2.5 py-1 rounded-md">
-            {activeCount} Active · {parkedCount} Parked
+            {activeCount} Active · {parkedCount} Parked · {inactiveCount} Stale/deployed
           </span>
         </div>
 
@@ -334,18 +340,39 @@ export default function RailwayUsageClient({ initialReport = null }: RailwayUsag
                           <div className="text-xs text-gray-400 font-mono mt-0.5 truncate max-w-xs">
                             {service.id}
                           </div>
+                          <div className="text-xs text-gray-500 mt-1">
+                            {service.workerRole === "store-specific"
+                              ? "Store-specific"
+                              : service.workerRole === "unified"
+                                ? "Unified"
+                                : "Legacy / unknown"}
+                            {` · ${service.coverage}`}
+                            {service.activeLeaseCount > 0
+                              ? ` · ${service.activeLeaseCount} active lease${service.activeLeaseCount === 1 ? "" : "s"}`
+                              : " · No active leases"}
+                          </div>
                         </div>
                       </td>
                       <td className="px-6 py-4">
-                        {service.isActive ? (
+                        {service.serviceState === "active" ? (
                           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
                             <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
                             Active
                           </span>
-                        ) : (
+                        ) : service.serviceState === "parked" ? (
                           <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">
                             <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
                             Parked ($0 active cost)
+                          </span>
+                        ) : service.serviceState === "stale" ? (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200">
+                            <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+                            Stale heartbeat
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-50 text-gray-700 border border-gray-200">
+                            <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
+                            Deployed — no heartbeat
                           </span>
                         )}
                       </td>
@@ -385,7 +412,7 @@ export default function RailwayUsageClient({ initialReport = null }: RailwayUsag
                 <tr>
                   <td className="px-6 py-3.5">Total</td>
                   <td className="px-6 py-3.5 text-xs text-gray-500 font-normal">
-                    {activeCount} active · {parkedCount} parked
+                    {activeCount} active · {parkedCount} parked · {inactiveCount} stale/deployed
                   </td>
                   <td className="px-6 py-3.5 font-mono">${totalCpuCost.toFixed(2)}</td>
                   <td className="px-6 py-3.5 font-mono text-purple-700">${totalMemoryCost.toFixed(2)}</td>
@@ -515,17 +542,17 @@ export default function RailwayUsageClient({ initialReport = null }: RailwayUsag
           <div className="space-y-2 text-sm flex-1">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
               <h3 className="font-bold text-gray-900 text-base">
-                Optimized Multi-Store Architecture Active
+                Dual-Worker Store Coverage
               </h3>
               <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                Saving ~${estimatedSavings.toFixed(2)}/mo (~70%)
+                Specialist-first + unified overflow
               </span>
             </div>
             <p className="text-xs text-gray-700 leading-relaxed">
-              Your infrastructure is running on <strong>1 unified worker (<code className="bg-white/80 px-1.5 py-0.5 rounded border border-emerald-200 font-mono text-emerald-900">worker-all-stores</code>)</strong> with lightweight Chromium memory flags. All 3 stores (<em>RK Ecommerce</em>, <em>Oz Metro</em>, <em>Aussie Walmart</em>) are served sequentially in real-time.
+              Each store is served by its <strong>store-specific worker</strong> and by <code className="bg-white/80 px-1.5 py-0.5 rounded border border-emerald-200 font-mono text-emerald-900">worker-all-stores</code>. Fresh jobs wait briefly for the specialist, then become eligible for unified overflow.
             </p>
             <p className="text-xs text-gray-600 leading-relaxed">
-              The 3 individual single-store workers are safely parked (<code className="bg-white/80 px-1.5 py-0.5 rounded border border-amber-200 font-mono text-amber-900">LISTFLOW_WORKER_ENABLED=false</code>) incurring <strong>$0 active cost</strong>, remaining fully configured and ready for on-demand parallel burst scaling whenever needed.
+              Whole jobs remain single-owner. Database leases prevent duplicate work, while per-store eBay lanes continue to serialize eBay API calls safely.
             </p>
           </div>
         </div>

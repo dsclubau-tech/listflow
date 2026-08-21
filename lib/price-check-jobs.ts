@@ -19,6 +19,10 @@ import {
   type WorkerContext,
 } from "@/lib/job-coordination";
 import {
+  filterRunnableJobsForWorker,
+  getWorkerClaimPolicy,
+} from "@/lib/worker-claim-policy";
+import {
   runPriceCheck,
   type PriceCheckProgress,
   type PriceCheckResult,
@@ -302,8 +306,11 @@ async function findNextRunnablePriceCheckJob(storeId: string) {
   });
 }
 
-async function findRunnablePriceCheckJobs(storeId: string) {
-  return prisma.priceCheckJob.findMany({
+async function findRunnablePriceCheckJobs(
+  storeId: string,
+  worker?: WorkerContext,
+) {
+  const jobs = await prisma.priceCheckJob.findMany({
     where: {
       storeId,
       status: { in: [...ACTIVE_JOB_STATUSES] },
@@ -312,6 +319,9 @@ async function findRunnablePriceCheckJobs(storeId: string) {
     orderBy: { createdAt: "asc" },
     take: 10,
   });
+
+  const policy = worker ? await getWorkerClaimPolicy(storeId, worker) : null;
+  return filterRunnableJobsForWorker(jobs, worker, policy);
 }
 
 async function markJobProductCompleted(
@@ -852,7 +862,7 @@ export async function runNextPriceCheckJobForStore(
   worker?: WorkerContext
 ) {
   const jobs = worker
-    ? await findRunnablePriceCheckJobs(storeId)
+    ? await findRunnablePriceCheckJobs(storeId, worker)
     : await findNextRunnablePriceCheckJob(storeId).then((job) => (job ? [job] : []));
 
   for (const job of jobs) {

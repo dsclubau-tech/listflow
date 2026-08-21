@@ -38,6 +38,10 @@ import {
   withJobLeases,
   type WorkerContext,
 } from "@/lib/job-coordination";
+import {
+  filterRunnableJobsForWorker,
+  getWorkerClaimPolicy,
+} from "@/lib/worker-claim-policy";
 import { logger } from "@/lib/logger";
 import {
   chunkInventoryReviseItems,
@@ -1930,7 +1934,8 @@ async function runEbayActionJob(jobId: string, worker?: WorkerContext) {
       "EBAY_ACTION",
       job.id,
       worker,
-      actionLabel(job.type)
+      actionLabel(job.type),
+      job.createdAt,
     ),
     () => runEbayActionJobClaimed(job.id)
   );
@@ -1991,7 +1996,7 @@ export async function runNextEbayActionJobForStore(
   storeId: string,
   worker?: WorkerContext
 ) {
-  const jobs = await prisma.ebayActionJob.findMany({
+  const candidates = await prisma.ebayActionJob.findMany({
     where: {
       storeId,
       status: { in: ACTIVE_ACTION_JOB_STATUSES },
@@ -2000,6 +2005,8 @@ export async function runNextEbayActionJobForStore(
     orderBy: { createdAt: "asc" },
     take: 5,
   });
+  const policy = worker ? await getWorkerClaimPolicy(storeId, worker) : null;
+  const jobs = filterRunnableJobsForWorker(candidates, worker, policy);
 
   for (const job of jobs) {
     try {

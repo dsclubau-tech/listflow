@@ -8,7 +8,9 @@ import {
   PriceCheckJobStatus,
 } from "@/app/generated/prisma/enums";
 import type { Prisma } from "@/app/generated/prisma/client";
+import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
+import type { WorkerRole } from "@/lib/worker-routing";
 
 export const JOB_LEASE_TTL_MS = Number(
   process.env.LISTFLOW_WORKER_LEASE_TTL_MS ?? 90_000
@@ -53,6 +55,7 @@ type TransactionClient = Prisma.TransactionClient;
 export type WorkerContext = {
   workerId: string;
   workerName: string;
+  workerRole: WorkerRole;
 };
 
 type LeaseRecord = {
@@ -78,6 +81,7 @@ type LeaseInput = {
   details?: Prisma.InputJsonValue;
   gateKey?: string;
   conflictWhere?: Prisma.JobLeaseWhereInput;
+  queuedAt?: Date;
 };
 
 export type SerializedJobLease = {
@@ -209,8 +213,29 @@ async function acquireJobLeases(input: LeaseInput) {
         });
       });
     });
+    logger.info("worker/lease", "Worker claimed job resources", {
+      storeId: input.storeId,
+      jobType: input.jobType,
+      jobId: input.jobId,
+      workerId: input.worker.workerId,
+      workerName: input.worker.workerName,
+      workerRole: input.worker.workerRole,
+      resources,
+      details: input.details ?? {},
+      queueAgeMs: input.queuedAt
+        ? Math.max(0, Date.now() - input.queuedAt.getTime())
+        : null,
+    });
   } catch (error) {
     if (error instanceof JobConflictError) {
+      logger.debug("worker/lease", "Worker claim deferred by an active lease", {
+        storeId: input.storeId,
+        jobType: input.jobType,
+        jobId: input.jobId,
+        workerId: input.worker.workerId,
+        workerRole: input.worker.workerRole,
+        conflicts: error.conflicts,
+      });
       throw error;
     }
 
@@ -247,13 +272,21 @@ async function releaseJobLeases(
   jobId: string,
   worker: WorkerContext
 ) {
-  await prisma.jobLease.deleteMany({
+  const released = await prisma.jobLease.deleteMany({
     where: {
       storeId,
       jobType,
       jobId,
       workerId: worker.workerId,
     },
+  });
+  logger.info("worker/lease", "Worker released job resources", {
+    storeId,
+    jobType,
+    jobId,
+    workerId: worker.workerId,
+    workerRole: worker.workerRole,
+    released: released.count,
   });
 }
 
@@ -264,7 +297,7 @@ async function renewJobLeases(
   worker: WorkerContext
 ) {
   const now = new Date();
-  await prisma.jobLease.updateMany({
+  const renewed = await prisma.jobLease.updateMany({
     where: {
       storeId,
       jobType,
@@ -275,6 +308,14 @@ async function renewJobLeases(
       renewedAt: now,
       expiresAt: leaseExpiresAt(),
     },
+  });
+  logger.debug("worker/lease", "Worker renewed job resources", {
+    storeId,
+    jobType,
+    jobId,
+    workerId: worker.workerId,
+    workerRole: worker.workerRole,
+    renewed: renewed.count,
   });
 }
 
@@ -319,6 +360,7 @@ export function getPriceCheckLeaseInput(job: {
   scope: PriceCheckJobScope;
   productIds: string[];
   total: number;
+  createdAt?: Date;
 }, worker: WorkerContext): LeaseInput | null {
   if (!job.storeId) {
     return null;
@@ -343,6 +385,7 @@ export function getPriceCheckLeaseInput(job: {
         scope: job.scope,
         total: job.total,
       },
+      queuedAt: job.createdAt,
     };
   }
 
@@ -359,6 +402,7 @@ export function getPriceCheckLeaseInput(job: {
       scope: job.scope,
       total: job.total,
     },
+    queuedAt: job.createdAt,
   };
 }
 
@@ -367,7 +411,8 @@ export function getEbayReadLeaseInput(
   jobType: string,
   jobId: string,
   worker: WorkerContext,
-  label: string
+  label: string,
+  queuedAt?: Date,
 ): LeaseInput {
   return {
     storeId,
@@ -380,6 +425,7 @@ export function getEbayReadLeaseInput(
       resourceKey: { in: [EBAY_READ_KEY, EBAY_WRITE_KEY] },
     },
     details: { label, lane: "eBay read" },
+    queuedAt,
   };
 }
 
@@ -388,7 +434,8 @@ export function getEbayWriteLeaseInput(
   jobType: string,
   jobId: string,
   worker: WorkerContext,
-  label: string
+  label: string,
+  queuedAt?: Date,
 ): LeaseInput {
   return {
     storeId,
@@ -401,6 +448,7 @@ export function getEbayWriteLeaseInput(
       resourceKey: { in: [EBAY_READ_KEY, EBAY_WRITE_KEY] },
     },
     details: { label, lane: "eBay write" },
+    queuedAt,
   };
 }
 

@@ -1128,6 +1128,13 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                 >
                   <span className="font-medium">
                     {worker.workerName ?? worker.workerId ?? "Worker"}
+                    <span className="ml-1 font-normal opacity-70">
+                      ({worker.workerRole === "store-specific"
+                        ? "Store-specific"
+                        : worker.workerRole === "unified"
+                          ? "Unified"
+                          : "Legacy"})
+                    </span>
                   </span>
                   <span>
                     {worker.online ? "Online" : "Stale"} ·{" "}

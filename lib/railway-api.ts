@@ -19,7 +19,15 @@ export interface RailwayServiceUsage {
   totalCost: number;
   isActive: boolean;
   isParked: boolean;
-  statusLabel: "Active" | "Parked ($0 active cost)";
+  workerRole: "unified" | "store-specific" | "legacy" | null;
+  coverage: string;
+  activeLeaseCount: number;
+  serviceState: "active" | "parked" | "stale" | "deployed";
+  statusLabel:
+    | "Active"
+    | "Parked ($0 active cost)"
+    | "Stale heartbeat"
+    | "Deployed — no heartbeat";
 }
 
 export interface WorkerTelemetrySnapshot {
@@ -277,6 +285,7 @@ export async function fetchRailwayUsageReport(): Promise<RailwayUsageReport> {
       string,
       { cpuHours: number; memoryGBHours: number; networkEgressGB: number }
     >();
+    const coverageByWorkerId = new Map<string, Set<string>>();
 
     for (const entry of json.data?.usage ?? []) {
       const serviceId = entry.tags?.serviceId;
@@ -300,18 +309,60 @@ export async function fetchRailwayUsageReport(): Promise<RailwayUsageReport> {
     }
 
     // Check recent active worker heartbeats from the database to determine live service status
-    const activeWorkerIds = new Set<string>();
-    const activeWorkerNames = new Set<string>();
+    const heartbeatByWorkerId = new Map<
+      string,
+      {
+        workerName: string;
+        workerRole: "unified" | "store-specific" | "legacy";
+        lastSeenAt: Date;
+      }
+    >();
+    const activeLeaseCountByWorkerId = new Map<string, number>();
     try {
       const { prisma } = await import("@/lib/prisma");
-      const recentCutoff = new Date(Date.now() - 5 * 60 * 1000); // 5 minutes
-      const activeHeartbeats = await prisma.workerHeartbeat.findMany({
-        where: { lastSeenAt: { gt: recentCutoff } },
-        select: { workerId: true, workerName: true },
-      });
-      for (const hb of activeHeartbeats) {
-        activeWorkerIds.add(hb.workerId.toLowerCase());
-        activeWorkerNames.add(hb.workerName.toLowerCase());
+      const [heartbeats, leases] = await Promise.all([
+        prisma.workerHeartbeat.findMany({
+          orderBy: { lastSeenAt: "desc" },
+          select: {
+            workerId: true,
+            workerName: true,
+            workerRole: true,
+            lastSeenAt: true,
+            store: { select: { loginId: true, name: true } },
+          },
+        }),
+        prisma.jobLease.findMany({
+          where: {
+            expiresAt: { gt: now },
+            NOT: { jobType: "GATE" },
+          },
+          select: { workerId: true },
+        }),
+      ]);
+      for (const heartbeat of heartbeats) {
+        const key = heartbeat.workerId.toLowerCase();
+        const coverage = coverageByWorkerId.get(key) ?? new Set<string>();
+        coverage.add(heartbeat.store.loginId ?? heartbeat.store.name);
+        coverageByWorkerId.set(key, coverage);
+        if (heartbeatByWorkerId.has(key)) {
+          continue;
+        }
+        heartbeatByWorkerId.set(key, {
+          workerName: heartbeat.workerName,
+          workerRole:
+            heartbeat.workerRole === "unified" ||
+            heartbeat.workerRole === "store-specific"
+              ? heartbeat.workerRole
+              : "legacy",
+          lastSeenAt: heartbeat.lastSeenAt,
+        });
+      }
+      for (const lease of leases) {
+        const key = lease.workerId.toLowerCase();
+        activeLeaseCountByWorkerId.set(
+          key,
+          (activeLeaseCountByWorkerId.get(key) ?? 0) + 1,
+        );
       }
     } catch {
       // Fallback if DB query fails
@@ -350,18 +401,48 @@ export async function fetchRailwayUsageReport(): Promise<RailwayUsageReport> {
         explicitParkedNames.has(name.toLowerCase()) ||
         explicitParkedNames.has(sanitizedName);
 
-      const hasActiveHeartbeat =
-        activeWorkerIds.has(name.toLowerCase()) ||
-        activeWorkerIds.has(sanitizedName) ||
-        activeWorkerIds.has(`worker-${sanitizedName}`) ||
-        Array.from(activeWorkerNames).some(
-          (wn) => wn.includes(sanitizedName) || sanitizedName.includes(wn)
-        );
-
-      const isActive =
-        !isExplicitlyParked &&
-        (hasActiveHeartbeat || activeWorkerIds.size === 0);
-      const isParked = !isActive;
+      const heartbeat =
+        heartbeatByWorkerId.get(name.toLowerCase()) ??
+        heartbeatByWorkerId.get(sanitizedName) ??
+        heartbeatByWorkerId.get(`worker-${sanitizedName}`) ??
+        null;
+      const inferredRole = name === "worker-all-stores"
+        ? "unified"
+        : name.startsWith("worker-")
+          ? "store-specific"
+          : null;
+      const workerRole = heartbeat?.workerRole ?? inferredRole;
+      const hasActiveHeartbeat = Boolean(
+        heartbeat && now.getTime() - heartbeat.lastSeenAt.getTime() <= 60_000,
+      );
+      const serviceState = isExplicitlyParked
+        ? "parked"
+        : hasActiveHeartbeat
+          ? "active"
+          : heartbeat
+            ? "stale"
+            : "deployed";
+      const isActive = serviceState === "active";
+      const isParked = serviceState === "parked";
+      const activeLeaseCount =
+        activeLeaseCountByWorkerId.get(name.toLowerCase()) ??
+        activeLeaseCountByWorkerId.get(sanitizedName) ??
+        activeLeaseCountByWorkerId.get(`worker-${sanitizedName}`) ??
+        0;
+      const explicitCoverage =
+        coverageByWorkerId.get(name.toLowerCase()) ??
+        coverageByWorkerId.get(sanitizedName) ??
+        coverageByWorkerId.get(`worker-${sanitizedName}`) ??
+        null;
+      const coverage = workerRole === "unified"
+        ? explicitCoverage?.size
+          ? Array.from(explicitCoverage).sort().join(", ")
+          : "All active stores"
+        : workerRole === "store-specific"
+          ? explicitCoverage?.size
+            ? Array.from(explicitCoverage).sort().join(", ")
+            : "One configured store"
+          : "Unknown / legacy";
 
       if (isActive) {
         activeServicesCost += costs.totalCost;
@@ -385,7 +466,18 @@ export async function fetchRailwayUsageReport(): Promise<RailwayUsageReport> {
         totalCost: costs.totalCost,
         isActive,
         isParked,
-        statusLabel: isActive ? "Active" : "Parked ($0 active cost)",
+        workerRole,
+        coverage,
+        activeLeaseCount,
+        serviceState,
+        statusLabel:
+          serviceState === "active"
+            ? "Active"
+            : serviceState === "parked"
+              ? "Parked ($0 active cost)"
+              : serviceState === "stale"
+                ? "Stale heartbeat"
+                : "Deployed — no heartbeat",
       });
     }
 

@@ -1,17 +1,18 @@
 # Railway Workers
 
-ListFlow uses three isolated Railway services, one for each store. All three
-services use the same GitHub repository, Docker image definition, Supabase
-database, and eBay application credentials. The store filter is the only
-runtime difference.
+ListFlow uses four Railway services: one unified overflow worker plus one
+store-specific worker for each store. All services use the same repository,
+Docker image, Supabase database, and eBay credentials. Store workers receive a
+three-second claim priority window; the unified worker then becomes eligible.
 
 ## Service matrix
 
-| Railway service | `LISTFLOW_WORKER_STORE_LOGIN_ID` | `LISTFLOW_WORKER_NAME` | Replicas |
-| --- | --- | --- | --- |
-| `worker-rk-ecommerce` | `store-1` | `RK Ecommerce Store Railway Worker` | 1 |
-| `worker-aussie-walmart` | `aussiewalmartonline` | `Aussie Walmart Railway Worker` | 1 |
-| `worker-oz-metro` | `oz-metro` | `Oz Metro Railway Worker` | 1 |
+| Railway service | Role | Store filter | Idle poll | Replicas |
+| --- | --- | --- | --- | --- |
+| `worker-all-stores` | `unified` | unset | `1000ms` | 1 |
+| `worker-rk-ecommerce` | `store-specific` | `store-1` | `500ms` | 1 |
+| `worker-aussie-walmart` | `store-specific` | `aussiewalmartonline` | `500ms` | 1 |
+| `worker-oz-metro` | `store-specific` | `oz-metro` | `500ms` | 1 |
 
 Do not run more than one replica of a store service until multi-replica worker
 identity and scheduling have been tested. The database leases prevent most
@@ -28,7 +29,7 @@ For each row above:
 3. Do not generate a public domain.
 4. Select one replica in the region closest to the Supabase database.
 5. Disable Railway Serverless/app sleeping.
-6. Add the two service-specific variables from the table.
+6. Add the role, store filter, and polling variables from the table.
 7. Add the shared runtime variables listed below and deploy.
 
 ## Shared runtime variables
@@ -38,10 +39,13 @@ Copy production values securely into Railway; never commit them:
 - `DATABASE_URL`
 - `LISTFLOW_DB_POOL_MAX=1`
 - `LISTFLOW_SUPABASE_TRANSACTION_POOLER=false`
-- `LISTFLOW_WORKER_ENABLED=false` while provisioning; change to `true` only
-  after the database cutover has passed validation
+- `LISTFLOW_WORKER_ENABLED=false` while provisioning; this value is mandatory
+  on Railway and must be changed to `true` only after validation
+- `LISTFLOW_WORKER_ROLE=unified` or `store-specific` as shown above
+- `LISTFLOW_WORKER_CLAIM_GRACE_MS=3000`
 - `LISTFLOW_USE_LOCAL_PLAYWRIGHT=true`
-- `LISTFLOW_WORKER_IDLE_SLEEP_MS=1000`
+- `LISTFLOW_WORKER_IDLE_SLEEP_MS` as shown in the service matrix (`1000` for
+  unified, `500` for each specialist)
 - `LISTFLOW_WORKER_ERROR_SLEEP_MS=30000`
 - `LISTFLOW_WORKER_LEASE_TTL_MS=90000`
 - `LISTFLOW_PUBLIC_IMAGE_BASE_URL`
@@ -61,9 +65,10 @@ pooling on port 6543 instead.
 
 ## Cutover
 
-Start one Railway service at a time. After its worker status is online in
-ListFlow, close the matching Windows worker before submitting new work for that
-store. Verify one small job per queue type before moving to the next service.
+Start the three store-specific services first and verify each heartbeat. Start
+`worker-all-stores` last. Each store must then show exactly two workers: its
+specialist and the unified worker. Whole jobs have one owner; eBay work remains
+serialized per store while non-overlapping price-check jobs can run in parallel.
 
 The Railway image uses the Playwright 1.58.2 image to match `package-lock.json`.
 Worker logs are emitted as structured JSON to Railway stdout and are also

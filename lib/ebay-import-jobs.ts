@@ -24,6 +24,10 @@ import {
   withJobLeases,
   type WorkerContext,
 } from "@/lib/job-coordination";
+import {
+  filterRunnableJobsForWorker,
+  getWorkerClaimPolicy,
+} from "@/lib/worker-claim-policy";
 
 const BLOCKING_IMPORT_JOB_STATUSES: EbayImportJobStatus[] = [
   EbayImportJobStatus.QUEUED,
@@ -216,8 +220,11 @@ async function findActiveEbayImportJob(storeId: string) {
   });
 }
 
-async function findRunnableEbayImportJobs(storeId: string) {
-  return prisma.ebayImportJob.findMany({
+async function findRunnableEbayImportJobs(
+  storeId: string,
+  worker?: WorkerContext,
+) {
+  const jobs = await prisma.ebayImportJob.findMany({
     where: {
       storeId,
       status: { in: [...RUNNABLE_IMPORT_JOB_STATUSES] },
@@ -226,6 +233,9 @@ async function findRunnableEbayImportJobs(storeId: string) {
     orderBy: { createdAt: "asc" },
     take: 5,
   });
+
+  const policy = worker ? await getWorkerClaimPolicy(storeId, worker) : null;
+  return filterRunnableJobsForWorker(jobs, worker, policy);
 }
 
 async function updateJobSelection(jobId: string, selection: ImportSelection) {
@@ -411,7 +421,8 @@ export async function runEbayImportJob(jobId: string, worker?: WorkerContext) {
       "EBAY_IMPORT",
       job.id,
       worker,
-      "eBay import"
+      "eBay import",
+      job.createdAt,
     ),
     () => runEbayImportJobClaimed(job.id)
   );
@@ -456,7 +467,7 @@ export async function runNextEbayImportJobForStore(
   storeId: string,
   worker?: WorkerContext
 ) {
-  const jobs = await findRunnableEbayImportJobs(storeId);
+  const jobs = await findRunnableEbayImportJobs(storeId, worker);
 
   for (const job of jobs) {
     try {

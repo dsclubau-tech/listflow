@@ -19,47 +19,48 @@ model User {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  products            Product[]
-  uploadLogs          UploadLog[]
-  priceCheckJobs      PriceCheckJob[]
-  ebayImportJobs      EbayImportJob[]
-  ebayResearchJobs    EbayResearchJob[]
-  ebayResearchBatches EbayResearchBatch[]
-  ebayActionJobs      EbayActionJob[]
+  products                Product[]
+  uploadLogs              UploadLog[]
+  priceCheckJobs          PriceCheckJob[]
+  ebayImportJobs          EbayImportJob[]
+  ebayResearchJobs        EbayResearchJob[]
+  ebayResearchBatches     EbayResearchBatch[]
+  ebayActionJobs          EbayActionJob[]
   favoriteResearchQueries FavoriteResearchQuery[]
 }
 
 // --- Part 2 Models ---
 
 model Store {
-  id          String    @id @default(cuid())
+  id          String   @id @default(cuid())
   name        String
-  loginId     String?   @unique
+  loginId     String?  @unique
   password    String?
   ebayToken   String?
   ebayUserId  String?
   ebayStoreId String?
-  isActive    Boolean   @default(true)
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
-  products             Product[]
-  uploadLogs           UploadLog[]
-  policyTemplates      PolicyTemplate[]
-  ebayImportStatsCache EbayImportStatsCache?
-  ebayImportJobs       EbayImportJob[]
-  priceCheckJobs       PriceCheckJob[]
-  ebayResearchJobs     EbayResearchJob[]
-  ebayResearchBatches  EbayResearchBatch[]
-  ebayActionJobs       EbayActionJob[]
-  descriptionTemplates DescriptionTemplate[]
-  keywordBlacklist     KeywordBlacklist[]
-  supplierSettings     SupplierSettings[]
-  workerHeartbeats     WorkerHeartbeat[]
-  jobLeases            JobLease[]
-  ebayRateLimitBuckets EbayRateLimitBucket[]
-  appLogs              AppLog[]
-  ebayListingAsins     EbayListingAsin[]
+  products                Product[]
+  uploadLogs              UploadLog[]
+  policyTemplates         PolicyTemplate[]
+  ebayImportStatsCache    EbayImportStatsCache?
+  ebayImportJobs          EbayImportJob[]
+  priceCheckJobs          PriceCheckJob[]
+  ebayResearchJobs        EbayResearchJob[]
+  ebayResearchBatches     EbayResearchBatch[]
+  ebayActionJobs          EbayActionJob[]
+  descriptionTemplates    DescriptionTemplate[]
+  keywordBlacklist        KeywordBlacklist[]
+  supplierSettings        SupplierSettings[]
+  workerHeartbeats        WorkerHeartbeat[]
+  workerSchedules         WorkerSchedule[]
+  jobLeases               JobLease[]
+  ebayRateLimitBuckets    EbayRateLimitBucket[]
+  appLogs                 AppLog[]
+  ebayListingAsins        EbayListingAsin[]
   favoriteResearchQueries FavoriteResearchQuery[]
 }
 
@@ -196,50 +197,50 @@ enum PromotedAdRateStrategy {
 }
 
 model Product {
-  id            String        @id @default(cuid())
-  title         String
-  fullTitle     String?
-  description   String        @db.Text
-  price         Decimal       @db.Decimal(10, 2)
-  quantity      Int           @default(1)
-  category      String
-  categoryName  String?
-  condition     String        @default("New")
-  images        String[]
-  itemSpecifics Json          @default("{}")
-  status        ProductStatus @default(DRAFT)
-  ebayItemId    String?
-  errorMessage  String?       @db.Text
-  asin          String?
-  amazonPrice   Decimal?      @db.Decimal(10, 2)
+  id                      String                  @id @default(cuid())
+  title                   String
+  fullTitle               String?
+  description             String                  @db.Text
+  price                   Decimal                 @db.Decimal(10, 2)
+  quantity                Int                     @default(1)
+  category                String
+  categoryName            String?
+  condition               String                  @default("New")
+  images                  String[]
+  itemSpecifics           Json                    @default("{}")
+  status                  ProductStatus           @default(DRAFT)
+  ebayItemId              String?
+  errorMessage            String?                 @db.Text
+  asin                    String?
+  amazonPrice             Decimal?                @db.Decimal(10, 2)
   amazonPriceTrackingMode AmazonPriceTrackingMode @default(REGULAR)
-  amazonStockLeft Int?
-  promotedAdPercent Float      @default(0)
-  promotedAdStatus PromotedAdStatus @default(UNKNOWN)
-  promotedAdCampaignId String?
-  promotedAdCampaignName String?
-  promotedAdRateStrategy PromotedAdRateStrategy @default(UNKNOWN)
-  promotedAdSyncedAt DateTime?
-  lastPriceCheck DateTime?
-  priceCheckError String?     @db.Text
-  priceCheckFailureCode PriceCheckFailureCode?
-  holdReason      String?     @db.Text
-  internalNote    String?     @db.Text
-  shippingPolicyId String?
-  returnPolicyId   String?
-  paymentPolicyId  String?
-  policyTemplateId String?
-  templateId       String?
-  storeId       String
-  createdById   String
-  createdAt     DateTime      @default(now())
-  updatedAt     DateTime      @updatedAt
+  amazonStockLeft         Int?
+  promotedAdPercent       Float                   @default(0)
+  promotedAdStatus        PromotedAdStatus        @default(UNKNOWN)
+  promotedAdCampaignId    String?
+  promotedAdCampaignName  String?
+  promotedAdRateStrategy  PromotedAdRateStrategy  @default(UNKNOWN)
+  promotedAdSyncedAt      DateTime?
+  lastPriceCheck          DateTime?
+  priceCheckError         String?                 @db.Text
+  priceCheckFailureCode   PriceCheckFailureCode?
+  holdReason              String?                 @db.Text
+  internalNote            String?                 @db.Text
+  shippingPolicyId        String?
+  returnPolicyId          String?
+  paymentPolicyId         String?
+  policyTemplateId        String?
+  templateId              String?
+  storeId                 String
+  createdById             String
+  createdAt               DateTime                @default(now())
+  updatedAt               DateTime                @updatedAt
 
-  store         Store         @relation(fields: [storeId], references: [id])
-  createdBy     User          @relation(fields: [createdById], references: [id])
-  uploadLogs    UploadLog[]
-  variants      Variant[]
-  priceHistory  PriceHistory[]
+  store        Store          @relation(fields: [storeId], references: [id])
+  createdBy    User           @relation(fields: [createdById], references: [id])
+  uploadLogs   UploadLog[]
+  variants     Variant[]
+  priceHistory PriceHistory[]
 
   @@index([storeId, status])
   @@index([storeId, asin])
@@ -267,27 +268,27 @@ model EbayListingAsin {
 }
 
 model Variant {
-  id               String        @id @default(cuid())
-  sku              String?
-  title            String
-  images           String[]
-  buyPrice         Decimal       @db.Decimal(10, 2)
-  feesPercent      Float         @default(0)
-  feesFixed        Float         @default(0)
-  profitPercent    Float         @default(0)
-  profitFixed      Float         @default(0)
+  id                String        @id @default(cuid())
+  sku               String?
+  title             String
+  images            String[]
+  buyPrice          Decimal       @db.Decimal(10, 2)
+  feesPercent       Float         @default(0)
+  feesFixed         Float         @default(0)
+  profitPercent     Float         @default(0)
+  profitFixed       Float         @default(0)
   promotedAdPercent Float         @default(0)
-  sellPrice        Decimal       @db.Decimal(10, 2)
-  quantity         Int           @default(1)
-  status           VariantStatus @default(IN_STOCK)
-  automation       String?
-  includeShipping  Boolean       @default(true)
-  allowMarketplace Boolean       @default(true)
-  roundCents       Float?
-  itemSpecifics    Json          @default("{}")
-  productId        String
-  createdAt        DateTime      @default(now())
-  updatedAt        DateTime      @updatedAt
+  sellPrice         Decimal       @db.Decimal(10, 2)
+  quantity          Int           @default(1)
+  status            VariantStatus @default(IN_STOCK)
+  automation        String?
+  includeShipping   Boolean       @default(true)
+  allowMarketplace  Boolean       @default(true)
+  roundCents        Float?
+  itemSpecifics     Json          @default("{}")
+  productId         String
+  createdAt         DateTime      @default(now())
+  updatedAt         DateTime      @updatedAt
 
   product      Product        @relation(fields: [productId], references: [id], onDelete: Cascade)
   priceHistory PriceHistory[]
@@ -296,20 +297,20 @@ model Variant {
 }
 
 model PriceHistory {
-  id                String   @id @default(cuid())
-  productId         String
-  variantId         String?
-  previousPrice     Decimal  @db.Decimal(10, 2)
-  newPrice          Decimal  @db.Decimal(10, 2)
-  previousSellPrice Decimal  @db.Decimal(10, 2)
-  newSellPrice      Decimal  @db.Decimal(10, 2)
-  changePercent     Float
-  ebayRevised       Boolean  @default(false)
-  errorMessage      String?  @db.Text
-  source            PriceCheckSource @default(LIVE)
+  id                      String                  @id @default(cuid())
+  productId               String
+  variantId               String?
+  previousPrice           Decimal                 @db.Decimal(10, 2)
+  newPrice                Decimal                 @db.Decimal(10, 2)
+  previousSellPrice       Decimal                 @db.Decimal(10, 2)
+  newSellPrice            Decimal                 @db.Decimal(10, 2)
+  changePercent           Float
+  ebayRevised             Boolean                 @default(false)
+  errorMessage            String?                 @db.Text
+  source                  PriceCheckSource        @default(LIVE)
   amazonPriceTrackingMode AmazonPriceTrackingMode @default(REGULAR)
-  appliedAt         DateTime?
-  createdAt         DateTime @default(now())
+  appliedAt               DateTime?
+  createdAt               DateTime                @default(now())
 
   product Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
   variant Variant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
@@ -320,30 +321,30 @@ model PriceHistory {
 }
 
 model PriceCheckJob {
-  id            String              @id @default(cuid())
-  userId        String
-  storeId       String?
-  scope         PriceCheckJobScope
-  status        PriceCheckJobStatus @default(QUEUED)
-  productIds    String[]            @default([])
-  completedProductIds String[]       @default([])
-  total         Int                 @default(0)
-  checked       Int                 @default(0)
-  changed       Int                 @default(0)
-  pendingReview Int                 @default(0)
-  failed        Int                 @default(0)
-  skipped       Int                 @default(0)
-  reason        String?             @db.Text
-  errorMessage  String?             @db.Text
-  createdAt     DateTime            @default(now())
-  updatedAt     DateTime            @updatedAt
-  startedAt     DateTime?
-  completedAt   DateTime?
-  dismissedAt   DateTime?
+  id                  String              @id @default(cuid())
+  userId              String
+  storeId             String?
+  scope               PriceCheckJobScope
+  status              PriceCheckJobStatus @default(QUEUED)
+  productIds          String[]            @default([])
+  completedProductIds String[]            @default([])
+  total               Int                 @default(0)
+  checked             Int                 @default(0)
+  changed             Int                 @default(0)
+  pendingReview       Int                 @default(0)
+  failed              Int                 @default(0)
+  skipped             Int                 @default(0)
+  reason              String?             @db.Text
+  errorMessage        String?             @db.Text
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
+  startedAt           DateTime?
+  completedAt         DateTime?
+  dismissedAt         DateTime?
   autoHoldActionJobId String?
-  autoHoldQueued Int                 @default(0)
+  autoHoldQueued      Int                 @default(0)
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   store Store? @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([userId, status])
@@ -367,9 +368,9 @@ model UploadLog {
   errorMessage String?      @db.Text
   createdAt    DateTime     @default(now())
 
-  product      Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
-  store        Store        @relation(fields: [storeId], references: [id])
-  user         User         @relation(fields: [userId], references: [id])
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  store   Store   @relation(fields: [storeId], references: [id])
+  user    User    @relation(fields: [userId], references: [id])
 
   @@index([productId])
   @@index([storeId, createdAt])
@@ -391,14 +392,14 @@ model UploadedImage {
 }
 
 model EbayImportStatsCache {
-  id             String   @id @default(cuid())
-  storeId        String   @unique
-  activeListings Int
-  listingIds     String[] @default([])
-  listingSummaries Json   @default("[]")
-  fetchedAt      DateTime @default(now())
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id               String   @id @default(cuid())
+  storeId          String   @unique
+  activeListings   Int
+  listingIds       String[] @default([])
+  listingSummaries Json     @default("[]")
+  fetchedAt        DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
@@ -446,32 +447,32 @@ model EbayImportJob {
 }
 
 model EbayResearchJob {
-  id             String                @id @default(cuid())
-  userId         String
-  storeId        String
-  batchId        String?
-  status         EbayResearchJobStatus @default(QUEUED)
-  mode           EbayResearchMode
+  id              String                      @id @default(cuid())
+  userId          String
+  storeId         String
+  batchId         String?
+  status          EbayResearchJobStatus       @default(QUEUED)
+  mode            EbayResearchMode
   conditionFilter EbayResearchConditionFilter @default(ANY)
-  query          String
-  limit          Int                   @default(50)
-  attempts       Int                   @default(0)
-  activeCount    Int                   @default(0)
-  soldCount      Int                   @default(0)
-  activeSummary  Json                  @default("{}")
-  soldSummary    Json                  @default("{}")
-  activeResults  Json                  @default("[]")
-  soldResults    Json                  @default("[]")
-  warningMessage String?               @db.Text
-  errorMessage   String?               @db.Text
-  createdAt      DateTime              @default(now())
-  updatedAt      DateTime              @updatedAt
-  startedAt      DateTime?
-  completedAt    DateTime?
-  expiresAt      DateTime?
+  query           String
+  limit           Int                         @default(50)
+  attempts        Int                         @default(0)
+  activeCount     Int                         @default(0)
+  soldCount       Int                         @default(0)
+  activeSummary   Json                        @default("{}")
+  soldSummary     Json                        @default("{}")
+  activeResults   Json                        @default("[]")
+  soldResults     Json                        @default("[]")
+  warningMessage  String?                     @db.Text
+  errorMessage    String?                     @db.Text
+  createdAt       DateTime                    @default(now())
+  updatedAt       DateTime                    @updatedAt
+  startedAt       DateTime?
+  completedAt     DateTime?
+  expiresAt       DateTime?
 
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  user  User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store Store              @relation(fields: [storeId], references: [id], onDelete: Cascade)
   batch EbayResearchBatch? @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
   @@index([batchId])
@@ -483,23 +484,23 @@ model EbayResearchJob {
 }
 
 model EbayResearchBatch {
-  id          String                  @id @default(cuid())
-  userId      String
-  storeId     String
-  status      EbayResearchBatchStatus @default(QUEUED)
-  total       Int                     @default(0)
-  completed   Int                     @default(0)
-  failed      Int                     @default(0)
+  id            String                  @id @default(cuid())
+  userId        String
+  storeId       String
+  status        EbayResearchBatchStatus @default(QUEUED)
+  total         Int                     @default(0)
+  completed     Int                     @default(0)
+  failed        Int                     @default(0)
   cooldownUntil DateTime?
-  createdAt   DateTime                @default(now())
-  updatedAt   DateTime                @updatedAt
-  startedAt   DateTime?
-  completedAt DateTime?
-  pausedAt    DateTime?
-  expiresAt   DateTime?
+  createdAt     DateTime                @default(now())
+  updatedAt     DateTime                @updatedAt
+  startedAt     DateTime?
+  completedAt   DateTime?
+  pausedAt      DateTime?
+  expiresAt     DateTime?
 
-  user  User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  user  User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store Store             @relation(fields: [storeId], references: [id], onDelete: Cascade)
   jobs  EbayResearchJob[]
 
   @@index([storeId, status])
@@ -558,6 +559,7 @@ model WorkerHeartbeat {
   storeId    String
   workerId   String
   workerName String
+  workerRole String   @default("legacy")
   status     String   @default("ONLINE")
   lastSeenAt DateTime @default(now())
   startedAt  DateTime @default(now())
@@ -570,6 +572,27 @@ model WorkerHeartbeat {
   @@unique([storeId, workerId])
   @@index([storeId, lastSeenAt])
   @@index([lastSeenAt])
+}
+
+model WorkerSchedule {
+  id              String    @id @default(cuid())
+  storeId         String
+  taskKey         String
+  nextRunAt       DateTime  @default(now())
+  claimedBy       String?
+  claimedByName   String?
+  claimExpiresAt  DateTime?
+  lastStartedAt   DateTime?
+  lastCompletedAt DateTime?
+  lastError       String?   @db.Text
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, taskKey])
+  @@index([nextRunAt])
+  @@index([claimExpiresAt])
 }
 
 model JobLease {
@@ -596,14 +619,14 @@ model JobLease {
 }
 
 model EbayRateLimitBucket {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   storeId       String
   apiKind       String
-  nextAllowedAt DateTime @default(now())
+  nextAllowedAt DateTime  @default(now())
   blockedUntil  DateTime?
-  lastError     String?  @db.Text
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  lastError     String?   @db.Text
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
 
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
@@ -621,7 +644,7 @@ model AppLog {
   environment String?
 
   context     String
-  message     String   @db.Text
+  message     String  @db.Text
   fingerprint String
   requestId   String?
   traceId     String?
@@ -676,7 +699,7 @@ model DescriptionTemplate {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  store     Store?   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store? @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([storeId])
 }
@@ -692,68 +715,68 @@ model PolicyTemplate {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  store            Store    @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([storeId])
 }
 
 model KeywordBlacklist {
-  id                     String   @id @default(cuid())
-  storeId                String?
-  keyword                String
-  removeFromTitle        Boolean  @default(false)
-  removeFromDescription  Boolean  @default(true)
-  createdAt              DateTime @default(now())
+  id                    String   @id @default(cuid())
+  storeId               String?
+  keyword               String
+  removeFromTitle       Boolean  @default(false)
+  removeFromDescription Boolean  @default(true)
+  createdAt             DateTime @default(now())
 
-  store                  Store?   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store? @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([storeId])
 }
 
 model SupplierSettings {
-  id                    String   @id @default(cuid())
-  storeId               String?
-  supplierName          String   @default("Amazon AU")
+  id           String  @id @default(cuid())
+  storeId      String?
+  supplierName String  @default("Amazon AU")
 
-  defaultQuantity       Int      @default(1)
-  defaultCountry        String   @default("Australia")
-  defaultZipcode        String   @default("3170")
-  defaultShippingMethod String   @default("Cheapest with tracking")
+  defaultQuantity       Int     @default(1)
+  defaultCountry        String  @default("Australia")
+  defaultZipcode        String  @default("3170")
+  defaultShippingMethod String  @default("Cheapest with tracking")
   defaultTemplateId     String?
 
   defaultShippingPolicyId String?
   defaultPaymentPolicyId  String?
   defaultReturnPolicyId   String?
 
-  ebayFeePercent        Float    @default(13.0)
-  fixedFeeAmount        Float    @default(0.33)
-  additionalProfitPercent Float  @default(0)
-  additionalProfitFixed   Float  @default(0)
-  minimumProfit         Float    @default(1.0)
+  ebayFeePercent          Float @default(13.0)
+  fixedFeeAmount          Float @default(0.33)
+  additionalProfitPercent Float @default(0)
+  additionalProfitFixed   Float @default(0)
+  minimumProfit           Float @default(1.0)
 
-  capitalizeTitle       Boolean  @default(false)
-  autofillBrand         Boolean  @default(true)
-  allowVeroKeywords     Boolean  @default(false)
-  privateListing        Boolean  @default(false)
+  capitalizeTitle   Boolean @default(false)
+  autofillBrand     Boolean @default(true)
+  allowVeroKeywords Boolean @default(false)
+  privateListing    Boolean @default(false)
 
-  defaultWeightUnit     String   @default("Kg")
-  automaticSkuFilling   Boolean  @default(true)
-  minProductQuantity    Int      @default(2)
-  maxShippingDays       Int      @default(25)
-  primeOnly             Boolean  @default(true)
-  priceTrackingEnabled  Boolean  @default(false)
+  defaultWeightUnit           String  @default("Kg")
+  automaticSkuFilling         Boolean @default(true)
+  minProductQuantity          Int     @default(2)
+  maxShippingDays             Int     @default(25)
+  primeOnly                   Boolean @default(true)
+  priceTrackingEnabled        Boolean @default(false)
   autoHoldOnPriceCheckFailure Boolean @default(true)
-  priceCheckHour        Int      @default(6)
-  scrapePostcode        String   @default("2217")
+  priceCheckHour              Int     @default(6)
+  scrapePostcode              String  @default("2217")
 
-  storeNumber           Int      @default(1)
+  storeNumber Int @default(1)
 
-  defaultItemSpecifics  Json     @default("{}")
+  defaultItemSpecifics Json @default("{}")
 
-  createdAt             DateTime @default(now())
-  updatedAt             DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  store                 Store?   @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store Store? @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, supplierName])
   @@index([storeId])
