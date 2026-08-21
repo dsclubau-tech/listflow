@@ -1097,14 +1097,14 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
       )}
 
       {modalState && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/50 px-4 py-6">
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-gray-900/50 p-2 sm:p-4">
           <div
-            className="max-h-full w-full max-w-2xl overflow-y-auto rounded-lg bg-white shadow-xl"
+            className="max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl bg-white shadow-2xl"
             role="dialog"
             aria-modal="true"
           >
             {modalState === "confirm" && (
-              <div className="p-6">
+              <div className="p-4 sm:p-6">
                 <h2 className="text-lg font-semibold text-gray-900">Confirm Import</h2>
                 <dl className="mt-5 grid gap-4 rounded-md border border-gray-200 p-4 text-sm sm:grid-cols-2">
                   <div>
@@ -1157,7 +1157,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
             )}
 
             {modalState === "importing" && (
-              <div className="p-6" aria-live="polite">
+              <div className="p-4 sm:p-6" aria-live="polite">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <h2 className="text-lg font-semibold text-gray-900">
@@ -1258,7 +1258,7 @@ export default function EbayImportClient({ stores }: EbayImportClientProps) {
             )}
 
             {modalState === "complete" && (
-              <div className="p-6">
+              <div className="p-4 sm:p-6">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <h2 className="text-lg font-semibold text-gray-900">
                     {error

@@ -355,11 +355,13 @@ function ActionButton({
   onClick,
   disabled,
   tone = "default",
+  className = "",
 }: {
   children: React.ReactNode;
   onClick: () => void;
   disabled?: boolean;
   tone?: "default" | "primary" | "danger";
+  className?: string;
 }) {
   const classes =
     tone === "primary"
@@ -373,7 +375,7 @@ function ActionButton({
       type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`rounded border px-2.5 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${classes}`}
+      className={`rounded border px-3 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${classes} ${className}`}
     >
       {children}
     </button>
@@ -1291,7 +1293,42 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
         </div>
       </div>
 
-      <div className="mb-6 grid gap-3 md:grid-cols-5">
+      {/* ── Mobile Filter Tabs (< md) ── */}
+      <div className="mb-4 md:hidden flex gap-2 overflow-x-auto no-scrollbar pb-1">
+        {FILTER_OPTIONS.map((option) => {
+          const selected = activeFilter === option.id;
+          const count = getFilterCount(adjustedSummary, data, option.id);
+
+          return (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => {
+                setActiveFilter(option.id);
+                setSelectedProductIds([]);
+              }}
+              aria-pressed={selected}
+              className={`flex-shrink-0 flex items-center gap-2 rounded-lg px-3.5 py-2 text-xs font-medium transition-colors border ${
+                selected
+                  ? "border-primary bg-primary text-white shadow-xs"
+                  : "border-gray-200 bg-white text-gray-700 hover:bg-gray-50"
+              }`}
+            >
+              <span>{option.label}</span>
+              <span
+                className={`rounded-full px-1.5 py-0.2 text-[11px] font-semibold ${
+                  selected ? "bg-white/20 text-white" : "bg-gray-100 text-gray-700"
+                }`}
+              >
+                {count}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── Desktop Filter Grid (>= md) ── */}
+      <div className="mb-6 hidden md:grid gap-3 md:grid-cols-5">
         {FILTER_OPTIONS.map((option) => {
           const selected = activeFilter === option.id;
           const count = getFilterCount(adjustedSummary, data, option.id);
@@ -1390,7 +1427,90 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                     : "Dismiss visible"}
               </ActionButton>
             </SectionHeader>
-            <div className="overflow-x-auto">
+
+            {/* ── Mobile Card List (< lg) ── */}
+            <div className="lg:hidden divide-y divide-gray-100 p-3 space-y-3">
+              {activeQueues.pendingReviews.length === 0 ? (
+                <div className="text-center py-6 text-sm text-gray-500">No pending price reviews.</div>
+              ) : (
+                activeQueues.pendingReviews.map((item) => {
+                  const isSelected = selectedProductIds.includes(item.product.id);
+                  return (
+                    <div
+                      key={item.product.id}
+                      className={`rounded-xl border p-3.5 space-y-2.5 transition-colors ${
+                        isSelected ? "border-orange-300 bg-orange-50/50" : "border-gray-200 bg-white shadow-2xs"
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${item.product.title}`}
+                          checked={isSelected}
+                          onChange={() => toggleSelectProduct(item.product.id)}
+                          className="mt-0.5 h-5 w-5 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium text-sm text-gray-900 leading-snug">{item.product.title}</div>
+                          {item.pendingCount > 1 && (
+                            <div className="mt-0.5 text-xs text-amber-700 font-medium">
+                              {item.pendingCount} pending variant changes
+                            </div>
+                          )}
+                          <div className="mt-1">
+                            <ProductLinks product={item.product} />
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 bg-gray-50 rounded-lg p-2.5 text-xs">
+                        <div>
+                          <span className="text-gray-500 block">Buy Price:</span>
+                          <span className="font-medium">{formatMoney(item.previousPrice)} → {formatMoney(item.newPrice)}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500 block">Sell Price:</span>
+                          <span className="font-medium">{formatMoney(item.previousSellPrice)} → {formatMoney(item.newSellPrice)}</span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500 block">Change:</span>
+                          <span className={`font-semibold ${Number(item.changeAmount) > 0 ? "text-red-700" : Number(item.changeAmount) < 0 ? "text-emerald-700" : "text-gray-700"}`}>
+                            {formatSignedMoney(item.changeAmount)}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500 block">Profit:</span>
+                          <span className={`font-semibold ${item.profit === null ? "text-gray-500" : Number(item.profit) < 0 ? "text-red-700" : "text-emerald-700"}`}>
+                            {formatMoney(item.profit)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 pt-1">
+                        <ActionButton
+                          onClick={() => applyReview(item)}
+                          disabled={runningAction === `apply:${item.product.id}`}
+                          tone="primary"
+                          className="flex-1 justify-center py-2"
+                        >
+                          {runningAction === `apply:${item.product.id}` ? "Applying..." : "Apply"}
+                        </ActionButton>
+                        <ActionButton
+                          onClick={() => dismissReview(item)}
+                          disabled={runningAction === `dismiss:${item.product.id}`}
+                          className="flex-1 justify-center py-2"
+                        >
+                          {runningAction === `dismiss:${item.product.id}` ? "Dismissing..." : "Dismiss"}
+                        </ActionButton>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* ── Desktop Table (>= lg) ── */}
+            <div className="hidden lg:block overflow-x-auto">
             <table className="min-w-[980px] w-full text-left">
               <thead className="bg-gray-50 text-xs font-medium uppercase tracking-wide text-gray-500">
                 <tr>
@@ -1556,6 +1676,80 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
               </>
             )}
           </SectionHeader>
+
+          {/* ── Mobile Card List (< lg) ── */}
+          <div className="lg:hidden divide-y divide-gray-100 p-3 space-y-3">
+            {activeQueues.failedChecks.length === 0 ? (
+              <div className="text-center py-6 text-sm text-gray-500">No failed price checks.</div>
+            ) : (
+              activeQueues.failedChecks.map((item: FailedCheckActionItem) => {
+                const isSelected = selectedProductIds.includes(item.product.id);
+                return (
+                  <div
+                    key={item.product.id}
+                    className={`rounded-xl border p-3.5 space-y-2.5 transition-colors ${
+                      isSelected ? "border-orange-300 bg-orange-50/50" : "border-gray-200 bg-white shadow-2xs"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${item.product.title}`}
+                        checked={isSelected}
+                        onChange={() => toggleSelectProduct(item.product.id)}
+                        className="mt-0.5 h-5 w-5 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-sm text-gray-900 leading-snug">{item.product.title}</div>
+                        <div className="mt-1">
+                          <ProductLinks product={item.product} />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg bg-red-50 p-2.5 text-xs text-red-700">
+                      <span className="font-semibold block mb-0.5">Error:</span>
+                      {item.errorMessage}
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs text-gray-500">
+                      <span>Last checked:</span>
+                      <span>{formatDateTime(item.lastPriceCheck)}</span>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-2 pt-1">
+                      <ActionButton
+                        onClick={() => retryCheck(item.product)}
+                        disabled={runningAction === `retry:${item.product.id}`}
+                        tone="primary"
+                        className="flex-1 justify-center py-2"
+                      >
+                        {runningAction === `retry:${item.product.id}` ? "Starting..." : "Retry"}
+                      </ActionButton>
+                      <ActionButton
+                        onClick={() => holdProduct(item.product)}
+                        disabled={runningAction === `hold:${item.product.id}`}
+                        className="flex-1 justify-center py-2"
+                      >
+                        Hold
+                      </ActionButton>
+                      <ActionButton
+                        onClick={() => endProduct(item.product)}
+                        disabled={runningAction === `end:${item.product.id}`}
+                        tone="danger"
+                        className="py-2"
+                      >
+                        End
+                      </ActionButton>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* ── Desktop Table (>= lg) ── */}
+          <div className="hidden lg:block overflow-x-auto">
           <table className="w-full text-left">
             <thead className="bg-gray-50 text-xs font-medium uppercase tracking-wide text-gray-500">
               <tr>
@@ -1641,6 +1835,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
               )}
             </tbody>
           </table>
+          </div>
         </section>
         )}
 
@@ -1682,6 +1877,62 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
               </ActionButton>
             )}
           </SectionHeader>
+
+          {/* ── Mobile Card List (< lg) ── */}
+          <div className="lg:hidden divide-y divide-gray-100 p-3 space-y-3">
+            {activeQueues.lowStock.length === 0 ? (
+              <div className="text-center py-6 text-sm text-gray-500">No low-stock products.</div>
+            ) : (
+              activeQueues.lowStock.map((item: LowStockActionItem) => {
+                const isSelected = selectedProductIds.includes(item.product.id);
+                return (
+                  <div
+                    key={item.product.id}
+                    className={`rounded-xl border p-3.5 space-y-2.5 transition-colors ${
+                      isSelected ? "border-orange-300 bg-orange-50/50" : "border-gray-200 bg-white shadow-2xs"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${item.product.title}`}
+                        checked={isSelected}
+                        onChange={() => toggleSelectProduct(item.product.id)}
+                        className="mt-0.5 h-5 w-5 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-sm text-gray-900 leading-snug">{item.product.title}</div>
+                        <div className="mt-1">
+                          <ProductLinks product={item.product} />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between bg-amber-50 rounded-lg p-2.5">
+                      <span className="text-xs text-amber-900 font-medium">Amazon Stock:</span>
+                      <span className="rounded-full bg-amber-200/80 px-2.5 py-0.5 text-xs font-bold text-amber-900">
+                        {item.amazonStockLeft ?? "?"} left
+                      </span>
+                    </div>
+
+                    <div className="pt-1">
+                      <ActionButton
+                        onClick={() => holdProduct(item.product)}
+                        disabled={runningAction === `hold:${item.product.id}`}
+                        tone="primary"
+                        className="w-full justify-center py-2"
+                      >
+                        Hold product
+                      </ActionButton>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* ── Desktop Table (>= lg) ── */}
+          <div className="hidden lg:block overflow-x-auto">
           <table className="w-full text-left">
             <thead className="bg-gray-50 text-xs font-medium uppercase tracking-wide text-gray-500">
               <tr>
@@ -1750,6 +2001,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
               )}
             </tbody>
           </table>
+          </div>
         </section>
         )}
 
@@ -1799,6 +2051,74 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                   : `End visible (${activeQueues.onHold.length})`}
             </ActionButton>
           </SectionHeader>
+
+          {/* ── Mobile Card List (< lg) ── */}
+          <div className="lg:hidden divide-y divide-gray-100 p-3 space-y-3">
+            {activeQueues.onHold.length === 0 ? (
+              <div className="text-center py-6 text-sm text-gray-500">No on-hold products.</div>
+            ) : (
+              activeQueues.onHold.map((item: OnHoldActionItem) => {
+                const isSelected = selectedProductIds.includes(item.product.id);
+                return (
+                  <div
+                    key={item.product.id}
+                    className={`rounded-xl border p-3.5 space-y-2.5 transition-colors ${
+                      isSelected ? "border-orange-300 bg-orange-50/50" : "border-gray-200 bg-white shadow-2xs"
+                    }`}
+                  >
+                    <div className="flex items-start gap-3">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${item.product.title}`}
+                        checked={isSelected}
+                        onChange={() => toggleSelectProduct(item.product.id)}
+                        className="mt-0.5 h-5 w-5 rounded border-gray-300 text-orange-600 focus:ring-orange-500 cursor-pointer"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-sm text-gray-900 leading-snug">{item.product.title}</div>
+                        <div className="mt-1">
+                          <ProductLinks product={item.product} />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-lg bg-gray-50 p-2.5 text-xs text-gray-700 space-y-1">
+                      <div>
+                        <span className="font-semibold text-gray-500 block">Reason:</span>
+                        <span className="font-medium text-gray-800">{item.reason}</span>
+                      </div>
+                      <div className="flex items-center justify-between pt-1 border-t border-gray-200/60">
+                        <span className="text-gray-500">Quantity:</span>
+                        <span className="font-semibold">{item.quantity}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <ActionButton
+                        onClick={() => resumeProduct(item.product)}
+                        disabled={runningAction === `resume:${item.product.id}`}
+                        tone="primary"
+                        className="flex-1 justify-center py-2"
+                      >
+                        Resume
+                      </ActionButton>
+                      <ActionButton
+                        onClick={() => endProduct(item.product)}
+                        disabled={runningAction === `end:${item.product.id}`}
+                        tone="danger"
+                        className="flex-1 justify-center py-2"
+                      >
+                        End
+                      </ActionButton>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+
+          {/* ── Desktop Table (>= lg) ── */}
+          <div className="hidden lg:block overflow-x-auto">
           <table className="w-full text-left">
             <thead className="bg-gray-50 text-xs font-medium uppercase tracking-wide text-gray-500">
               <tr>
@@ -1876,8 +2196,10 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
               )}
             </tbody>
           </table>
+          </div>
         </section>
         )}
+
 
         {activeFilter === "jobs" && (
           <section className="overflow-hidden rounded-md border border-gray-200 bg-white">
@@ -1885,8 +2207,8 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
               title="Jobs"
               count={getCurrentJobCount(data)}
             />
-            <div className="border-b border-gray-200 px-4 py-3">
-              <div className="inline-flex overflow-hidden rounded-md border border-gray-300 bg-white">
+            <div className="border-b border-gray-200 px-3 sm:px-4 py-2.5 sm:py-3 overflow-x-auto no-scrollbar">
+              <div className="inline-flex overflow-hidden rounded-md border border-gray-300 bg-white whitespace-nowrap">
                 {JOB_PANEL_FILTERS.map((option) => {
                   const selected = jobPanelFilter === option.id;
 

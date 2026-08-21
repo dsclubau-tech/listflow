@@ -10,6 +10,8 @@ interface SidebarProps {
   userEmail: string;
   collapsed?: boolean;
   onToggle?: () => void;
+  mobileOpen?: boolean;
+  onMobileClose?: () => void;
 }
 
 export default function Sidebar({
@@ -17,6 +19,8 @@ export default function Sidebar({
   userEmail,
   collapsed = false,
   onToggle,
+  mobileOpen = false,
+  onMobileClose,
 }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
@@ -129,143 +133,201 @@ export default function Sidebar({
 
   const userInitial = (userName || userEmail || "U").charAt(0).toUpperCase();
 
-  return (
-    <aside
-      className={`fixed inset-y-0 left-0 bg-primary flex flex-col z-30 transition-all duration-300 ease-in-out ${
-        collapsed ? "w-16" : "w-64"
-      }`}
-    >
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-5 border-b border-white/15 h-16">
-        {!collapsed ? (
-          <div>
-            <h1 className="text-xl font-bold text-white leading-none">ListFlow</h1>
-            <p className="text-xs text-tertiary/70 mt-1">eBay listing tool</p>
-          </div>
-        ) : (
-          <div className="mx-auto font-bold text-white text-lg tracking-wider">
-            LF
-          </div>
-        )}
+  const renderNavLinks = (isMobile = false) => (
+    <nav className="flex-1 px-2 py-4 space-y-1.5 overflow-y-auto">
+      {links.map((link) => {
+        const isActive =
+          pathname === link.href || pathname.startsWith(`${link.href}/`);
 
-        {onToggle && (
-          <button
-            type="button"
-            onClick={onToggle}
-            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className={`p-1.5 rounded-lg text-tertiary/70 hover:text-white hover:bg-white/10 transition-colors ${
-              collapsed ? "mx-auto" : ""
+        return (
+          <Link
+            key={link.href}
+            href={link.href}
+            prefetch
+            onClick={() => {
+              if (isMobile && onMobileClose) {
+                onMobileClose();
+              }
+            }}
+            onFocus={() => router.prefetch(link.href)}
+            onMouseEnter={() => router.prefetch(link.href)}
+            title={!isMobile && collapsed ? link.label : undefined}
+            className={`flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-colors ${
+              !isMobile && collapsed ? "justify-center px-0" : ""
+            } ${
+              isActive
+                ? "bg-tertiary text-primary ring-1 ring-inset ring-secondary"
+                : "text-tertiary/80 hover:text-white hover:bg-white/10"
             }`}
           >
-            <svg
-              className="w-5 h-5"
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              {collapsed ? (
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M13 5l7 7-7 7M5 5l7 7-7 7"
-                />
-              ) : (
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M11 19l-7-7 7-7m8 14l-7-7 7-7"
-                />
-              )}
-            </svg>
-          </button>
-        )}
-      </div>
+            {link.icon}
+            {(isMobile || !collapsed) && <span>{link.label}</span>}
+          </Link>
+        );
+      })}
+    </nav>
+  );
 
-      {/* Navigation Links */}
-      <nav className="flex-1 px-2 py-4 space-y-1.5 overflow-y-auto">
-        {links.map((link) => {
-          const isActive =
-            pathname === link.href || pathname.startsWith(`${link.href}/`);
-
-          return (
-            <Link
-              key={link.href}
-              href={link.href}
-              prefetch
-              onFocus={() => router.prefetch(link.href)}
-              onMouseEnter={() => router.prefetch(link.href)}
-              title={collapsed ? link.label : undefined}
-              className={`flex items-center gap-3 px-3 py-2.5 rounded-md text-sm font-medium transition-colors ${
-                collapsed ? "justify-center px-0" : ""
-              } ${
-                isActive
-                  ? "bg-tertiary text-primary ring-1 ring-inset ring-secondary"
-                  : "text-tertiary/80 hover:text-white hover:bg-white/10"
-              }`}
-            >
-              {link.icon}
-              {!collapsed && <span>{link.label}</span>}
-            </Link>
-          );
-        })}
-      </nav>
-
-      {/* User Section */}
-      <div className="p-3 border-t border-white/15">
-        {!collapsed ? (
-          <div>
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-white">{userName}</p>
-                <p className="truncate text-xs text-tertiary/70">{userEmail}</p>
-              </div>
-              <PageRefreshButton />
-            </div>
-            <button
-              type="button"
-              onClick={() => signOut({ callbackUrl: "/login" })}
-              className="mt-3 flex items-center gap-2 text-sm text-tertiary/70 hover:text-white transition-colors"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-                />
-              </svg>
-              <span>Sign out</span>
-            </button>
-          </div>
-        ) : (
-          <div className="flex flex-col items-center gap-2">
-            <div
-              title={`${userName} (${userEmail})`}
-              className="w-8 h-8 rounded-full bg-tertiary text-primary font-bold text-xs flex items-center justify-center"
-            >
-              {userInitial}
+  const renderUserSection = (isMobile = false) => (
+    <div className="p-3 border-t border-white/15">
+      {isMobile || !collapsed ? (
+        <div>
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="truncate text-sm font-medium text-white">{userName}</p>
+              <p className="truncate text-xs text-tertiary/70">{userEmail}</p>
             </div>
             <PageRefreshButton />
+          </div>
+          <button
+            type="button"
+            onClick={() => signOut({ callbackUrl: "/login" })}
+            className="mt-3 flex items-center gap-2 text-sm text-tertiary/70 hover:text-white transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+              />
+            </svg>
+            <span>Sign out</span>
+          </button>
+        </div>
+      ) : (
+        <div className="flex flex-col items-center gap-2">
+          <div
+            title={`${userName} (${userEmail})`}
+            className="w-8 h-8 rounded-full bg-tertiary text-primary font-bold text-xs flex items-center justify-center"
+          >
+            {userInitial}
+          </div>
+          <PageRefreshButton />
+          <button
+            type="button"
+            onClick={() => signOut({ callbackUrl: "/login" })}
+            title="Sign out"
+            className="p-1 text-tertiary/70 hover:text-white hover:bg-white/10 rounded transition-colors"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2}
+                d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+              />
+            </svg>
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <>
+      {/* ── Mobile Overlay & Slide-over Drawer ── */}
+      <div className="md:hidden">
+        <div
+          className={`fixed inset-0 bg-black/60 backdrop-blur-xs z-40 transition-opacity duration-300 ${
+            mobileOpen ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
+          }`}
+          onClick={onMobileClose}
+          aria-hidden={!mobileOpen}
+        />
+        <aside
+          className={`fixed inset-y-0 left-0 w-72 bg-primary flex flex-col z-50 transform transition-transform duration-300 ease-in-out shadow-2xl ${
+            mobileOpen ? "translate-x-0" : "-translate-x-full"
+          }`}
+          aria-label="Mobile Navigation"
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 py-4 border-b border-white/15 h-16">
+            <div>
+              <h1 className="text-xl font-bold text-white leading-none">ListFlow</h1>
+              <p className="text-xs text-tertiary/70 mt-1">eBay listing tool</p>
+            </div>
             <button
               type="button"
-              onClick={() => signOut({ callbackUrl: "/login" })}
-              title="Sign out"
-              className="p-1 text-tertiary/70 hover:text-white hover:bg-white/10 rounded transition-colors"
+              onClick={onMobileClose}
+              className="p-2 rounded-lg text-tertiary/70 hover:text-white hover:bg-white/10 transition-colors"
+              aria-label="Close navigation"
             >
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-                />
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
           </div>
-        )}
+
+          {/* Nav links */}
+          {renderNavLinks(true)}
+
+          {/* User section */}
+          {renderUserSection(true)}
+        </aside>
       </div>
-    </aside>
+
+      {/* ── Desktop Fixed Collapsible Sidebar ── */}
+      <aside
+        className={`hidden md:flex fixed inset-y-0 left-0 bg-primary flex-col z-30 transition-all duration-300 ease-in-out ${
+          collapsed ? "w-16" : "w-64"
+        }`}
+      >
+        {/* Header */}
+        <div className="flex items-center justify-between px-4 py-5 border-b border-white/15 h-16">
+          {!collapsed ? (
+            <div>
+              <h1 className="text-xl font-bold text-white leading-none">ListFlow</h1>
+              <p className="text-xs text-tertiary/70 mt-1">eBay listing tool</p>
+            </div>
+          ) : (
+            <div className="mx-auto font-bold text-white text-lg tracking-wider">
+              LF
+            </div>
+          )}
+
+          {onToggle && (
+            <button
+              type="button"
+              onClick={onToggle}
+              title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+              className={`p-1.5 rounded-lg text-tertiary/70 hover:text-white hover:bg-white/10 transition-colors ${
+                collapsed ? "mx-auto" : ""
+              }`}
+            >
+              <svg
+                className="w-5 h-5"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                {collapsed ? (
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M13 5l7 7-7 7M5 5l7 7-7 7"
+                  />
+                ) : (
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M11 19l-7-7 7-7m8 14l-7-7 7-7"
+                  />
+                )}
+              </svg>
+            </button>
+          )}
+        </div>
+
+        {/* Navigation Links */}
+        {renderNavLinks(false)}
+
+        {/* User Section */}
+        {renderUserSection(false)}
+      </aside>
+    </>
   );
 }
+

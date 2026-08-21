@@ -2505,7 +2505,7 @@ export default function DraftsTable({
                           id={isDraftsView ? `draft-editor-${product.id}` : undefined}
                           className={
                             isProductsView
-                              ? "sticky left-0 w-[calc(100vw-20rem)] max-w-full"
+                              ? "sticky left-0 w-full max-w-[calc(100vw-1.5rem)] md:max-w-[calc(100vw-5rem)] xl:max-w-none"
                               : undefined
                           }
                         >

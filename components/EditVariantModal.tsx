@@ -617,59 +617,59 @@ export default function EditVariantModal({
     <>
       <div className="fixed inset-0 bg-black/45 z-40" onClick={onClose} />
 
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4">
         <form
           onSubmit={handleSubmit}
-          className="w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-2xl"
+          className="w-full max-w-4xl max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] overflow-hidden rounded-2xl bg-white shadow-2xl flex flex-col"
         >
-          <div className="border-b border-gray-200 px-6 py-5">
-            <div className="flex items-start justify-between gap-4">
-              <div className="flex items-center gap-4 min-w-0">
+          <div className="border-b border-gray-200 px-4 sm:px-6 py-4 sm:py-5 flex-shrink-0">
+            <div className="flex flex-wrap sm:flex-nowrap items-start justify-between gap-4">
+              <div className="flex items-center gap-3 sm:gap-4 min-w-0">
                 {heroImage ? (
                   <img
                     src={heroImage}
                     alt={form.title || productTitle}
-                    className="h-16 w-16 rounded-xl object-cover border border-gray-200"
+                    className="h-12 w-12 sm:h-16 sm:w-16 rounded-xl object-cover border border-gray-200"
                   />
                 ) : (
-                  <div className="h-16 w-16 rounded-xl border border-gray-200 bg-gray-100" />
+                  <div className="h-12 w-12 sm:h-16 sm:w-16 rounded-xl border border-gray-200 bg-gray-100" />
                 )}
                 <div className="min-w-0">
                   <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
                     {variant ? "Edit Variant" : "Add Variant"}
                   </p>
-                  <h2 className="truncate text-lg font-semibold text-gray-900">
+                  <h2 className="truncate text-base sm:text-lg font-semibold text-gray-900">
                     {productTitle}
                   </h2>
-                  <p className="truncate text-sm text-gray-500">
+                  <p className="truncate text-xs sm:text-sm text-gray-500">
                     {form.title.trim() || "Untitled variant"}
                   </p>
                 </div>
               </div>
 
               <div
-                className={`rounded-xl border px-4 py-3 text-right ${
+                className={`rounded-xl border px-3 sm:px-4 py-2 sm:py-3 text-right flex-shrink-0 ${
                   isNegativeTotalProfit
                     ? "border-red-200 bg-red-50"
                     : "border-emerald-200 bg-emerald-50"
                 }`}
               >
                 <p
-                  className={`text-xs font-medium uppercase tracking-wide ${
+                  className={`text-[11px] sm:text-xs font-medium uppercase tracking-wide ${
                     isNegativeTotalProfit ? "text-red-700" : "text-emerald-700"
                   }`}
                 >
                   Total Profit
                 </p>
                 <p
-                  className={`text-xl font-semibold ${
+                  className={`text-lg sm:text-xl font-semibold ${
                     isNegativeTotalProfit ? "text-red-800" : "text-emerald-900"
                   }`}
                 >
                   ${totalProfit.toFixed(2)}
                 </p>
                 <p
-                  className={`text-xs ${
+                  className={`text-[11px] sm:text-xs ${
                     isNegativeTotalProfit ? "text-red-700" : "text-emerald-800"
                   }`}
                 >
@@ -696,7 +696,7 @@ export default function EditVariantModal({
             </div>
           </div>
 
-          <div className="max-h-[70vh] overflow-y-auto px-6 py-5">
+          <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 sm:py-5">
             {activeTab === "pricing" && (
               <div className="grid gap-4 md:grid-cols-2">
                 <div>

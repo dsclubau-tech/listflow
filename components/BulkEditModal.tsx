@@ -789,18 +789,18 @@ export default function BulkEditModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/45 px-4 py-8"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-2 sm:p-4"
       onClick={closeModal}
     >
       <div
-        className="max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-lg bg-white shadow-xl"
+        className="max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-xl bg-white shadow-2xl flex flex-col"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="flex items-start justify-between gap-4 border-b border-gray-200 px-6 py-5">
+        <div className="flex items-start justify-between gap-4 border-b border-gray-200 px-4 sm:px-6 py-4 sm:py-5 flex-shrink-0">
           <div>
-            <h2 className="text-xl font-semibold text-gray-900">
+            <h2 className="text-lg sm:text-xl font-semibold text-gray-900">
               Bulk Edit{" "}
-              <span className="text-sm font-medium text-gray-500">
+              <span className="text-xs sm:text-sm font-medium text-gray-500">
                 ({selectedCount} products)
               </span>
             </h2>
@@ -817,7 +817,7 @@ export default function BulkEditModal({
           </button>
         </div>
 
-        <div className="max-h-[calc(90vh-150px)] overflow-y-auto px-6 py-5">
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 sm:py-5">
           <div className="relative inline-block">
             <button
               type="button"
@@ -831,7 +831,7 @@ export default function BulkEditModal({
               Add item to edit
             </button>
             {menuOpen && (
-              <div className="absolute left-0 top-full z-10 mt-2 w-80 overflow-hidden rounded-md border border-gray-200 bg-white shadow-lg">
+              <div className="absolute left-0 top-full z-10 mt-2 w-72 sm:w-80 max-w-[calc(100vw-3rem)] overflow-hidden rounded-md border border-gray-200 bg-white shadow-lg">
                 <div className="border-b border-gray-100 p-2">
                   <input
                     type="search"
@@ -858,75 +858,69 @@ export default function BulkEditModal({
                           </span>
                         )}
                         {definition.disabled && (
-                          <span className="rounded-full border border-gray-200 px-1.5 py-0.5 text-[11px] font-medium text-gray-400">
-                            Later
+                          <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-400">
+                            Coming soon
                           </span>
                         )}
                       </span>
                     </button>
                   ))}
                   {filteredFields.length === 0 && (
-                    <div className="px-4 py-3 text-sm text-gray-400">No fields</div>
+                    <div className="px-4 py-3 text-sm text-gray-500">
+                      No matching fields
+                    </div>
                   )}
                 </div>
               </div>
             )}
           </div>
 
-          <div className="mt-5 space-y-3 border-t border-gray-200 pt-5">
+          <div className="mt-4 space-y-3">
             {items.map((item) => (
               <div
                 key={item.id}
-                className="grid gap-3 rounded-md border border-gray-200 bg-white p-3 sm:grid-cols-[170px_1fr_32px]"
+                className="rounded-lg border border-gray-200 bg-gray-50 p-4"
               >
-                <div className="flex min-h-10 items-center text-sm font-semibold text-gray-700">
-                  {fieldLabel(item.field)}
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="text-sm font-semibold text-gray-900">
+                    {fieldLabel(item.field)}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeItem(item.id)}
+                    className="text-xs font-semibold text-red-600 hover:text-red-800"
+                  >
+                    Remove
+                  </button>
                 </div>
-                <div>{renderValueControl(item)}</div>
-                <button
-                  type="button"
-                  onClick={() => removeItem(item.id)}
-                  disabled={activeJob || terminalJob}
-                  className="inline-flex h-8 w-8 items-center justify-center rounded text-gray-400 transition-colors hover:bg-quaternary-soft hover:text-quaternary disabled:cursor-not-allowed disabled:opacity-50"
-                  aria-label={`Remove ${fieldLabel(item.field)}`}
-                >
-                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18 18 6M6 6l12 12" />
-                  </svg>
-                </button>
+                {renderValueControl(item)}
               </div>
             ))}
             {items.length === 0 && (
-              <div className="rounded-md border border-dashed border-gray-200 px-4 py-8 text-center text-sm text-gray-400">
-                No bulk edit fields selected.
+              <div className="rounded-lg border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500">
+                Choose fields above to start bulk editing.
               </div>
             )}
           </div>
 
-          {validationError && !activeJob && !terminalJob && (
-            <p className="mt-3 text-sm text-red-600">{validationError}</p>
+          {validationError && (
+            <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              {validationError}
+            </div>
           )}
 
           {job && (
-            <div
-              className={`mt-5 rounded-md border px-4 py-3 ${
-                job.failed > 0
-                  ? "border-red-200 bg-red-50"
-                  : terminalJob
-                    ? "border-emerald-200 bg-emerald-50"
-                    : "border-blue-200 bg-blue-50"
-              }`}
-            >
+            <div className="mt-4 rounded-md border border-gray-200 bg-gray-50 p-3">
               <ActionProgressBar
                 label={
-                  job.status === "QUEUED"
-                    ? "Saved locally. Waiting for worker to revise eBay."
-                    : job.status === "RUNNING"
-                      ? "Revising eBay listings"
+                  terminalJob
+                    ? job.failed > 0
+                      ? "Bulk edit completed with errors"
                       : "Bulk edit complete"
+                    : "Applying bulk edits"
                 }
                 percent={progressPercent}
-                detail={`${job.processed}/${job.total} processed, ${job.succeeded} succeeded, ${job.failed} failed`}
+                detail={`${job.processed}/${job.total} processed (${job.succeeded} succeeded, ${job.failed} failed)`}
                 tone={job.failed > 0 ? "red" : terminalJob ? "green" : "blue"}
               />
               {job.errors.length > 0 && (
@@ -959,7 +953,7 @@ export default function BulkEditModal({
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-3 border-t border-gray-200 px-6 py-4">
+        <div className="flex items-center justify-end gap-3 border-t border-gray-200 px-4 sm:px-6 py-3.5 sm:py-4 flex-shrink-0">
           <button
             type="button"
             onClick={closeModal}

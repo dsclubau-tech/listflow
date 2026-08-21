@@ -1934,7 +1934,7 @@ export default function ProductsPageClient({
               </div>
             )}
           </div>
-          <div className="inline-flex overflow-hidden rounded-md border border-gray-300 bg-white shadow-sm">
+          <div className="inline-flex max-w-full overflow-x-auto no-scrollbar rounded-md border border-gray-300 bg-white shadow-sm whitespace-nowrap">
             {PRODUCT_FILTER_OPTIONS.map((option) => {
               const selected = option.value === displayedProductFilter;
               const loading =
