@@ -20,6 +20,7 @@ import {
 } from "@/lib/amazon-price-tracking";
 import { getPriceCheckPrerequisiteIssue } from "@/lib/price-check-eligibility";
 import { getPriceCheckFailureCode } from "@/lib/price-check-failures";
+import { getLowStockResolvedUpdate } from "@/lib/low-stock-products";
 
 const PRICE_TOLERANCE = 0.01;
 const MIN_SAFE_PRODUCT_DELAY_MS = 1000;
@@ -513,6 +514,10 @@ export async function runPriceCheck(
         }
 
         const amazonStockUpdate = getAmazonStockUpdate(scrapedAmazonStockLeft);
+        const lowStockResolvedUpdate = getLowStockResolvedUpdate(
+          product,
+          scrapedAmazonStockLeft
+        );
 
         if (currentAmazonPrice === null) {
           await recordProductFailure({
@@ -553,6 +558,7 @@ export async function runPriceCheck(
               data: {
                 amazonPrice: currentAmazonPriceDecimal,
                 ...amazonStockUpdate,
+                ...lowStockResolvedUpdate,
                 lastPriceCheck: checkedAt,
                 priceCheckError: null,
                 priceCheckFailureCode: null,
@@ -618,6 +624,7 @@ export async function runPriceCheck(
               data: {
                 amazonPrice: toMoneyDecimal(currentAmazonPrice),
                 ...amazonStockUpdate,
+                ...lowStockResolvedUpdate,
                 lastPriceCheck: checkedAt,
                 priceCheckError: null,
                 priceCheckFailureCode: null,
@@ -695,6 +702,7 @@ export async function runPriceCheck(
               data: {
                 amazonPrice: toMoneyDecimal(currentAmazonPrice),
                 ...amazonStockUpdate,
+                ...lowStockResolvedUpdate,
                 lastPriceCheck: checkedAt,
                 priceCheckError: null,
                 priceCheckFailureCode: null,
@@ -815,6 +823,7 @@ export async function runPriceCheck(
             data: {
               amazonPrice: toMoneyDecimal(currentAmazonPrice),
               ...amazonStockUpdate,
+              ...lowStockResolvedUpdate,
               lastPriceCheck: checkedAt,
               priceCheckError: null,
               priceCheckFailureCode: null,

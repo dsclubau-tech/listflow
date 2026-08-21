@@ -46,7 +46,7 @@ const CURRENT_RESEARCH_BATCH_STATUSES = new Set([
 ]);
 const ACTIVE_RESEARCH_BATCH_STATUSES = new Set(["QUEUED", "RUNNING", "PAUSING"]);
 const PRICE_CHECK_JOB_STORAGE_KEY = "listflow.products.activePriceCheckJobId";
-const ACTIVE_JOB_ROUTE_REFRESH_MS = 5_000;
+const ACTIVE_JOB_ROUTE_REFRESH_MS = 3_000;
 type ActionCenterFilter =
   | "pendingReviews"
   | "failedChecks"
@@ -434,41 +434,54 @@ function SectionHeader({
   );
 }
 
-function getFilterCount(data: ActionCenterData, filter: ActionCenterFilter) {
+function getFilterCount(
+  summary: ActionCenterData["summary"],
+  data: ActionCenterData,
+  filter: ActionCenterFilter
+) {
   if (filter === "pendingReviews") {
-    return data.summary.pendingReviews;
+    return summary.pendingReviews;
   }
 
   if (filter === "failedChecks") {
-    return data.summary.failedChecks;
+    return summary.failedChecks;
   }
 
   if (filter === "lowStock") {
-    return data.summary.lowStock;
+    return summary.lowStock;
   }
 
   if (filter === "onHold") {
-    return data.summary.onHold;
+    return summary.onHold;
   }
 
   return getCurrentJobCount(data);
 }
 
-function hasFilterContent(data: ActionCenterData, filter: ActionCenterFilter) {
+function hasFilterContent(
+  queues: {
+    pendingReviews: unknown[];
+    failedChecks: unknown[];
+    lowStock: unknown[];
+    onHold: unknown[];
+  },
+  data: ActionCenterData,
+  filter: ActionCenterFilter
+) {
   if (filter === "pendingReviews") {
-    return data.queues.pendingReviews.length > 0;
+    return queues.pendingReviews.length > 0;
   }
 
   if (filter === "failedChecks") {
-    return data.queues.failedChecks.length > 0;
+    return queues.failedChecks.length > 0;
   }
 
   if (filter === "lowStock") {
-    return data.queues.lowStock.length > 0;
+    return queues.lowStock.length > 0;
   }
 
   if (filter === "onHold") {
-    return data.queues.onHold.length > 0;
+    return queues.onHold.length > 0;
   }
 
   return (
@@ -479,9 +492,17 @@ function hasFilterContent(data: ActionCenterData, filter: ActionCenterFilter) {
   );
 }
 
-function getDefaultFilter(data: ActionCenterData): ActionCenterFilter {
+function getDefaultFilter(
+  queues: {
+    pendingReviews: unknown[];
+    failedChecks: unknown[];
+    lowStock: unknown[];
+    onHold: unknown[];
+  },
+  data: ActionCenterData
+): ActionCenterFilter {
   return (
-    FILTER_OPTIONS.find((option) => hasFilterContent(data, option.id))?.id ??
+    FILTER_OPTIONS.find((option) => hasFilterContent(queues, data, option.id))?.id ??
     "pendingReviews"
   );
 }
@@ -494,8 +515,63 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
     initialPercent: 12,
     maxWaitingPercent: 90,
   });
+  const [dismissedProductIds, setDismissedProductIds] = useState<Set<string>>(
+    () => new Set()
+  );
+
+  useEffect(() => {
+    setDismissedProductIds(new Set());
+  }, [data]);
+
+  const activeQueues = useMemo(
+    () => ({
+      pendingReviews: data.queues.pendingReviews.filter(
+        (item) => !dismissedProductIds.has(item.product.id)
+      ),
+      failedChecks: data.queues.failedChecks.filter(
+        (item) => !dismissedProductIds.has(item.product.id)
+      ),
+      lowStock: data.queues.lowStock.filter(
+        (item) => !dismissedProductIds.has(item.product.id)
+      ),
+      onHold: data.queues.onHold.filter(
+        (item) => !dismissedProductIds.has(item.product.id)
+      ),
+    }),
+    [data.queues, dismissedProductIds]
+  );
+
+  const adjustedSummary = useMemo(() => {
+    if (dismissedProductIds.size === 0) {
+      return data.summary;
+    }
+    return {
+      ...data.summary,
+      pendingReviews: Math.max(
+        0,
+        data.summary.pendingReviews -
+          (data.queues.pendingReviews.length - activeQueues.pendingReviews.length)
+      ),
+      failedChecks: Math.max(
+        0,
+        data.summary.failedChecks -
+          (data.queues.failedChecks.length - activeQueues.failedChecks.length)
+      ),
+      lowStock: Math.max(
+        0,
+        data.summary.lowStock -
+          (data.queues.lowStock.length - activeQueues.lowStock.length)
+      ),
+      onHold: Math.max(
+        0,
+        data.summary.onHold -
+          (data.queues.onHold.length - activeQueues.onHold.length)
+      ),
+    };
+  }, [data.summary, data.queues, activeQueues, dismissedProductIds.size]);
+
   const [activeFilter, setActiveFilter] = useState<ActionCenterFilter>(() =>
-    getDefaultFilter(data)
+    getDefaultFilter(data.queues, data)
   );
   const [jobPanelFilter, setJobPanelFilter] =
     useState<JobPanelFilter>("current");
@@ -503,19 +579,19 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
 
   const visibleProductIds = useMemo(() => {
     if (activeFilter === "pendingReviews") {
-      return data.queues.pendingReviews.map((item) => item.product.id);
+      return activeQueues.pendingReviews.map((item) => item.product.id);
     }
     if (activeFilter === "failedChecks") {
-      return data.queues.failedChecks.map((item) => item.product.id);
+      return activeQueues.failedChecks.map((item) => item.product.id);
     }
     if (activeFilter === "lowStock") {
-      return data.queues.lowStock.map((item) => item.product.id);
+      return activeQueues.lowStock.map((item) => item.product.id);
     }
     if (activeFilter === "onHold") {
-      return data.queues.onHold.map((item) => item.product.id);
+      return activeQueues.onHold.map((item) => item.product.id);
     }
     return [];
-  }, [activeFilter, data.queues]);
+  }, [activeFilter, activeQueues]);
 
   const selectedInActiveTab = useMemo(() => {
     const visibleSet = new Set(visibleProductIds);
@@ -638,24 +714,40 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
   }, [hasActiveJobs, router]);
 
   useEffect(() => {
-    if (hasFilterContent(data, activeFilter)) {
+    if (hasFilterContent(activeQueues, data, activeFilter)) {
       return;
     }
 
-    setActiveFilter(getDefaultFilter(data));
-  }, [activeFilter, data]);
+    setActiveFilter(getDefaultFilter(activeQueues, data));
+  }, [activeFilter, activeQueues, data]);
 
   async function runAction(
     key: string,
     task: () => Promise<string>,
-    variant: ToastVariant = "success"
+    variant: ToastVariant = "success",
+    affectedProductIds?: string[]
   ) {
     setRunningAction(key);
 
     try {
       const message = await task();
+      if (affectedProductIds && affectedProductIds.length > 0) {
+        setDismissedProductIds((prev) => {
+          const next = new Set(prev);
+          for (const id of affectedProductIds) {
+            next.add(id);
+          }
+          return next;
+        });
+        setSelectedProductIds((prev) =>
+          prev.filter((id) => !affectedProductIds.includes(id))
+        );
+      }
       showToast(message, variant);
       router.refresh();
+      setTimeout(() => {
+        router.refresh();
+      }, 2500);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Action failed.";
       showToast(message, "error");
@@ -665,46 +757,59 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
   }
 
   function applyReview(item: PendingReviewActionItem) {
-    void runAction(`apply:${item.product.id}`, async () => {
-      await postJson("/api/price-check/apply", { productId: item.product.id });
-      return "Applied pending price change.";
-    });
+    void runAction(
+      `apply:${item.product.id}`,
+      async () => {
+        await postJson("/api/price-check/apply", { productId: item.product.id });
+        return "Applied pending price change.";
+      },
+      "success",
+      [item.product.id]
+    );
   }
 
   function dismissReview(item: PendingReviewActionItem) {
-    void runAction(`dismiss:${item.product.id}`, async () => {
-      await postJson("/api/price-check/dismiss", { productId: item.product.id });
-      return "Dismissed pending price change.";
-    });
+    void runAction(
+      `dismiss:${item.product.id}`,
+      async () => {
+        await postJson("/api/price-check/dismiss", { productId: item.product.id });
+        return "Dismissed pending price change.";
+      },
+      "success",
+      [item.product.id]
+    );
   }
 
   function bulkReview(action: "apply" | "dismiss", explicitProductIds?: string[]) {
     const productIds =
       explicitProductIds && explicitProductIds.length > 0
         ? explicitProductIds
-        : data.queues.pendingReviews.map((item) => item.product.id);
+        : activeQueues.pendingReviews.map((item) => item.product.id);
     const endpoint =
       action === "apply" ? "/api/price-check/bulk-apply" : "/api/price-check/bulk-dismiss";
 
-    void runAction(`bulk-${action}`, async () => {
-      if (productIds.length === 0) {
-        return "No pending reviews selected.";
-      }
+    void runAction(
+      `bulk-${action}`,
+      async () => {
+        if (productIds.length === 0) {
+          return "No pending reviews selected.";
+        }
 
-      const result = await postJson<{
-        applied?: number;
-        dismissed?: number;
-        failed?: number;
-      }>(endpoint, { productIds });
+        const result = await postJson<{
+          applied?: number;
+          dismissed?: number;
+          failed?: number;
+        }>(endpoint, { productIds });
 
-      setSelectedProductIds((prev) => prev.filter((id) => !productIds.includes(id)));
+        if (action === "apply") {
+          return `Applied ${result.applied ?? 0} price change(s). ${result.failed ?? 0} failed.`;
+        }
 
-      if (action === "apply") {
-        return `Applied ${result.applied ?? 0} price change(s). ${result.failed ?? 0} failed.`;
-      }
-
-      return `Dismissed ${result.dismissed ?? 0} price change(s).`;
-    });
+        return `Dismissed ${result.dismissed ?? 0} price change(s).`;
+      },
+      "success",
+      productIds
+    );
   }
 
   function startPriceCheckJob(
@@ -750,7 +855,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
     const targetProductIds =
       explicitProductIds && explicitProductIds.length > 0
         ? explicitProductIds
-        : data.queues.failedChecks.map((item) => item.product.id);
+        : activeQueues.failedChecks.map((item) => item.product.id);
 
     if (targetProductIds.length === 0) {
       showToast("No failed price checks to retry.", "error");
@@ -767,14 +872,19 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
   }
 
   function holdProduct(product: ActionCenterProductSummary) {
-    void runAction(`hold:${product.id}`, async () => {
-      const result = await postJson<{ held?: number; failed?: number; message?: string }>(
-        "/api/products/bulk-hold",
-        { productIds: [product.id] }
-      );
-      if (result.message) return result.message;
-      return `Put ${result.held ?? 0} product(s) on hold. ${result.failed ?? 0} failed.`;
-    });
+    void runAction(
+      `hold:${product.id}`,
+      async () => {
+        const result = await postJson<{ held?: number; failed?: number; message?: string }>(
+          "/api/products/bulk-hold",
+          { productIds: [product.id] }
+        );
+        if (result.message) return result.message;
+        return `Put ${result.held ?? 0} product(s) on hold. ${result.failed ?? 0} failed.`;
+      },
+      "success",
+      [product.id]
+    );
   }
 
   function bulkHoldProducts(explicitProductIds?: string[]) {
@@ -788,69 +898,89 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
       return;
     }
 
-    void runAction("bulk-hold", async () => {
-      const result = await postJson<{ held?: number; failed?: number; message?: string }>(
-        "/api/products/bulk-hold",
-        { productIds: targetProductIds }
-      );
-      setSelectedProductIds((prev) => prev.filter((id) => !targetProductIds.includes(id)));
-      if (result.message) return result.message;
-      return `Put ${result.held ?? 0} product(s) on hold. ${result.failed ?? 0} failed.`;
-    });
+    void runAction(
+      "bulk-hold",
+      async () => {
+        const result = await postJson<{ held?: number; failed?: number; message?: string }>(
+          "/api/products/bulk-hold",
+          { productIds: targetProductIds }
+        );
+        if (result.message) return result.message;
+        return `Put ${result.held ?? 0} product(s) on hold. ${result.failed ?? 0} failed.`;
+      },
+      "success",
+      targetProductIds
+    );
   }
 
   function holdAllLowStockProducts() {
+    const lowStockCount = adjustedSummary.lowStock;
     const confirmed = window.confirm(
-      `Put all ${data.summary.lowStock} low-stock product(s) on hold? This sets their eBay listing quantity to 0 and hides them from eBay search results.`
+      `Put all ${lowStockCount} low-stock product(s) on hold? This sets their eBay listing quantity to 0 and hides them from eBay search results.`
     );
 
     if (!confirmed) {
       return;
     }
 
-    void runAction("hold-all-low-stock", async () => {
-      const result = await postJson<{
-        total?: number;
-        message?: string;
-      }>("/api/products/bulk-hold", { allLowStock: true });
-      return (
-        result.message ??
-        `Queued ${result.total ?? 0} low-stock product(s) to put on hold.`
-      );
-    });
+    const allLowStockIds = activeQueues.lowStock.map((i) => i.product.id);
+    void runAction(
+      "hold-all-low-stock",
+      async () => {
+        const result = await postJson<{
+          total?: number;
+          message?: string;
+        }>("/api/products/bulk-hold", { allLowStock: true });
+        return (
+          result.message ??
+          `Queued ${result.total ?? 0} low-stock product(s) to put on hold.`
+        );
+      },
+      "success",
+      allLowStockIds
+    );
   }
 
   function resumeProduct(product: ActionCenterProductSummary) {
-    void runAction(`resume:${product.id}`, async () => {
-      const result = await postJson<{ resumed?: number; failed?: number; message?: string }>(
-        "/api/products/bulk-resume",
-        { productIds: [product.id] }
-      );
-      if (result.message) return result.message;
-      return `Resumed ${result.resumed ?? 0} product(s). ${result.failed ?? 0} failed.`;
-    });
+    void runAction(
+      `resume:${product.id}`,
+      async () => {
+        const result = await postJson<{ resumed?: number; failed?: number; message?: string }>(
+          "/api/products/bulk-resume",
+          { productIds: [product.id] }
+        );
+        if (result.message) return result.message;
+        return `Resumed ${result.resumed ?? 0} product(s). ${result.failed ?? 0} failed.`;
+      },
+      "success",
+      [product.id]
+    );
   }
 
   function bulkResumeProducts(explicitProductIds?: string[]) {
     const productIds =
       explicitProductIds && explicitProductIds.length > 0
         ? explicitProductIds
-        : data.queues.onHold.map((item) => item.product.id);
+        : activeQueues.onHold.map((item) => item.product.id);
 
     if (productIds.length === 0) {
       showToast("No products selected to resume.", "error");
       return;
     }
 
-    void runAction("bulk-resume", async () => {
-      const result = await postJson<{ resumed?: number; failed?: number; message?: string }>(
-        "/api/products/bulk-resume",
-        { productIds }
-      );
-      setSelectedProductIds((prev) => prev.filter((id) => !productIds.includes(id)));
-      if (result.message) return result.message;
-      return `Resumed ${result.resumed ?? 0} product(s). ${result.failed ?? 0} failed.`;
-    });
+    void runAction(
+      "bulk-resume",
+      async () => {
+        const result = await postJson<{ resumed?: number; failed?: number; message?: string }>(
+          "/api/products/bulk-resume",
+          { productIds }
+        );
+        if (result.message) return result.message;
+        return `Resumed ${result.resumed ?? 0} product(s). ${result.failed ?? 0} failed.`;
+      },
+      "success",
+      productIds
+    );
   }
 
   function endProduct(product: ActionCenterProductSummary) {
@@ -862,14 +992,19 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
       return;
     }
 
-    void runAction(`end:${product.id}`, async () => {
-      const result = await postJson<{ ended?: number; failed?: number; message?: string }>(
-        "/api/products/bulk-end",
-        { productIds: [product.id] }
-      );
-      if (result.message) return result.message;
-      return `Ended ${result.ended ?? 0} listing(s). ${result.failed ?? 0} failed.`;
-    });
+    void runAction(
+      `end:${product.id}`,
+      async () => {
+        const result = await postJson<{ ended?: number; failed?: number; message?: string }>(
+          "/api/products/bulk-end",
+          { productIds: [product.id] }
+        );
+        if (result.message) return result.message;
+        return `Ended ${result.ended ?? 0} listing(s). ${result.failed ?? 0} failed.`;
+      },
+      "success",
+      [product.id]
+    );
   }
 
   function bulkEndProducts(explicitProductIds?: string[]) {
@@ -891,15 +1026,19 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
       return;
     }
 
-    void runAction("bulk-end", async () => {
-      const result = await postJson<{ ended?: number; failed?: number; message?: string }>(
-        "/api/products/bulk-end",
-        { productIds: targetProductIds }
-      );
-      setSelectedProductIds((prev) => prev.filter((id) => !targetProductIds.includes(id)));
-      if (result.message) return result.message;
-      return `Ended ${result.ended ?? 0} listing(s). ${result.failed ?? 0} failed.`;
-    });
+    void runAction(
+      "bulk-end",
+      async () => {
+        const result = await postJson<{ ended?: number; failed?: number; message?: string }>(
+          "/api/products/bulk-end",
+          { productIds: targetProductIds }
+        );
+        if (result.message) return result.message;
+        return `Ended ${result.ended ?? 0} listing(s). ${result.failed ?? 0} failed.`;
+      },
+      "success",
+      targetProductIds
+    );
   }
 
   function cancelPriceJob(job: ActionCenterPriceCheckJob, force = false) {
@@ -1155,7 +1294,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
       <div className="mb-6 grid gap-3 md:grid-cols-5">
         {FILTER_OPTIONS.map((option) => {
           const selected = activeFilter === option.id;
-          const count = getFilterCount(data, option.id);
+          const count = getFilterCount(adjustedSummary, data, option.id);
 
           return (
             <button
@@ -1208,7 +1347,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
           <section className="overflow-hidden rounded-md border border-gray-200 bg-white">
             <SectionHeader
               title="Needs Price Review"
-              count={data.summary.pendingReviews}
+              count={adjustedSummary.pendingReviews}
               selectedCount={selectedInActiveTab.length}
               onClearSelection={clearSelection}
               viewAllHref="/products?filter=needs-changing-price"
@@ -1221,7 +1360,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                   )
                 }
                 disabled={
-                  data.queues.pendingReviews.length === 0 ||
+                  activeQueues.pendingReviews.length === 0 ||
                   runningAction === "bulk-apply"
                 }
                 tone="primary"
@@ -1240,7 +1379,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                   )
                 }
                 disabled={
-                  data.queues.pendingReviews.length === 0 ||
+                  activeQueues.pendingReviews.length === 0 ||
                   runningAction === "bulk-dismiss"
                 }
               >
@@ -1279,15 +1418,15 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {data.queues.pendingReviews.length === 0 ? (
+                {activeQueues.pendingReviews.length === 0 ? (
                   <EmptyRow colSpan={8} message="No pending price reviews." />
                 ) : (
-                  data.queues.pendingReviews.map((item) => {
+                  activeQueues.pendingReviews.map((item) => {
                     const isSelected = selectedProductIds.includes(item.product.id);
                     return (
                       <tr
                         key={item.product.id}
-                        className={isSelected ? "bg-orange-50/40" : undefined}
+                        className={`transition-colors duration-150 ${isSelected ? "bg-orange-50/40" : ""}`}
                       >
                         <td className="w-10 px-4 py-3 align-top">
                           <input
@@ -1372,7 +1511,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
           <section className="overflow-hidden rounded-md border border-gray-200 bg-white">
           <SectionHeader
             title="Failed Price Checks"
-            count={data.summary.failedChecks}
+            count={adjustedSummary.failedChecks}
             selectedCount={selectedInActiveTab.length}
             onClearSelection={clearSelection}
             viewAllHref="/products?filter=failed-on-hold"
@@ -1384,7 +1523,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                 )
               }
               disabled={
-                data.queues.failedChecks.length === 0 ||
+                activeQueues.failedChecks.length === 0 ||
                 runningAction === "bulk-retry"
               }
               tone="primary"
@@ -1393,7 +1532,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                 ? "Starting..."
                 : selectedInActiveTab.length > 0
                   ? `Retry selected (${selectedInActiveTab.length})`
-                  : `Retry all (${data.queues.failedChecks.length})`}
+                  : `Retry all (${activeQueues.failedChecks.length})`}
             </ActionButton>
             {selectedInActiveTab.length > 0 && (
               <>
@@ -1441,15 +1580,15 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {data.queues.failedChecks.length === 0 ? (
+              {activeQueues.failedChecks.length === 0 ? (
                 <EmptyRow colSpan={5} message="No failed price checks." />
               ) : (
-                data.queues.failedChecks.map((item: FailedCheckActionItem) => {
+                activeQueues.failedChecks.map((item: FailedCheckActionItem) => {
                   const isSelected = selectedProductIds.includes(item.product.id);
                   return (
                     <tr
                       key={item.product.id}
-                      className={isSelected ? "bg-orange-50/40" : undefined}
+                      className={`transition-colors duration-150 ${isSelected ? "bg-orange-50/40" : ""}`}
                     >
                       <td className="w-10 px-4 py-3 align-top">
                         <input
@@ -1509,7 +1648,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
           <section className="overflow-hidden rounded-md border border-gray-200 bg-white">
           <SectionHeader
             title="Low Amazon Stock"
-            count={data.summary.lowStock}
+            count={adjustedSummary.lowStock}
             selectedCount={selectedInActiveTab.length}
             onClearSelection={clearSelection}
             viewAllHref="/products?stockMonitoring=low-stock"
@@ -1530,7 +1669,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                 disabled={
                   workerOffline ||
                   hasActiveLowStockHoldJob ||
-                  data.summary.lowStock === 0 ||
+                  adjustedSummary.lowStock === 0 ||
                   runningAction === "hold-all-low-stock"
                 }
                 tone="primary"
@@ -1539,7 +1678,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                   ? "Queueing..."
                   : hasActiveLowStockHoldJob
                     ? "Hold queued"
-                  : `Hold all (${data.summary.lowStock})`}
+                  : `Hold all (${adjustedSummary.lowStock})`}
               </ActionButton>
             )}
           </SectionHeader>
@@ -1566,15 +1705,15 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {data.queues.lowStock.length === 0 ? (
+              {activeQueues.lowStock.length === 0 ? (
                 <EmptyRow colSpan={4} message="No low-stock products." />
               ) : (
-                data.queues.lowStock.map((item: LowStockActionItem) => {
+                activeQueues.lowStock.map((item: LowStockActionItem) => {
                   const isSelected = selectedProductIds.includes(item.product.id);
                   return (
                     <tr
                       key={item.product.id}
-                      className={isSelected ? "bg-orange-50/40" : undefined}
+                      className={`transition-colors duration-150 ${isSelected ? "bg-orange-50/40" : ""}`}
                     >
                       <td className="w-10 px-4 py-3 align-top">
                         <input
@@ -1618,7 +1757,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
           <section className="overflow-hidden rounded-md border border-gray-200 bg-white">
           <SectionHeader
             title="On Hold"
-            count={data.summary.onHold}
+            count={adjustedSummary.onHold}
             selectedCount={selectedInActiveTab.length}
             onClearSelection={clearSelection}
             viewAllHref="/products?filter=failed-on-hold"
@@ -1630,7 +1769,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                 )
               }
               disabled={
-                data.queues.onHold.length === 0 ||
+                activeQueues.onHold.length === 0 ||
                 runningAction === "bulk-resume"
               }
               tone="primary"
@@ -1639,7 +1778,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                 ? "Resuming..."
                 : selectedInActiveTab.length > 0
                   ? `Resume selected (${selectedInActiveTab.length})`
-                  : `Resume visible (${data.queues.onHold.length})`}
+                  : `Resume visible (${activeQueues.onHold.length})`}
             </ActionButton>
             <ActionButton
               onClick={() =>
@@ -1648,7 +1787,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                 )
               }
               disabled={
-                data.queues.onHold.length === 0 ||
+                activeQueues.onHold.length === 0 ||
                 runningAction === "bulk-end"
               }
               tone="danger"
@@ -1657,7 +1796,7 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                 ? "Ending..."
                 : selectedInActiveTab.length > 0
                   ? `End selected (${selectedInActiveTab.length})`
-                  : `End visible (${data.queues.onHold.length})`}
+                  : `End visible (${activeQueues.onHold.length})`}
             </ActionButton>
           </SectionHeader>
           <table className="w-full text-left">
@@ -1684,15 +1823,15 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {data.queues.onHold.length === 0 ? (
+              {activeQueues.onHold.length === 0 ? (
                 <EmptyRow colSpan={5} message="No on-hold products." />
               ) : (
-                data.queues.onHold.map((item: OnHoldActionItem) => {
+                activeQueues.onHold.map((item: OnHoldActionItem) => {
                   const isSelected = selectedProductIds.includes(item.product.id);
                   return (
                     <tr
                       key={item.product.id}
-                      className={isSelected ? "bg-orange-50/40" : undefined}
+                      className={`transition-colors duration-150 ${isSelected ? "bg-orange-50/40" : ""}`}
                     >
                       <td className="w-10 px-4 py-3 align-top">
                         <input
@@ -2132,15 +2271,15 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                       Retry visible failed checks
                     </div>
                     <div className="mt-1 text-xs text-gray-500">
-                      {data.queues.failedChecks.length} visible failed product
-                      {data.queues.failedChecks.length === 1 ? "" : "s"}.
+                      {activeQueues.failedChecks.length} visible failed product
+                      {activeQueues.failedChecks.length === 1 ? "" : "s"}.
                     </div>
                   </div>
                   <ActionButton
                     onClick={startVisibleFailedPriceCheck}
                     disabled={
                       workerOffline ||
-                      data.queues.failedChecks.length === 0 ||
+                      activeQueues.failedChecks.length === 0 ||
                       runningAction === "start-visible-failed"
                     }
                     tone="primary"
@@ -2154,15 +2293,15 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                       Check visible low-stock products
                     </div>
                     <div className="mt-1 text-xs text-gray-500">
-                      {data.queues.lowStock.length} visible low-stock product
-                      {data.queues.lowStock.length === 1 ? "" : "s"}.
+                      {activeQueues.lowStock.length} visible low-stock product
+                      {activeQueues.lowStock.length === 1 ? "" : "s"}.
                     </div>
                   </div>
                   <ActionButton
                     onClick={startVisibleLowStockPriceCheck}
                     disabled={
                       workerOffline ||
-                      data.queues.lowStock.length === 0 ||
+                      activeQueues.lowStock.length === 0 ||
                       runningAction === "start-visible-low-stock"
                     }
                     tone="primary"

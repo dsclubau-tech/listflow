@@ -21,3 +21,27 @@ export function getLowStockProductWhere(storeId: string) {
     amazonStockLeft: { not: null, lte: LOW_STOCK_THRESHOLD },
   } satisfies Prisma.ProductWhereInput;
 }
+
+export function getLowStockResolvedUpdate(
+  product: { status: string; holdReason?: string | null },
+  stockLeft: number | null | undefined
+) {
+  if (
+    product.status !== ProductStatus.ON_HOLD ||
+    !product.holdReason?.startsWith("Low Amazon stock")
+  ) {
+    return {};
+  }
+
+  const stockIsHealthy =
+    stockLeft === null ||
+    (typeof stockLeft === "number" && stockLeft > LOW_STOCK_THRESHOLD);
+
+  if (!stockIsHealthy) {
+    return {};
+  }
+
+  return {
+    holdReason: "Low Amazon stock resolved — product is back in stock on Amazon.",
+  };
+}
