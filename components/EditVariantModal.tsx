@@ -42,6 +42,7 @@ interface SupplierPricingDefaults {
   profitPercent: number;
   profitFixed: number;
   minimumProfit: number;
+  applyAdditionalProfitToExisting?: boolean;
 }
 
 interface VariantFormState {
@@ -215,6 +216,7 @@ export default function EditVariantModal({
   const [pricingDefaults, setPricingDefaults] =
     useState<SupplierPricingDefaults | null>(null);
   const pricingDefaultsRef = useRef<SupplierPricingDefaults | null>(null);
+  const [includeAdditionalProfit, setIncludeAdditionalProfit] = useState(false);
 
   useEffect(() => {
     pricingDefaultsRef.current = pricingDefaults;
@@ -227,6 +229,7 @@ export default function EditVariantModal({
 
     setActiveTab("pricing");
     setError(null);
+    setIncludeAdditionalProfit(false);
     setForm(
       buildFormState({
         variant,
@@ -271,6 +274,7 @@ export default function EditVariantModal({
           additionalProfitPercent?: number;
           additionalProfitFixed?: number;
           minimumProfit?: number;
+          applyAdditionalProfitToExisting?: boolean;
         };
 
         if (cancelled) {
@@ -283,32 +287,56 @@ export default function EditVariantModal({
           profitPercent: toFiniteNumber(data.additionalProfitPercent),
           profitFixed: toFiniteNumber(data.additionalProfitFixed),
           minimumProfit: toFiniteNumber(data.minimumProfit),
+          applyAdditionalProfitToExisting: Boolean(
+            data.applyAdditionalProfitToExisting
+          ),
         };
 
         pricingDefaultsRef.current = nextDefaults;
         setPricingDefaults(nextDefaults);
 
         setForm((prev) => {
-          // Apply supplier defaults when all fee/profit fields are still zero.
-          // This covers both new variants and existing variants that were
-          // created before the pricing fix was deployed.
-          const allFeesZero =
-            toNumber(prev.feesPercent) === 0 &&
-            toNumber(prev.feesFixed) === 0 &&
-            toNumber(prev.profitPercent) === 0 &&
-            toNumber(prev.profitFixed) === 0;
+          // When creating a new variant (variant === null), apply supplier defaults
+          // if fee/profit fields are zero.
+          if (!variant) {
+            const allFeesZero =
+              toNumber(prev.feesPercent) === 0 &&
+              toNumber(prev.feesFixed) === 0 &&
+              toNumber(prev.profitPercent) === 0 &&
+              toNumber(prev.profitFixed) === 0;
 
-          if (!allFeesZero) {
-            return prev;
+            if (!allFeesZero) {
+              return prev;
+            }
+
+            return recalculateSellPriceForState({
+              ...prev,
+              feesPercent: String(nextDefaults.feesPercent),
+              feesFixed: String(nextDefaults.feesFixed),
+              profitPercent: String(nextDefaults.profitPercent),
+              profitFixed: String(nextDefaults.profitFixed),
+              minimumProfit: String(nextDefaults.minimumProfit),
+            });
           }
 
-          return recalculateSellPriceForState({
-            ...prev,
-            feesPercent: String(nextDefaults.feesPercent),
-            feesFixed: String(nextDefaults.feesFixed),
-            profitPercent: String(nextDefaults.profitPercent),
-            profitFixed: String(nextDefaults.profitFixed),
-          });
+          // For existing variants, only add supplier additional profit once if the
+          // settings toggle is enabled.
+          if (nextDefaults.applyAdditionalProfitToExisting) {
+            setIncludeAdditionalProfit(true);
+            const currentFixed = toNumber(prev.profitFixed);
+            const currentPercent = toNumber(prev.profitPercent);
+            const nextFixed = currentFixed + nextDefaults.profitFixed;
+            const nextPercent = currentPercent + nextDefaults.profitPercent;
+
+            return recalculateSellPriceForState({
+              ...prev,
+              profitFixed: toMoneyString(nextFixed),
+              profitPercent: String(nextPercent),
+              minimumProfit: String(nextDefaults.minimumProfit),
+            });
+          }
+
+          return prev;
         });
       } catch {
         // Leave zeroed pricing defaults in place if settings are unavailable.
@@ -397,6 +425,37 @@ export default function EditVariantModal({
 
   function handleRoundCentsChange(checked: boolean) {
     setForm((prev) => recalculateSellPrice({ ...prev, roundCentsEnabled: checked }));
+  }
+
+  function handleToggleAdditionalProfit(checked: boolean) {
+    const defaults = pricingDefaultsRef.current ?? pricingDefaults ?? {
+      feesPercent: 13,
+      feesFixed: 0.33,
+      profitPercent: 0,
+      profitFixed: 14,
+      minimumProfit: 1,
+    };
+
+    setIncludeAdditionalProfit(checked);
+    setForm((prev) => {
+      const addFixed = defaults.profitFixed || 0;
+      const addPercent = defaults.profitPercent || 0;
+      const currentFixed = toNumber(prev.profitFixed);
+      const currentPercent = toNumber(prev.profitPercent);
+
+      const nextFixed = checked
+        ? currentFixed + addFixed
+        : Math.max(0, currentFixed - addFixed);
+      const nextPercent = checked
+        ? currentPercent + addPercent
+        : Math.max(0, currentPercent - addPercent);
+
+      return recalculateSellPriceForState({
+        ...prev,
+        profitFixed: toMoneyString(nextFixed),
+        profitPercent: String(nextPercent),
+      });
+    });
   }
 
   function updateSpecific(
@@ -782,6 +841,41 @@ export default function EditVariantModal({
                   />
                   <span className="text-sm text-gray-700">Round Cents to .99</span>
                 </label>
+
+                {variant && (
+                  <div
+                    onClick={() =>
+                      handleToggleAdditionalProfit(!includeAdditionalProfit)
+                    }
+                    className="flex items-center justify-between rounded-lg border border-orange-200 bg-orange-50/50 px-4 py-3 md:col-span-2 cursor-pointer hover:bg-orange-50 transition-colors select-none"
+                  >
+                    <div>
+                      <span className="text-sm font-medium text-gray-800">
+                        Include Additional Profit from Settings
+                      </span>
+                      <p className="mt-0.5 text-xs text-gray-500">
+                        {pricingDefaults &&
+                        (pricingDefaults.profitFixed > 0 ||
+                          pricingDefaults.profitPercent > 0)
+                          ? `Adds +A$${pricingDefaults.profitFixed.toFixed(
+                              2
+                            )} and +${pricingDefaults.profitPercent}% on top of existing profit.`
+                          : "Adds supplier additional profit (+A$14.00) to this variant."}
+                      </p>
+                    </div>
+                    <input
+                      type="checkbox"
+                      id="include-additional-profit-toggle"
+                      checked={includeAdditionalProfit}
+                      onChange={(event) => {
+                        event.stopPropagation();
+                        handleToggleAdditionalProfit(event.target.checked);
+                      }}
+                      onClick={(event) => event.stopPropagation()}
+                      className="h-4 w-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500 cursor-pointer"
+                    />
+                  </div>
+                )}
               </div>
             )}
 

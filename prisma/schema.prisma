@@ -750,9 +750,10 @@ model SupplierSettings {
 
   ebayFeePercent          Float @default(13.0)
   fixedFeeAmount          Float @default(0.33)
-  additionalProfitPercent Float @default(0)
-  additionalProfitFixed   Float @default(0)
-  minimumProfit           Float @default(1.0)
+  additionalProfitPercent         Float   @default(0)
+  additionalProfitFixed           Float   @default(0)
+  applyAdditionalProfitToExisting Boolean @default(false)
+  minimumProfit                   Float   @default(1.0)
 
   capitalizeTitle   Boolean @default(false)
   autofillBrand     Boolean @default(true)

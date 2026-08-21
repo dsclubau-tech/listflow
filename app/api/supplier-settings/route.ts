@@ -45,6 +45,7 @@ export async function PATCH(request: Request) {
     "fixedFeeAmount",
     "additionalProfitPercent",
     "additionalProfitFixed",
+    "applyAdditionalProfitToExisting",
     "minimumProfit",
     "capitalizeTitle",
     "autofillBrand",

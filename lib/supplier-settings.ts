@@ -53,6 +53,8 @@ export async function getOrCreateStoreSupplierSettings(storeId: string) {
       fixedFeeAmount: globalSettings?.fixedFeeAmount ?? 0.33,
       additionalProfitPercent: globalSettings?.additionalProfitPercent ?? 0,
       additionalProfitFixed: globalSettings?.additionalProfitFixed ?? 0,
+      applyAdditionalProfitToExisting:
+        globalSettings?.applyAdditionalProfitToExisting ?? false,
       minimumProfit: globalSettings?.minimumProfit ?? 1,
       capitalizeTitle: globalSettings?.capitalizeTitle ?? false,
       autofillBrand: globalSettings?.autofillBrand ?? true,

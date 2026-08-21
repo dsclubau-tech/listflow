@@ -2401,27 +2401,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                 </p>
               )}
             </div>
-
-            {/* Local promoted ad reference */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Local Promoted Ad Reference %</label>
-              <input
-                type="number"
-                min="0"
-                max="100"
-                step="0.01"
-                value={promotedAdPercent}
-                onChange={(e) => setPromotedAdPercent(e.target.value)}
-                disabled={isListed}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500 disabled:bg-gray-50 disabled:text-gray-500"
-              />
-              <p className="mt-1 text-xs text-gray-500">
-                {isListed
-                  ? "Live eBay ad rates are updated with Sync eBay Ads on Products."
-                  : "Reference only. Products filters use Sync eBay Ads for live campaign rates."}
-              </p>
-            </div>
-            </div>
+          </div>
         )}
 
         {/* ===== Tab 2 — Description ===== */}

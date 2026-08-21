@@ -2,14 +2,22 @@ import { Prisma, type Product, type Variant } from "@/app/generated/prisma/clien
 import { dedupeProductImages } from "@/lib/product-images";
 import { prisma } from "@/lib/prisma";
 import { getAutomaticSku } from "@/lib/sku";
+import { calculateSellPrice } from "@/lib/variant-pricing";
 import type { VariantPayload, VariantRecord } from "@/types/variant";
 import { variantStatuses } from "@/types/variant";
 
-type DefaultVariantSource = Pick<
-  Product,
-  "id" | "price" | "quantity" | "images" | "asin"
-> & {
+type DefaultVariantSource = {
+  id: string;
+  price: Product["price"] | number | string;
+  quantity: number;
+  images: string[];
+  asin?: string | null;
   automaticSkuFilling?: boolean | null;
+  feesPercent?: number | null;
+  feesFixed?: number | null;
+  profitPercent?: number | null;
+  profitFixed?: number | null;
+  minimumProfit?: number | null;
 };
 
 type VariantSource = Variant & {
@@ -144,8 +152,23 @@ export function normalizeVariantPayload(body: unknown): VariantPayload {
   };
 }
 
-function buildDefaultVariantData(product: DefaultVariantSource) {
+export function buildDefaultVariantData(product: DefaultVariantSource) {
   const status = product.quantity > 0 ? "IN_STOCK" : "OUT_OF_STOCK";
+  const feesPercent = Math.max(0, toNumber(product.feesPercent, 0));
+  const feesFixed = Math.max(0, toNumber(product.feesFixed, 0));
+  const profitPercent = Math.max(0, toNumber(product.profitPercent, 0));
+  const profitFixed = toNumber(product.profitFixed, 0);
+  const minimumProfit = Math.max(0, toNumber(product.minimumProfit, 0));
+  const buyPriceNumber = toNumber(product.price, 0);
+  const sellPrice = calculateSellPrice({
+    buyPrice: buyPriceNumber,
+    feesPercent,
+    feesFixed,
+    profitPercent,
+    profitFixed,
+    minimumProfit,
+    roundCents: null,
+  });
 
   return {
     sku: getAutomaticSku({
@@ -155,12 +178,12 @@ function buildDefaultVariantData(product: DefaultVariantSource) {
     title: "Default",
     images: dedupeProductImages(product.images),
     buyPrice: product.price,
-    feesPercent: 0,
-    feesFixed: 0,
-    profitPercent: 0,
-    profitFixed: 0,
+    feesPercent,
+    feesFixed,
+    profitPercent,
+    profitFixed,
     promotedAdPercent: 0,
-    sellPrice: product.price,
+    sellPrice,
     quantity: product.quantity,
     status: status as VariantPayload["status"],
     automation: null,
@@ -214,21 +237,48 @@ export async function ensureDefaultVariantForProduct(productId: string) {
             return;
           }
 
-          const supplierSettings = await tx.supplierSettings.findUnique({
-            where: {
-              storeId_supplierName: {
-                storeId: product.storeId,
+          const supplierSettings =
+            (await tx.supplierSettings.findUnique({
+              where: {
+                storeId_supplierName: {
+                  storeId: product.storeId,
+                  supplierName: "Amazon AU",
+                },
+              },
+              select: {
+                automaticSkuFilling: true,
+                ebayFeePercent: true,
+                fixedFeeAmount: true,
+                additionalProfitPercent: true,
+                additionalProfitFixed: true,
+                minimumProfit: true,
+              },
+            })) ??
+            (await tx.supplierSettings.findFirst({
+              where: {
+                storeId: null,
                 supplierName: "Amazon AU",
               },
-            },
-            select: { automaticSkuFilling: true },
-          });
+              select: {
+                automaticSkuFilling: true,
+                ebayFeePercent: true,
+                fixedFeeAmount: true,
+                additionalProfitPercent: true,
+                additionalProfitFixed: true,
+                minimumProfit: true,
+              },
+            }));
 
           await tx.variant.create({
             data: buildDefaultVariantData({
               ...product,
               automaticSkuFilling:
                 supplierSettings?.automaticSkuFilling ?? true,
+              feesPercent: supplierSettings?.ebayFeePercent ?? 13,
+              feesFixed: supplierSettings?.fixedFeeAmount ?? 0.33,
+              profitPercent: supplierSettings?.additionalProfitPercent ?? 0,
+              profitFixed: supplierSettings?.additionalProfitFixed ?? 0,
+              minimumProfit: supplierSettings?.minimumProfit ?? 1,
             }),
           });
         },

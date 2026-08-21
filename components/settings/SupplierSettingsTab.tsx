@@ -18,6 +18,7 @@ interface SupplierSettingsData {
   fixedFeeAmount: number;
   additionalProfitPercent: number;
   additionalProfitFixed: number;
+  applyAdditionalProfitToExisting?: boolean;
   minimumProfit: number;
   capitalizeTitle: boolean;
   autofillBrand: boolean;
@@ -153,6 +154,8 @@ export default function SupplierSettingsTab() {
           fixedFeeAmount: settings.fixedFeeAmount,
           additionalProfitPercent: settings.additionalProfitPercent,
           additionalProfitFixed: settings.additionalProfitFixed,
+          applyAdditionalProfitToExisting:
+            settings.applyAdditionalProfitToExisting ?? false,
           minimumProfit: settings.minimumProfit,
           capitalizeTitle: settings.capitalizeTitle,
           autofillBrand: settings.autofillBrand,
@@ -593,18 +596,30 @@ export default function SupplierSettingsTab() {
             {/* Additional Pricing Settings */}
             <section>
               <h3 className="text-sm font-semibold text-gray-800 mb-4">Additional Pricing Settings</h3>
-              <div className="space-y-3">
+              <div className="space-y-4">
                 <div className="flex items-center gap-3">
                   <ToggleSwitch checked={false} disabled />
                   <span className="text-sm text-gray-600">Set Price Cents Value</span>
                 </div>
                 <CheckRow label="Include shipping price" checked={true} disabled />
+                <div className="flex items-start gap-3 pt-1">
+                  <ToggleSwitch
+                    checked={Boolean(settings.applyAdditionalProfitToExisting)}
+                    onChange={(v) => updateField("applyAdditionalProfitToExisting", v)}
+                  />
+                  <div>
+                    <span className="text-sm text-gray-700 font-medium">
+                      Include additional profit to already uploaded products
+                    </span>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      When enabled, allows including additional profit values when editing existing products.
+                    </p>
+                  </div>
+                </div>
               </div>
             </section>
           </div>
         )}
-
-        {/* ==================== GENERAL TAB ==================== */}
         {activeSubTab === "General" && (
           <div className="space-y-8">
             {/* General */}
