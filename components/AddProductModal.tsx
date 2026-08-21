@@ -218,7 +218,7 @@ export default function AddProductModal({
       const res = await fetch("/api/scrape", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: url.trim() }),
+        body: JSON.stringify({ url: url.trim(), mode: "advanced" }),
         signal: AbortSignal.timeout(45000), // 45s timeout for direct Amazon import
       });
 
@@ -469,7 +469,7 @@ export default function AddProductModal({
                   <label className="flex min-h-11 cursor-pointer items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
                     <span>
                       <span className="font-medium text-gray-900">
-                        Regular price
+                        {regularChoice.label}
                       </span>
                       <span className="ml-2 text-gray-700">
                         A${regularChoice.price.toFixed(2)}
@@ -487,7 +487,7 @@ export default function AddProductModal({
                   <label className="flex min-h-11 cursor-pointer items-center justify-between rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm">
                     <span>
                       <span className="font-medium text-gray-900">
-                        Deal price
+                        {dealChoice.label}
                       </span>
                       <span className="ml-2 text-gray-700">
                         A${dealChoice.price.toFixed(2)}

@@ -243,3 +243,43 @@ test("extractLocalizedBuyboxPriceChoices reads Exclusive Prime price labels", ()
   assert.equal(choices.regular?.price, 179.99);
   assert.equal(choices.regular?.mode, "REGULAR");
 });
+
+test("extractLocalizedBuyboxPriceChoices returns Prime Member and Regular price cards", () => {
+  const $ = load(`
+    <main>
+      <section class="recommendation">
+        <span class="a-price"><span class="a-offscreen">$129.00</span></span>
+      </section>
+      <div id="desktop_buybox">
+        <div class="a-box">
+          <span>Prime Member Price</span>
+          <span class="a-price priceToPay">
+            <span class="a-price-symbol">$</span>
+            <span class="a-price-whole">159</span>
+            <span class="a-price-fraction">98</span>
+          </span>
+          <span>Join Prime</span>
+        </div>
+        <div class="a-box">
+          <span>Regular Price</span>
+          <span class="a-price">
+            <span class="a-price-symbol">$</span>
+            <span class="a-price-whole">249</span>
+            <span class="a-price-fraction">98</span>
+          </span>
+        </div>
+      </div>
+    </main>
+  `);
+
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0FN3LF2B8");
+
+  assert.equal(choices.deal?.price, 159.98);
+  assert.equal(choices.deal?.mode, "DEAL");
+  assert.equal(choices.deal?.label, "Prime member price");
+  assert.equal(choices.regular?.price, 249.98);
+  assert.equal(choices.regular?.mode, "REGULAR");
+  assert.equal(choices.regular?.label, "Regular price");
+  assert.notEqual(choices.deal?.price, 129);
+  assert.notEqual(choices.regular?.price, 129);
+});

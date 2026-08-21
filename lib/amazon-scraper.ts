@@ -60,6 +60,10 @@ export interface ScrapedAmazonPrice {
   price: number | null;
   stockLeft: number | null;
   priceMode?: AmazonPriceTrackingMode;
+  priceChoices?: {
+    regular: number | null;
+    deal: number | null;
+  };
 }
 
 const USER_AGENTS = [
@@ -802,7 +806,15 @@ export async function scrapeAmazonPrice(
       );
     }
 
-    return { price, stockLeft, priceMode: priceTrackingMode };
+    return {
+      price,
+      stockLeft,
+      priceMode: priceTrackingMode,
+      priceChoices: {
+        regular: priceChoices.regular?.price ?? null,
+        deal: priceChoices.deal?.price ?? null,
+      },
+    };
   } finally {
     await context.close().catch(() => {});
 

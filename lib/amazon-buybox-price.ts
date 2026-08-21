@@ -3,6 +3,11 @@ import type { AmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
 
 const SCRAPER_MIN_PRICE = 1;
 
+const DEAL_PRICE_LABEL_PATTERN =
+  /deal price|exclusive prime price|prime exclusive price|exclusive prime|prime deal|prime member price/i;
+const PRIME_MEMBER_PRICE_LABEL_PATTERN = /prime member price/i;
+const REGULAR_PRICE_LABEL_PATTERN = /regular price/i;
+
 const BUYBOX_PRICE_CONTAINER_SELECTORS = [
   "#corePrice_feature_div",
   "#corePriceDisplay_desktop_feature_div",
@@ -51,9 +56,10 @@ export type AmazonBuyboxPriceResult = {
   asin: string | null;
   containerSelector: string;
   price: number;
-  priceSource: "localized_buybox";
+  priceSource: "localized_buybox" | "rendered_selected_variant_buybox";
   selector: string;
   mode: AmazonPriceTrackingMode;
+  label: string;
 };
 
 export type AmazonBuyboxPriceChoices = {
@@ -129,7 +135,8 @@ function buildResult(
   containerSelector: string,
   selector: string,
   price: number,
-  mode: AmazonPriceTrackingMode
+  mode: AmazonPriceTrackingMode,
+  label = mode === "DEAL" ? "Deal price" : "Regular price",
 ): AmazonBuyboxPriceResult {
   return {
     asin: asin || null,
@@ -138,6 +145,7 @@ function buildResult(
     priceSource: "localized_buybox",
     selector,
     mode,
+    label,
   };
 }
 
@@ -197,13 +205,12 @@ export function extractLocalizedBuyboxPriceChoices(
 
     const containerText = normalizeText(container.text());
     const hasLabelledPriceSection =
-      /deal price|exclusive prime price|prime exclusive price|exclusive prime|prime deal|regular price/i.test(
-        containerText
-      );
+      DEAL_PRICE_LABEL_PATTERN.test(containerText) ||
+      REGULAR_PRICE_LABEL_PATTERN.test(containerText);
     const labelledDeal = extractLabelledPrice(
       containerText,
-      /deal price|exclusive prime price|prime exclusive price|exclusive prime|prime deal/i,
-      [/regular price/i]
+      DEAL_PRICE_LABEL_PATTERN,
+      [REGULAR_PRICE_LABEL_PATTERN]
     );
     if (
       labelledDeal !== null &&
@@ -214,16 +221,17 @@ export function extractLocalizedBuyboxPriceChoices(
         containerSelector,
         "label:deal-price",
         labelledDeal,
-        "DEAL"
+        "DEAL",
+        PRIME_MEMBER_PRICE_LABEL_PATTERN.test(containerText)
+          ? "Prime member price"
+          : "Deal price",
       );
     }
 
     const labelledRegular = extractLabelledPrice(
       containerText,
-      /regular price/i,
-      [
-        /deal price|exclusive prime price|prime exclusive price|exclusive prime|prime deal/i,
-      ]
+      REGULAR_PRICE_LABEL_PATTERN,
+      [DEAL_PRICE_LABEL_PATTERN]
     );
     if (
       labelledRegular !== null &&
@@ -270,16 +278,16 @@ export function extractLocalizedBuyboxPriceChoices(
         );
         const selectorLooksDeal = selector.includes("dealprice");
         const localLooksDeal =
-          /deal price|prime exclusive|exclusive prime|prime deal|with prime/i.test(
-            localNearbyText
-          );
-        const localLooksRegular = /regular price/i.test(localNearbyText);
+          DEAL_PRICE_LABEL_PATTERN.test(localNearbyText) ||
+          /with prime/i.test(localNearbyText);
+        const localLooksRegular =
+          REGULAR_PRICE_LABEL_PATTERN.test(localNearbyText);
 
         const containerLooksDeal =
-          /deal price|prime exclusive|exclusive prime|prime deal|with prime/i.test(
-            containerText
-          );
-        const containerLooksRegular = /regular price/i.test(containerText);
+          DEAL_PRICE_LABEL_PATTERN.test(containerText) ||
+          /with prime/i.test(containerText);
+        const containerLooksRegular =
+          REGULAR_PRICE_LABEL_PATTERN.test(containerText);
 
         let mode: AmazonPriceTrackingMode;
         if (selectorLooksDeal) {
@@ -302,7 +310,10 @@ export function extractLocalizedBuyboxPriceChoices(
             containerSelector,
             selector,
             price,
-            "DEAL"
+            "DEAL",
+            PRIME_MEMBER_PRICE_LABEL_PATTERN.test(localNearbyText)
+              ? "Prime member price"
+              : "Deal price",
           );
           return;
         }

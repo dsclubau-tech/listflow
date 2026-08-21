@@ -861,6 +861,50 @@ test("scrapeAmazonProductDirect uses a rendered selected-variant price fallback"
   ]);
 });
 
+test("scrapeAmazonProductDirect completes Advanced price choices with one rendered lookup", async (t) => {
+  const { scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
+  const fallbackRequests: Array<{ asin: string; postcode: string }> = [];
+
+  installFetchMock(t, [
+    { body: amazonProductHtml({ regularPrice: "$249.98" }) },
+    { body: '{"isValidAddress":1}' },
+    {
+      body: amazonProductHtml({
+        regularPrice: "$249.98",
+        postcode: "2217",
+      }),
+    },
+    {
+      body: amazonProductHtml({
+        regularPrice: "$249.98",
+        postcode: "2217",
+      }),
+    },
+  ]);
+
+  const product = await scrapeAmazonProductDirect(
+    "https://www.amazon.com.au/dp/B0TEST1234",
+    {
+      discoverAllPriceChoices: true,
+      postcode: "2217",
+      resolveMissingPriceChoices: async (request) => {
+        fallbackRequests.push(request);
+        return { regular: 249.98, deal: 159.98 };
+      },
+    },
+  );
+
+  assert.equal(product.price, 249.98);
+  assert.equal(product.amazonPriceTrackingMode, "REGULAR");
+  assert.deepEqual(product.priceChoices, {
+    regular: { price: 249.98, label: "Regular price" },
+    deal: { price: 159.98, label: "Deal price" },
+  });
+  assert.deepEqual(fallbackRequests, [
+    { asin: "B0TEST1234", postcode: "2217" },
+  ]);
+});
+
 test("renderAmazonDescription excludes comparison table content and other-product variant images", async () => {
   const { renderAmazonDescription } = await loadAmazonDirectScraper();
   const $ = load(`

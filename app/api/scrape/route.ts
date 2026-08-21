@@ -11,7 +11,10 @@ import { prisma } from "@/lib/prisma";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { getStorePolicyDefaults } from "@/lib/policy-defaults";
 import { normalizeItemSpecifics } from "@/lib/item-specifics";
-import { isAmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
+import {
+  isAmazonPriceTrackingMode,
+  type AmazonPriceTrackingMode,
+} from "@/lib/amazon-price-tracking";
 import { extractAmazonAsinFromValue } from "@/lib/amazon-direct-scraper";
 import {
   findExistingAmazonProduct,
@@ -59,6 +62,7 @@ export async function POST(request: Request) {
 
   const { url } = body;
   const allowMetadataOnly = body?.mode === "regrab";
+  const discoverAllPriceChoices = body?.mode === "advanced";
   const priceTrackingMode = isAmazonPriceTrackingMode(
     body?.amazonPriceTrackingMode
   )
@@ -116,49 +120,81 @@ export async function POST(request: Request) {
       });
     };
 
+    const resolveRenderedAmazonPrices = async (
+      asin: string,
+      postcode: string,
+      requestedPriceMode: AmazonPriceTrackingMode,
+    ) => {
+      log.info(
+        "scrape/route",
+        "Direct buybox price choice missing; starting rendered Amazon fallback",
+        {
+          asin,
+          postcode,
+          priceTrackingMode: requestedPriceMode,
+          discoverAllPriceChoices,
+        },
+      );
+
+      const { scrapeAmazonPrice } = await import("@/lib/amazon-scraper");
+      const result = await withTimeout(
+        scrapeAmazonPrice(
+          asin,
+          undefined,
+          postcode,
+          requestedPriceMode,
+        ),
+        40_000,
+        "Rendered Amazon price lookup timed out",
+      );
+
+      log.info("scrape/route", "Rendered Amazon fallback completed", {
+        asin,
+        price: result.price,
+        priceChoices: result.priceChoices,
+        priceTrackingMode: requestedPriceMode,
+      });
+
+      return result;
+    };
+
     const product = await scrapeAmazonProductDirect(url, {
       allowMetadataOnly,
+      discoverAllPriceChoices,
       onStage: logStage,
       priceTrackingMode,
       postcode:
         supplierSettings?.scrapePostcode?.trim() ||
         supplierSettings?.defaultZipcode?.trim() ||
         "2217",
-      resolveMissingPrice: async ({
-        asin,
-        postcode,
-        priceTrackingMode: requestedPriceMode,
-      }) => {
-        log.info(
-          "scrape/route",
-          "Direct buybox price missing; starting rendered Amazon fallback",
-          {
-            asin,
-            postcode,
-            priceTrackingMode: requestedPriceMode,
+      resolveMissingPriceChoices: discoverAllPriceChoices
+        ? async ({ asin, postcode }) => {
+            const result = await resolveRenderedAmazonPrices(
+              asin,
+              postcode,
+              "REGULAR",
+            );
+
+            return {
+              regular:
+                result.priceChoices?.regular ??
+                (result.priceMode === "REGULAR" ? result.price : null),
+              deal:
+                result.priceChoices?.deal ??
+                (result.priceMode === "DEAL" ? result.price : null),
+            };
+          }
+        : undefined,
+      resolveMissingPrice: discoverAllPriceChoices
+        ? undefined
+        : async ({ asin, postcode, priceTrackingMode: requestedPriceMode }) => {
+            const result = await resolveRenderedAmazonPrices(
+              asin,
+              postcode,
+              requestedPriceMode,
+            );
+            return result.price;
           },
-        );
-
-        const { scrapeAmazonPrice } = await import("@/lib/amazon-scraper");
-        const result = await withTimeout(
-          scrapeAmazonPrice(
-            asin,
-            undefined,
-            postcode,
-            requestedPriceMode,
-          ),
-          40_000,
-          "Rendered Amazon price lookup timed out",
-        );
-
-        log.info("scrape/route", "Rendered Amazon fallback completed", {
-          asin,
-          price: result.price,
-          priceTrackingMode: requestedPriceMode,
-        });
-
-        return result.price;
-      },
     });
 
     if (!allowMetadataOnly && (product.price === null || product.price <= 0)) {

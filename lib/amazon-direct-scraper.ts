@@ -53,9 +53,17 @@ export type AmazonScrapeStageLogger = (
 
 type ScrapeDirectOptions = {
   allowMetadataOnly?: boolean;
+  discoverAllPriceChoices?: boolean;
   onStage?: AmazonScrapeStageLogger;
   postcode?: string;
   priceTrackingMode?: AmazonPriceTrackingMode;
+  resolveMissingPriceChoices?: (request: {
+    asin: string;
+    postcode: string;
+  }) => Promise<{
+    regular: number | null;
+    deal: number | null;
+  }>;
   resolveMissingPrice?: (request: {
     asin: string;
     postcode: string;
@@ -1428,7 +1436,7 @@ function toScrapedPriceChoice(choice: AmazonBuyboxPriceResult | null) {
 
   return {
     price: choice.price,
-    label: getAmazonPriceTrackingLabel(choice.mode),
+    label: choice.label,
   };
 }
 
@@ -1436,6 +1444,30 @@ function toScrapedPriceChoices(choices: AmazonBuyboxPriceChoices) {
   return {
     regular: toScrapedPriceChoice(choices.regular),
     deal: toScrapedPriceChoice(choices.deal),
+  };
+}
+
+function toRenderedBuyboxPriceChoice(
+  asin: string,
+  mode: AmazonPriceTrackingMode,
+  price: number | null,
+): AmazonBuyboxPriceResult | null {
+  if (
+    typeof price !== "number" ||
+    !Number.isFinite(price) ||
+    price <= 0
+  ) {
+    return null;
+  }
+
+  return {
+    asin: asin.trim().toUpperCase() || null,
+    containerSelector: "rendered_selected_variant_buybox",
+    price: Math.round(price * 100) / 100,
+    priceSource: "rendered_selected_variant_buybox",
+    selector: `rendered:${mode.toLowerCase()}`,
+    mode,
+    label: getAmazonPriceTrackingLabel(mode),
   };
 }
 
@@ -1687,9 +1719,15 @@ export async function scrapeAmazonProductDirect(
   let priceRetryAttempted = false;
   let renderedFallbackAttempted = false;
   let renderedFallbackPrice: number | null = null;
+  let renderedFallbackModes: AmazonPriceTrackingMode[] = [];
   let renderedFallbackError: string | null = null;
 
-  if (!buyboxPrice && !options.allowMetadataOnly) {
+  if (
+    !options.allowMetadataOnly &&
+    (!buyboxPrice ||
+      (options.discoverAllPriceChoices &&
+        (!priceChoices.regular || !priceChoices.deal)))
+  ) {
     priceRetryAttempted = true;
 
     try {
@@ -1713,18 +1751,67 @@ export async function scrapeAmazonProductDirect(
         load(retryHtml),
         retryProduct.asin || product.asin
       );
+      priceChoices = {
+        asin: priceChoices.asin ?? retryChoices.asin,
+        regular: priceChoices.regular ?? retryChoices.regular,
+        deal: priceChoices.deal ?? retryChoices.deal,
+      };
       const retryBuyboxPrice = hasExplicitMode
         ? requestedMode === "DEAL"
-          ? retryChoices.deal
-          : retryChoices.regular
-        : retryChoices.regular ?? retryChoices.deal;
+          ? priceChoices.deal
+          : priceChoices.regular
+        : priceChoices.regular ?? priceChoices.deal;
 
       if (retryBuyboxPrice) {
-        priceChoices = retryChoices;
         buyboxPrice = retryBuyboxPrice;
       }
     } catch {
       // Preserve the clear missing-buybox result after the bounded retry.
+    }
+  }
+
+  if (
+    !options.allowMetadataOnly &&
+    options.resolveMissingPriceChoices &&
+    (!buyboxPrice ||
+      (options.discoverAllPriceChoices &&
+        (!priceChoices.regular || !priceChoices.deal)))
+  ) {
+    renderedFallbackAttempted = true;
+
+    try {
+      const resolvedChoices = await options.resolveMissingPriceChoices({
+        asin: product.asin,
+        postcode,
+      });
+      const renderedRegular = toRenderedBuyboxPriceChoice(
+        product.asin,
+        "REGULAR",
+        resolvedChoices.regular,
+      );
+      const renderedDeal = toRenderedBuyboxPriceChoice(
+        product.asin,
+        "DEAL",
+        resolvedChoices.deal,
+      );
+
+      priceChoices = {
+        asin: priceChoices.asin ?? product.asin,
+        regular: priceChoices.regular ?? renderedRegular,
+        deal: priceChoices.deal ?? renderedDeal,
+      };
+      renderedFallbackModes = [
+        renderedRegular ? "REGULAR" : null,
+        renderedDeal ? "DEAL" : null,
+      ].filter((mode): mode is AmazonPriceTrackingMode => mode !== null);
+      buyboxPrice = hasExplicitMode
+        ? requestedMode === "DEAL"
+          ? priceChoices.deal
+          : priceChoices.regular
+        : priceChoices.regular ?? priceChoices.deal;
+    } catch (error) {
+      renderedFallbackError =
+        error instanceof Error ? error.message : "Rendered price lookup failed";
     }
   }
 
@@ -1774,8 +1861,10 @@ export async function scrapeAmazonProductDirect(
       buyboxPrice?.mode ??
       (renderedFallbackPrice !== null ? requestedMode : null),
     availableModes,
+    discoverAllPriceChoices: options.discoverAllPriceChoices === true,
     priceRetryAttempted,
     renderedFallbackAttempted,
+    renderedFallbackModes,
     renderedFallbackError,
     postcodeApplied,
     postcodeResponseConfirmed: postcodeResult.responseConfirmed,
