@@ -14,6 +14,7 @@ import ActionProgressBar from "@/components/ActionProgressBar";
 import { useTimedActionProgress } from "@/hooks/useTimedActionProgress";
 import type { ExistingProductConflict } from "@/types/product-duplicate";
 import Button from "@/components/ui/Button";
+import { getAmazonImportStageMessage } from "@/components/amazon-import-client";
 
 interface DraftsPageClientProps {
   products: SerializedProductRow[];
@@ -30,6 +31,7 @@ export default function DraftsPageClient({
   const [backgroundImport, setBackgroundImport] = useState<{
     status: "reading" | "saving" | "success" | "error";
     url: string;
+    progress?: number;
     message?: string;
     existing?: ExistingProductConflict;
   } | null>(null);
@@ -217,7 +219,7 @@ export default function DraftsPageClient({
             }
             percent={
               backgroundImport.status === "reading"
-                ? backgroundImportPercent
+                ? backgroundImport.progress ?? backgroundImportPercent
                 : backgroundImport.status === "saving"
                   ? 92
                   : backgroundImport.status === "success"
@@ -284,7 +286,19 @@ export default function DraftsPageClient({
         onClose={() => setIsModalOpen(false)}
         onScraped={handleScraped}
         onBackgroundStarted={(url) =>
-          setBackgroundImport({ status: "reading", url })
+          setBackgroundImport({ status: "reading", url, progress: 5 })
+        }
+        onBackgroundProgress={(progress) =>
+          setBackgroundImport((current) =>
+            current
+              ? {
+                  ...current,
+                  status: "reading",
+                  progress: progress.progress,
+                  message: getAmazonImportStageMessage(progress.stage),
+                }
+              : current,
+          )
         }
         onBackgroundFailed={(message, existing) =>
           setBackgroundImport((current) => ({

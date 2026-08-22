@@ -26,6 +26,7 @@ model User {
   ebayResearchJobs        EbayResearchJob[]
   ebayResearchBatches     EbayResearchBatch[]
   ebayActionJobs          EbayActionJob[]
+  amazonImportJobs        AmazonImportJob[]
   favoriteResearchQueries FavoriteResearchQuery[]
 }
 
@@ -52,6 +53,7 @@ model Store {
   ebayResearchJobs        EbayResearchJob[]
   ebayResearchBatches     EbayResearchBatch[]
   ebayActionJobs          EbayActionJob[]
+  amazonImportJobs        AmazonImportJob[]
   descriptionTemplates    DescriptionTemplate[]
   keywordBlacklist        KeywordBlacklist[]
   supplierSettings        SupplierSettings[]
@@ -95,6 +97,22 @@ enum PriceCheckSource {
 enum AmazonPriceTrackingMode {
   REGULAR
   DEAL
+  DEAL_PREFERRED
+}
+
+enum AmazonImportJobStatus {
+  QUEUED
+  RUNNING
+  READY
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum AmazonImportJobKind {
+  NORMAL
+  ADVANCED
+  REGRAB
 }
 
 enum PriceCheckFailureCode {
@@ -353,6 +371,48 @@ model PriceCheckJob {
   @@index([dismissedAt])
 }
 
+model AmazonImportJob {
+  id                         String                   @id @default(cuid())
+  userId                     String
+  storeId                    String
+  kind                       AmazonImportJobKind
+  status                     AmazonImportJobStatus    @default(QUEUED)
+  sourceUrl                  String                   @db.Text
+  asin                       String
+  requestedPriceTrackingMode AmazonPriceTrackingMode?
+  result                     Json?
+  productId                  String?
+  targetProductId            String?
+  requestId                  String?
+  errorCode                  String?
+  errorMessage               String?                  @db.Text
+  errorStatus                Int?
+  stage                      String                   @default("QUEUED")
+  progress                   Int                      @default(0)
+  attempts                   Int                      @default(0)
+  workerId                   String?
+  workerName                 String?
+  requiredWorkerRole         String?
+  nextAttemptAt              DateTime                 @default(now())
+  leaseExpiresAt             DateTime?
+  startedAt                  DateTime?
+  completedAt                DateTime?
+  expiresAt                  DateTime?
+  dismissedAt                DateTime?
+  createdAt                  DateTime                 @default(now())
+  updatedAt                  DateTime                 @updatedAt
+
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, status, nextAttemptAt, createdAt])
+  @@index([userId, storeId, createdAt])
+  @@index([leaseExpiresAt])
+  @@index([expiresAt])
+  @@index([productId])
+  @@index([targetProductId])
+}
+
 enum UploadStatus {
   SUCCESS
   FAILED
@@ -555,17 +615,18 @@ model EbayActionJob {
 }
 
 model WorkerHeartbeat {
-  id         String   @id @default(cuid())
-  storeId    String
-  workerId   String
-  workerName String
-  workerRole String   @default("legacy")
-  status     String   @default("ONLINE")
-  lastSeenAt DateTime @default(now())
-  startedAt  DateTime @default(now())
-  version    String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  id           String   @id @default(cuid())
+  storeId      String
+  workerId     String
+  workerName   String
+  workerRole   String   @default("legacy")
+  capabilities String[] @default([])
+  status       String   @default("ONLINE")
+  lastSeenAt   DateTime @default(now())
+  startedAt    DateTime @default(now())
+  version      String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
@@ -748,8 +809,8 @@ model SupplierSettings {
   defaultPaymentPolicyId  String?
   defaultReturnPolicyId   String?
 
-  ebayFeePercent          Float @default(13.0)
-  fixedFeeAmount          Float @default(0.33)
+  ebayFeePercent                  Float   @default(13.0)
+  fixedFeeAmount                  Float   @default(0.33)
   additionalProfitPercent         Float   @default(0)
   additionalProfitFixed           Float   @default(0)
   applyAdditionalProfitToExisting Boolean @default(false)

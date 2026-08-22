@@ -4,6 +4,9 @@ ListFlow uses four Railway services: one unified overflow worker plus one
 store-specific worker for each store. All services use the same repository,
 Docker image, Supabase database, and eBay credentials. Store workers receive a
 three-second claim priority window; the unified worker then becomes eligible.
+Normal and advanced Amazon imports use the same durable queue. They are claimed
+first by the store-specific worker and retried once by the unified worker when
+the specialist cannot return a verified result.
 
 ## Service matrix
 

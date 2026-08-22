@@ -102,6 +102,7 @@ test("unified store ordering rotates fairly", () => {
 test("all durable queues apply worker claim policy", () => {
   for (const path of [
     "lib/price-check-jobs.ts",
+    "lib/amazon-import-jobs.ts",
     "lib/ebay-action-jobs.ts",
     "lib/ebay-import-jobs.ts",
     "lib/ebay-research.ts",
@@ -110,6 +111,20 @@ test("all durable queues apply worker claim policy", () => {
     assert.match(source, /filterRunnableJobsForWorker/, path);
     assert.match(source, /getWorkerClaimPolicy/, path);
   }
+});
+
+test("interactive Amazon imports run before background worker queues", () => {
+  const source = readFileSync("scripts/listflow-worker.ts", "utf8");
+  const amazonImportIndex = source.indexOf(
+    "runNextAmazonImportJobForStore(store.id, worker)",
+  );
+  const ebayActionIndex = source.indexOf(
+    "runNextEbayActionJobForStore(store.id, worker)",
+  );
+
+  assert.ok(amazonImportIndex >= 0);
+  assert.ok(ebayActionIndex >= 0);
+  assert.ok(amazonImportIndex < ebayActionIndex);
 });
 
 test("research recovery is lease-aware and claims queued work atomically", () => {

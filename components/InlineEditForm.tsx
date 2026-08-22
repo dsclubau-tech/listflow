@@ -9,6 +9,7 @@ import ImageLightbox from "@/components/ImageLightbox";
 import { PostcodeAutocomplete } from "@/components/PostcodeAutocomplete";
 import type { Product, Store, User } from "@/app/generated/prisma/client";
 import type { ScrapedProduct } from "@/components/AddProductModal";
+import { runQueuedAmazonImport } from "@/components/amazon-import-client";
 import {
   addMissingItemSpecificRows,
   DRAFT_ITEM_SPECIFICS_TAB_INDEX,
@@ -1597,44 +1598,14 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
 
     try {
       const url = buildRegrabAmazonUrl(currentAsin);
-      const res = await fetch("/api/scrape", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      const scraped = await runQueuedAmazonImport<ScrapedProduct>(
+        {
           url,
           mode: "regrab",
           amazonPriceTrackingMode,
-        }),
-        signal: AbortSignal.timeout(90000),
-      });
-
-      const data = (await res.json()) as ScrapedProduct | { error?: string };
-
-      if (!res.ok) {
-        void reportClientError(
-          "inline-edit/regrab",
-          "Regrab failed",
-          undefined,
-          {
-            productId: product.id,
-            asin: currentAsin,
-            status: res.status,
-            error: "error" in data ? data.error : undefined,
-          },
-          {
-            requestId: res.headers.get("x-request-id") ?? undefined,
-            tags: ["regrab"],
-          },
-        );
-        setSaveMessage({
-          title: "Regrab failed",
-          text: ("error" in data && data.error) || "Failed to fetch product details",
-          variant: "error",
-        });
-        return;
-      }
-
-      const scraped = data as ScrapedProduct;
+        },
+        { signal: AbortSignal.timeout(150_000) },
+      );
       const update = buildRegrabDraftUpdate(scraped, currentAsin);
 
       setTitle(update.title);
@@ -1699,7 +1670,10 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       );
       setSaveMessage({
         title: "Regrab failed",
-        text: "Network error. Please try again.",
+        text:
+          err instanceof Error
+            ? err.message
+            : "Network error. Please try again.",
         variant: "error",
       });
     } finally {

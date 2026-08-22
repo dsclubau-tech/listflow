@@ -102,6 +102,7 @@ let roundRobinStartIndex = 0;
 async function loadWorkerModules() {
   const [
     prismaModule,
+    amazonImportJobs,
     ebayImportJobs,
     ebayActionJobs,
     ebayResearch,
@@ -112,6 +113,7 @@ async function loadWorkerModules() {
     loggerModule,
   ] = await Promise.all([
     import("../lib/prisma"),
+    import("../lib/amazon-import-jobs"),
     import("../lib/ebay-import-jobs"),
     import("../lib/ebay-action-jobs"),
     import("../lib/ebay-research"),
@@ -124,6 +126,8 @@ async function loadWorkerModules() {
 
   return {
     prisma: prismaModule.prisma,
+    runNextAmazonImportJobForStore:
+      amazonImportJobs.runNextAmazonImportJobForStore,
     runNextEbayImportJobForStore: ebayImportJobs.runNextEbayImportJobForStore,
     runNextEbayActionJobForStore: ebayActionJobs.runNextEbayActionJobForStore,
     runEbayResearchQueueForStore: ebayResearch.runEbayResearchQueueForStore,
@@ -270,6 +274,10 @@ async function heartbeat(storeIds = heartbeatStoreIds) {
 
 async function processStore(store: { id: string; name: string; loginId: string | null }) {
   const worker = getWorkerContext();
+
+  if (await modules.runNextAmazonImportJobForStore(store.id, worker)) {
+    return true;
+  }
 
   if (await modules.runNextEbayActionJobForStore(store.id, worker)) {
     return true;

@@ -12,6 +12,12 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { DuplicateDraftError } from "@/components/draft-autosave";
 import type { ExistingProductConflict } from "@/types/product-duplicate";
 import Button from "@/components/ui/Button";
+import {
+  AmazonImportRequestError,
+  getAmazonImportStageMessage,
+  runQueuedAmazonImport,
+  type AmazonImportProgress,
+} from "@/components/amazon-import-client";
 
 interface AddProductModalProps {
   isOpen: boolean;
@@ -22,6 +28,7 @@ interface AddProductModalProps {
     context: { background: boolean },
   ) => void | Promise<void>;
   onBackgroundStarted?: (url: string) => void;
+  onBackgroundProgress?: (progress: AmazonImportProgress) => void;
   onBackgroundFailed?: (
     message: string,
     existing?: ExistingProductConflict,
@@ -63,47 +70,7 @@ export interface ScrapedProduct {
   };
 }
 
-type ScrapeResponseBody = Partial<ScrapedProduct> & {
-  error?: string;
-  code?: string;
-  existing?: ExistingProductConflict;
-};
-
 export type AddProductMode = "normal" | "advanced";
-
-function getFallbackScrapeError(response: Response, bodyText: string) {
-  const trimmed = bodyText.trim();
-
-  if (response.status === 504 || response.status === 408) {
-    return "Amazon is taking too long to respond. No draft was created.";
-  }
-
-  if (response.status >= 500) {
-    return "Amazon scraping failed on the server. Please try again after redeploying the latest ListFlow fix.";
-  }
-
-  if (trimmed) {
-    return trimmed.slice(0, 240);
-  }
-
-  return "Scraping failed. Please try again.";
-}
-
-async function readScrapeResponse(response: Response) {
-  const bodyText = await response.text();
-
-  if (!bodyText.trim()) {
-    return {} as ScrapeResponseBody;
-  }
-
-  try {
-    return JSON.parse(bodyText) as ScrapeResponseBody;
-  } catch {
-    return {
-      error: getFallbackScrapeError(response, bodyText),
-    } satisfies ScrapeResponseBody;
-  }
-}
 
 export default function AddProductModal({
   isOpen,
@@ -111,12 +78,15 @@ export default function AddProductModal({
   onClose,
   onScraped,
   onBackgroundStarted,
+  onBackgroundProgress,
   onBackgroundFailed,
   onOpenExisting,
 }: AddProductModalProps) {
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [queueProgress, setQueueProgress] = useState(0);
+  const [queueDetail, setQueueDetail] = useState("");
   const [scrapedProduct, setScrapedProduct] = useState<ScrapedProduct | null>(
     null
   );
@@ -139,6 +109,8 @@ export default function AddProductModal({
       setError("");
       setScrapedProduct(null);
       setDuplicateProduct(null);
+      setQueueProgress(0);
+      setQueueDetail("");
       setSelectedMode(DEFAULT_AMAZON_PRICE_TRACKING_MODE);
       onClose();
     }
@@ -205,6 +177,8 @@ export default function AddProductModal({
     setError("");
     setScrapedProduct(null);
     setDuplicateProduct(null);
+    setQueueProgress(0);
+    setQueueDetail("");
 
     const validationError = getAddProductUrlValidationError(url);
     if (validationError) {
@@ -215,44 +189,38 @@ export default function AddProductModal({
     setIsLoading(true);
 
     try {
-      const res = await fetch("/api/scrape", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: url.trim(), mode: "advanced" }),
-        signal: AbortSignal.timeout(45000), // 45s timeout for direct Amazon import
+      const data = await runQueuedAmazonImport<ScrapedProduct>({
+        url: url.trim(),
+        mode: "advanced",
+      }, {
+        signal: AbortSignal.timeout(150_000),
+        onProgress: (progress) => {
+          setQueueProgress(progress.progress);
+          setQueueDetail(getAmazonImportStageMessage(progress.stage));
+        },
       });
 
-      const data = await readScrapeResponse(res);
-
-      if (res.ok) {
-        if (!data.title || !Array.isArray(data.images) || !data.asin) {
-          setError("Amazon scraping returned an incomplete product. Please try again.");
-          return;
-        }
-
-        const scraped = data as ScrapedProduct;
-        const hasRegular = Boolean(scraped.priceChoices?.regular);
-        const hasDeal = Boolean(scraped.priceChoices?.deal);
-
-        if (!hasRegular && !hasDeal) {
-          setError(
-            "Amazon product was found, but ListFlow could not read a regular or deal buybox price. No draft was created."
-          );
-          return;
-        }
-
-        setSelectedMode(hasRegular ? "REGULAR" : "DEAL");
-        setScrapedProduct(scraped);
-      } else {
-        setDuplicateProduct(
-          data.code === "DUPLICATE_ASIN" && data.existing
-            ? data.existing
-            : null,
-        );
-        setError(data.error || "Scraping failed. Please try again.");
+      if (!data.title || !Array.isArray(data.images) || !data.asin) {
+        setError("Amazon scraping returned an incomplete product. Please try again.");
+        return;
       }
+
+      const hasRegular = Boolean(data.priceChoices?.regular);
+      const hasDeal = Boolean(data.priceChoices?.deal);
+      if (!hasRegular && !hasDeal) {
+        setError(
+          "Amazon product was found, but ListFlow could not read a regular or deal buybox price. No draft was created.",
+        );
+        return;
+      }
+
+      setSelectedMode(hasRegular ? "REGULAR" : "DEAL");
+      setScrapedProduct(data);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
+      setDuplicateProduct(
+        error instanceof AmazonImportRequestError ? error.existing ?? null : null,
+      );
       setError(
         error instanceof DOMException && error.name === "TimeoutError"
           ? "Amazon is taking too long to respond. No draft was created."
@@ -285,22 +253,12 @@ export default function AddProductModal({
     onClose();
 
     try {
-      const res = await fetch("/api/scrape", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: importUrl }),
-        signal: AbortSignal.timeout(45000),
+      const data = await runQueuedAmazonImport<ScrapedProduct>({
+        url: importUrl,
+      }, {
+        signal: AbortSignal.timeout(150_000),
+        onProgress: onBackgroundProgress,
       });
-
-      const data = await readScrapeResponse(res);
-
-      if (!res.ok) {
-        onBackgroundFailed?.(
-          data.error || "Scraping failed. Please try again.",
-          data.code === "DUPLICATE_ASIN" ? data.existing : undefined,
-        );
-        return;
-      }
 
       if (!data.title || !Array.isArray(data.images) || !data.asin) {
         onBackgroundFailed?.(
@@ -309,8 +267,7 @@ export default function AddProductModal({
         return;
       }
 
-      const scraped = data as ScrapedProduct;
-      const regular = scraped.priceChoices?.regular ?? null;
+      const regular = data.priceChoices?.regular ?? null;
 
       if (!regular) {
         onBackgroundFailed?.(
@@ -321,7 +278,7 @@ export default function AddProductModal({
 
       await onScraped(
         {
-          ...scraped,
+          ...data,
           price: regular.price,
           amazonPriceTrackingMode: "REGULAR",
         },
@@ -337,7 +294,11 @@ export default function AddProductModal({
             : message
               ? message
               : "Request timed out or failed. Please try again.",
-        error instanceof DuplicateDraftError ? error.existing : undefined,
+        error instanceof DuplicateDraftError
+          ? error.existing
+          : error instanceof AmazonImportRequestError
+            ? error.existing
+            : undefined,
       );
     }
   }
@@ -532,11 +493,11 @@ export default function AddProductModal({
                       ? "Saving draft"
                       : "Reading Amazon"
                   }
-                  percent={importProgress}
+                  percent={queueProgress > 0 ? queueProgress : importProgress}
                   detail={
                     scrapedProduct
                       ? "Saving the selected Amazon price mode."
-                      : "Fetching the selected product and reading the buy-box prices."
+                      : queueDetail || "Waiting for the Amazon import worker."
                   }
                   tone="orange"
                 />
