@@ -19,6 +19,7 @@ import {
   findExistingAmazonProduct,
   getDuplicateAmazonProductBody,
 } from "@/lib/product-duplicate";
+import { buildDefaultVariantData } from "@/lib/variants";
 
 const SUPPLIER_NAME = "Amazon AU";
 
@@ -208,11 +209,29 @@ export async function POST(request: Request) {
             supplierName: SUPPLIER_NAME,
           },
         },
-        select: { defaultCountry: true, defaultZipcode: true },
+        select: {
+          defaultCountry: true,
+          defaultZipcode: true,
+          automaticSkuFilling: true,
+          ebayFeePercent: true,
+          fixedFeeAmount: true,
+          additionalProfitPercent: true,
+          additionalProfitFixed: true,
+          minimumProfit: true,
+        },
       })) ??
       (await prisma.supplierSettings.findFirst({
         where: { storeId: null, supplierName: SUPPLIER_NAME },
-        select: { defaultCountry: true, defaultZipcode: true },
+        select: {
+          defaultCountry: true,
+          defaultZipcode: true,
+          automaticSkuFilling: true,
+          ebayFeePercent: true,
+          fixedFeeAmount: true,
+          additionalProfitPercent: true,
+          additionalProfitFixed: true,
+          minimumProfit: true,
+        },
       }));
 
     if (/^\d+$/.test(normalizedCategory)) {
@@ -272,7 +291,7 @@ export async function POST(request: Request) {
                 }
               }
 
-              return tx.product.create({
+              const createdProduct = await tx.product.create({
                 data: {
                   title: listingTitle,
                   fullTitle: filteredFullTitle || null,
@@ -302,6 +321,23 @@ export async function POST(request: Request) {
                   createdBy: true,
                 },
               });
+
+              await tx.variant.create({
+                data: buildDefaultVariantData({
+                  ...createdProduct,
+                  automaticSkuFilling:
+                    supplierSettings?.automaticSkuFilling ?? true,
+                  feesPercent: supplierSettings?.ebayFeePercent ?? 13,
+                  feesFixed: supplierSettings?.fixedFeeAmount ?? 0.33,
+                  profitPercent:
+                    supplierSettings?.additionalProfitPercent ?? 0,
+                  profitFixed:
+                    supplierSettings?.additionalProfitFixed ?? 0,
+                  minimumProfit: supplierSettings?.minimumProfit ?? 1,
+                }),
+              });
+
+              return createdProduct;
             },
             { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
           );

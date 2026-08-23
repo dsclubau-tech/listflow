@@ -1110,7 +1110,13 @@ export default function DraftEditForm({
                 </Link>
               </div>
               <div className="min-h-64">
-                <RichTextEditor value={description} onChange={setDescription} minHeight="256px" toolbarVariant="compact" />
+                <RichTextEditor
+                  value={description}
+                  onChange={setDescription}
+                  stickyToolbar
+                  minHeight="256px"
+                  toolbarVariant="compact"
+                />
               </div>
             </div>
           )}

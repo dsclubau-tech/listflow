@@ -70,6 +70,7 @@ interface RichTextEditorProps {
   value: string;
   onChange: (value: string) => void;
   selectableImages?: boolean;
+  stickyToolbar?: boolean;
   placeholder?: string;
   minHeight?: string;
   className?: string;
@@ -236,6 +237,7 @@ export default function RichTextEditor({
   value,
   onChange,
   selectableImages = false,
+  stickyToolbar = false,
   placeholder,
   minHeight = "18rem",
   className = "",
@@ -1281,6 +1283,7 @@ export default function RichTextEditor({
       className={`listflow-rich-text ${className}`.trim()}
       style={rootStyle}
       data-toolbar-variant={toolbarVariant}
+      data-toolbar-sticky={stickyToolbar ? "true" : undefined}
       data-images-selectable={selectableImages ? "true" : undefined}
       onClickCapture={handleSelectableImageClick}
       onContextMenuCapture={handleImageContextMenu}

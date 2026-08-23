@@ -18,7 +18,7 @@ import {
   type DraftItemSpecificRow,
   type RequiredItemSpecific,
 } from "@/components/draft-upload-response";
-import ProductVariantsEditor from "@/components/ProductVariantsEditor";
+import ProductVariantsPanel from "@/components/ProductVariantsPanel";
 import RichTextEditor from "@/components/RichTextEditor";
 import { reportClientError } from "@/lib/client-logger";
 import {
@@ -361,8 +361,21 @@ const tabs = ["Product", "Description", "Variants", "Images", "Item Specificatio
 export default function InlineEditForm({ product, onImported }: InlineEditFormProps) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState(0);
+  const [mountedTabs, setMountedTabs] = useState<Set<number>>(
+    () => new Set([0, 2]),
+  );
   const editorContainerRef = useRef<HTMLDivElement | null>(null);
   const [showBackToTop, setShowBackToTop] = useState(false);
+
+  const activateTab = useCallback((index: number) => {
+    setMountedTabs((current) => {
+      if (current.has(index)) return current;
+      const next = new Set(current);
+      next.add(index);
+      return next;
+    });
+    setActiveTab(index);
+  }, []);
 
   useEffect(() => {
     const updateBackToTopVisibility = () => {
@@ -2024,12 +2037,18 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
         <nav
           className="flex min-w-max gap-4 md:gap-6"
           aria-label="Draft editor sections"
+          role="tablist"
         >
           {tabs.map((tab, i) => (
             <button
               key={tab}
               type="button"
-              onClick={() => setActiveTab(i)}
+              id={`draft-editor-tab-${product.id}-${i}`}
+              role="tab"
+              aria-selected={activeTab === i}
+              aria-controls={`draft-editor-panel-${product.id}-${i}`}
+              tabIndex={activeTab === i ? 0 : -1}
+              onClick={() => activateTab(i)}
               className={`px-1 py-3 text-sm transition-colors ${
                 activeTab === i
                   ? "border-b-2 border-orange-500 text-orange-600 font-medium"
@@ -2045,8 +2064,14 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       {/* ===== Tab Content ===== */}
       <div className="p-4 pb-8 md:p-6 md:pb-10">
         {/* ===== Tab 1 — Product ===== */}
-        {activeTab === 0 && (
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {mountedTabs.has(0) && (
+          <div
+            id={`draft-editor-panel-${product.id}-0`}
+            role="tabpanel"
+            aria-labelledby={`draft-editor-tab-${product.id}-0`}
+            hidden={activeTab !== 0}
+            className="grid grid-cols-1 gap-4 lg:grid-cols-2"
+          >
             {/* Title — full width */}
             <div className="col-span-full">
               <label className="block text-sm font-medium text-gray-700 mb-1">Title</label>
@@ -2379,8 +2404,13 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
         )}
 
         {/* ===== Tab 2 — Description ===== */}
-        {activeTab === 1 && (
-          <div>
+        {mountedTabs.has(1) && (
+          <div
+            id={`draft-editor-panel-${product.id}-1`}
+            role="tabpanel"
+            aria-labelledby={`draft-editor-tab-${product.id}-1`}
+            hidden={activeTab !== 1}
+          >
             {descriptionContainsAmazon && (
               <div className="mb-3 flex items-start gap-3 p-3 bg-red-50 border border-red-200 rounded-md">
                 <svg className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -2420,6 +2450,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                 value={description}
                 onChange={setDescription}
                 selectableImages
+                stickyToolbar
                 minHeight="300px"
                 toolbarVariant="compact"
               />
@@ -2428,9 +2459,14 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
         )}
 
         {/* ===== Tab 3 — Variants ===== */}
-        {activeTab === 2 && (
-          <>
-            <ProductVariantsEditor
+        {mountedTabs.has(2) && (
+          <div
+            id={`draft-editor-panel-${product.id}-2`}
+            role="tabpanel"
+            aria-labelledby={`draft-editor-tab-${product.id}-2`}
+            hidden={activeTab !== 2}
+          >
+            <ProductVariantsPanel
               product={{
                 id: product.id,
                 title: product.title,
@@ -2441,70 +2477,17 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                 asin: currentAsin,
               }}
             />
-            <div className="hidden">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="bg-gray-100 text-xs font-medium text-gray-500 uppercase tracking-wide">
-                  <th className="px-3 py-2 text-left w-14">Image</th>
-                  <th className="px-3 py-2 text-left">Variant</th>
-                  <th className="px-3 py-2 text-left">Status</th>
-                  <th className="px-3 py-2 text-left">Buy ID</th>
-                  <th className="px-3 py-2 text-left w-32">Price</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr className="border-b">
-                  <td className="px-3 py-2">
-                    {thumbnail ? (
-                      <img src={thumbnail} alt="variant" className="w-10 h-10 rounded object-cover" />
-                    ) : (
-                      <div className="w-10 h-10 bg-gray-200 rounded" />
-                    )}
-                  </td>
-                  <td className="px-3 py-2 text-gray-700">
-                    {product.condition || "Default"}
-                  </td>
-                  <td className="px-3 py-2">
-                    <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
-                      IN STOCK
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-gray-500 font-mono text-xs">
-                    <AsinLink
-                      asin={currentAsin}
-                      fallback="—"
-                      className="font-mono text-xs text-orange-600 hover:text-orange-800 hover:underline"
-                    />
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="relative">
-                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-gray-400 text-xs">$</span>
-                      <input
-                        type="number"
-                        step="0.01"
-                        min="0"
-                        value={price}
-                        onChange={(e) => setPrice(e.target.value)}
-                        className="w-full pl-5 pr-2 py-1 border border-gray-300 rounded text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                      />
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <button
-              type="button"
-              className="mt-3 text-sm text-green-600 hover:text-green-800 font-medium transition-colors"
-            >
-              + Add Variant
-            </button>
-            </div>
-          </>
+          </div>
         )}
 
         {/* ===== Tab 4 — Images ===== */}
-        {activeTab === 3 && (
-          <div>
+        {mountedTabs.has(3) && (
+          <div
+            id={`draft-editor-panel-${product.id}-3`}
+            role="tabpanel"
+            aria-labelledby={`draft-editor-tab-${product.id}-3`}
+            hidden={activeTab !== 3}
+          >
             <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start">
               <div className="flex-1">
                 <label className="sr-only" htmlFor={`manual-image-${product.id}`}>
@@ -2649,8 +2632,13 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
         )}
 
         {/* ===== Tab 5 — Item Specifications ===== */}
-        {activeTab === 4 && (
-          <div>
+        {mountedTabs.has(4) && (
+          <div
+            id={`draft-editor-panel-${product.id}-4`}
+            role="tabpanel"
+            aria-labelledby={`draft-editor-tab-${product.id}-4`}
+            hidden={activeTab !== 4}
+          >
             <div className="hidden items-center gap-3 border-b border-gray-200 px-3 py-2 text-xs font-medium uppercase tracking-wide text-gray-500 md:flex">
               <span className="flex-1">Name</span>
               <span className="flex-1">Value</span>

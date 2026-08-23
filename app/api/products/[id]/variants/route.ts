@@ -31,12 +31,18 @@ export async function GET(
     return NextResponse.json({ error: "Product not found" }, { status: 404 });
   }
 
-  await ensureDefaultVariantForProduct(productId);
-
-  const variants = await prisma.variant.findMany({
+  let variants = await prisma.variant.findMany({
     where: { productId },
     orderBy: { createdAt: "asc" },
   });
+
+  if (variants.length === 0) {
+    await ensureDefaultVariantForProduct(productId);
+    variants = await prisma.variant.findMany({
+      where: { productId },
+      orderBy: { createdAt: "asc" },
+    });
+  }
 
   return NextResponse.json(variants.map(serializeVariant));
 }
