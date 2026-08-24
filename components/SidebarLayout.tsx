@@ -103,7 +103,7 @@ export default function SidebarLayout({
       <main
         className={`flex-1 transition-all duration-300 ease-in-out ${
           collapsed ? "md:ml-16" : "md:ml-64"
-        } ml-0 pt-16 md:pt-0 min-h-screen overflow-x-hidden overflow-y-auto bg-tertiary`}
+        } ml-0 min-h-screen overflow-x-clip bg-tertiary pt-16 md:pt-0`}
       >
         <div className="w-full max-w-full px-3 py-4 sm:p-6 lg:p-8">
           {children}
@@ -112,4 +112,3 @@ export default function SidebarLayout({
     </div>
   );
 }
-

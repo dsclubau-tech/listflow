@@ -1871,8 +1871,8 @@ export default function DraftsTable({
       <div
         className={
           isDraftsView
-            ? "max-w-full xl:overflow-hidden xl:rounded-2xl xl:border xl:border-gray-200 xl:bg-white xl:shadow-sm"
-            : "max-w-full overflow-hidden rounded-lg border border-gray-200 bg-white"
+            ? "max-w-full xl:overflow-clip xl:rounded-2xl xl:border xl:border-gray-200 xl:bg-white xl:shadow-sm"
+            : "max-w-full overflow-clip rounded-lg border border-gray-200 bg-white"
         }
       >
         <div
@@ -2493,7 +2493,7 @@ export default function DraftsTable({
                     <tr
                       className={
                         isDraftsView
-                          ? "block overflow-hidden rounded-2xl border border-orange-200 bg-gray-50 shadow-sm xl:table-row xl:rounded-none xl:border-0 xl:shadow-none"
+                          ? "block overflow-clip rounded-2xl border border-orange-200 bg-gray-50 shadow-sm xl:table-row xl:rounded-none xl:border-0 xl:shadow-none"
                           : undefined
                       }
                     >

@@ -6,6 +6,8 @@ test("description editors opt into a responsive sticky formatting toolbar", () =
   const editor = readFileSync("components/RichTextEditor.tsx", "utf8");
   const inlineEditor = readFileSync("components/InlineEditForm.tsx", "utf8");
   const draftEditor = readFileSync("components/DraftEditForm.tsx", "utf8");
+  const draftsTable = readFileSync("components/DraftsTable.tsx", "utf8");
+  const sidebarLayout = readFileSync("components/SidebarLayout.tsx", "utf8");
   const styles = readFileSync("app/globals.css", "utf8");
 
   assert.match(editor, /stickyToolbar\?: boolean/);
@@ -18,6 +20,10 @@ test("description editors opt into a responsive sticky formatting toolbar", () =
   );
   assert.match(styles, /top: 4rem/);
   assert.match(styles, /@media \(min-width: 768px\)/);
+  assert.match(sidebarLayout, /overflow-x-clip/);
+  assert.doesNotMatch(sidebarLayout, /overflow-y-auto bg-tertiary/);
+  assert.match(draftsTable, /xl:overflow-clip xl:rounded-2xl/);
+  assert.match(draftsTable, /block overflow-clip rounded-2xl/);
 });
 
 test("inline editor preloads variants and retains mounted tab state", () => {
