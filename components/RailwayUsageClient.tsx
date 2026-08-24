@@ -1,560 +1,371 @@
 "use client";
 
-import { useState, useEffect, useTransition, useCallback } from "react";
-import type { RailwayUsageReport } from "@/lib/railway-api";
+import { useCallback, useEffect, useState } from "react";
+import type { ReactNode } from "react";
+import type {
+  HeartbeatState,
+  InfrastructureState,
+  RailwayUsageReport,
+} from "@/lib/railway-api";
 
 interface RailwayUsageClientProps {
   initialReport?: RailwayUsageReport | null;
 }
 
-export default function RailwayUsageClient({ initialReport = null }: RailwayUsageClientProps) {
-  const [report, setReport] = useState<RailwayUsageReport | null>(initialReport);
-  const [isRefreshing, startRefreshing] = useTransition();
-  const [isLoading, setIsLoading] = useState(!initialReport);
-  const [autoRefresh, setAutoRefresh] = useState(true);
-  const [error, setError] = useState<string | null>(initialReport?.error ?? null);
+const AUTO_REFRESH_MS = 5 * 60 * 1000;
 
-  const refreshData = useCallback(() => {
-    startRefreshing(async () => {
-      try {
-        const res = await fetch("/api/railway/usage", { cache: "no-store" });
-        if (!res.ok) {
-          throw new Error(`HTTP error ${res.status}`);
-        }
-        const data: RailwayUsageReport = await res.json();
-        setReport(data);
-        setError(data.error ?? null);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to fetch Railway usage data");
-      } finally {
-        setIsLoading(false);
-      }
-    });
+function money(value: number | null, approximate = false) {
+  if (value === null) return "Unavailable";
+  return `${approximate ? "~" : ""}$${value.toFixed(2)}`;
+}
+
+function dateLabel(value: string | null, includeTime = false) {
+  if (!value) return "Unavailable";
+  const date = new Date(value);
+  if (!Number.isFinite(date.getTime())) return "Unavailable";
+  return date.toLocaleString([], includeTime
+    ? { dateStyle: "medium", timeStyle: "short" }
+    : { dateStyle: "medium" });
+}
+
+function InfrastructureBadge({ state }: { state: InfrastructureState }) {
+  const styles = {
+    online: "border-emerald-200 bg-emerald-50 text-emerald-800",
+    starting: "border-blue-200 bg-blue-50 text-blue-800",
+    offline: "border-red-200 bg-red-50 text-red-800",
+    unknown: "border-gray-200 bg-gray-50 text-gray-700",
+  }[state];
+  const label = {
+    online: "Railway Online",
+    starting: "Railway Starting",
+    offline: "Railway Offline",
+    unknown: "Railway Unknown",
+  }[state];
+  return (
+    <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${styles}`}>
+      {label}
+    </span>
+  );
+}
+
+function HeartbeatBadge({ state }: { state: HeartbeatState }) {
+  const styles = {
+    healthy: "border-emerald-200 bg-emerald-50 text-emerald-800",
+    stale: "border-amber-200 bg-amber-50 text-amber-800",
+    missing: "border-gray-200 bg-gray-50 text-gray-700",
+  }[state];
+  const label = {
+    healthy: "Heartbeat healthy",
+    stale: "Heartbeat stale",
+    missing: "Heartbeat missing",
+  }[state];
+  return (
+    <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${styles}`}>
+      {label}
+    </span>
+  );
+}
+
+function Card({
+  label,
+  value,
+  detail,
+  tone = "text-gray-900",
+}: {
+  label: string;
+  value: string;
+  detail: ReactNode;
+  tone?: string;
+}) {
+  return (
+    <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-xs">
+      <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">{label}</p>
+      <p className={`mt-3 text-3xl font-bold tracking-tight ${tone}`}>{value}</p>
+      <div className="mt-3 text-xs leading-relaxed text-gray-500">{detail}</div>
+    </div>
+  );
+}
+
+export default function RailwayUsageClient({
+  initialReport = null,
+}: RailwayUsageClientProps) {
+  const [report, setReport] = useState<RailwayUsageReport | null>(initialReport);
+  const [isLoading, setIsLoading] = useState(!initialReport);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [requestError, setRequestError] = useState<string | null>(
+    initialReport?.error ?? null,
+  );
+
+  const refreshData = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      const response = await fetch("/api/railway/usage", { cache: "no-store" });
+      if (!response.ok) throw new Error(`Railway report request failed (${response.status}).`);
+      const nextReport = (await response.json()) as RailwayUsageReport;
+      setReport(nextReport);
+      setRequestError(nextReport.error ?? null);
+    } catch (error) {
+      setRequestError(
+        error instanceof Error ? error.message : "Failed to load Railway usage.",
+      );
+    } finally {
+      setIsRefreshing(false);
+      setIsLoading(false);
+    }
   }, []);
 
-  // Fetch on mount if no initial report
   useEffect(() => {
-    if (!report) {
-      refreshData();
-    }
-  }, [report, refreshData]);
+    if (!report) void refreshData();
+  }, [refreshData, report]);
 
-  // Periodic polling every 30 seconds when autoRefresh is active
   useEffect(() => {
     if (!autoRefresh) return;
-    const interval = setInterval(() => {
-      refreshData();
-    }, 30_000);
-    return () => clearInterval(interval);
+    const timer = window.setInterval(() => void refreshData(), AUTO_REFRESH_MS);
+    return () => window.clearInterval(timer);
   }, [autoRefresh, refreshData]);
 
   if (isLoading || !report) {
     return (
-      <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-6 animate-pulse">
-        <div className="flex items-center justify-between border-b border-gray-200 pb-5">
-          <div className="space-y-2">
-            <div className="h-7 bg-gray-200 rounded-md w-64" />
-            <div className="h-4 bg-gray-200 rounded-md w-96" />
-          </div>
-          <div className="h-9 bg-gray-200 rounded-lg w-28" />
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="bg-white border border-gray-200 rounded-xl p-5 h-36" />
+      <div className="mx-auto max-w-7xl space-y-6 p-6 md:p-8" aria-busy="true">
+        <div className="h-20 animate-pulse rounded-xl bg-gray-200" />
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {[1, 2, 3, 4, 5, 6].map((item) => (
+            <div key={item} className="h-36 animate-pulse rounded-xl bg-gray-200" />
           ))}
         </div>
-        <div className="bg-white border border-gray-200 rounded-xl p-6 h-64" />
       </div>
     );
   }
 
-  const { billingPeriod, services, workerTelemetry } = report;
-  const currentCost = billingPeriod.currentPeriodCost;
-  const projectedCost = billingPeriod.projectedMonthEndCost;
-  const dailyAverage = billingPeriod.dailyAverageCost;
-  const activeCount = report.activeServicesCount ?? services.filter((s) => s.isActive).length;
-  const parkedCount = report.parkedServicesCount ?? services.filter((s) => s.isParked).length;
-  const inactiveCount = Math.max(0, services.length - activeCount - parkedCount);
-  const specialistCount = services.filter((s) => s.workerRole === "store-specific").length;
-
-  // Calculate memory cost vs total
-  const totalMemoryCost = services.reduce((sum, s) => sum + s.memoryCost, 0);
-  const totalCpuCost = services.reduce((sum, s) => sum + s.cpuCost, 0);
-  const totalEgressCost = services.reduce((sum, s) => sum + s.networkEgressCost, 0);
-
-  const memoryCostPercentage =
-    currentCost > 0 ? Math.round((totalMemoryCost / currentCost) * 100) : 90;
+  const { estimate, period, credit, reconciliation, services, workerTelemetry } = report;
+  const periodProgress = period.totalSeconds > 0
+    ? Math.min(100, Math.round((period.elapsedSeconds / period.totalSeconds) * 100))
+    : 0;
+  const reconciliationLabel = reconciliation.status === "matches"
+    ? "Estimate matches Railway"
+    : reconciliation.status === "differs"
+      ? "Estimate differs"
+      : "Railway comparison unavailable";
+  const reconciliationTone = reconciliation.status === "matches"
+    ? "text-emerald-700"
+    : reconciliation.status === "differs"
+      ? "text-red-700"
+      : "text-gray-700";
+  const specialistCount = services.filter(
+    (service) => service.workerRole === "store-specific",
+  ).length;
 
   return (
-    <div className="p-6 md:p-8 max-w-7xl mx-auto space-y-6">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-gray-200 pb-5">
+    <div className="mx-auto max-w-7xl space-y-6 p-6 md:p-8">
+      <div className="flex flex-col gap-4 border-b border-gray-200 pb-5 md:flex-row md:items-center md:justify-between">
         <div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-2xl font-bold text-gray-900 tracking-tight">
-              Railway Usage & Costs
-            </h1>
-            <span
-              className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                report.configured
-                  ? "bg-emerald-100 text-emerald-800 border border-emerald-200"
-                  : "bg-amber-100 text-amber-800 border border-amber-200"
-              }`}
-            >
-              <span
-                className={`w-1.5 h-1.5 rounded-full mr-1.5 ${
-                  report.configured ? "bg-emerald-500" : "bg-amber-500 animate-pulse"
-                }`}
-              />
-              {report.configured ? "Live Railway Sync" : "Internal Telemetry Only"}
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-2xl font-bold tracking-tight text-gray-900">Railway Usage & Costs</h1>
+            <span className={`inline-flex rounded-full border px-2.5 py-1 text-xs font-medium ${
+              report.configured
+                ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                : "border-amber-200 bg-amber-50 text-amber-800"
+            }`}>
+              {report.configured ? "Live Railway Sync" : "Railway not configured"}
             </span>
           </div>
           <p className="mt-1 text-sm text-gray-500">
-            Real-time infrastructure billing calculation ·{" "}
-            <span className="font-semibold text-emerald-700">{activeCount} active worker</span>
-            {parkedCount > 0 ? (
-              <span className="text-gray-500">
-                {" "}· <span className="font-semibold text-amber-700">{parkedCount} parked</span> (on-demand standby)
-              </span>
-            ) : null}
-            {inactiveCount > 0 ? (
-              <span className="text-gray-500">
-                {" "}· <span className="font-semibold text-red-700">{inactiveCount} stale/deployed</span>
-              </span>
-            ) : null}
+            {report.infrastructureOnlineCount}/{services.length} Railway online · {report.heartbeatHealthyCount}/{services.length} heartbeat healthy
+            {report.parkedServicesCount > 0 ? ` · ${report.parkedServicesCount} intentionally parked` : ""}
+          </p>
+          <p className="mt-1 text-xs text-gray-400">
+            Snapshot fetched {dateLabel(report.lastUpdated, true)} · methodology {estimate.methodologyVersion}
           </p>
         </div>
-
-        {/* Controls */}
-        <div className="flex items-center gap-3">
-          <label className="flex items-center gap-2 text-xs text-gray-600 cursor-pointer select-none">
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="flex cursor-pointer select-none items-center gap-2 text-xs text-gray-600">
             <input
               type="checkbox"
               checked={autoRefresh}
-              onChange={(e) => setAutoRefresh(e.target.checked)}
-              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 h-4 w-4"
+              onChange={(event) => setAutoRefresh(event.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
             />
-            Auto-refresh (30s)
+            Auto-refresh (5m)
           </label>
-
           <button
             type="button"
-            onClick={refreshData}
+            onClick={() => void refreshData()}
             disabled={isRefreshing}
-            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-sm font-medium bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 shadow-xs active:bg-gray-100 transition-colors disabled:opacity-50 cursor-pointer"
+            className="rounded-lg border border-gray-300 bg-white px-3.5 py-2 text-sm font-medium text-gray-700 shadow-xs hover:bg-gray-50 disabled:opacity-50"
           >
-            <svg
-              className={`w-4 h-4 text-gray-500 ${isRefreshing ? "animate-spin" : ""}`}
-              fill="none"
-              stroke="currentColor"
-              viewBox="0 0 24 24"
-            >
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-              />
-            </svg>
-            <span>{isRefreshing ? "Syncing..." : "Refresh"}</span>
+            {isRefreshing ? "Refreshing…" : "Refresh"}
           </button>
         </div>
       </div>
 
-      {/* Notice / Warning banner if any */}
-      {error && (
-        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 flex items-start gap-3">
-          <svg className="w-5 h-5 text-amber-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-          </svg>
-          <div className="flex-1">
-            <p className="font-semibold text-amber-900">Notice</p>
-            <p className="mt-0.5 text-xs text-amber-700 leading-relaxed">{error}</p>
-          </div>
+      {(requestError || report.warnings.length > 0) && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900" role="status">
+          {requestError ? <p className="font-semibold">{requestError}</p> : null}
+          {report.warnings.map((warning) => (
+            <p key={warning} className="mt-1 text-xs text-amber-800">{warning}</p>
+          ))}
         </div>
       )}
 
-      {/* Top 4 KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Month to Date Spend */}
-        <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-xs hover:border-gray-300 transition-colors">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-              Month-to-Date Spend
-            </span>
-            <span className="p-1.5 rounded-lg bg-blue-50 text-blue-600">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </span>
-          </div>
-          <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-gray-900 tracking-tight">
-              ${currentCost.toFixed(2)}
-            </span>
-            <span className="text-xs text-gray-500 font-medium">USD</span>
-          </div>
-          <div className="mt-3">
-            <div className="flex justify-between text-xs text-gray-500 mb-1">
-              <span>Day {billingPeriod.daysElapsed} of {billingPeriod.totalDaysInMonth}</span>
-              <span>{Math.round((billingPeriod.daysElapsed / billingPeriod.totalDaysInMonth) * 100)}% of cycle</span>
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <Card
+          label="Estimated Worker Compute Cost"
+          value={money(estimate.currentGrossCost)}
+          tone="text-blue-700"
+          detail={
+            <div>
+              <div className="flex justify-between gap-3">
+                <span>{dateLabel(period.start)} – {dateLabel(period.end)}</span>
+                <span>{periodProgress}%</span>
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-gray-100">
+                <div className="h-full rounded-full bg-blue-600" style={{ width: `${periodProgress}%` }} />
+              </div>
+              <p className="mt-2 capitalize">{period.type} / billing period · gross project usage</p>
             </div>
-            <div className="w-full bg-gray-100 rounded-full h-1.5 overflow-hidden">
-              <div
-                className="bg-blue-600 h-1.5 rounded-full"
-                style={{
-                  width: `${Math.min(
-                    Math.round((billingPeriod.daysElapsed / billingPeriod.totalDaysInMonth) * 100),
-                    100
-                  )}%`,
-                }}
-              />
-            </div>
-          </div>
-        </div>
-
-        {/* Projected Month-End */}
-        <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-xs hover:border-gray-300 transition-colors">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-              Projected Month-End
+          }
+        />
+        <Card
+          label="Projected Period-End"
+          value={money(estimate.projectedGrossCost, true)}
+          detail={estimate.recentBurnPerDay === null
+            ? "Unavailable until a complete burn-rate window exists."
+            : `Latest available 24-hour burn: ~$${estimate.recentBurnPerDay.toFixed(2)} per day.`}
+        />
+        <Card
+          label="Railway Credit Available"
+          value={credit.availableUsd === null ? "Unavailable" : money(credit.availableUsd)}
+          tone="text-emerald-700"
+          detail={credit.source === "unavailable" ? (
+            <span>
+              Railway’s accessible API does not expose the live workspace credit balance.{" "}
+              {credit.dashboardUrl ? (
+                <a className="font-semibold text-blue-700 underline" href={credit.dashboardUrl} target="_blank" rel="noreferrer">Open Railway</a>
+              ) : null}
             </span>
-            <span className="p-1.5 rounded-lg bg-indigo-50 text-indigo-600">
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
-              </svg>
-            </span>
-          </div>
-          <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-gray-900 tracking-tight">
-              ~${projectedCost.toFixed(2)}
-            </span>
-            <span className="text-xs text-gray-500 font-medium">USD</span>
-          </div>
-          <div className="mt-3 text-xs text-gray-500 flex items-center justify-between">
-            <span>Burn (Active Only)</span>
-            <span className="font-semibold text-emerald-700">~${dailyAverage.toFixed(2)} / day</span>
-          </div>
-        </div>
-
-        {/* Worker Coverage */}
-        <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-xs hover:border-gray-300 transition-colors">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-              Worker Coverage
-            </span>
-            <span className="p-1.5 rounded-lg bg-blue-50 text-blue-700 font-bold text-xs">
-              {services.length} services
-            </span>
-          </div>
-          <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-blue-700 tracking-tight">
-              {activeCount}/{services.length}
-            </span>
-            <span className="text-xs text-gray-500 font-medium">online</span>
-          </div>
-          <div className="mt-3 text-xs text-gray-500 flex items-center justify-between">
-            <span>{specialistCount} specialist workers</span>
-            <span className="font-medium text-gray-700">1 unified overflow</span>
-          </div>
-        </div>
-
-        {/* Resource Allocation */}
-        <div className="bg-white border border-gray-200 rounded-xl p-5 shadow-xs hover:border-gray-300 transition-colors">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-gray-500">
-              RAM Share of Bill
-            </span>
-            <span className="p-1.5 rounded-lg bg-purple-50 text-purple-600 font-semibold text-xs">
-              {memoryCostPercentage}%
-            </span>
-          </div>
-          <div className="mt-3 flex items-baseline gap-2">
-            <span className="text-3xl font-bold text-purple-700 tracking-tight">
-              ${totalMemoryCost.toFixed(2)}
-            </span>
-            <span className="text-xs text-gray-500 font-medium">RAM Cost</span>
-          </div>
-          <div className="mt-3 text-xs text-gray-500 flex items-center justify-between">
-            <span>CPU / Egress Total</span>
-            <span className="font-medium text-gray-700">
-              ${(totalCpuCost + totalEgressCost).toFixed(2)}
-            </span>
-          </div>
-        </div>
+          ) : `Railway workspace value fetched ${dateLabel(credit.fetchedAt, true)}.`}
+        />
+        <Card
+          label="Credit Expires"
+          value={dateLabel(credit.expiresAt)}
+          detail={`Credit is workspace-wide and is never calculated as $5 minus this project’s usage. Snapshot: ${dateLabel(credit.fetchedAt, true)}.`}
+        />
+        <Card
+          label="Worker Coverage"
+          value={`${report.infrastructureOnlineCount}/${services.length} online`}
+          tone="text-blue-700"
+          detail={`${report.heartbeatHealthyCount}/${services.length} heartbeat healthy · ${specialistCount} specialist · ${services.filter((service) => service.workerRole === "unified").length} unified.`}
+        />
+        <Card
+          label="Railway Reconciliation"
+          value={reconciliationLabel}
+          tone={reconciliationTone}
+          detail={reconciliation.status === "unavailable"
+            ? reconciliation.reason ?? "No comparable Railway project value was available."
+            : `Estimate ${money(estimate.currentGrossCost)} · Railway ${money(reconciliation.railwayProjectUsage)} · difference ${money(reconciliation.absoluteDifference)} (tolerance ${money(reconciliation.tolerance)}).`}
+        />
       </div>
 
-      {/* Services Usage Breakdown Table */}
-      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-xs">
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-          <div>
-            <h2 className="text-base font-semibold text-gray-900">Per-Service Resource Breakdown</h2>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Accumulated resource metrics for each worker in your Railway project.
-            </p>
-          </div>
-          <span className="text-xs font-medium text-gray-500 bg-gray-100 px-2.5 py-1 rounded-md">
-            {activeCount} Active · {parkedCount} Parked · {inactiveCount} Stale/deployed
-          </span>
+      <div className="rounded-xl border border-gray-200 bg-white shadow-xs">
+        <div className="border-b border-gray-200 px-6 py-4">
+          <h2 className="font-semibold text-gray-900">Per-Service Resource Breakdown</h2>
+          <p className="mt-1 text-xs text-gray-500">
+            Railway billable vCPU-minutes, GB-minutes and egress for the exact period above. Deployment and heartbeat states are intentionally separate.
+          </p>
         </div>
-
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-sm">
-            <thead className="bg-gray-50/75 border-b border-gray-200 text-xs font-semibold text-gray-600 uppercase tracking-wider">
+          <table className="w-full min-w-[1000px] text-left text-sm">
+            <thead className="border-b border-gray-200 bg-gray-50 text-xs uppercase tracking-wider text-gray-600">
               <tr>
-                <th className="px-6 py-3.5">Service Name</th>
-                <th className="px-6 py-3.5">Status</th>
-                <th className="px-6 py-3.5">CPU Usage</th>
-                <th className="px-6 py-3.5">Memory (RAM)</th>
-                <th className="px-6 py-3.5">Current Cost</th>
-                <th className="px-6 py-3.5 text-right">% Share</th>
+                <th className="px-6 py-3.5">Service</th>
+                <th className="px-6 py-3.5">Infrastructure</th>
+                <th className="px-6 py-3.5">Application Health</th>
+                <th className="px-6 py-3.5">CPU</th>
+                <th className="px-6 py-3.5">RAM</th>
+                <th className="px-6 py-3.5">Egress</th>
+                <th className="px-6 py-3.5 text-right">Cost</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
               {services.length === 0 ? (
-                <tr>
-                  <td colSpan={6} className="px-6 py-8 text-center text-gray-500 text-sm">
-                    No Railway service data available. Check that your Railway API token and Project ID are set.
+                <tr><td colSpan={7} className="px-6 py-10 text-center text-gray-500">No complete Railway service snapshot is available.</td></tr>
+              ) : services.map((service) => (
+                <tr key={service.id} className="align-top hover:bg-gray-50/60">
+                  <td className="px-6 py-4">
+                    <p className="font-semibold text-gray-900">{service.name}</p>
+                    <p className="mt-1 max-w-xs text-xs text-gray-500">
+                      {service.workerRole === "unified" ? "Unified" : service.workerRole === "store-specific" ? "Store-specific" : "Legacy / unknown"} · {service.coverage}
+                    </p>
+                    <p className="mt-1 text-xs text-gray-400">{service.activeLeaseCount} active lease{service.activeLeaseCount === 1 ? "" : "s"}</p>
                   </td>
+                  <td className="px-6 py-4">
+                    <InfrastructureBadge state={service.infrastructureState} />
+                    <p className="mt-2 text-xs text-gray-400">Deployment {service.deploymentStatus ?? "unavailable"}</p>
+                  </td>
+                  <td className="px-6 py-4">
+                    <HeartbeatBadge state={service.heartbeatState} />
+                    <p className="mt-2 text-xs text-gray-400">Last: {dateLabel(service.lastHeartbeatAt, true)}</p>
+                  </td>
+                  <td className="px-6 py-4">
+                    <p className="font-medium text-gray-900">{service.cpuVcpuMinutes.toFixed(2)} vCPU-min</p>
+                    <p className="mt-1 text-xs text-gray-500">${service.cpuCost.toFixed(4)}</p>
+                  </td>
+                  <td className="px-6 py-4">
+                    <p className="font-medium text-gray-900">{service.memoryGbMinutes.toFixed(2)} GB-min</p>
+                    <p className="mt-1 text-xs text-purple-700">${service.memoryCost.toFixed(4)}</p>
+                  </td>
+                  <td className="px-6 py-4">
+                    <p className="font-medium text-gray-900">{service.networkEgressGb.toFixed(3)} GB</p>
+                    <p className="mt-1 text-xs text-gray-500">${service.networkEgressCost.toFixed(4)}</p>
+                  </td>
+                  <td className="px-6 py-4 text-right text-base font-bold text-gray-900">${service.totalCost.toFixed(2)}</td>
                 </tr>
-              ) : (
-                services.map((service) => {
-                  const share =
-                    currentCost > 0 ? Math.round((service.totalCost / currentCost) * 100) : 0;
-
-                  return (
-                    <tr
-                      key={service.id}
-                      className={`transition-colors ${
-                        service.isActive ? "bg-emerald-50/30 hover:bg-emerald-50/50" : "hover:bg-gray-50/50"
-                      }`}
-                    >
-                      <td className="px-6 py-4 font-medium text-gray-900 flex items-center gap-2.5">
-                        <div
-                          className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${
-                            service.isActive ? "bg-emerald-500 animate-pulse" : "bg-amber-400"
-                          }`}
-                        />
-                        <div>
-                          <div className="font-semibold text-gray-900">{service.name}</div>
-                          <div className="text-xs text-gray-400 font-mono mt-0.5 truncate max-w-xs">
-                            {service.id}
-                          </div>
-                          <div className="text-xs text-gray-500 mt-1">
-                            {service.workerRole === "store-specific"
-                              ? "Store-specific"
-                              : service.workerRole === "unified"
-                                ? "Unified"
-                                : "Legacy / unknown"}
-                            {` · ${service.coverage}`}
-                            {service.activeLeaseCount > 0
-                              ? ` · ${service.activeLeaseCount} active lease${service.activeLeaseCount === 1 ? "" : "s"}`
-                              : " · No active leases"}
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4">
-                        {service.serviceState === "active" ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                            Active
-                          </span>
-                        ) : service.serviceState === "parked" ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-                            Parked ($0 active cost)
-                          </span>
-                        ) : service.serviceState === "stale" ? (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
-                            Stale heartbeat
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-50 text-gray-700 border border-gray-200">
-                            <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
-                            Deployed — no heartbeat
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4 text-gray-700">
-                        <div className="font-medium text-gray-900">{service.cpuHours.toFixed(1)} vCPU-hrs</div>
-                        <div className="text-xs text-gray-500 font-mono">${service.cpuCost.toFixed(2)}</div>
-                      </td>
-                      <td className="px-6 py-4 text-gray-700">
-                        <div className="font-medium text-gray-900">{service.memoryGBHours.toFixed(1)} GB-hrs</div>
-                        <div className="text-xs text-purple-700 font-mono font-medium">
-                          ${service.memoryCost.toFixed(2)}
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 font-bold text-gray-900">
-                        ${service.totalCost.toFixed(2)}
-                      </td>
-                      <td className="px-6 py-4 text-right">
-                        <div className="inline-flex items-center gap-2">
-                          <span className="text-xs font-semibold text-gray-700">{share}%</span>
-                          <div className="w-16 bg-gray-100 rounded-full h-1.5 overflow-hidden">
-                            <div
-                              className={`h-1.5 rounded-full ${
-                                service.isActive ? "bg-emerald-500" : "bg-blue-600"
-                              }`}
-                              style={{ width: `${share}%` }}
-                            />
-                          </div>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
+              ))}
             </tbody>
-            {services.length > 0 && (
-              <tfoot className="bg-gray-50 font-semibold border-t-2 border-gray-300 text-gray-900">
+            {services.length > 0 ? (
+              <tfoot className="border-t-2 border-gray-300 bg-gray-50 font-semibold">
                 <tr>
-                  <td className="px-6 py-3.5">Total</td>
-                  <td className="px-6 py-3.5 text-xs text-gray-500 font-normal">
-                    {activeCount} active · {parkedCount} parked · {inactiveCount} stale/deployed
-                  </td>
-                  <td className="px-6 py-3.5 font-mono">${totalCpuCost.toFixed(2)}</td>
-                  <td className="px-6 py-3.5 font-mono text-purple-700">${totalMemoryCost.toFixed(2)}</td>
-                  <td className="px-6 py-3.5 font-mono text-blue-700 text-base">
-                    ${currentCost.toFixed(2)}
-                  </td>
-                  <td className="px-6 py-3.5 text-right">100%</td>
+                  <td className="px-6 py-3.5" colSpan={3}>Total</td>
+                  <td className="px-6 py-3.5">{money(estimate.cpuCost)}</td>
+                  <td className="px-6 py-3.5 text-purple-700">{money(estimate.memoryCost)}</td>
+                  <td className="px-6 py-3.5">{money(estimate.networkEgressCost)}</td>
+                  <td className="px-6 py-3.5 text-right text-base text-blue-700">{money(estimate.currentGrossCost)}</td>
                 </tr>
               </tfoot>
-            )}
+            ) : null}
           </table>
         </div>
       </div>
 
-      {/* Live Worker Internal Telemetry Snapshots */}
-      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden shadow-xs">
-        <div className="px-6 py-4 border-b border-gray-200 flex items-center justify-between">
-          <div>
-            <h2 className="text-base font-semibold text-gray-900">Live Worker Telemetry (RAM & CPU)</h2>
-            <p className="text-xs text-gray-500 mt-0.5">
-              Live snapshots reported directly from the worker processes via internal telemetry.
-            </p>
-          </div>
-          <span className="inline-flex items-center gap-1.5 text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full font-medium">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            Active Emitter
-          </span>
+      <div className="rounded-xl border border-gray-200 bg-white shadow-xs">
+        <div className="border-b border-gray-200 px-6 py-4">
+          <h2 className="font-semibold text-gray-900">ListFlow Worker Telemetry</h2>
+          <p className="mt-1 text-xs text-gray-500">Application process snapshots; these do not determine Railway deployment status.</p>
         </div>
-
         <div className="p-6">
           {workerTelemetry.length === 0 ? (
-            <div className="text-center py-8 text-sm text-gray-500">
-              <p>No internal telemetry snapshots recorded yet.</p>
-              <p className="text-xs text-gray-400 mt-1">
-                Workers report memory and CPU snapshots every 60 seconds while active.
-              </p>
-            </div>
+            <p className="py-6 text-center text-sm text-gray-500">No internal telemetry snapshots recorded yet.</p>
           ) : (
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
               {workerTelemetry.slice(0, 6).map((snapshot) => (
-                <div
-                  key={snapshot.id}
-                  className="border border-gray-200 rounded-xl p-4 bg-gray-50/50 hover:bg-white hover:shadow-xs transition-all space-y-3"
-                >
-                  <div className="flex items-start justify-between">
+                <div key={snapshot.id} className="rounded-xl border border-gray-200 bg-gray-50/50 p-4">
+                  <div className="flex items-start justify-between gap-3">
                     <div>
-                      <h3 className="font-semibold text-gray-900 text-sm">
-                        {snapshot.workerName}
-                      </h3>
-                      <p className="text-xs text-gray-500 font-mono mt-0.5">{snapshot.workerId}</p>
+                      <p className="font-semibold text-gray-900">{snapshot.workerName}</p>
+                      <p className="mt-1 text-xs text-gray-400">{snapshot.workerId}</p>
                     </div>
-                    <span className="text-[11px] text-gray-400 bg-white border border-gray-200 px-2 py-0.5 rounded-md">
-                      {new Date(snapshot.timestamp).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                        second: "2-digit",
-                      })}
-                    </span>
+                    <span className="text-xs text-gray-500">{dateLabel(snapshot.timestamp, true)}</span>
                   </div>
-
-                  {/* RAM breakdown */}
-                  <div className="space-y-1.5">
-                    <div className="flex justify-between text-xs">
-                      <span className="text-gray-500">RSS (Container RAM):</span>
-                      <span className="font-semibold text-gray-900 font-mono">
-                        {snapshot.rssMB.toFixed(1)} MB
-                      </span>
-                    </div>
-                    <div className="flex justify-between text-xs">
-                      <span className="text-gray-500">V8 Heap Used / Total:</span>
-                      <span className="font-medium text-gray-700 font-mono">
-                        {snapshot.heapUsedMB.toFixed(1)} / {snapshot.heapTotalMB.toFixed(1)} MB
-                      </span>
-                    </div>
-                    {/* Heap Bar relative to 512MB limit */}
-                    <div className="w-full bg-gray-200 rounded-full h-1.5 overflow-hidden">
-                      <div
-                        className={`h-1.5 rounded-full ${
-                          snapshot.heapUsedMB > 400
-                            ? "bg-red-500"
-                            : snapshot.heapUsedMB > 250
-                            ? "bg-amber-500"
-                            : "bg-emerald-500"
-                        }`}
-                        style={{
-                          width: `${Math.min(Math.round((snapshot.heapUsedMB / 512) * 100), 100)}%`,
-                        }}
-                      />
-                    </div>
-                    <div className="flex justify-between text-[10px] text-gray-400">
-                      <span>Heap Cap: 512 MB</span>
-                      <span>{Math.round((snapshot.heapUsedMB / 512) * 100)}% utilized</span>
-                    </div>
-                  </div>
-
-                  {/* CPU & Uptime */}
-                  <div className="pt-2 border-t border-gray-200 grid grid-cols-2 gap-2 text-xs">
-                    <div>
-                      <span className="text-gray-400 block text-[10px] uppercase">CPU %</span>
-                      <span className="font-semibold text-gray-800 font-mono">
-                        {snapshot.cpuPercent.toFixed(1)}%
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-gray-400 block text-[10px] uppercase">Uptime</span>
-                      <span className="font-medium text-gray-800 font-mono">
-                        {Math.floor(snapshot.uptimeSeconds / 3600)}h{" "}
-                        {Math.floor((snapshot.uptimeSeconds % 3600) / 60)}m
-                      </span>
-                    </div>
-                  </div>
+                  <dl className="mt-4 grid grid-cols-3 gap-2 text-xs">
+                    <div><dt className="text-gray-400">RSS RAM</dt><dd className="mt-1 font-semibold">{snapshot.rssMB.toFixed(1)} MB</dd></div>
+                    <div><dt className="text-gray-400">CPU</dt><dd className="mt-1 font-semibold">{snapshot.cpuPercent.toFixed(1)}%</dd></div>
+                    <div><dt className="text-gray-400">Uptime</dt><dd className="mt-1 font-semibold">{Math.floor(snapshot.uptimeSeconds / 3600)}h</dd></div>
+                  </dl>
                 </div>
               ))}
             </div>
           )}
-        </div>
-      </div>
-
-      {/* Architecture & Savings Summary Card */}
-      <div className="bg-gradient-to-r from-emerald-50 via-teal-50 to-blue-50 border border-emerald-200 rounded-xl p-5 shadow-xs">
-        <div className="flex items-start gap-4">
-          <div className="p-2.5 rounded-xl bg-emerald-600 text-white flex-shrink-0">
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
-            </svg>
-          </div>
-          <div className="space-y-2 text-sm flex-1">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-              <h3 className="font-bold text-gray-900 text-base">
-                Dual-Worker Store Coverage
-              </h3>
-              <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
-                Specialist-first + unified overflow
-              </span>
-            </div>
-            <p className="text-xs text-gray-700 leading-relaxed">
-              Each store is served by its <strong>store-specific worker</strong> and by <code className="bg-white/80 px-1.5 py-0.5 rounded border border-emerald-200 font-mono text-emerald-900">worker-all-stores</code>. Fresh jobs wait briefly for the specialist, then become eligible for unified overflow.
-            </p>
-            <p className="text-xs text-gray-600 leading-relaxed">
-              Whole jobs remain single-owner. Database leases prevent duplicate work, while per-store eBay lanes continue to serialize eBay API calls safely.
-            </p>
-          </div>
         </div>
       </div>
     </div>

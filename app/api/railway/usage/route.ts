@@ -19,7 +19,11 @@ export async function GET(request: Request) {
 
   try {
     const report = await fetchRailwayUsageReport();
-    return NextResponse.json(report);
+    return NextResponse.json(report, {
+      headers: {
+        "Cache-Control": "private, no-store, max-age=0",
+      },
+    });
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     log.error("railway/usage/GET", "Failed to fetch Railway usage report", error);
