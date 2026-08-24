@@ -12,6 +12,9 @@ test("description editors opt into a responsive sticky formatting toolbar", () =
 
   assert.match(editor, /stickyToolbar\?: boolean/);
   assert.match(editor, /data-toolbar-sticky=/);
+  assert.match(editor, /window\.addEventListener\("scroll", scheduleToolbarUpdate, true\)/);
+  assert.match(editor, /position: "fixed"/);
+  assert.match(editor, /style=\{\{ height: fixedToolbarLayout\.height \}\}/);
   assert.match(inlineEditor, /selectableImages\s+stickyToolbar/);
   assert.match(draftEditor, /onChange=\{setDescription\}\s+stickyToolbar/);
   assert.match(

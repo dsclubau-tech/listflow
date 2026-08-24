@@ -77,6 +77,13 @@ interface RichTextEditorProps {
   toolbarVariant?: ToolbarVariant;
 }
 
+interface FixedToolbarLayout {
+  height: number;
+  left: number;
+  top: number;
+  width: number;
+}
+
 interface ToolbarSectionProps {
   label: string;
   children: ReactNode;
@@ -289,9 +296,81 @@ export default function RichTextEditor({
   const [imageProperties, setImageProperties] =
     useState<ImagePropertiesState | null>(null);
   const pickerRef = useRef<HTMLSpanElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
+  const toolbarFrameRef = useRef<number | null>(null);
   const selectedImageRef = useRef<HTMLImageElement | null>(null);
   const imageMenuRef = useRef<HTMLDivElement | null>(null);
   const pointerImageDragRef = useRef<PointerImageDragState | null>(null);
+  const [fixedToolbarLayout, setFixedToolbarLayout] =
+    useState<FixedToolbarLayout | null>(null);
+
+  useEffect(() => {
+    if (!stickyToolbar) return;
+
+    const updateToolbarLayout = () => {
+      const root = rootRef.current;
+      const toolbar = toolbarRef.current;
+      if (!root || !toolbar) return;
+
+      const rootRect = root.getBoundingClientRect();
+      const height = toolbar.offsetHeight;
+      const top = window.matchMedia("(min-width: 768px)").matches ? 0 : 64;
+      const shouldFix =
+        rootRect.top < top && rootRect.bottom > top + height;
+
+      const nextLayout = shouldFix
+        ? {
+            height,
+            left: Math.max(0, rootRect.left),
+            top,
+            width: Math.max(
+              0,
+              Math.min(window.innerWidth, rootRect.right) -
+                Math.max(0, rootRect.left),
+            ),
+          }
+        : null;
+
+      setFixedToolbarLayout((current) => {
+        if (
+          current?.height === nextLayout?.height &&
+          current?.left === nextLayout?.left &&
+          current?.top === nextLayout?.top &&
+          current?.width === nextLayout?.width
+        ) {
+          return current;
+        }
+        return nextLayout;
+      });
+    };
+
+    const scheduleToolbarUpdate = () => {
+      if (toolbarFrameRef.current !== null) return;
+      toolbarFrameRef.current = window.requestAnimationFrame(() => {
+        toolbarFrameRef.current = null;
+        updateToolbarLayout();
+      });
+    };
+
+    scheduleToolbarUpdate();
+    window.addEventListener("scroll", scheduleToolbarUpdate, true);
+    window.addEventListener("resize", scheduleToolbarUpdate);
+
+    const resizeObserver = new ResizeObserver(scheduleToolbarUpdate);
+    if (rootRef.current) resizeObserver.observe(rootRef.current);
+    if (toolbarRef.current) resizeObserver.observe(toolbarRef.current);
+
+    return () => {
+      window.removeEventListener("scroll", scheduleToolbarUpdate, true);
+      window.removeEventListener("resize", scheduleToolbarUpdate);
+      resizeObserver.disconnect();
+      if (toolbarFrameRef.current !== null) {
+        window.cancelAnimationFrame(toolbarFrameRef.current);
+        toolbarFrameRef.current = null;
+      }
+    };
+  }, [stickyToolbar]);
 
   useEffect(() => {
     if (!openPicker) return;
@@ -1280,6 +1359,7 @@ export default function RichTextEditor({
 
   return (
     <div
+      ref={rootRef}
       className={`listflow-rich-text ${className}`.trim()}
       style={rootStyle}
       data-toolbar-variant={toolbarVariant}
@@ -1292,9 +1372,29 @@ export default function RichTextEditor({
       onPointerUpCapture={handleImagePointerUp}
       onPointerCancelCapture={clearPointerImageDrag}
     >
-      <div id={toolbarId} className="listflow-quill-toolbar" role="toolbar" aria-label="Rich text editor toolbar">
+      <div
+        ref={toolbarRef}
+        id={toolbarId}
+        className="listflow-quill-toolbar"
+        role="toolbar"
+        aria-label="Rich text editor toolbar"
+        style={
+          fixedToolbarLayout
+            ? {
+                left: fixedToolbarLayout.left,
+                position: "fixed",
+                top: fixedToolbarLayout.top,
+                width: fixedToolbarLayout.width,
+                zIndex: 70,
+              }
+            : undefined
+        }
+      >
         {toolbarVariant === "compact" ? renderCompactToolbar() : renderGroupedToolbar()}
       </div>
+      {fixedToolbarLayout && (
+        <div aria-hidden="true" style={{ height: fixedToolbarLayout.height }} />
+      )}
 
       {!EditorComponent ? (
         <div className="listflow-quill-loading border border-gray-300 border-t-0 rounded-b-md px-4 py-3 text-sm text-gray-500 bg-white">
