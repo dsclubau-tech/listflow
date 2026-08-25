@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import ActionProgressBar from "@/components/ActionProgressBar";
 import { PostcodeAutocomplete } from "@/components/PostcodeAutocomplete";
-import type { SerializedProductRow } from "@/types/product-row";
 
 type ToastVariant = "success" | "error";
 
@@ -96,7 +95,7 @@ type BulkEditSkipped = {
 
 interface BulkEditModalProps {
   open: boolean;
-  products: SerializedProductRow[];
+  storeId: string | null;
   selectedProductIds: string[];
   onClose: () => void;
   onToast: (message: string, variant: ToastVariant) => void;
@@ -246,7 +245,7 @@ function buildOperation(item: BulkEditItem) {
 
 export default function BulkEditModal({
   open,
-  products,
+  storeId,
   selectedProductIds,
   onClose,
   onToast,
@@ -266,11 +265,7 @@ export default function BulkEditModal({
   const [job, setJob] = useState<BulkEditJob | null>(null);
   const [skipped, setSkipped] = useState<BulkEditSkipped[]>([]);
   const [terminalNotifiedJobId, setTerminalNotifiedJobId] = useState<string | null>(null);
-  const selectedProducts = useMemo(
-    () => products.filter((product) => selectedProductIds.includes(product.id)),
-    [products, selectedProductIds]
-  );
-  const selectedStoreId = selectedProducts[0]?.storeId ?? null;
+  const selectedStoreId = storeId;
   const selectedCount = selectedProductIds.length;
   const selectedFields = useMemo(
     () => new Set(items.map((item) => item.field)),
@@ -384,9 +379,10 @@ export default function BulkEditModal({
     if (!open || !selectedStoreId) {
       return;
     }
+    const storeIdForRequest = selectedStoreId;
 
     const loadedForStore =
-      supportDataLoaded.storeId === selectedStoreId
+      supportDataLoaded.storeId === storeIdForRequest
         ? supportDataLoaded
         : EMPTY_SUPPORT_DATA_LOADED;
     const shouldLoadPolicies = needsEbayPolicies && !loadedForStore.policies;
@@ -412,12 +408,12 @@ export default function BulkEditModal({
         const [policyResponse, templateResponse, descriptionTemplateResponse] =
           await Promise.all([
             shouldLoadPolicies
-              ? fetch(`/api/policies?store=${encodeURIComponent(selectedStoreId)}`, {
+              ? fetch(`/api/policies?store=${encodeURIComponent(storeIdForRequest)}`, {
                   cache: "no-store",
                 })
               : Promise.resolve(null),
             shouldLoadPolicyTemplates
-              ? fetch(`/api/policy-templates?storeId=${encodeURIComponent(selectedStoreId)}`, {
+              ? fetch(`/api/policy-templates?storeId=${encodeURIComponent(storeIdForRequest)}`, {
                   cache: "no-store",
                 })
               : Promise.resolve(null),
@@ -462,12 +458,12 @@ export default function BulkEditModal({
         ) {
           setSupportDataLoaded((current) => {
             const base =
-              current.storeId === selectedStoreId
+              current.storeId === storeIdForRequest
                 ? current
-                : { ...EMPTY_SUPPORT_DATA_LOADED, storeId: selectedStoreId };
+                : { ...EMPTY_SUPPORT_DATA_LOADED, storeId: storeIdForRequest };
 
             return {
-              storeId: selectedStoreId,
+              storeId: storeIdForRequest,
               policies: base.policies || loaded.policies,
               policyTemplates: base.policyTemplates || loaded.policyTemplates,
               descriptionTemplates:

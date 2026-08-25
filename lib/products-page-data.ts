@@ -23,6 +23,7 @@ import {
   type ProductSortOrder,
 } from "@/lib/product-sort";
 import { prisma } from "@/lib/prisma";
+import type { ProductSelectionSummary } from "@/types/product-selection";
 import type { SerializedProductRow } from "@/types/product-row";
 
 export { normalizeProductsQuery };
@@ -133,6 +134,58 @@ const productSortCandidateSelect = {
   },
 } satisfies Prisma.ProductSelect;
 
+const productSelectionSelect = {
+  id: true,
+  title: true,
+  status: true,
+  asin: true,
+  storeId: true,
+  price: true,
+  amazonPrice: true,
+  variants: {
+    orderBy: { createdAt: "asc" },
+    select: {
+      id: true,
+      title: true,
+      buyPrice: true,
+      sellPrice: true,
+      feesPercent: true,
+      feesFixed: true,
+    },
+  },
+  _count: {
+    select: {
+      variants: true,
+      priceHistory: { where: { appliedAt: null } },
+    },
+  },
+} satisfies Prisma.ProductSelect;
+
+type ProductSelectionPayload = Prisma.ProductGetPayload<{
+  select: typeof productSelectionSelect;
+}>;
+
+function serializeProductSelection(
+  products: ProductSelectionPayload[],
+): ProductSelectionSummary[] {
+  return products.map((product) => ({
+    id: product.id,
+    title: product.title,
+    status: product.status,
+    asin: product.asin,
+    storeId: product.storeId,
+    price: product.price.toString(),
+    amazonPrice: product.amazonPrice?.toString() ?? null,
+    variants: product.variants.map((variant) => ({
+      ...variant,
+      buyPrice: variant.buyPrice.toString(),
+      sellPrice: variant.sellPrice.toString(),
+    })),
+    _count: { variants: product._count.variants },
+    hasPendingPriceChange: product._count.priceHistory > 0,
+  }));
+}
+
 function serializeProducts(products: ProductRowPayload[]): SerializedProductRow[] {
   // Editor-only fields are loaded from the product detail endpoint on expansion.
   return products.map(({ uploadLogs, ...product }) =>
@@ -213,6 +266,55 @@ async function getProductRowsByIds(storeId: string, ids: string[]) {
   return products.sort(
     (left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0)
   );
+}
+
+async function getProductSelectionRowsByIds(storeId: string, ids: string[]) {
+  if (ids.length === 0) {
+    return [];
+  }
+
+  const products = await prisma.product.findMany({
+    where: { storeId, id: { in: ids } },
+    select: productSelectionSelect,
+  });
+  const order = new Map(ids.map((id, index) => [id, index]));
+
+  return products.sort(
+    (left, right) => (order.get(left.id) ?? 0) - (order.get(right.id) ?? 0),
+  );
+}
+
+export async function getCachedProductsSelectionData(
+  storeId: string,
+  query: NormalizedProductsQuery,
+) {
+  "use cache";
+
+  cacheLife(LISTFLOW_FRESH_CACHE_LIFE);
+  cacheTag(productsCacheTag(storeId), draftsCacheTag(storeId));
+
+  const where = buildProductsWhere(storeId, query);
+
+  if (hasProfitRangeFilter(query) || query.sortBy) {
+    const orderedIds = await getComputedProductOrderIds(where, query);
+    const products = await getProductSelectionRowsByIds(storeId, orderedIds);
+
+    return {
+      products: serializeProductSelection(products),
+      totalCount: products.length,
+    };
+  }
+
+  const products = await prisma.product.findMany({
+    where,
+    orderBy: [{ createdAt: "desc" }, { id: "asc" }],
+    select: productSelectionSelect,
+  });
+
+  return {
+    products: serializeProductSelection(products),
+    totalCount: products.length,
+  };
 }
 
 export async function getCachedProductsPageData(

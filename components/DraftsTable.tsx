@@ -31,10 +31,20 @@ import {
   type ProductSortField,
   type ProductSortOrder,
 } from "@/lib/product-sort";
+import {
+  hasEverySelected,
+  setPageSelection,
+} from "@/lib/product-selection";
+import type { ProductSelectionSummary } from "@/types/product-selection";
 import type { SerializedProductRow } from "@/types/product-row";
 
 interface DraftsTableProps {
   products: SerializedProductRow[];
+  totalListingCount?: number;
+  allSelectionProducts?: ProductSelectionSummary[] | null;
+  selectionScopeKey?: string;
+  onSelectAllListings?: () => Promise<ProductSelectionSummary[]>;
+  isSelectAllListingsLoading?: boolean;
   onToast: (message: string, variant: "success" | "error") => void;
   view?: "drafts" | "products";
   sortBy?: ProductSortField | null;
@@ -499,12 +509,27 @@ function getPromotedAdState(product: SerializedProductRow) {
   };
 }
 
-function canCheckProductPrice(product: SerializedProductRow) {
+type SelectionProduct = SerializedProductRow | ProductSelectionSummary;
+
+function canCheckProductPrice(product: SelectionProduct) {
   return getPriceCheckEligibility(product).eligible;
+}
+
+function hasPendingPriceChange(product: SelectionProduct) {
+  if ("hasPendingPriceChange" in product) {
+    return product.hasPendingPriceChange;
+  }
+
+  return Boolean(product.priceHistory?.some((entry) => !entry.appliedAt));
 }
 
 export default function DraftsTable({
   products,
+  totalListingCount = products.length,
+  allSelectionProducts = null,
+  selectionScopeKey = "",
+  onSelectAllListings,
+  isSelectAllListingsLoading = false,
   onToast,
   view = "drafts",
   sortBy = null,
@@ -536,7 +561,10 @@ export default function DraftsTable({
     Record<string, string>
   >({});
   const productDetailRequests = useRef<Map<string, Promise<void>>>(new Map());
+  const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null);
+  const previousSelectionScopeKey = useRef(selectionScopeKey);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [isSelectingAllListings, setIsSelectingAllListings] = useState(false);
   const [bulkImporting, setBulkImporting] = useState(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [isBulkPriceChecking, setIsBulkPriceChecking] = useState(false);
@@ -1100,27 +1128,67 @@ export default function DraftsTable({
           ),
     [isDraftsView, products],
   );
-  const allSelectableIds = useMemo(
+  const pageSelectableIds = useMemo(
     () => selectableProducts.map((product) => product.id),
     [selectableProducts],
   );
-  const selectableIdSet = useMemo(
-    () => new Set(allSelectableIds),
-    [allSelectableIds],
+  const pageSelectableIdSet = useMemo(
+    () => new Set(pageSelectableIds),
+    [pageSelectableIds],
   );
-  const allSelected =
-    allSelectableIds.length > 0 &&
-    allSelectableIds.every((id) => selectedIds.includes(id));
+  const selectionProducts = useMemo<SelectionProduct[]>(
+    () =>
+      isProductsView && allSelectionProducts
+        ? allSelectionProducts
+        : products,
+    [allSelectionProducts, isProductsView, products],
+  );
+  const allMatchingIds = useMemo(
+    () =>
+      isProductsView && allSelectionProducts
+        ? allSelectionProducts.map((product) => product.id)
+        : pageSelectableIds,
+    [allSelectionProducts, isProductsView, pageSelectableIds],
+  );
+  const allPageSelected = hasEverySelected(selectedIds, pageSelectableIds);
+  const somePageSelected =
+    pageSelectableIds.some((id) => selectedIds.includes(id)) && !allPageSelected;
+  const allMatchingSelected =
+    isProductsView &&
+    allSelectionProducts !== null &&
+    hasEverySelected(selectedIds, allMatchingIds);
 
   useEffect(() => {
+    if (isProductsView) {
+      return;
+    }
+
+    const selectableIdSet = new Set(pageSelectableIds);
     setSelectedIds((currentIds) => {
       const nextIds = currentIds.filter((id) => selectableIdSet.has(id));
       return nextIds.length === currentIds.length ? currentIds : nextIds;
     });
-  }, [selectableIdSet]);
+  }, [isProductsView, pageSelectableIds]);
+
+  useEffect(() => {
+    if (!isProductsView) {
+      return;
+    }
+
+    if (previousSelectionScopeKey.current !== selectionScopeKey) {
+      previousSelectionScopeKey.current = selectionScopeKey;
+      setSelectedIds([]);
+    }
+  }, [isProductsView, selectionScopeKey]);
+
+  useEffect(() => {
+    if (selectAllCheckboxRef.current) {
+      selectAllCheckboxRef.current.indeterminate = somePageSelected;
+    }
+  }, [somePageSelected]);
 
   function toggleSelect(productId: string) {
-    if (!selectableIdSet.has(productId)) {
+    if (!pageSelectableIdSet.has(productId)) {
       return;
     }
 
@@ -1132,12 +1200,32 @@ export default function DraftsTable({
   }
 
   function toggleSelectAll() {
-    if (allSelected) {
-      setSelectedIds([]);
+    setSelectedIds((current) =>
+      setPageSelection(current, pageSelectableIds, !allPageSelected),
+    );
+  }
+
+  async function selectAllListings() {
+    if (!isProductsView || !onSelectAllListings) {
       return;
     }
 
-    setSelectedIds(allSelectableIds);
+    setIsSelectingAllListings(true);
+
+    try {
+      const completeSelection =
+        allSelectionProducts ?? (await onSelectAllListings());
+      setSelectedIds(completeSelection.map((product) => product.id));
+    } catch (error) {
+      onToast(
+        error instanceof Error
+          ? error.message
+          : "Unable to select all listings.",
+        "error",
+      );
+    } finally {
+      setIsSelectingAllListings(false);
+    }
   }
 
   const selectedPendingCount = useMemo(() => {
@@ -1145,53 +1233,51 @@ export default function DraftsTable({
       return 0;
     }
 
-    return products.filter(
+    return selectionProducts.filter(
       (product) =>
         selectedIds.includes(product.id) &&
-        (product.priceHistory?.length ?? 0) > 0 &&
-        product.priceHistory?.some((h) => !h.appliedAt)
+        hasPendingPriceChange(product)
     ).length;
-  }, [isProductsView, products, selectedIds]);
+  }, [isProductsView, selectedIds, selectionProducts]);
 
   const selectedOnHoldCount = useMemo(() => {
     if (!isProductsView) {
       return 0;
     }
 
-    return products.filter(
+    return selectionProducts.filter(
       (product) =>
         selectedIds.includes(product.id) && product.status === "ON_HOLD"
     ).length;
-  }, [isProductsView, products, selectedIds]);
+  }, [isProductsView, selectedIds, selectionProducts]);
 
   const selectedImportedCount = useMemo(() => {
     if (!isProductsView) {
       return 0;
     }
 
-    return products.filter(
+    return selectionProducts.filter(
       (product) =>
         selectedIds.includes(product.id) && product.status === "IMPORTED"
     ).length;
-  }, [isProductsView, products, selectedIds]);
+  }, [isProductsView, selectedIds, selectionProducts]);
 
   const selectedListedCount = selectedImportedCount + selectedOnHoldCount;
 
   const selectedPriceCheckSummary = useMemo(
     () =>
       isProductsView
-        ? getSelectedPriceCheckSummary(products, selectedIds)
+        ? getSelectedPriceCheckSummary(selectionProducts, selectedIds)
         : null,
-    [isProductsView, products, selectedIds]
+    [isProductsView, selectedIds, selectionProducts]
   );
 
   async function handleBulkApplySelected() {
-    const idsWithPending = products
+    const idsWithPending = selectionProducts
       .filter(
         (product) =>
           selectedIds.includes(product.id) &&
-          (product.priceHistory?.length ?? 0) > 0 &&
-          product.priceHistory?.some((h) => !h.appliedAt)
+          hasPendingPriceChange(product)
       )
       .map((product) => product.id);
 
@@ -1249,12 +1335,11 @@ export default function DraftsTable({
   }
 
   async function handleBulkDismissSelected() {
-    const idsWithPending = products
+    const idsWithPending = selectionProducts
       .filter(
         (product) =>
           selectedIds.includes(product.id) &&
-          (product.priceHistory?.length ?? 0) > 0 &&
-          product.priceHistory?.some((h) => !h.appliedAt)
+          hasPendingPriceChange(product)
       )
       .map((product) => product.id);
 
@@ -1307,7 +1392,7 @@ export default function DraftsTable({
     const idsToCheck =
       selectedPriceCheckSummary?.eligibleIds ??
       selectedIds.filter((id) => {
-        const p = products.find((prod) => prod.id === id);
+        const p = selectionProducts.find((product) => product.id === id);
         return p && canCheckProductPrice(p);
       });
 
@@ -1366,7 +1451,7 @@ export default function DraftsTable({
   }
 
   async function handleBulkResumeSelected() {
-    const onHoldIds = products
+    const onHoldIds = selectionProducts
       .filter((product) => selectedIds.includes(product.id) && product.status === "ON_HOLD")
       .map((product) => product.id);
 
@@ -1431,7 +1516,7 @@ export default function DraftsTable({
   }
 
   async function handleBulkHoldSelected() {
-    const importedIds = products
+    const importedIds = selectionProducts
       .filter(
         (product) =>
           selectedIds.includes(product.id) && product.status === "IMPORTED"
@@ -1499,7 +1584,7 @@ export default function DraftsTable({
   }
 
   async function handleBulkRemoveFromListflowSelected() {
-    const listedIds = products
+    const listedIds = selectionProducts
       .filter(
         (product) =>
           selectedIds.includes(product.id) &&
@@ -1553,7 +1638,7 @@ export default function DraftsTable({
   }
 
   async function handleBulkEndAndRemoveSelected() {
-    const listedIds = products
+    const listedIds = selectionProducts
       .filter(
         (product) =>
           selectedIds.includes(product.id) &&
@@ -1885,13 +1970,13 @@ export default function DraftsTable({
           <table
             className={
               isProductsView
-                ? "w-full min-w-[1390px] table-fixed"
+                ? "w-full min-w-[1540px] table-fixed"
                 : "block w-full xl:table"
             }
           >
           {isProductsView && (
             <colgroup>
-              <col className="w-[34px]" />
+              <col className="w-[184px]" />
               <col className="w-7" />
               <col className="w-[58px]" />
               <col className="w-[280px]" />
@@ -1909,13 +1994,37 @@ export default function DraftsTable({
             <tr className="border-b bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
               {hasSelectionColumn && (
                 <th className="px-3 py-3 text-left w-10">
-                  <input
-                    type="checkbox"
-                    checked={allSelected}
-                    onChange={toggleSelectAll}
-                    disabled={allSelectableIds.length === 0}
-                    className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
-                  />
+                  <div className="flex items-center gap-2 whitespace-nowrap">
+                    <input
+                      ref={selectAllCheckboxRef}
+                      type="checkbox"
+                      checked={allPageSelected}
+                      onChange={toggleSelectAll}
+                      disabled={pageSelectableIds.length === 0}
+                      aria-label="Select all listings on this page"
+                      className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                    />
+                    {isProductsView && totalListingCount > pageSelectableIds.length && (
+                      allMatchingSelected ? (
+                        <span className="text-[11px] font-medium normal-case tracking-normal text-blue-700">
+                          All {allMatchingIds.length} selected
+                        </span>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => void selectAllListings()}
+                          disabled={
+                            isSelectingAllListings || isSelectAllListingsLoading
+                          }
+                          className="text-[11px] font-medium normal-case tracking-normal text-blue-700 hover:text-blue-900 hover:underline disabled:cursor-wait disabled:opacity-60"
+                        >
+                          {isSelectingAllListings || isSelectAllListingsLoading
+                            ? "Selecting all…"
+                            : `Select all ${totalListingCount} listings`}
+                        </button>
+                      )
+                    )}
+                  </div>
                 </th>
               )}
               <th className="px-2 py-3 text-left w-10" />
@@ -1976,7 +2085,7 @@ export default function DraftsTable({
                 loadingProductDetailIds.includes(product.id);
               const productDetailError = productDetailErrors[product.id] ?? null;
               const isSelected = selectedIds.includes(product.id);
-              const isSelectable = selectableIdSet.has(product.id);
+              const isSelectable = pageSelectableIdSet.has(product.id);
               const uploadJob = uploadJobByProductId.get(product.id) ?? null;
               const isUploadQueued = Boolean(uploadJob);
               const isFailedDraft =

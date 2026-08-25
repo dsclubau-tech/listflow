@@ -9,6 +9,11 @@ import Toast from "@/components/Toast";
 import { useTimedActionProgress } from "@/hooks/useTimedActionProgress";
 import { useToast } from "@/hooks/useToast";
 import {
+  buildActiveJobAssignmentIndex,
+  getActiveJobAssignment,
+  type ActiveJobWorkerAssignment,
+} from "@/lib/action-center-job-assignments";
+import {
   getEbayActionJobLabel,
   getEbayActionQueuePositionText,
   getEbayActionStatusLabel,
@@ -509,6 +514,76 @@ function getDefaultFilter(
   );
 }
 
+function JobWorkerAssignment({
+  assignment,
+  status,
+}: {
+  assignment: ActiveJobWorkerAssignment | null;
+  status: string;
+}) {
+  if (assignment) {
+    return (
+      <span className="inline-flex items-center rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
+        Worker: {assignment.workerName}
+      </span>
+    );
+  }
+
+  const paused = status === "PAUSED" || status === "CANCELLED";
+
+  return (
+    <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+      {paused
+        ? "No active worker"
+        : status === "QUEUED"
+          ? "Waiting for worker"
+          : "Worker assignment pending"}
+    </span>
+  );
+}
+
+function ResearchBatchWorkerAssignments({
+  batch,
+  assignments,
+}: {
+  batch: ActionCenterEbayResearchBatch;
+  assignments: Map<string, ActiveJobWorkerAssignment>;
+}) {
+  const claimedJobs = batch.jobs.flatMap((job) => {
+    const assignment = getActiveJobAssignment(
+      assignments,
+      "EBAY_RESEARCH",
+      job.id,
+    );
+
+    return assignment ? [{ job, assignment }] : [];
+  });
+
+  if (claimedJobs.length === 0) {
+    return (
+      <div className="mt-2">
+        <JobWorkerAssignment assignment={null} status={batch.status} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-2 space-y-1">
+      {claimedJobs.map(({ job, assignment }) => (
+        <div
+          key={job.id}
+          className="flex max-w-xl flex-wrap items-center gap-2 text-xs text-gray-600"
+        >
+          <span className="max-w-72 truncate" title={job.query}>
+            {job.query}
+          </span>
+          <JobWorkerAssignment assignment={assignment} status={job.status} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function ActionCenterClient({ data }: { data: ActionCenterData }) {
   const router = useRouter();
   const { toast, showToast, hideToast } = useToast();
@@ -578,6 +653,10 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
   const [jobPanelFilter, setJobPanelFilter] =
     useState<JobPanelFilter>("current");
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const activeJobAssignments = useMemo(
+    () => buildActiveJobAssignmentIndex(data.workers),
+    [data.workers],
+  );
 
   const visibleProductIds = useMemo(() => {
     if (activeFilter === "pendingReviews") {
@@ -2257,6 +2336,14 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                             >
                               {job.status === "CANCELLED" ? "PAUSED" : job.status}
                             </span>
+                            <JobWorkerAssignment
+                              assignment={getActiveJobAssignment(
+                                activeJobAssignments,
+                                "PRICE_CHECK",
+                                job.id,
+                              )}
+                              status={job.status}
+                            />
                           </div>
                           <div className="mt-1 text-xs text-gray-500">
                             {job.checked}/{job.total} checked, {job.pendingReview} pending,{" "}
@@ -2349,6 +2436,14 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                             >
                               {job.status}
                             </span>
+                            <JobWorkerAssignment
+                              assignment={getActiveJobAssignment(
+                                activeJobAssignments,
+                                "EBAY_IMPORT",
+                                job.id,
+                              )}
+                              status={job.status}
+                            />
                           </div>
                           <div className="mt-1 text-xs text-gray-500">
                             {job.processed}/{job.total || job.quantity} processed,{" "}
@@ -2440,6 +2535,14 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                             >
                               {actionJobProgressLabel(job)}
                             </span>
+                            <JobWorkerAssignment
+                              assignment={getActiveJobAssignment(
+                                activeJobAssignments,
+                                "EBAY_ACTION",
+                                job.id,
+                              )}
+                              status={job.status}
+                            />
                           </div>
                           <div className="mt-1 text-xs text-gray-500">
                             {actionJobDetail(job)}
@@ -2491,6 +2594,10 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                               ? ` - took ${formatDuration(batch.startedAt, batch.completedAt)}`
                               : ""}
                           </div>
+                          <ResearchBatchWorkerAssignments
+                            batch={batch}
+                            assignments={activeJobAssignments}
+                          />
                           <div className="mt-2 max-w-sm">
                             <ActionProgressBar
                               label="Research batch progress"

@@ -31,7 +31,9 @@ import {
   buildProductSortUrl,
   type ProductQuickFilter,
 } from "@/lib/product-filter-navigation";
+import { getProductSelectionScopeKey } from "@/lib/product-selection";
 import type { ProductSortField, ProductSortOrder } from "@/lib/product-sort";
+import type { ProductSelectionSummary } from "@/types/product-selection";
 import type { SerializedProductRow } from "@/types/product-row";
 
 interface ProductsPageClientProps {
@@ -394,6 +396,10 @@ export default function ProductsPageClient({
   const [isResumingPriceCheckJob, setIsResumingPriceCheckJob] = useState(false);
   const [priceCheckJob, setPriceCheckJob] = useState<PriceCheckJob | null>(null);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [allSelectionProducts, setAllSelectionProducts] = useState<
+    ProductSelectionSummary[] | null
+  >(null);
+  const [isLoadingAllSelection, setIsLoadingAllSelection] = useState(false);
   const [isCopyingTitles, setIsCopyingTitles] = useState(false);
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
   const [isPromotedListingsOpen, setIsPromotedListingsOpen] = useState(false);
@@ -419,6 +425,8 @@ export default function ProductsPageClient({
   const [pageJumpDraft, setPageJumpDraft] = useState(String(page));
   const notifiedTerminalJobIds = useRef<Set<string>>(new Set());
   const notifiedPromotionJobIds = useRef<Set<string>>(new Set());
+  const failedSelectionScopeRef = useRef<string | null>(null);
+  const selectionLoadRequestIdRef = useRef(0);
   const searchContainerRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const filterMenuRef = useRef<HTMLDivElement | null>(null);
@@ -427,14 +435,24 @@ export default function ProductsPageClient({
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const isPromotionJobActive = isActivePromotedListingsJob(promotedListingsJob);
   const displayedProductFilter = pendingProductFilter ?? productFilter;
+  const selectionScopeKey = useMemo(
+    () => getProductSelectionScopeKey(searchParamsString),
+    [searchParamsString],
+  );
+  const selectionProducts = useMemo<
+    Array<SerializedProductRow | ProductSelectionSummary>
+  >(
+    () => allSelectionProducts ?? products,
+    [allSelectionProducts, products],
+  );
   const selectedPriceCheckSummary = useMemo(
-    () => getSelectedPriceCheckSummary(products, selectedProductIds),
-    [products, selectedProductIds]
+    () => getSelectedPriceCheckSummary(selectionProducts, selectedProductIds),
+    [selectionProducts, selectedProductIds]
   );
   const selectedProducts = useMemo(() => {
     const selectedIds = new Set(selectedProductIds);
-    return products.filter((product) => selectedIds.has(product.id));
-  }, [products, selectedProductIds]);
+    return selectionProducts.filter((product) => selectedIds.has(product.id));
+  }, [selectionProducts, selectedProductIds]);
   const selectedHasNoEligiblePriceChecks =
     selectedProductIds.length > 0 && selectedPriceCheckSummary.eligibleCount === 0;
   const listingCountLabel =
@@ -453,6 +471,76 @@ export default function ProductsPageClient({
     totalCount === 0 ? 0 : Math.min(totalCount, (page - 1) * pageSize + 1);
   const lastVisibleProduct =
     totalCount === 0 ? 0 : Math.min(totalCount, page * pageSize);
+
+  const loadAllSelectionProducts = useCallback(async () => {
+    const requestId = selectionLoadRequestIdRef.current + 1;
+    selectionLoadRequestIdRef.current = requestId;
+    setIsLoadingAllSelection(true);
+
+    try {
+      const query = selectionScopeKey ? `?${selectionScopeKey}` : "";
+      const response = await fetch(`/api/products/selection${query}`, {
+        cache: "no-store",
+      });
+      const data = (await response.json().catch(() => ({}))) as {
+        products?: ProductSelectionSummary[];
+        totalCount?: number;
+        error?: string;
+      };
+
+      if (!response.ok || !Array.isArray(data.products)) {
+        throw new Error(data.error || "Unable to select all listings.");
+      }
+
+      if (selectionLoadRequestIdRef.current !== requestId) {
+        return [];
+      }
+
+      failedSelectionScopeRef.current = null;
+      setAllSelectionProducts(data.products);
+      return data.products;
+    } finally {
+      if (selectionLoadRequestIdRef.current === requestId) {
+        setIsLoadingAllSelection(false);
+      }
+    }
+  }, [selectionScopeKey]);
+
+  useEffect(() => {
+    selectionLoadRequestIdRef.current += 1;
+    setIsLoadingAllSelection(false);
+    setSelectedProductIds([]);
+    setAllSelectionProducts(null);
+    failedSelectionScopeRef.current = null;
+  }, [selectionScopeKey]);
+
+  useEffect(() => {
+    if (
+      selectedProductIds.length === 0 ||
+      allSelectionProducts ||
+      isLoadingAllSelection ||
+      failedSelectionScopeRef.current === selectionScopeKey
+    ) {
+      return;
+    }
+
+    void loadAllSelectionProducts().catch((error) => {
+      failedSelectionScopeRef.current = selectionScopeKey;
+      showToast(
+        error instanceof Error
+          ? error.message
+          : "Unable to load the complete selection.",
+        "error",
+      );
+    });
+  }, [
+    allSelectionProducts,
+    isLoadingAllSelection,
+    loadAllSelectionProducts,
+    selectionScopeKey,
+    selectedProductIds.length,
+    showToast,
+  ]);
 
   useEffect(() => {
     const savedPageSize = window.localStorage.getItem(PAGE_SIZE_STORAGE_KEY);
@@ -1343,7 +1431,7 @@ export default function ProductsPageClient({
     if (selectedProductIds.length === 0) return;
 
     const selectedSet = new Set(selectedProductIds);
-    const titles = products
+    const titles = selectionProducts
       .filter((p) => selectedSet.has(p.id))
       .map((p) => p.title.trim())
       .filter(Boolean)
@@ -2169,6 +2257,11 @@ export default function ProductsPageClient({
 
       <DraftsTable
         products={products}
+        totalListingCount={totalCount}
+        allSelectionProducts={allSelectionProducts}
+        selectionScopeKey={selectionScopeKey}
+        onSelectAllListings={loadAllSelectionProducts}
+        isSelectAllListingsLoading={isLoadingAllSelection}
         onToast={showToast}
         view="products"
         sortBy={sortBy}
@@ -2190,7 +2283,7 @@ export default function ProductsPageClient({
 
       <BulkEditModal
         open={isBulkEditOpen}
-        products={products}
+        storeId={selectionProducts[0]?.storeId ?? null}
         selectedProductIds={selectedProductIds}
         onClose={() => setIsBulkEditOpen(false)}
         onToast={showToast}
