@@ -439,3 +439,60 @@ test("resolveRequiredItemSpecifics resolves brand from title when Amazon brand i
   assert.equal(result.itemSpecifics.Brand, "AMVR");
   assert.deepEqual(result.missingItemSpecifics, []);
 });
+
+test("resolveRequiredItemSpecifics maps a slash-delimited Form Factor from title text", () => {
+  const result = resolveRequiredItemSpecifics({
+    title:
+      "Insta360 Mic Pro (1 Tx + 1 Rx), Wireless Mini Lavalier Microphone For Iphone/camera/android",
+    categoryName:
+      "Musical Instruments > Pro Audio > Microphones & Wireless Systems",
+    brand: "Gli Pro",
+    itemSpecifics: {
+      Brand: "Gli Pro",
+      Connectivity: "Bluetooth",
+      "Compatible Devices": "Camera",
+    },
+    requiredItemSpecifics: [
+      {
+        name: "Form Factor",
+        values: [
+          "Channel Strip",
+          "Condenser Microphone",
+          "Desktop Microphone",
+          "Lavalier/Lapel",
+          "Microphone Receiver",
+        ],
+      },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics["Form Factor"], "Lavalier/Lapel");
+  assert.equal(result.addedItemSpecifics["Form Factor"], "Lavalier/Lapel");
+  assert.deepEqual(result.missingItemSpecifics, []);
+  assert.deepEqual(result.decisions, [
+    { name: "Form Factor", value: "Lavalier/Lapel", source: "title" },
+  ]);
+});
+
+test("resolveRequiredItemSpecifics does not infer a Form Factor from generic microphone text", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "Compact wireless microphone system for video recording",
+    categoryName: "Microphones & Wireless Systems",
+    itemSpecifics: {},
+    requiredItemSpecifics: [
+      {
+        name: "Form Factor",
+        values: [
+          "Condenser Microphone",
+          "Dynamic Microphone",
+          "Lavalier/Lapel",
+          "Microphone Receiver",
+        ],
+      },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics["Form Factor"], undefined);
+  assert.deepEqual(result.addedItemSpecifics, {});
+  assert.deepEqual(result.missingItemSpecifics, ["Form Factor"]);
+});

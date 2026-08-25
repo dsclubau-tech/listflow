@@ -53,6 +53,10 @@ next-env.d.ts
 /RAILWAY_OPTIMIZATION_REPORT.md
 [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.md
 /DATABASE_SCHEMA.md
+/AA_AUTH_ENTITLEMENT_GUIDE_REVIEW.md
+/AA_AUTH_ENTITLEMENT_INTEGRATION_RESPONSE.md
+/AA_ENTITLEMENT_CONTRACT_CONFIRMATION.md
+/AA_SCOPED_ENTITLEMENT_ENDPOINT_REVIEW.md
 
 # local database migration backups (may contain sensitive production data)
 /.migration-backups/

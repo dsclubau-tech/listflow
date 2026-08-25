@@ -58,8 +58,66 @@ const BRAND_UNAVAILABLE_VALUES = new Set([
   "unbranded",
 ]);
 
+const UNSAFE_COMPOUND_SPECIFIC_FRAGMENTS = new Set([
+  "does not apply",
+  "n a",
+  "none",
+  "not applicable",
+  "not specified",
+  "other",
+  "unknown",
+  "unspecified",
+  "various",
+]);
+
 function normalizeName(value: string) {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function normalizeSearchPhrase(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function findCompoundAllowedValueInText(
+  searchText: string,
+  allowedValues: string[],
+) {
+  const normalizedSearchText = normalizeSearchPhrase(searchText);
+  if (!normalizedSearchText) {
+    return null;
+  }
+
+  const paddedSearchText = ` ${normalizedSearchText} `;
+  let bestMatch: { value: string; fragmentLength: number } | null = null;
+
+  for (const value of allowedValues) {
+    if (!value.includes("/")) {
+      continue;
+    }
+
+    for (const rawFragment of value.split("/")) {
+      const fragment = normalizeSearchPhrase(rawFragment);
+      const meaningfulLength = fragment.replace(/\s/g, "").length;
+
+      if (
+        meaningfulLength < 3 ||
+        UNSAFE_COMPOUND_SPECIFIC_FRAGMENTS.has(fragment) ||
+        !paddedSearchText.includes(` ${fragment} `)
+      ) {
+        continue;
+      }
+
+      if (!bestMatch || meaningfulLength > bestMatch.fragmentLength) {
+        bestMatch = { value, fragmentLength: meaningfulLength };
+      }
+    }
+  }
+
+  return bestMatch?.value ?? null;
 }
 
 function stripHtml(value: string | null | undefined) {
@@ -551,6 +609,11 @@ function inferGenericAspect(
     if (normalizedValue.length >= 3 && searchText.includes(normalizedValue)) {
       return { value, source: "title" as const };
     }
+  }
+
+  const compoundMatch = findCompoundAllowedValueInText(text.all, allowedValues);
+  if (compoundMatch) {
+    return { value: compoundMatch, source: "title" as const };
   }
 
   return { value: null, source: "missing" as const };

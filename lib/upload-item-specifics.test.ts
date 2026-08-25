@@ -69,3 +69,34 @@ test("eBay missing specifics stay unresolved when retry autofill cannot fill the
   assert.equal(result.shouldRetry, false);
   assert.deepEqual(result.missingItemSpecifics, ["Stove Type Compatibility"]);
 });
+
+test("eBay missing Form Factor retries with the canonical slash-delimited value", () => {
+  const result = resolveMissingItemSpecificsForUploadRetry({
+    title:
+      "Insta360 Mic Pro (1 Tx + 1 Rx), Wireless Mini Lavalier Microphone For Iphone/camera/android",
+    categoryName:
+      "Musical Instruments > Pro Audio > Microphones & Wireless Systems",
+    brand: "Gli Pro",
+    itemSpecifics: {
+      Brand: "Gli Pro",
+      Connectivity: "Bluetooth",
+    },
+    missingItemSpecifics: ["Form Factor"],
+    requiredItemSpecifics: [
+      {
+        name: "Form Factor",
+        values: [
+          "Condenser Microphone",
+          "Dynamic Microphone",
+          "Lavalier/Lapel",
+          "Microphone Receiver",
+        ],
+      },
+    ],
+  });
+
+  assert.equal(result.shouldRetry, true);
+  assert.equal(result.itemSpecifics["Form Factor"], "Lavalier/Lapel");
+  assert.equal(result.addedItemSpecifics["Form Factor"], "Lavalier/Lapel");
+  assert.deepEqual(result.missingItemSpecifics, []);
+});
