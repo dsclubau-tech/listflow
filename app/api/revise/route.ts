@@ -7,6 +7,7 @@ import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 import { invalidateJobCaches } from "@/lib/cache-tags";
 import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
+import { hasRevisableEbayListing } from "@/lib/ebay-listing-state";
 
 function getErrorStatus(error: unknown) {
   return error instanceof Error &&
@@ -40,6 +41,16 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "productId is required" }, { status: 400 });
   }
 
+  if (
+    body.quantityChanged !== undefined &&
+    typeof body.quantityChanged !== "boolean"
+  ) {
+    return NextResponse.json(
+      { error: "quantityChanged must be a boolean" },
+      { status: 400 },
+    );
+  }
+
   const product = await prisma.product.findFirst({
     where: { id: productId, storeId: storeSession.storeId },
     include: { store: true },
@@ -50,12 +61,14 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Product not found" }, { status: 404 });
   }
 
-  if (product.status !== "IMPORTED" || !product.ebayItemId) {
+  if (!hasRevisableEbayListing(product)) {
     log.warn("revise/route", "Rejected revise for product not listed on eBay", {
       productId,
+      status: product.status,
+      hasEbayItemId: Boolean(product.ebayItemId),
     });
     return NextResponse.json(
-      { error: "Product is not currently listed on eBay" },
+      { error: "Product has no active eBay listing reference" },
       { status: 400 },
     );
   }
@@ -68,7 +81,11 @@ export async function POST(request: Request) {
       storeId: storeSession.storeId,
       type: EbayActionJobType.REVISE_LISTING,
       productIds: [product.id],
-      metadata: { kind: "revise-listing", includePictures: true },
+      metadata: {
+        kind: "revise-listing",
+        includePictures: true,
+        quantityChanged: body.quantityChanged === true,
+      },
     });
 
     invalidateJobCaches(storeSession.storeId);

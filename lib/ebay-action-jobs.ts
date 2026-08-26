@@ -46,6 +46,8 @@ import { logger } from "@/lib/logger";
 import {
   chunkInventoryReviseItems,
   getBulkEditQuantityStatus,
+  getReviseListingQuantityOptions,
+  isReviseListingQuantityChanged,
   shouldRetryInventoryBatchIndividually,
 } from "@/lib/ebay-action-job-helpers";
 import { getEbayActionQueuePositions } from "@/lib/ebay-action-queue";
@@ -65,6 +67,7 @@ import {
   isPriceCheckAutoHoldMetadata,
 } from "@/lib/price-check-failures";
 import { isLowStockHoldJobMetadata } from "@/lib/low-stock-products";
+import { hasRevisableEbayListing } from "@/lib/ebay-listing-state";
 import {
   canonicalizePackageItemSpecifics,
   compareEbayPackageDimensions,
@@ -1073,18 +1076,23 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
   }
 
   if (job.type === EbayActionJobType.REVISE_LISTING) {
-    if (product.status !== ProductStatus.IMPORTED || !product.ebayItemId) {
+    if (!hasRevisableEbayListing(product)) {
       return {
         ok: false,
         failure: {
           productId,
           title: product.title,
-          error: "Product is not currently listed on eBay",
+          error: "Product has no active eBay listing reference",
         },
       };
     }
 
     try {
+      const quantityChanged = isReviseListingQuantityChanged(job.metadata);
+      const quantityOptions = getReviseListingQuantityOptions({
+        quantityChanged,
+        quantity: product.quantity,
+      });
       const policySelection = await resolveProductPolicySelection(
         product.storeId,
         {
@@ -1126,6 +1134,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
             includePictures: true,
             includeItemSpecifics: true,
             includeShippingPackage: true,
+            ...quantityOptions,
           },
         ),
         storeNumber,
@@ -1143,11 +1152,25 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
         };
       }
 
+      const revisedStatus = getBulkEditQuantityStatus({
+        quantityChanged,
+        quantity: product.quantity,
+        currentStatus: product.status,
+      });
+
       await prisma.product.update({
         where: { id: product.id },
         data: {
           images: preparedImages,
-          status: ProductStatus.IMPORTED,
+          status: revisedStatus,
+          ...(quantityChanged
+            ? {
+                holdReason:
+                  revisedStatus === ProductStatus.ON_HOLD
+                    ? "Listing quantity was set to 0."
+                    : null,
+              }
+            : {}),
           errorMessage: null,
           shippingPolicyId: policySelection.shippingPolicyId,
           returnPolicyId: policySelection.returnPolicyId,

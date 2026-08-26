@@ -79,6 +79,18 @@ test.describe("responsive Drafts workspace", () => {
     const dialog = page.getByRole("dialog", { name: "Normal Upload" });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByPlaceholder("https://www.amazon.com.au/dp/...")).toBeFocused();
+    const cancelBox = await dialog.getByRole("button", { name: "Cancel" }).boundingBox();
+    const importBox = await dialog.getByRole("button", { name: "Import Product" }).boundingBox();
+    const closeBox = await dialog.getByRole("button", { name: "Close upload dialog" }).boundingBox();
+    const dialogBox = await dialog.boundingBox();
+
+    expect(cancelBox).not.toBeNull();
+    expect(importBox).not.toBeNull();
+    expect(closeBox).not.toBeNull();
+    expect(dialogBox).not.toBeNull();
+    expect(cancelBox!.x).toBeLessThan(importBox!.x);
+    expect(dialogBox!.x + dialogBox!.width - (closeBox!.x + closeBox!.width)).toBeLessThanOrEqual(20);
+    expect(closeBox!.y - dialogBox!.y).toBeLessThanOrEqual(20);
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();
   });

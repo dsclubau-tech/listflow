@@ -251,6 +251,44 @@ test("buildReviseItemXML omits SKU by default", () => {
   assert.doesNotMatch(buildReviseItemXML(product), /<SKU>/);
 });
 
+test("policy revision can preserve an active out-of-stock listing", () => {
+  const product = {
+    ...buildTestProduct(),
+    ebayItemId: "318759051734",
+    quantity: 0,
+  } as Parameters<typeof buildReviseItemXML>[0];
+
+  const xml = buildReviseItemXML(product, undefined, {
+    includeTitle: false,
+    includeDescription: false,
+    includeStartPrice: false,
+    includeDispatchTimeMax: false,
+    includeQuantity: false,
+    includeSellerProfiles: true,
+    includeLocation: false,
+  });
+
+  assert.match(xml, /<SellerProfiles>/);
+  assert.match(xml, /<ShippingProfileID>shipping-1<\/ShippingProfileID>/);
+  assert.match(xml, /<ReturnProfileID>return-1<\/ReturnProfileID>/);
+  assert.match(xml, /<PaymentProfileID>payment-1<\/PaymentProfileID>/);
+  assert.doesNotMatch(xml, /<Quantity>/);
+});
+
+test("explicit stock change can revise listing quantity to zero", () => {
+  const product = {
+    ...buildTestProduct(),
+    ebayItemId: "318759051734",
+    quantity: 0,
+  } as Parameters<typeof buildReviseItemXML>[0];
+
+  const xml = buildReviseItemXML(product, undefined, {
+    quantityOverride: 0,
+  });
+
+  assert.match(xml, /<Quantity>0<\/Quantity>/);
+});
+
 test("buildReviseItemXML sends package details only when requested", () => {
   const product = {
     ...buildTestProduct(),

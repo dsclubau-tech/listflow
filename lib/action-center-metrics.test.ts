@@ -6,6 +6,7 @@ import {
   getLatestPendingReviewHistory,
   getOnHoldReason,
   getStoredQuantityAfterEdit,
+  hasDisplayedQuantityChanged,
 } from "@/lib/action-center-metrics";
 
 test("pending review change uses the absolute Amazon buy-price difference", () => {
@@ -129,6 +130,13 @@ test("on-hold quantity is displayed as zero without changing resume quantity", (
   assert.equal(getStoredQuantityAfterEdit("ON_HOLD", 0, 1), 1);
   assert.equal(getStoredQuantityAfterEdit("ON_HOLD", 4, 1), 4);
   assert.equal(getStoredQuantityAfterEdit("IMPORTED", 0, 1), 0);
+});
+
+test("quantity change detection compares against the displayed on-hold quantity", () => {
+  assert.equal(hasDisplayedQuantityChanged("IMPORTED", 0, 0), false);
+  assert.equal(hasDisplayedQuantityChanged("IMPORTED", 0, 5), true);
+  assert.equal(hasDisplayedQuantityChanged("ON_HOLD", 0, 5), false);
+  assert.equal(hasDisplayedQuantityChanged("ON_HOLD", 2, 5), true);
 });
 
 test("on-hold reason explains every supported hold path", () => {

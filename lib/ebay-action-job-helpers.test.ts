@@ -4,6 +4,8 @@ import { ProductStatus } from "@/app/generated/prisma/enums";
 import {
   chunkInventoryReviseItems,
   getBulkEditQuantityStatus,
+  getReviseListingQuantityOptions,
+  isReviseListingQuantityChanged,
   shouldRetryInventoryBatchIndividually,
 } from "@/lib/ebay-action-job-helpers";
 
@@ -75,5 +77,23 @@ test("getBulkEditQuantityStatus aligns successful quantity edits with listing st
       currentStatus: ProductStatus.IMPORTED,
     }),
     ProductStatus.IMPORTED,
+  );
+});
+
+test("single-listing revision metadata only enables explicit quantity edits", () => {
+  assert.equal(isReviseListingQuantityChanged(null), false);
+  assert.equal(isReviseListingQuantityChanged({ quantityChanged: false }), false);
+  assert.equal(isReviseListingQuantityChanged({ quantityChanged: "true" }), false);
+  assert.equal(isReviseListingQuantityChanged({ quantityChanged: true }), true);
+});
+
+test("single-listing policy revisions omit quantity while explicit holds send zero", () => {
+  assert.deepEqual(
+    getReviseListingQuantityOptions({ quantityChanged: false, quantity: 0 }),
+    { includeQuantity: false, quantityOverride: undefined },
+  );
+  assert.deepEqual(
+    getReviseListingQuantityOptions({ quantityChanged: true, quantity: 0 }),
+    { includeQuantity: true, quantityOverride: 0 },
   );
 });

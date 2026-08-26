@@ -2,6 +2,30 @@ import { ProductStatus } from "@/app/generated/prisma/enums";
 
 export const EBAY_REVISE_INVENTORY_STATUS_MAX_ITEMS = 4;
 
+export function isReviseListingQuantityChanged(metadata: unknown) {
+  return (
+    Boolean(metadata) &&
+    typeof metadata === "object" &&
+    !Array.isArray(metadata) &&
+    (metadata as Record<string, unknown>).quantityChanged === true
+  );
+}
+
+export function getReviseListingQuantityOptions(input: {
+  quantityChanged: boolean;
+  quantity: number;
+}) {
+  return input.quantityChanged
+    ? {
+        includeQuantity: true as const,
+        quantityOverride: Math.max(0, Math.floor(input.quantity)),
+      }
+    : {
+        includeQuantity: false as const,
+        quantityOverride: undefined,
+      };
+}
+
 export function chunkInventoryReviseItems<T>(
   items: readonly T[],
   chunkSize = EBAY_REVISE_INVENTORY_STATUS_MAX_ITEMS,

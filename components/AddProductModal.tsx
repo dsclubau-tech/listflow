@@ -356,9 +356,9 @@ export default function AddProductModal({
           aria-modal="true"
           aria-labelledby={titleId}
           aria-describedby={descriptionId}
-          className="flex max-h-[calc(100dvh-1rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl sm:max-h-[calc(100dvh-2rem)]"
+          className="relative flex max-h-[calc(100dvh-1rem)] w-full max-w-lg flex-col overflow-hidden rounded-2xl bg-white shadow-2xl sm:max-h-[calc(100dvh-2rem)]"
         >
-          <div className="flex items-start justify-between gap-4 border-b border-gray-100 px-5 py-4 sm:px-6">
+          <div className="border-b border-gray-100 py-4 pl-5 pr-16 sm:pl-6 sm:pr-20">
             <div>
               <h2 id={titleId} className="text-lg font-bold text-gray-950">
                 {isAdvancedMode ? "Advanced Upload" : "Normal Upload"}
@@ -374,7 +374,7 @@ export default function AddProductModal({
               size="sm"
               onClick={handleClose}
               disabled={isLoading}
-              className="-mr-2 min-h-10 w-10 px-0"
+              className="absolute right-3 top-3 z-10 min-h-10 w-10 px-0 sm:right-4 sm:top-4"
               aria-label="Close upload dialog"
               icon={
                 <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" aria-hidden="true">
@@ -505,6 +505,14 @@ export default function AddProductModal({
             ) : (
               <div className="grid gap-2 sm:grid-cols-2">
                 <Button
+                  onClick={handleClose}
+                  variant="secondary"
+                  size="md"
+                  fullWidth
+                >
+                  Cancel
+                </Button>
+                <Button
                   onClick={scrapedProduct ? handleCreateDraft : handleImport}
                   disabled={Boolean(scrapedProduct && !selectedChoice)}
                   variant="primary"
@@ -512,14 +520,6 @@ export default function AddProductModal({
                   fullWidth
                 >
                   {scrapedProduct ? "Create Draft" : "Import Product"}
-                </Button>
-                <Button
-                  onClick={handleClose}
-                  variant="secondary"
-                  size="md"
-                  fullWidth
-                >
-                  Cancel
                 </Button>
               </div>
             )}

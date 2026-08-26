@@ -49,7 +49,9 @@ import {
 import {
   getEffectiveListingQuantity,
   getStoredQuantityAfterEdit,
+  hasDisplayedQuantityChanged,
 } from "@/lib/action-center-metrics";
+import { hasRevisableEbayListing } from "@/lib/ebay-listing-state";
 import { uploadProductImageFile } from "@/lib/client-product-image-upload";
 import {
   applyTitleCase,
@@ -967,9 +969,8 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
     }
   }, [saveMessage]);
 
-  const isImported = product.status === "IMPORTED" && Boolean(product.ebayItemId);
   const isOnHold = product.status === "ON_HOLD" && Boolean(product.ebayItemId);
-  const isListed = isImported || isOnHold;
+  const isListed = hasRevisableEbayListing(product);
   const inlineSuccessMessage =
     saveMessage?.variant === "success" && !saveMessage.title ? saveMessage : null;
   const bannerMessage =
@@ -1251,11 +1252,15 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       displayedQuantity,
       product.quantity,
     );
+    const quantityChanged = hasDisplayedQuantityChanged(
+      product.status,
+      displayedQuantity,
+      product.quantity,
+    );
 
     const body: Record<string, unknown> = {
       title: toEbayListingTitle(title),
       description,
-      quantity: normalizedQuantity,
       condition,
       category: activeCategory,
       categoryName: activeCategoryName || null,
@@ -1269,6 +1274,10 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       templateId: selectedTemplateId || null,
       promotedAdPercent: Math.min(100, Math.max(0, Number(promotedAdPercent) || 0)),
     };
+
+    if (quantityChanged) {
+      body.quantity = normalizedQuantity;
+    }
 
     // A manual title edit changes the eBay listing title only. Regrab is the
     // only editor action that replaces the original full Amazon title.
@@ -1300,11 +1309,9 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
           });
         } else if (showSuccessMessage) {
           setSaveMessage({
-            text: isOnHold
-              ? "Saved locally. Resume this listing before syncing updates to eBay."
-              : isImported
-                ? "Saved locally. Update eBay to sync the live listing."
-                : "Saved",
+            text: isListed
+              ? "Saved locally. Update eBay to sync the live listing."
+              : "Saved",
             variant: "success",
           });
         }
@@ -1365,7 +1372,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
         variant: "error",
         title: "Import failed",
         text: isOnHold
-          ? "This product is on hold. Resume it before updating the live eBay listing."
+          ? "This product already has an eBay listing. Use Save & Update eBay instead."
           : "This product is already imported. Use Save & Update eBay instead.",
       });
       return;
@@ -1512,11 +1519,11 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
   const [isRevising, setIsRevising] = useState(false);
 
   async function handleSaveAndUpdateEbay() {
-    if (!isImported) {
+    if (!isListed) {
       setSaveMessage({
         variant: "error",
         title: "Update failed",
-        text: "This product must be imported before it can be updated on eBay.",
+        text: "This product must have an active eBay listing before it can be updated.",
       });
       return;
     }
@@ -1533,6 +1540,16 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
     setIsRevising(true);
     setSaveMessage(null);
 
+    const parsedQuantity = Number.parseInt(quantity, 10);
+    const displayedQuantity = Number.isFinite(parsedQuantity)
+      ? Math.max(0, parsedQuantity)
+      : 0;
+    const quantityChanged = hasDisplayedQuantityChanged(
+      product.status,
+      displayedQuantity,
+      product.quantity,
+    );
+
     const saved = await handleSave({ showSuccessMessage: false });
     if (!saved) {
       setIsRevising(false);
@@ -1543,7 +1560,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       const res = await fetch("/api/revise", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ productId: product.id }),
+        body: JSON.stringify({ productId: product.id, quantityChanged }),
       });
 
       if (res.ok) {
@@ -1907,7 +1924,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
               Save & Import
             </Button>
           )}
-          {isImported && (
+          {isListed && (
             <Button
               onClick={handleSaveAndUpdateEbay}
               disabled={isSaving || isImporting || isRevising || isRegrabbing}

@@ -105,3 +105,19 @@ export function getStoredQuantityAfterEdit(
 
   return normalizedDisplayedQuantity;
 }
+
+export function hasDisplayedQuantityChanged(
+  status: string,
+  displayedQuantity: number,
+  savedQuantity: number,
+) {
+  const normalizedDisplayedQuantity = Math.max(
+    0,
+    Math.floor(displayedQuantity),
+  );
+
+  return (
+    normalizedDisplayedQuantity !==
+    getEffectiveListingQuantity(status, savedQuantity)
+  );
+}
