@@ -11,6 +11,7 @@ interface ProductForTemplate {
   images: string[];
   itemSpecifics: unknown;
   templateId: string | null;
+  policyTemplateId?: string | null;
 }
 
 function escapeHtml(value: string): string {
@@ -53,6 +54,19 @@ export async function resolveDescriptionTemplate(product: ProductForTemplate): P
     if (template?.storeId !== product.storeId) {
       template = null;
     }
+  }
+
+  if (!template && product.policyTemplateId) {
+    const policyTemplate = await prisma.policyTemplate.findFirst({
+      where: {
+        id: product.policyTemplateId,
+        storeId: product.storeId,
+      },
+      select: {
+        descriptionTemplate: true,
+      },
+    });
+    template = policyTemplate?.descriptionTemplate ?? null;
   }
 
   if (!template) {

@@ -314,7 +314,10 @@ export async function POST(request: Request) {
                   returnPolicyId: policySelection.returnPolicyId,
                   paymentPolicyId: policySelection.paymentPolicyId,
                   policyTemplateId: policySelection.policyTemplateId,
-                  templateId: templateId || null,
+                  templateId:
+                    (typeof templateId === "string" && templateId.trim()
+                      ? templateId.trim()
+                      : null) ?? policySelection.descriptionTemplateId,
                 },
                 include: {
                   store: true,

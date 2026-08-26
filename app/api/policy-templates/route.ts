@@ -9,6 +9,7 @@ type PolicyTemplateBody = {
   shippingPolicyId?: unknown;
   returnPolicyId?: unknown;
   paymentPolicyId?: unknown;
+  descriptionTemplateId?: unknown;
   isDefault?: unknown;
 };
 
@@ -30,6 +31,11 @@ function normalizePolicyTemplateBody(body: PolicyTemplateBody) {
     paymentPolicyId:
       typeof body.paymentPolicyId === "string" && body.paymentPolicyId.trim()
         ? body.paymentPolicyId.trim()
+        : null,
+    descriptionTemplateId:
+      typeof body.descriptionTemplateId === "string" &&
+      body.descriptionTemplateId.trim()
+        ? body.descriptionTemplateId.trim()
         : null,
     isDefault: body.isDefault === true,
   };
@@ -95,6 +101,23 @@ export async function POST(request: Request) {
       where: { storeId: normalized.storeId },
       data: { isDefault: false },
     });
+  }
+
+  if (normalized.descriptionTemplateId) {
+    const descriptionTemplate = await prisma.descriptionTemplate.findFirst({
+      where: {
+        id: normalized.descriptionTemplateId,
+        storeId: storeSession.storeId,
+      },
+      select: { id: true },
+    });
+
+    if (!descriptionTemplate) {
+      return NextResponse.json(
+        { error: "Description template not found" },
+        { status: 400 },
+      );
+    }
   }
 
   const template = await prisma.policyTemplate.create({

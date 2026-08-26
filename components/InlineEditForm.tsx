@@ -30,6 +30,7 @@ import {
   sanitizeEbayItemSpecifics,
 } from "@/lib/item-specifics";
 import { isValidAsin, normalizeAsin } from "@/lib/price-check-eligibility";
+import { getPolicyDescriptionTemplateId } from "@/lib/policy-template-description";
 import { resolveRequiredItemSpecifics } from "@/lib/required-specific-resolver";
 import {
   getEbayCountryLabel,
@@ -88,6 +89,7 @@ interface PolicyTemplate {
   shippingPolicyId: string | null;
   returnPolicyId: string | null;
   paymentPolicyId: string | null;
+  descriptionTemplateId: string | null;
   isDefault: boolean;
 }
 
@@ -437,6 +439,9 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
   const [selectedPolicyTemplateId, setSelectedPolicyTemplateId] = useState(product.policyTemplateId || "");
   const hasInferredPolicyTemplateRef = useRef(Boolean(product.policyTemplateId));
   const hasAppliedDefaultPolicyTemplateRef = useRef(false);
+  const appliedPolicyDescriptionTemplateRef = useRef<string | null>(
+    product.templateId ? product.policyTemplateId : null,
+  );
   const [countryLocation, setCountryLocation] = useState("Australia");
   const [defaultZipcode, setDefaultZipcode] = useState("3170");
   const [brand, setBrand] = useState("");
@@ -872,6 +877,16 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
     if (!selectedTemplate) {
       setSelectedPolicyTemplateId("");
       return;
+    }
+
+    if (appliedPolicyDescriptionTemplateRef.current !== selectedTemplate.id) {
+      appliedPolicyDescriptionTemplateRef.current = selectedTemplate.id;
+      setSelectedTemplateId(
+        getPolicyDescriptionTemplateId(
+          policyTemplates,
+          selectedTemplate.id,
+        ) ?? "",
+      );
     }
 
     const stillMatches =
@@ -2277,6 +2292,13 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                     return;
                   }
 
+                  appliedPolicyDescriptionTemplateRef.current = nextTemplateId;
+                  setSelectedTemplateId(
+                    getPolicyDescriptionTemplateId(
+                      policyTemplates,
+                      nextTemplateId,
+                    ) ?? "",
+                  );
                   setShippingPolicyId(selectedPolicyTemplate.shippingPolicyId ?? "");
                   setReturnPolicyId(selectedPolicyTemplate.returnPolicyId ?? "");
                   setPaymentPolicyId(selectedPolicyTemplate.paymentPolicyId ?? "");

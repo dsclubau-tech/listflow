@@ -427,6 +427,9 @@ export async function applyBulkProductEdits(input: ApplyBulkProductEditsInput) {
   const skipped: BulkEditSkippedProduct[] = [];
   const updatedProductIds: string[] = [];
   const hasVariantOps = hasVariantOperation(operations);
+  const hasDescriptionTemplateOperation = operations.some(
+    (operation) => operation.field === "templateId",
+  );
   let updatedVariantCount = 0;
 
   for (const productId of productIds) {
@@ -570,6 +573,12 @@ export async function applyBulkProductEdits(input: ApplyBulkProductEditsInput) {
         productData.returnPolicyId = policySelection.returnPolicyId;
         productData.paymentPolicyId = policySelection.paymentPolicyId;
         productData.policyTemplateId = policySelection.policyTemplateId;
+        if (
+          policyPatch.policyTemplateId !== undefined &&
+          !hasDescriptionTemplateOperation
+        ) {
+          productData.templateId = policySelection.descriptionTemplateId;
+        }
       }
 
       await prisma.$transaction(async (tx) => {

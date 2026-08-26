@@ -21,6 +21,7 @@ import {
 } from "@/lib/product-images";
 import { uploadProductImageFile } from "@/lib/client-product-image-upload";
 import { getStoreBadgeClass } from "@/lib/store-badge";
+import { getPolicyDescriptionTemplateId } from "@/lib/policy-template-description";
 import {
   applyTitleCase,
   normalizeFullProductTitle,
@@ -54,6 +55,7 @@ interface PolicyTemplate {
   shippingPolicyId: string | null;
   returnPolicyId: string | null;
   paymentPolicyId: string | null;
+  descriptionTemplateId: string | null;
   isDefault: boolean;
 }
 
@@ -93,6 +95,7 @@ export default function DraftEditForm({
   const [policyTemplates, setPolicyTemplates] = useState<PolicyTemplate[]>([]);
   const [selectedPolicyTemplateId, setSelectedPolicyTemplateId] = useState("");
   const hasAppliedDefaultPolicyTemplateRef = useRef(false);
+  const appliedPolicyDescriptionTemplateRef = useRef<string | null>(null);
 
   // Product fields
   const [title, setTitle] = useState("");
@@ -182,6 +185,7 @@ export default function DraftEditForm({
   useEffect(() => {
     if (scrapedData) {
       hasAppliedDefaultPolicyTemplateRef.current = false;
+      appliedPolicyDescriptionTemplateRef.current = null;
       const defaults = scrapedData.supplierDefaults;
 
       // Apply title — capitalize if supplier setting is enabled
@@ -387,6 +391,16 @@ export default function DraftEditForm({
     if (!selectedTemplate) {
       setSelectedPolicyTemplateId("");
       return;
+    }
+
+    if (appliedPolicyDescriptionTemplateRef.current !== selectedTemplate.id) {
+      appliedPolicyDescriptionTemplateRef.current = selectedTemplate.id;
+      setSelectedTemplateId(
+        getPolicyDescriptionTemplateId(
+          policyTemplates,
+          selectedTemplate.id,
+        ) ?? "",
+      );
     }
 
     const stillMatches =
@@ -793,6 +807,13 @@ export default function DraftEditForm({
                         return;
                       }
 
+                      appliedPolicyDescriptionTemplateRef.current = nextTemplateId;
+                      setSelectedTemplateId(
+                        getPolicyDescriptionTemplateId(
+                          policyTemplates,
+                          nextTemplateId,
+                        ) ?? "",
+                      );
                       setShippingPolicyId(selectedPolicyTemplate.shippingPolicyId ?? "");
                       setReturnPolicyId(selectedPolicyTemplate.returnPolicyId ?? "");
                       setPaymentPolicyId(selectedPolicyTemplate.paymentPolicyId ?? "");

@@ -9,6 +9,7 @@ type PolicyTemplateBody = {
   shippingPolicyId?: unknown;
   returnPolicyId?: unknown;
   paymentPolicyId?: unknown;
+  descriptionTemplateId?: unknown;
   isDefault?: unknown;
 };
 
@@ -90,6 +91,31 @@ export async function PATCH(
 
   if (body.paymentPolicyId !== undefined) {
     data.paymentPolicyId = normalizeOptionalPolicyId(body.paymentPolicyId);
+  }
+
+  if (body.descriptionTemplateId !== undefined) {
+    const descriptionTemplateId = normalizeOptionalPolicyId(
+      body.descriptionTemplateId,
+    );
+
+    if (descriptionTemplateId) {
+      const descriptionTemplate = await prisma.descriptionTemplate.findFirst({
+        where: {
+          id: descriptionTemplateId,
+          storeId: storeSession.storeId,
+        },
+        select: { id: true },
+      });
+
+      if (!descriptionTemplate) {
+        return NextResponse.json(
+          { error: "Description template not found" },
+          { status: 400 },
+        );
+      }
+    }
+
+    data.descriptionTemplateId = descriptionTemplateId;
   }
 
   if (body.isDefault !== undefined) {

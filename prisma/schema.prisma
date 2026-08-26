@@ -760,25 +760,29 @@ model DescriptionTemplate {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  store Store? @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store           Store?           @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  policyTemplates PolicyTemplate[]
 
   @@index([storeId])
 }
 
 model PolicyTemplate {
-  id               String   @id @default(cuid())
-  name             String
-  storeId          String
-  shippingPolicyId String?
-  returnPolicyId   String?
-  paymentPolicyId  String?
-  isDefault        Boolean  @default(false)
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id                    String   @id @default(cuid())
+  name                  String
+  storeId               String
+  shippingPolicyId      String?
+  returnPolicyId        String?
+  paymentPolicyId       String?
+  descriptionTemplateId String?
+  isDefault             Boolean  @default(false)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
-  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store               Store                @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  descriptionTemplate DescriptionTemplate? @relation(fields: [descriptionTemplateId], references: [id], onDelete: SetNull)
 
   @@index([storeId])
+  @@index([descriptionTemplateId])
 }
 
 model KeywordBlacklist {

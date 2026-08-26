@@ -377,6 +377,9 @@ export async function PATCH(
       data.returnPolicyId = policySelection.returnPolicyId;
       data.paymentPolicyId = policySelection.paymentPolicyId;
       data.policyTemplateId = policySelection.policyTemplateId;
+      if (data.templateId === undefined) {
+        data.templateId = policySelection.descriptionTemplateId;
+      }
     } catch (error) {
       return NextResponse.json(
         {

@@ -34,6 +34,7 @@ interface PolicyTemplate {
   shippingPolicyId: string | null;
   returnPolicyId: string | null;
   paymentPolicyId: string | null;
+  descriptionTemplateId: string | null;
   store: Store;
 }
 
@@ -92,6 +93,18 @@ function getPolicyLabel(policyId: string | null, options: PolicyEntry[] | undefi
   return match?.profileName ?? policyId;
 }
 
+function getDescriptionTemplateLabel(
+  templateId: string | null,
+  templates: DescriptionTemplate[],
+) {
+  if (!templateId) {
+    return "Store default";
+  }
+
+  return templates.find((template) => template.id === templateId)?.name ??
+    "Unavailable template";
+}
+
 export default function TemplatesTab() {
   const [activeSubTab, setActiveSubTab] = useState<ActiveSubTab>("description");
   const [loading, setLoading] = useState(true);
@@ -142,6 +155,8 @@ export default function TemplatesTab() {
   const [policyFormShippingPolicyId, setPolicyFormShippingPolicyId] = useState("");
   const [policyFormReturnPolicyId, setPolicyFormReturnPolicyId] = useState("");
   const [policyFormPaymentPolicyId, setPolicyFormPaymentPolicyId] = useState("");
+  const [policyFormDescriptionTemplateId, setPolicyFormDescriptionTemplateId] =
+    useState("");
   const [savingPolicy, setSavingPolicy] = useState(false);
 
   const fetchDescriptionTemplates = useCallback(async () => {
@@ -303,6 +318,7 @@ export default function TemplatesTab() {
     setPolicyFormShippingPolicyId("");
     setPolicyFormReturnPolicyId("");
     setPolicyFormPaymentPolicyId("");
+    setPolicyFormDescriptionTemplateId("");
     setPolicyModalOpen(true);
   }
 
@@ -313,6 +329,7 @@ export default function TemplatesTab() {
     setPolicyFormShippingPolicyId(template.shippingPolicyId ?? "");
     setPolicyFormReturnPolicyId(template.returnPolicyId ?? "");
     setPolicyFormPaymentPolicyId(template.paymentPolicyId ?? "");
+    setPolicyFormDescriptionTemplateId(template.descriptionTemplateId ?? "");
     setPolicyModalOpen(true);
     void ensurePoliciesForStore(template.storeId);
   }
@@ -393,6 +410,7 @@ export default function TemplatesTab() {
         shippingPolicyId: policyFormShippingPolicyId || null,
         returnPolicyId: policyFormReturnPolicyId || null,
         paymentPolicyId: policyFormPaymentPolicyId || null,
+        descriptionTemplateId: policyFormDescriptionTemplateId || null,
       };
 
       const res = editingPolicyId
@@ -617,7 +635,7 @@ export default function TemplatesTab() {
                         </span>
                       </div>
 
-                      <div className="grid gap-2 text-sm text-gray-600 md:grid-cols-3">
+                      <div className="grid gap-2 text-sm text-gray-600 md:grid-cols-2 xl:grid-cols-4">
                         <div className="rounded-lg bg-gray-50 px-3 py-2">
                           <p className="text-xs font-medium uppercase tracking-wide text-gray-400">Shipping</p>
                           <p className="mt-1 text-sm text-gray-700">
@@ -634,6 +652,17 @@ export default function TemplatesTab() {
                           <p className="text-xs font-medium uppercase tracking-wide text-gray-400">Payment</p>
                           <p className="mt-1 text-sm text-gray-700">
                             {getPolicyLabel(template.paymentPolicyId, storePolicies?.payment)}
+                          </p>
+                        </div>
+                        <div className="rounded-lg bg-orange-50 px-3 py-2">
+                          <p className="text-xs font-medium uppercase tracking-wide text-orange-500">
+                            Description
+                          </p>
+                          <p className="mt-1 text-sm text-gray-700">
+                            {getDescriptionTemplateLabel(
+                              template.descriptionTemplateId,
+                              descriptionTemplates,
+                            )}
                           </p>
                         </div>
                       </div>
@@ -842,6 +871,7 @@ export default function TemplatesTab() {
                     setPolicyFormShippingPolicyId("");
                     setPolicyFormReturnPolicyId("");
                     setPolicyFormPaymentPolicyId("");
+                    setPolicyFormDescriptionTemplateId("");
                     if (nextStoreId) {
                       void ensurePoliciesForStore(nextStoreId);
                     }
@@ -857,6 +887,30 @@ export default function TemplatesTab() {
                 </select>
                 <p className="mt-1 text-xs text-gray-500">
                   Choose the store only to load that store&apos;s eBay business policy IDs. Products will still select templates individually.
+                </p>
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Description Template
+                </label>
+                <select
+                  value={policyFormDescriptionTemplateId}
+                  onChange={(event) =>
+                    setPolicyFormDescriptionTemplateId(event.target.value)
+                  }
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                >
+                  <option value="">Use store default description template</option>
+                  {descriptionTemplates.map((template) => (
+                    <option key={template.id} value={template.id}>
+                      {template.name}{template.isDefault ? " (Default)" : ""}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-xs text-gray-500">
+                  This description template loads automatically whenever the
+                  policy template is selected on a product.
                 </p>
               </div>
 

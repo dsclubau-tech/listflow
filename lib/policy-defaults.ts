@@ -10,6 +10,7 @@ export interface PolicyIds {
 
 export interface ResolvedPolicyDefaults extends PolicyIds {
   policyTemplateId: string | null;
+  descriptionTemplateId: string | null;
 }
 
 type PolicyTemplateRecord = {
@@ -18,6 +19,7 @@ type PolicyTemplateRecord = {
   shippingPolicyId: string | null;
   returnPolicyId: string | null;
   paymentPolicyId: string | null;
+  descriptionTemplateId: string | null;
 };
 
 function normalizePolicyId(value: unknown) {
@@ -48,7 +50,7 @@ export function normalizePolicyIds(policyIds: Partial<Record<keyof PolicyIds, un
   };
 }
 
-export async function findMatchingPolicyTemplateId(
+async function findMatchingPolicyTemplate(
   storeId: string,
   policyIds: PolicyIds,
 ) {
@@ -64,10 +66,17 @@ export async function findMatchingPolicyTemplateId(
       paymentPolicyId: policyIds.paymentPolicyId,
     },
     orderBy: [{ isDefault: "desc" }, { name: "asc" }],
-    select: { id: true },
+    select: { id: true, descriptionTemplateId: true },
   });
 
-  return template?.id ?? null;
+  return template;
+}
+
+export async function findMatchingPolicyTemplateId(
+  storeId: string,
+  policyIds: PolicyIds,
+) {
+  return (await findMatchingPolicyTemplate(storeId, policyIds))?.id ?? null;
 }
 
 export async function getStorePolicyDefaults(
@@ -82,6 +91,7 @@ export async function getStorePolicyDefaults(
         shippingPolicyId: true,
         returnPolicyId: true,
         paymentPolicyId: true,
+        descriptionTemplateId: true,
       },
     }),
     prisma.supplierSettings.findFirst({
@@ -112,17 +122,23 @@ export async function getStorePolicyDefaults(
     : fallbackPolicyIds;
 
   if (!hasAnyPolicyId(resolvedPolicyIds)) {
-    return { ...resolvedPolicyIds, policyTemplateId: null };
+    return {
+      ...resolvedPolicyIds,
+      policyTemplateId: defaultTemplate?.id ?? null,
+      descriptionTemplateId: defaultTemplate?.descriptionTemplateId ?? null,
+    };
   }
 
   const defaultTemplateMatches =
     defaultTemplate && policyIdsMatch(defaultTemplate, resolvedPolicyIds);
+  const matchingTemplate = defaultTemplateMatches
+    ? defaultTemplate
+    : await findMatchingPolicyTemplate(storeId, resolvedPolicyIds);
 
   return {
     ...resolvedPolicyIds,
-    policyTemplateId: defaultTemplateMatches
-      ? defaultTemplate.id
-      : await findMatchingPolicyTemplateId(storeId, resolvedPolicyIds),
+    policyTemplateId: matchingTemplate?.id ?? null,
+    descriptionTemplateId: matchingTemplate?.descriptionTemplateId ?? null,
   };
 }
 
@@ -154,6 +170,7 @@ export async function resolveProductPolicySelection(
         shippingPolicyId: true,
         returnPolicyId: true,
         paymentPolicyId: true,
+        descriptionTemplateId: true,
       },
     });
 
@@ -180,15 +197,30 @@ export async function resolveProductPolicySelection(
   });
 
   if (!hasAnyPolicyId(resolvedPolicyIds)) {
-    return { ...resolvedPolicyIds, policyTemplateId: null };
+    return {
+      ...resolvedPolicyIds,
+      policyTemplateId: selectedTemplate?.id ?? defaults.policyTemplateId,
+      descriptionTemplateId:
+        selectedTemplate?.descriptionTemplateId ?? defaults.descriptionTemplateId,
+    };
   }
 
   if (selectedTemplate && policyIdsMatch(selectedTemplate, resolvedPolicyIds)) {
-    return { ...resolvedPolicyIds, policyTemplateId: selectedTemplate.id };
+    return {
+      ...resolvedPolicyIds,
+      policyTemplateId: selectedTemplate.id,
+      descriptionTemplateId: selectedTemplate.descriptionTemplateId,
+    };
   }
+
+  const matchingTemplate = await findMatchingPolicyTemplate(
+    storeId,
+    resolvedPolicyIds,
+  );
 
   return {
     ...resolvedPolicyIds,
-    policyTemplateId: await findMatchingPolicyTemplateId(storeId, resolvedPolicyIds),
+    policyTemplateId: matchingTemplate?.id ?? null,
+    descriptionTemplateId: matchingTemplate?.descriptionTemplateId ?? null,
   };
 }
