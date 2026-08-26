@@ -1874,9 +1874,25 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
             {storeBadge}
           </span>
           {currentAsin && (
-            <span className="text-xs text-gray-400 flex-shrink-0">
-              Supplier: Amazon AU
-            </span>
+            <AsinLink
+              asin={currentAsin}
+              stopPropagation
+              className="group inline-flex flex-shrink-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-gray-500 transition-colors hover:bg-orange-50 hover:text-orange-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400/70"
+              title={`Open Amazon product ${currentAsin}`}
+            >
+              <span>Supplier:</span>
+              <span className="font-semibold text-orange-700">Amazon AU</span>
+              <svg
+                className="h-3.5 w-3.5 text-gray-300 transition-colors group-hover:text-orange-500"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+                aria-hidden="true"
+              >
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-6 3L21 3m0 0h-5.25M21 3v5.25" />
+              </svg>
+            </AsinLink>
           )}
         </div>
 

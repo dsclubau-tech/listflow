@@ -216,9 +216,21 @@ function PlatformIcon({ platform }: { platform: "amazon" | "ebay" }) {
     return (
       <span
         aria-hidden="true"
-        className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded bg-gray-900 text-[10px] font-bold leading-none text-white"
+        className="relative inline-flex h-5 w-6 shrink-0 items-start justify-center overflow-hidden rounded-md bg-[#131921] pt-0.5 text-[11px] font-bold leading-none text-white shadow-sm ring-1 ring-black/10"
       >
         a
+        <svg
+          className="absolute bottom-0.5 left-1 h-2 w-4 text-[#ff9900]"
+          viewBox="0 0 16 7"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M1.5 1.5c3.4 2.5 7.5 3.1 11.7 1.4" />
+          <path d="m11.4 1.8 2.2.8-1 2" />
+        </svg>
       </span>
     );
   }
@@ -226,10 +238,32 @@ function PlatformIcon({ platform }: { platform: "amazon" | "ebay" }) {
   return (
     <span
       aria-hidden="true"
-      className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded bg-blue-600 text-[9px] font-bold leading-none text-white"
+      className="inline-flex h-5 w-6 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white text-[8px] font-black leading-none tracking-[-0.1em] shadow-sm ring-1 ring-gray-200"
     >
-      e
+      <span className="text-[#e53238]">e</span>
+      <span className="text-[#0064d2]">b</span>
+      <span className="text-[#f5af02]">a</span>
+      <span className="text-[#86b817]">y</span>
     </span>
+  );
+}
+
+function ExternalLinkGlyph({ platform }: { platform: "amazon" | "ebay" }) {
+  return (
+    <svg
+      aria-hidden="true"
+      className={
+        platform === "amazon"
+          ? "h-3 w-3 shrink-0 text-gray-300 transition-colors group-hover:text-orange-500"
+          : "h-3 w-3 shrink-0 text-gray-300 transition-colors group-hover:text-blue-500"
+      }
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-6 3L21 3m0 0h-5.25M21 3v5.25" />
+    </svg>
   );
 }
 
@@ -238,36 +272,48 @@ function ItemIdCell({ product }: { product: SerializedProductRow }) {
   const ebayItemId = product.ebayItemId?.trim();
 
   return (
-    <div className="space-y-1.5 text-xs">
-      <div className="flex min-w-0 items-center gap-2">
-        <PlatformIcon platform="amazon" />
-        {asin ? (
-          <AsinLink
-            asin={asin}
-            stopPropagation
-            className="block min-w-0 flex-1 truncate font-mono text-gray-700 hover:text-orange-600 hover:underline"
-          />
-        ) : (
+    <div className="space-y-1 text-xs">
+      {asin ? (
+        <AsinLink
+          asin={asin}
+          stopPropagation
+          aria-label={`Open Amazon product ${asin}`}
+          className="group -ml-1 inline-flex max-w-full min-w-0 items-center gap-2 rounded-lg border border-transparent px-1 py-0.5 text-gray-700 transition-colors hover:border-orange-200 hover:bg-orange-50 hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400/70"
+        >
+          <PlatformIcon platform="amazon" />
+          <span className="min-w-0 flex-1 truncate font-mono font-medium">
+            {asin.toUpperCase()}
+          </span>
+          <ExternalLinkGlyph platform="amazon" />
+        </AsinLink>
+      ) : (
+        <div className="flex min-w-0 items-center gap-2 px-1 py-0.5">
+          <PlatformIcon platform="amazon" />
           <span className="text-gray-400">-</span>
-        )}
-      </div>
-      <div className="flex min-w-0 items-center gap-2">
-        <PlatformIcon platform="ebay" />
-        {ebayItemId ? (
-          <a
-            href={`https://www.ebay.com.au/itm/${ebayItemId}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={(event) => event.stopPropagation()}
-            className="block min-w-0 flex-1 truncate font-mono text-gray-700 hover:text-blue-600 hover:underline"
-            title={`Open eBay item ${ebayItemId}`}
-          >
+        </div>
+      )}
+      {ebayItemId ? (
+        <a
+          href={`https://www.ebay.com.au/itm/${ebayItemId}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          onClick={(event) => event.stopPropagation()}
+          className="group -ml-1 inline-flex max-w-full min-w-0 items-center gap-2 rounded-lg border border-transparent px-1 py-0.5 text-gray-700 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70"
+          title={`Open eBay item ${ebayItemId}`}
+          aria-label={`Open eBay item ${ebayItemId}`}
+        >
+          <PlatformIcon platform="ebay" />
+          <span className="min-w-0 flex-1 truncate font-mono font-medium">
             {ebayItemId}
-          </a>
-        ) : (
+          </span>
+          <ExternalLinkGlyph platform="ebay" />
+        </a>
+      ) : (
+        <div className="flex min-w-0 items-center gap-2 px-1 py-0.5">
+          <PlatformIcon platform="ebay" />
           <span className="text-gray-400">-</span>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -2495,33 +2541,21 @@ export default function DraftsTable({
                                 Delete
                               </Button>
                             )}
-                            {product.asin && (
-                              <AsinLink
-                                asin={product.asin}
-                                className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 shadow-sm transition-colors hover:border-orange-200 hover:bg-orange-50 hover:text-orange-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-500"
-                                title="Go to Amazon"
-                              >
-                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5} aria-hidden="true">
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
-                                </svg>
-                              </AsinLink>
-                            )}
                             {product.ebayItemId && (
                               <a
                                 href={`https://www.ebay.com.au/itm/${product.ebayItemId}`}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 shadow-sm transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                                className="inline-flex h-11 w-11 items-center justify-center rounded-lg border border-gray-200 bg-white shadow-sm transition-all hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50 hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                                 title="Go to eBay"
+                                aria-label={`Open eBay item ${product.ebayItemId}`}
                               >
-                                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5} aria-hidden="true">
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
-                                </svg>
+                                <PlatformIcon platform="ebay" />
                               </a>
                             )}
                           </div>
 
-                          {(product.status !== "IMPORTED" || product.asin || product.ebayItemId) && (
+                          {(product.status !== "IMPORTED" || product.ebayItemId) && (
                             <div className="relative xl:hidden" data-draft-action-menu>
                               <Button
                                 ref={(node) => {
@@ -2542,24 +2576,16 @@ export default function DraftsTable({
                               </Button>
                               {draftActionMenuProductId === product.id && (
                                 <div className="absolute bottom-full right-0 z-30 mb-2 w-52 overflow-hidden rounded-xl border border-gray-200 bg-white p-1.5 shadow-xl" role="menu">
-                                  {product.asin && (
-                                    <AsinLink
-                                      asin={product.asin}
-                                      className="flex min-h-10 items-center rounded-lg px-3 text-sm font-medium text-gray-700 hover:bg-orange-50 hover:text-orange-700"
-                                      role="menuitem"
-                                    >
-                                      Open on Amazon
-                                    </AsinLink>
-                                  )}
                                   {product.ebayItemId && (
                                     <a
                                       href={`https://www.ebay.com.au/itm/${product.ebayItemId}`}
                                       target="_blank"
                                       rel="noopener noreferrer"
-                                      className="flex min-h-10 items-center rounded-lg px-3 text-sm font-medium text-gray-700 hover:bg-blue-50 hover:text-blue-700"
+                                      className="flex min-h-10 items-center gap-2 rounded-lg px-3 text-sm font-medium text-gray-700 hover:bg-blue-50 hover:text-blue-700"
                                       role="menuitem"
                                     >
-                                      Open on eBay
+                                      <PlatformIcon platform="ebay" />
+                                      <span>Open on eBay</span>
                                     </a>
                                   )}
                                   {product.status !== "IMPORTED" && (
