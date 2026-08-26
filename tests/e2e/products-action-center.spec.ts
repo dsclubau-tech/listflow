@@ -24,10 +24,14 @@ test.describe("Products selection and Action Center ownership", () => {
     await signIn(page);
     await page.goto("/products?pageSize=25");
 
+    const pageCheckbox = page.getByRole("checkbox", {
+      name: "Select all listings on this page",
+    });
+
+    await pageCheckbox.check();
     const selectAllListings = page.getByRole("button", {
       name: /Select all \d+ listings/,
     });
-
     test.skip(
       (await selectAllListings.count()) === 0,
       "The authenticated store needs more than one page of products.",
@@ -35,12 +39,15 @@ test.describe("Products selection and Action Center ownership", () => {
 
     const label = await selectAllListings.innerText();
     const totalCount = Number(label.match(/\d+/)?.[0] ?? 0);
-    const pageCheckbox = page.getByRole("checkbox", {
-      name: "Select all listings on this page",
-    });
-
-    await pageCheckbox.check();
-    await expect(page.getByText("25 selected", { exact: true })).toBeVisible();
+    const selectionSummary = page
+      .getByText("25 selected", { exact: true })
+      .locator("..");
+    await expect(selectionSummary).toBeVisible();
+    await expect(
+      selectionSummary.getByRole("button", {
+        name: `Select all ${totalCount} listings`,
+      }),
+    ).toBeVisible();
     await selectAllListings.click();
     await expect(page.getByText(`All ${totalCount} selected`, { exact: true })).toBeVisible();
     await expect(

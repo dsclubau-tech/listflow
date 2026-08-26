@@ -1994,9 +1994,29 @@ export default function DraftsTable({
       )}
 
       {selectedIds.length > 0 && (
-        <p className="mb-2 text-sm font-medium text-gray-500">
-          {selectedIds.length} selected
-        </p>
+        <div className="mb-2 flex min-h-5 flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+          <span className="font-medium text-gray-500">
+            {selectedIds.length} selected
+          </span>
+          {isProductsView && totalListingCount > pageSelectableIds.length && (
+            allMatchingSelected ? (
+              <span className="font-medium text-blue-700">
+                All {allMatchingIds.length} selected
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={() => void selectAllListings()}
+                disabled={isSelectingAllListings || isSelectAllListingsLoading}
+                className="font-medium text-blue-700 hover:text-blue-900 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 disabled:cursor-wait disabled:opacity-60"
+              >
+                {isSelectingAllListings || isSelectAllListingsLoading
+                  ? "Selecting all…"
+                  : `Select all ${totalListingCount} listings`}
+              </button>
+            )
+          )}
+        </div>
       )}
 
       <div
@@ -2016,13 +2036,13 @@ export default function DraftsTable({
           <table
             className={
               isProductsView
-                ? "w-full min-w-[1540px] table-fixed"
+                ? "w-full min-w-[1412px] table-fixed"
                 : "block w-full xl:table"
             }
           >
           {isProductsView && (
             <colgroup>
-              <col className="w-[184px]" />
+              <col className="w-12" />
               <col className="w-7" />
               <col className="w-[58px]" />
               <col className="w-[280px]" />
@@ -2040,37 +2060,15 @@ export default function DraftsTable({
             <tr className="border-b bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
               {hasSelectionColumn && (
                 <th className="px-3 py-3 text-left w-10">
-                  <div className="flex items-center gap-2 whitespace-nowrap">
-                    <input
-                      ref={selectAllCheckboxRef}
-                      type="checkbox"
-                      checked={allPageSelected}
-                      onChange={toggleSelectAll}
-                      disabled={pageSelectableIds.length === 0}
-                      aria-label="Select all listings on this page"
-                      className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
-                    />
-                    {isProductsView && totalListingCount > pageSelectableIds.length && (
-                      allMatchingSelected ? (
-                        <span className="text-[11px] font-medium normal-case tracking-normal text-blue-700">
-                          All {allMatchingIds.length} selected
-                        </span>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => void selectAllListings()}
-                          disabled={
-                            isSelectingAllListings || isSelectAllListingsLoading
-                          }
-                          className="text-[11px] font-medium normal-case tracking-normal text-blue-700 hover:text-blue-900 hover:underline disabled:cursor-wait disabled:opacity-60"
-                        >
-                          {isSelectingAllListings || isSelectAllListingsLoading
-                            ? "Selecting all…"
-                            : `Select all ${totalListingCount} listings`}
-                        </button>
-                      )
-                    )}
-                  </div>
+                  <input
+                    ref={selectAllCheckboxRef}
+                    type="checkbox"
+                    checked={allPageSelected}
+                    onChange={toggleSelectAll}
+                    disabled={pageSelectableIds.length === 0}
+                    aria-label="Select all listings on this page"
+                    className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                  />
                 </th>
               )}
               <th className="px-2 py-3 text-left w-10" />
