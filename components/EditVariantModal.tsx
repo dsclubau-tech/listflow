@@ -10,6 +10,7 @@ import {
   calculateTotalFees,
 } from "@/lib/variant-pricing";
 import { dedupeProductImages } from "@/lib/product-images";
+import { addAdditionalProfitToExistingVariant } from "@/lib/variant-additional-profit";
 import {
   getEffectiveListingQuantity,
   getStoredQuantityAfterEdit,
@@ -107,6 +108,29 @@ function recalculateSellPriceForState(next: VariantFormState) {
   return {
     ...next,
     sellPrice: toMoneyString(sellPrice),
+  };
+}
+
+function addSupplierProfitToExistingForm(
+  base: VariantFormState,
+  defaults: SupplierPricingDefaults,
+) {
+  const pricing = addAdditionalProfitToExistingVariant({
+    buyPrice: toNumber(base.buyPrice),
+    sellPrice: toNumber(base.sellPrice),
+    feesPercent: toNumber(base.feesPercent),
+    feesFixed: toNumber(base.feesFixed),
+    profitPercent: toNumber(base.profitPercent),
+    additionalProfitPercent: defaults.profitPercent,
+    additionalProfitFixed: defaults.profitFixed,
+    roundCents: base.roundCentsEnabled ? 0.99 : null,
+  });
+
+  return {
+    ...base,
+    profitFixed: toMoneyString(pricing.profitFixed),
+    profitPercent: String(pricing.profitPercent),
+    sellPrice: toMoneyString(pricing.sellPrice),
   };
 }
 
@@ -216,6 +240,7 @@ export default function EditVariantModal({
   const [pricingDefaults, setPricingDefaults] =
     useState<SupplierPricingDefaults | null>(null);
   const pricingDefaultsRef = useRef<SupplierPricingDefaults | null>(null);
+  const additionalProfitBaseRef = useRef<VariantFormState | null>(null);
   const [includeAdditionalProfit, setIncludeAdditionalProfit] = useState(false);
 
   useEffect(() => {
@@ -230,6 +255,7 @@ export default function EditVariantModal({
     setActiveTab("pricing");
     setError(null);
     setIncludeAdditionalProfit(false);
+    additionalProfitBaseRef.current = null;
     setForm(
       buildFormState({
         variant,
@@ -294,6 +320,9 @@ export default function EditVariantModal({
 
         pricingDefaultsRef.current = nextDefaults;
         setPricingDefaults(nextDefaults);
+        if (variant && nextDefaults.applyAdditionalProfitToExisting) {
+          setIncludeAdditionalProfit(true);
+        }
 
         setForm((prev) => {
           // When creating a new variant (variant === null), apply supplier defaults
@@ -322,18 +351,9 @@ export default function EditVariantModal({
           // For existing variants, only add supplier additional profit once if the
           // settings toggle is enabled.
           if (nextDefaults.applyAdditionalProfitToExisting) {
-            setIncludeAdditionalProfit(true);
-            const currentFixed = toNumber(prev.profitFixed);
-            const currentPercent = toNumber(prev.profitPercent);
-            const nextFixed = currentFixed + nextDefaults.profitFixed;
-            const nextPercent = currentPercent + nextDefaults.profitPercent;
-
-            return recalculateSellPriceForState({
-              ...prev,
-              profitFixed: toMoneyString(nextFixed),
-              profitPercent: String(nextPercent),
-              minimumProfit: String(nextDefaults.minimumProfit),
-            });
+            const base = additionalProfitBaseRef.current ?? prev;
+            additionalProfitBaseRef.current = base;
+            return addSupplierProfitToExistingForm(base, nextDefaults);
           }
 
           return prev;
@@ -438,23 +458,15 @@ export default function EditVariantModal({
 
     setIncludeAdditionalProfit(checked);
     setForm((prev) => {
-      const addFixed = defaults.profitFixed || 0;
-      const addPercent = defaults.profitPercent || 0;
-      const currentFixed = toNumber(prev.profitFixed);
-      const currentPercent = toNumber(prev.profitPercent);
+      if (checked) {
+        const base = additionalProfitBaseRef.current ?? prev;
+        additionalProfitBaseRef.current = base;
+        return addSupplierProfitToExistingForm(base, defaults);
+      }
 
-      const nextFixed = checked
-        ? currentFixed + addFixed
-        : Math.max(0, currentFixed - addFixed);
-      const nextPercent = checked
-        ? currentPercent + addPercent
-        : Math.max(0, currentPercent - addPercent);
-
-      return recalculateSellPriceForState({
-        ...prev,
-        profitFixed: toMoneyString(nextFixed),
-        profitPercent: String(nextPercent),
-      });
+      const base = additionalProfitBaseRef.current;
+      additionalProfitBaseRef.current = null;
+      return base ?? prev;
     });
   }
 

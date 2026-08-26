@@ -1,6 +1,7 @@
 import type { Browser, Page } from "playwright-core";
 import { load } from "cheerio";
 import { extractLocalizedBuyboxPriceChoices } from "@/lib/amazon-buybox-price";
+import { extractAmazonNewOfferStockLeft } from "@/lib/amazon-stock";
 import { launchScraperBrowser } from "@/lib/scraper-browser";
 import { isUsefulItemSpecificCandidate } from "@/lib/item-specifics";
 import {
@@ -714,27 +715,8 @@ export async function scrapeAmazonPrice(
     }
 
     const stockLeft = await page
-      .evaluate(() => {
-        const selectors = [
-          "#availability",
-          "#buybox",
-          "#desktop_buybox",
-          "#mir-layout-DELIVERY_BLOCK",
-        ];
-        const text = selectors
-          .map((selector) => document.querySelector(selector)?.textContent ?? "")
-          .join(" ")
-          .toLowerCase()
-          .replace(/\s+/g, " ");
-        const match = text.match(/only\s+(\d+)\s+left\s+in\s+stock/);
-
-        if (!match) {
-          return null;
-        }
-
-        const parsed = Number.parseInt(match[1], 10);
-        return Number.isFinite(parsed) ? parsed : null;
-      })
+      .content()
+      .then((html) => extractAmazonNewOfferStockLeft(load(html)))
       .catch(() => null);
 
     const priceChoices = await extractAmazonBuyboxPriceChoicesFromPage(
