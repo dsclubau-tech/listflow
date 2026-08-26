@@ -20,7 +20,7 @@ import {
   getPriceCheckEligibility,
   getSelectedPriceCheckSummary,
 } from "@/lib/price-check-eligibility";
-import { getProductDisplayProfits } from "@/lib/product-profit";
+import { getProductDisplayProfitBreakdown } from "@/lib/product-profit";
 import {
   getAmazonPriceTrackingLabel,
   normalizeAmazonPriceTrackingMode,
@@ -367,22 +367,49 @@ function PriceCell({ product }: { product: SerializedProductRow }) {
 }
 
 function ProfitCell({ product }: { product: SerializedProductRow }) {
-  const profits = getProductDisplayProfits(product);
+  const breakdown = getProductDisplayProfitBreakdown(product);
 
-  if (profits.length === 0) {
+  if (breakdown.length === 0) {
     return <span className="text-sm text-gray-400">-</span>;
   }
 
+  const profits = breakdown.map((item) => item.profit);
+  const profitsAfterAdFee = breakdown
+    .map((item) => item.profitAfterAdFee)
+    .filter((profit): profit is number => profit !== null);
   const hasNegativeProfit = profits.some((profit) => profit < 0);
+  const hasUnknownAdProfit = profitsAfterAdFee.length !== breakdown.length;
+  const hasNegativeAdProfit = profitsAfterAdFee.some((profit) => profit < 0);
 
   return (
-    <span
-      className={`block max-w-full whitespace-normal break-words text-sm font-medium leading-5 ${
-        hasNegativeProfit ? "text-red-700" : "text-gray-700"
-      }`}
-    >
-      {formatMoneyRange(profits)}
-    </span>
+    <div className="max-w-full space-y-0.5 whitespace-normal text-xs leading-4">
+      <div>
+        <span className="text-gray-500">PROFIT</span>{" "}
+        <span
+          className={`font-semibold ${
+            hasNegativeProfit ? "text-red-700" : "text-gray-900"
+          }`}
+        >
+          {formatMoneyRange(profits)}
+        </span>
+      </div>
+      <div
+        title={
+          hasUnknownAdProfit
+            ? "Sync eBay Ads to calculate profit after the promoted-ad fee. Dynamic campaigns do not expose a fixed fee rate."
+            : "Profit after the current promoted-ad fee"
+        }
+      >
+        <span className="text-gray-500">AFTER AD</span>{" "}
+        <span
+          className={`font-semibold ${
+            hasNegativeAdProfit ? "text-red-700" : "text-gray-900"
+          }`}
+        >
+          {hasUnknownAdProfit ? "-" : formatMoneyRange(profitsAfterAdFee)}
+        </span>
+      </div>
+    </div>
   );
 }
 

@@ -2,6 +2,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   applyRoundCents,
   calculateNetProfit,
@@ -237,11 +238,42 @@ export default function EditVariantModal({
   );
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
+  const modalRef = useRef<HTMLDialogElement>(null);
   const [pricingDefaults, setPricingDefaults] =
     useState<SupplierPricingDefaults | null>(null);
   const pricingDefaultsRef = useRef<SupplierPricingDefaults | null>(null);
   const additionalProfitBaseRef = useRef<VariantFormState | null>(null);
   const [includeAdditionalProfit, setIncludeAdditionalProfit] = useState(false);
+
+  useEffect(() => {
+    setPortalRoot(document.body);
+  }, []);
+
+  useEffect(() => {
+    const dialog = modalRef.current;
+
+    if (!isOpen || !dialog) return;
+
+    if (!dialog.open) {
+      dialog.showModal();
+    }
+
+    return () => {
+      if (dialog.open) dialog.close();
+    };
+  }, [isOpen, portalRoot]);
+
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isOpen]);
 
   useEffect(() => {
     pricingDefaultsRef.current = pricingDefaults;
@@ -457,17 +489,16 @@ export default function EditVariantModal({
     };
 
     setIncludeAdditionalProfit(checked);
-    setForm((prev) => {
-      if (checked) {
-        const base = additionalProfitBaseRef.current ?? prev;
-        additionalProfitBaseRef.current = base;
-        return addSupplierProfitToExistingForm(base, defaults);
-      }
+    if (checked) {
+      const base = additionalProfitBaseRef.current ?? form;
+      additionalProfitBaseRef.current = base;
+      setForm(addSupplierProfitToExistingForm(base, defaults));
+      return;
+    }
 
-      const base = additionalProfitBaseRef.current;
-      additionalProfitBaseRef.current = null;
-      return base ?? prev;
-    });
+    const base = additionalProfitBaseRef.current;
+    additionalProfitBaseRef.current = null;
+    if (base) setForm(base);
   }
 
   function updateSpecific(
@@ -621,15 +652,23 @@ export default function EditVariantModal({
     }
   }
 
-  if (!isOpen) {
+  if (!isOpen || !portalRoot) {
     return null;
   }
 
-  return (
-    <>
-      <div className="fixed inset-0 bg-black/45 z-40" onClick={onClose} />
-
-      <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-2 sm:p-4">
+  return createPortal(
+    <dialog
+      ref={modalRef}
+      aria-label={variant ? "Edit variant" : "Add variant"}
+      className="fixed inset-0 m-0 h-dvh max-h-none w-screen max-w-none border-0 bg-black/45 p-2 backdrop:bg-transparent open:flex open:items-end open:justify-center sm:p-4 sm:open:items-center"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+    >
         <form
           onSubmit={handleSubmit}
           className="w-full max-w-4xl max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] overflow-hidden rounded-2xl bg-white shadow-2xl flex flex-col"
@@ -855,10 +894,8 @@ export default function EditVariantModal({
                 </label>
 
                 {variant && (
-                  <div
-                    onClick={() =>
-                      handleToggleAdditionalProfit(!includeAdditionalProfit)
-                    }
+                  <label
+                    htmlFor="include-additional-profit-toggle"
                     className="flex items-center justify-between rounded-lg border border-orange-200 bg-orange-50/50 px-4 py-3 md:col-span-2 cursor-pointer hover:bg-orange-50 transition-colors select-none"
                   >
                     <div>
@@ -879,14 +916,12 @@ export default function EditVariantModal({
                       type="checkbox"
                       id="include-additional-profit-toggle"
                       checked={includeAdditionalProfit}
-                      onChange={(event) => {
-                        event.stopPropagation();
-                        handleToggleAdditionalProfit(event.target.checked);
-                      }}
-                      onClick={(event) => event.stopPropagation()}
+                      onChange={(event) =>
+                        handleToggleAdditionalProfit(event.target.checked)
+                      }
                       className="h-4 w-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500 cursor-pointer"
                     />
-                  </div>
+                  </label>
                 )}
               </div>
             )}
@@ -1100,7 +1135,7 @@ export default function EditVariantModal({
             </div>
           </div>
         </form>
-      </div>
-    </>
+    </dialog>,
+    portalRoot,
   );
 }

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  getProductDisplayProfitBreakdown,
   getProductIdsMatchingDisplayProfitRange,
   getProductDisplayProfits,
   productMatchesDisplayProfitRange,
@@ -32,6 +33,72 @@ test("getProductDisplayProfits uses product fallback when no variants exist", ()
       variants: [],
     }),
     [9.21]
+  );
+});
+
+test("getProductDisplayProfitBreakdown shows profit before and after fixed promoted-ad fees", () => {
+  assert.deepEqual(
+    getProductDisplayProfitBreakdown({
+      price: "290.90",
+      promotedAdStatus: "PROMOTED",
+      promotedAdRateStrategy: "FIXED",
+      promotedAdPercent: 3.5,
+      variants: [
+        {
+          buyPrice: "206.00",
+          sellPrice: "290.90",
+          feesPercent: 0,
+          feesFixed: 0,
+        },
+      ],
+    }),
+    [{ profit: 84.9, profitAfterAdFee: 74.72 }],
+  );
+});
+
+test("getProductDisplayProfitBreakdown leaves dynamic or unsynced ad profit unknown", () => {
+  const baseProduct = {
+    price: "140",
+    variants: [
+      {
+        buyPrice: "100",
+        sellPrice: "140",
+        feesPercent: 10,
+        feesFixed: 2,
+      },
+    ],
+  };
+
+  assert.deepEqual(
+    getProductDisplayProfitBreakdown({
+      ...baseProduct,
+      promotedAdStatus: "PROMOTED",
+      promotedAdRateStrategy: "DYNAMIC",
+      promotedAdPercent: 4,
+    }),
+    [{ profit: 24, profitAfterAdFee: null }],
+  );
+  assert.deepEqual(getProductDisplayProfitBreakdown(baseProduct), [
+    { profit: 24, profitAfterAdFee: null },
+  ]);
+});
+
+test("getProductDisplayProfitBreakdown uses zero ad fee for unpromoted listings", () => {
+  assert.deepEqual(
+    getProductDisplayProfitBreakdown({
+      price: "140",
+      promotedAdStatus: "NOT_PROMOTED",
+      promotedAdPercent: 9,
+      variants: [
+        {
+          buyPrice: "100",
+          sellPrice: "140",
+          feesPercent: 10,
+          feesFixed: 2,
+        },
+      ],
+    }),
+    [{ profit: 24, profitAfterAdFee: 24 }],
   );
 });
 

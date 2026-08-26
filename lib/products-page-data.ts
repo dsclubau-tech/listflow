@@ -25,6 +25,7 @@ import {
 import { prisma } from "@/lib/prisma";
 import type { ProductSelectionSummary } from "@/types/product-selection";
 import type { SerializedProductRow } from "@/types/product-row";
+import { getProductUploadedAt } from "@/lib/product-uploaded-at";
 
 export { normalizeProductsQuery };
 export type {
@@ -188,8 +189,15 @@ function serializeProductSelection(
 
 function serializeProducts(products: ProductRowPayload[]): SerializedProductRow[] {
   // Editor-only fields are loaded from the product detail endpoint on expansion.
-  return products.map(({ uploadLogs, ...product }) =>
-    ({
+  return products.map(({ uploadLogs, ...product }) => {
+    const uploadedAt = getProductUploadedAt({
+      successfulUploadAt: uploadLogs[0]?.createdAt,
+      productCreatedAt: product.createdAt,
+      ebayItemId: product.ebayItemId,
+      status: product.status,
+    });
+
+    return ({
       ...product,
       price: product.price.toString(),
       amazonPrice: product.amazonPrice?.toString() ?? null,
@@ -197,7 +205,7 @@ function serializeProducts(products: ProductRowPayload[]): SerializedProductRow[
       promotedAdSyncedAt: product.promotedAdSyncedAt?.toISOString() ?? null,
       createdAt: product.createdAt.toISOString(),
       updatedAt: product.updatedAt.toISOString(),
-      uploadedAt: uploadLogs[0]?.createdAt.toISOString() ?? null,
+      uploadedAt: uploadedAt?.toISOString() ?? null,
       variants: product.variants.map((variant) => ({
         ...variant,
         buyPrice: variant.buyPrice.toString(),
@@ -214,8 +222,8 @@ function serializeProducts(products: ProductRowPayload[]): SerializedProductRow[
       })),
       store: product.store,
       createdBy: product.createdBy,
-    }) as unknown as SerializedProductRow,
-  );
+    }) as unknown as SerializedProductRow;
+  });
 }
 
 function getPage(totalCount: number, query: NormalizedProductsQuery) {

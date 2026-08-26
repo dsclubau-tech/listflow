@@ -12,6 +12,9 @@ export type ProductProfitVariant = {
 export type ProductProfitInput = {
   price: MoneyValue;
   amazonPrice?: MoneyValue;
+  promotedAdStatus?: string | null;
+  promotedAdPercent?: number | null;
+  promotedAdRateStrategy?: string | null;
   variants?: ProductProfitVariant[] | null;
 };
 
@@ -32,7 +35,30 @@ function isInRange(value: number, min: number | null, max: number | null) {
   return (min === null || value >= min) && (max === null || value <= max);
 }
 
-export function getProductDisplayProfits(product: ProductProfitInput) {
+function getSyncedPromotedAdPercent(product: ProductProfitInput) {
+  if (product.promotedAdStatus === "NOT_PROMOTED") {
+    return 0;
+  }
+
+  if (
+    product.promotedAdStatus !== "PROMOTED" ||
+    product.promotedAdRateStrategy === "DYNAMIC" ||
+    typeof product.promotedAdPercent !== "number" ||
+    !Number.isFinite(product.promotedAdPercent)
+  ) {
+    return null;
+  }
+
+  return Math.max(0, product.promotedAdPercent);
+}
+
+export type ProductDisplayProfit = {
+  profit: number;
+  profitAfterAdFee: number | null;
+};
+
+export function getProductDisplayProfitBreakdown(product: ProductProfitInput) {
+  const promotedAdPercent = getSyncedPromotedAdPercent(product);
   const variantProfits = (product.variants ?? [])
     .map((variant) => {
       const buyPrice = parseMoney(variant.buyPrice);
@@ -42,14 +68,28 @@ export function getProductDisplayProfits(product: ProductProfitInput) {
         return null;
       }
 
-      return calculateNetProfit({
+      const profit = calculateNetProfit({
         buyPrice,
         sellPrice,
         feesPercent: variant.feesPercent ?? 0,
         feesFixed: variant.feesFixed ?? 0,
       });
+
+      return {
+        profit,
+        profitAfterAdFee:
+          promotedAdPercent === null
+            ? null
+            : calculateNetProfit({
+                buyPrice,
+                sellPrice,
+                feesPercent: variant.feesPercent ?? 0,
+                feesFixed: variant.feesFixed ?? 0,
+                promotedAdPercent,
+              }),
+      } satisfies ProductDisplayProfit;
     })
-    .filter((value): value is number => value !== null);
+    .filter((value): value is ProductDisplayProfit => value !== null);
 
   if (variantProfits.length > 0) {
     return variantProfits;
@@ -62,7 +102,34 @@ export function getProductDisplayProfits(product: ProductProfitInput) {
     return [];
   }
 
-  return [Math.round((fallbackSellPrice - fallbackBuyPrice) * 100) / 100];
+  const profit = calculateNetProfit({
+    buyPrice: fallbackBuyPrice,
+    sellPrice: fallbackSellPrice,
+    feesPercent: 0,
+    feesFixed: 0,
+  });
+
+  return [
+    {
+      profit,
+      profitAfterAdFee:
+        promotedAdPercent === null
+          ? null
+          : calculateNetProfit({
+              buyPrice: fallbackBuyPrice,
+              sellPrice: fallbackSellPrice,
+              feesPercent: 0,
+              feesFixed: 0,
+              promotedAdPercent,
+            }),
+    },
+  ];
+}
+
+export function getProductDisplayProfits(product: ProductProfitInput) {
+  return getProductDisplayProfitBreakdown(product).map(
+    (breakdown) => breakdown.profit,
+  );
 }
 
 export function productMatchesDisplayProfitRange(

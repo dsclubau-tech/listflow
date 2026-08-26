@@ -21,6 +21,7 @@ import {
 import { getPriceCheckPrerequisiteIssue } from "@/lib/price-check-eligibility";
 import { getPriceCheckFailureCode } from "@/lib/price-check-failures";
 import { getLowStockResolvedUpdate } from "@/lib/low-stock-products";
+import { shouldAutomaticallyApplyPriceIncrease } from "@/lib/price-change-automation";
 
 const PRICE_TOLERANCE = 0.01;
 const MIN_SAFE_PRODUCT_DELAY_MS = 1000;
@@ -88,6 +89,13 @@ interface RunPriceCheckOptions {
 type ProductRecord = NonNullable<Awaited<ReturnType<typeof prisma.product.findFirst>>>;
 type StoreRecord = NonNullable<Awaited<ReturnType<typeof prisma.store.findFirst>>>;
 type RevisableProduct = ProductRecord & { store: StoreRecord };
+type CalculatedVariantPrice = {
+  id: string;
+  previousBuyPrice: number;
+  nextBuyPrice: number;
+  previousSellPrice: number;
+  nextSellPrice: number;
+};
 
 function roundMoney(value: number) {
   return Math.round(value * 100) / 100;
@@ -200,6 +208,95 @@ export async function reviseProductPrice(
   const xml = buildReviseInventoryStatusXML(product.ebayItemId, { startPrice });
 
   return callEbayReviseInventoryStatus(xml, storeNumber);
+}
+
+async function automaticallyApplyPriceIncrease(input: {
+  product: RevisableProduct;
+  variants: CalculatedVariantPrice[];
+  nextPrimarySellPrice: number;
+  checkedAt: Date;
+}) {
+  let reviseResult: Awaited<ReturnType<typeof reviseProductPrice>>;
+
+  try {
+    reviseResult = await reviseProductPrice(
+      input.product,
+      input.nextPrimarySellPrice,
+    );
+  } catch (error) {
+    reviseResult = {
+      success: false,
+      errorMessage: getErrorMessage(error),
+    };
+  }
+
+  if (!reviseResult.success) {
+    const errorMessage =
+      reviseResult.errorMessage || "Failed to revise eBay listing.";
+
+    await prisma.$transaction(async (tx) => {
+      await tx.priceHistory.updateMany({
+        where: {
+          productId: input.product.id,
+          createdAt: input.checkedAt,
+          appliedAt: null,
+        },
+        data: {
+          ebayRevised: false,
+          errorMessage,
+        },
+      });
+
+      await tx.product.update({
+        where: { id: input.product.id },
+        data: {
+          priceCheckError:
+            `Automatic price increase could not be applied to eBay: ${errorMessage}`,
+          priceCheckFailureCode: PriceCheckFailureCode.TECHNICAL_ERROR,
+        },
+      });
+    });
+
+    return { success: false as const, errorMessage };
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await Promise.all(
+      input.variants.map((variant) =>
+        tx.variant.update({
+          where: { id: variant.id },
+          data: {
+            buyPrice: toMoneyDecimal(variant.nextBuyPrice),
+            sellPrice: toMoneyDecimal(variant.nextSellPrice),
+          },
+        }),
+      ),
+    );
+
+    await tx.product.update({
+      where: { id: input.product.id },
+      data: {
+        price: toMoneyDecimal(input.nextPrimarySellPrice),
+        priceCheckError: null,
+        priceCheckFailureCode: null,
+      },
+    });
+
+    await tx.priceHistory.updateMany({
+      where: {
+        productId: input.product.id,
+        createdAt: input.checkedAt,
+        appliedAt: null,
+      },
+      data: {
+        appliedAt: input.checkedAt,
+        ebayRevised: true,
+        errorMessage: null,
+      },
+    });
+  });
+
+  return { success: true as const, errorMessage: null };
 }
 
 function getSimulatedPrice(
@@ -729,16 +826,67 @@ export async function runPriceCheck(
           });
 
           result.changed += 1;
-          result.pendingReview += 1;
+          const mismatchPrimarySellPrice =
+            mismatchVariants[0]?.nextSellPrice;
 
-          logger.info("price-checker/run", "BuyPrice correction recorded for review", {
-            productId: product.id,
-            asin: product.asin,
-            oldBuyPrice: primaryBuyPrice,
-            newBuyPrice: currentAmazonPrice,
-            newSellPrice: mismatchVariants[0]?.nextSellPrice,
-            priceTrackingMode,
-          });
+          if (
+            mismatchPrimarySellPrice !== undefined &&
+            shouldAutomaticallyApplyPriceIncrease(
+              primaryBuyPrice,
+              currentAmazonPrice,
+            )
+          ) {
+            const automaticApplication =
+              await automaticallyApplyPriceIncrease({
+                product,
+                variants: mismatchVariants,
+                nextPrimarySellPrice: mismatchPrimarySellPrice,
+                checkedAt,
+              });
+
+            if (automaticApplication.success) {
+              logger.info(
+                "price-checker/run",
+                "BuyPrice increase applied automatically",
+                {
+                  productId: product.id,
+                  asin: product.asin,
+                  oldBuyPrice: primaryBuyPrice,
+                  newBuyPrice: currentAmazonPrice,
+                  newSellPrice: mismatchPrimarySellPrice,
+                  priceTrackingMode,
+                },
+              );
+            } else {
+              result.pendingReview += 1;
+              result.failed += 1;
+
+              logger.warn(
+                "price-checker/run",
+                "Automatic BuyPrice increase application failed; review retained",
+                {
+                  productId: product.id,
+                  asin: product.asin,
+                  errorMessage: automaticApplication.errorMessage,
+                },
+              );
+            }
+          } else {
+            result.pendingReview += 1;
+
+            logger.info(
+              "price-checker/run",
+              "BuyPrice correction recorded for review",
+              {
+                productId: product.id,
+                asin: product.asin,
+                oldBuyPrice: primaryBuyPrice,
+                newBuyPrice: currentAmazonPrice,
+                newSellPrice: mismatchPrimarySellPrice,
+                priceTrackingMode,
+              },
+            );
+          }
 
           await reportProductComplete(product.id);
           continue;
@@ -850,17 +998,66 @@ export async function runPriceCheck(
         });
 
         result.changed += 1;
-        result.pendingReview += 1;
 
-        logger.info("price-checker/run", "Tracked product price change recorded for review", {
-          productId: product.id,
-          asin: product.asin,
-          previousAmazonPrice,
-          currentAmazonPrice,
-          changePercent: roundMoney(changePercent),
-          usedSimulatedPrice: simulatedAmazonPrice !== null,
-          priceTrackingMode,
-        });
+        if (
+          shouldAutomaticallyApplyPriceIncrease(
+            previousAmazonPrice,
+            currentAmazonPrice,
+          )
+        ) {
+          const automaticApplication = await automaticallyApplyPriceIncrease({
+            product,
+            variants: nextVariants,
+            nextPrimarySellPrice,
+            checkedAt,
+          });
+
+          if (automaticApplication.success) {
+            logger.info(
+              "price-checker/run",
+              "Tracked price increase applied automatically",
+              {
+                productId: product.id,
+                asin: product.asin,
+                previousAmazonPrice,
+                currentAmazonPrice,
+                newSellPrice: nextPrimarySellPrice,
+                changePercent: roundMoney(changePercent),
+                usedSimulatedPrice: simulatedAmazonPrice !== null,
+                priceTrackingMode,
+              },
+            );
+          } else {
+            result.pendingReview += 1;
+            result.failed += 1;
+
+            logger.warn(
+              "price-checker/run",
+              "Automatic price increase application failed; review retained",
+              {
+                productId: product.id,
+                asin: product.asin,
+                errorMessage: automaticApplication.errorMessage,
+              },
+            );
+          }
+        } else {
+          result.pendingReview += 1;
+
+          logger.info(
+            "price-checker/run",
+            "Tracked product price change recorded for review",
+            {
+              productId: product.id,
+              asin: product.asin,
+              previousAmazonPrice,
+              currentAmazonPrice,
+              changePercent: roundMoney(changePercent),
+              usedSimulatedPrice: simulatedAmazonPrice !== null,
+              priceTrackingMode,
+            },
+          );
+        }
       } catch (error) {
         const message = getErrorMessage(error);
         const code = getPriceCheckFailureCode(error);
