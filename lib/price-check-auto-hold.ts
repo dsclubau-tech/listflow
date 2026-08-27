@@ -11,6 +11,11 @@ import {
   selectPriceCheckAutoHoldProductIds,
 } from "@/lib/price-check-failures";
 import { invalidateJobCaches } from "@/lib/cache-tags";
+import { logger } from "@/lib/logger";
+import {
+  finalizePriceCheckAutoResumeForJob,
+  queuePriceCheckAutoResumeForRun,
+} from "@/lib/price-check-auto-resume";
 
 const SUPPLIER_NAME = "Amazon AU";
 const ACTIVE_HOLD_STATUSES = [
@@ -24,6 +29,38 @@ export type PriceCheckAutoHoldQueueResult = {
   actionJobId: string | null;
   queued: number;
 };
+
+async function finalizeAutoResumesSafelyForJob(priceCheckJobId: string) {
+  try {
+    await finalizePriceCheckAutoResumeForJob(priceCheckJobId);
+  } catch (error) {
+    logger.error(
+      "price-check/auto-resume",
+      "Failed to queue automatic resumes after a price-check job",
+      error,
+      { priceCheckJobId },
+    );
+  }
+}
+
+async function queueAutoResumesSafelyForRun(input: {
+  userId: string;
+  storeId: string;
+  productIds: string[];
+  checkedSince: Date;
+  all?: boolean;
+}) {
+  try {
+    await queuePriceCheckAutoResumeForRun(input);
+  } catch (error) {
+    logger.error(
+      "price-check/auto-resume",
+      "Failed to queue automatic resumes after a direct price check",
+      error,
+      { storeId: input.storeId },
+    );
+  }
+}
 
 async function getAutoHoldEnabled(tx: TransactionClient, storeId: string) {
   const settings = await tx.supplierSettings.findUnique({
@@ -132,6 +169,8 @@ async function createAutoHoldAction(
 export async function finalizePriceCheckAutoHoldForJob(
   priceCheckJobId: string,
 ): Promise<PriceCheckAutoHoldQueueResult> {
+  await finalizeAutoResumesSafelyForJob(priceCheckJobId);
+
   const result = await prisma.$transaction(async (tx) => {
     const job = await tx.priceCheckJob.findUnique({
       where: { id: priceCheckJobId },
@@ -194,6 +233,14 @@ export async function queuePriceCheckAutoHoldForRun(input: {
   failedSince: Date;
   all?: boolean;
 }): Promise<PriceCheckAutoHoldQueueResult> {
+  await queueAutoResumesSafelyForRun({
+    userId: input.userId,
+    storeId: input.storeId,
+    productIds: input.productIds,
+    checkedSince: input.failedSince,
+    all: input.all,
+  });
+
   const result = await prisma.$transaction(async (tx) => {
     const productIds = await resolveCandidateIds(tx, input);
     const actionJob = await createAutoHoldAction(tx, {

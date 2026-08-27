@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ProductStatus } from "../app/generated/prisma/enums";
 import {
+  getLowStockResolvedUpdate,
   getLowStockProductWhere,
   isLowStockHoldJobMetadata,
   LOW_STOCK_HOLD_JOB_KIND,
@@ -28,8 +29,6 @@ test("low-stock bulk hold jobs have explicit metadata", () => {
 });
 
 test("getLowStockResolvedUpdate resolves holdReason when stock is healthy", () => {
-  const { getLowStockResolvedUpdate } = require("./low-stock-products");
-
   // Case 1: ON_HOLD with Low Amazon stock, scraped stock is null (In stock) -> resolved
   assert.deepEqual(
     getLowStockResolvedUpdate(

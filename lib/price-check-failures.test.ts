@@ -2,13 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { PriceCheckFailureCode } from "@/app/generated/prisma/enums";
 import {
+  DEAL_PRICE_UNAVAILABLE_AUTO_HOLD_REASON,
   PriceCheckFailure,
+  getPriceCheckAutoHoldReason,
+  getPriceCheckAutoResumeMetadata,
   getAmazonTechnicalPageMessage,
   getPriceCheckFailureCode,
   isAutoHoldPriceCheckFailureCode,
   isVerifiedAmazonProductPage,
   isPriceCheckAutoHoldMetadata,
+  isPriceCheckAutoResumeMetadata,
   selectPriceCheckAutoHoldProductIds,
+  selectPriceCheckAutoResumeProductIds,
 } from "@/lib/price-check-failures";
 
 test("only confirmed product failures are eligible for automatic hold", () => {
@@ -140,6 +145,71 @@ test("automatic hold candidates require a current product failure and are dedupe
   );
   assert.deepEqual(
     selectPriceCheckAutoHoldProductIds({ enabled: false, products }),
+    [],
+  );
+});
+
+test("automatic hold reasons are stable for later recovery checks", () => {
+  assert.equal(
+    getPriceCheckAutoHoldReason(" Deal price is no longer available on Amazon. "),
+    DEAL_PRICE_UNAVAILABLE_AUTO_HOLD_REASON,
+  );
+  assert.equal(
+    getPriceCheckAutoHoldReason(null),
+    "Automatic hold after failed price check.",
+  );
+});
+
+test("automatic resume metadata identifies recovered price-check actions", () => {
+  const metadata = getPriceCheckAutoResumeMetadata({
+    sourcePriceCheckJobId: "price-job-1",
+  });
+
+  assert.deepEqual(metadata, {
+    kind: "price-check-auto-resume",
+    reason: "limited-time-deal-price-restored",
+    sourcePriceCheckJobId: "price-job-1",
+  });
+  assert.equal(isPriceCheckAutoResumeMetadata(metadata), true);
+  assert.equal(isPriceCheckAutoResumeMetadata({ kind: "price-check-auto-hold" }), false);
+});
+
+test("automatic resume candidates only include recovered false deal-price holds", () => {
+  const recovered = {
+    id: "recovered",
+    status: "ON_HOLD",
+    ebayItemId: "123",
+    amazonPriceTrackingMode: "DEAL",
+    amazonPrice: 210.98,
+    holdReason: DEAL_PRICE_UNAVAILABLE_AUTO_HOLD_REASON,
+    priceCheckError: null,
+    priceCheckFailureCode: null,
+    amazonStockLeft: 1,
+  };
+  const products = [
+    recovered,
+    { ...recovered, id: "manual", holdReason: "Put on hold manually." },
+    { ...recovered, id: "unresolved", priceCheckError: "Still unavailable" },
+    {
+      ...recovered,
+      id: "other-failure",
+      holdReason:
+        "Automatic hold after failed price check: Regular price is no longer available on Amazon.",
+    },
+    { ...recovered, id: "regular", amazonPriceTrackingMode: "REGULAR" },
+    { ...recovered, id: "missing-price", amazonPrice: null },
+    { ...recovered, id: "missing-ebay", ebayItemId: null },
+    { ...recovered, id: "already-active", status: "IMPORTED" },
+  ];
+
+  assert.deepEqual(selectPriceCheckAutoResumeProductIds({ products }), [
+    "recovered",
+  ]);
+  assert.deepEqual(
+    selectPriceCheckAutoResumeProductIds({
+      products,
+      coveredProductIds: ["recovered"],
+    }),
     [],
   );
 });

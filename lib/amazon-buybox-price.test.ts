@@ -244,6 +244,85 @@ test("extractLocalizedBuyboxPriceChoices reads Exclusive Prime price labels", ()
   assert.equal(choices.regular?.mode, "REGULAR");
 });
 
+test("extractLocalizedBuyboxPriceChoices recognizes limited-time deal labels", () => {
+  const examples = [
+    { label: "Limited time deal", price: "210.98", rrp: "349.00" },
+    { label: "LIMITED   TIME   DEAL", price: "169.00", rrp: "329.00" },
+    { label: "Limited - time-DEAL", price: "248.99", rrp: "319.00" },
+  ];
+
+  for (const [index, example] of examples.entries()) {
+    const $ = load(`
+      <div id="corePrice_feature_div">
+        <div>
+          <span>${example.label}</span>
+          <span class="a-price priceToPay">
+            <span class="a-offscreen">A$${example.price}</span>
+          </span>
+        </div>
+        <div class="basisPrice">
+          <span>RRP:</span>
+          <span class="a-price a-text-price">
+            <span class="a-offscreen">A$${example.rrp}</span>
+          </span>
+        </div>
+      </div>
+    `);
+
+    const choices = extractLocalizedBuyboxPriceChoices(
+      $,
+      `B0LIMITED${index}`,
+    );
+
+    assert.equal(choices.deal?.price, Number(example.price));
+    assert.equal(choices.deal?.mode, "DEAL");
+    assert.equal(choices.regular, null);
+    assert.equal(
+      extractLocalizedBuyboxPriceForMode($, `B0LIMITED${index}`, "DEAL")
+        ?.price,
+      Number(example.price),
+    );
+  }
+});
+
+test("extractLocalizedBuyboxPriceChoices reads split limited-time deal markup", () => {
+  const $ = load(`
+    <div id="corePrice_feature_div">
+      <span>Limited time deal</span>
+      <span class="a-price priceToPay">
+        <span class="a-price-symbol">$</span>
+        <span class="a-price-whole">210</span>
+        <span class="a-price-fraction">98</span>
+      </span>
+    </div>
+  `);
+
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0LIMITED99");
+
+  assert.equal(choices.deal?.price, 210.98);
+  assert.equal(choices.regular, null);
+});
+
+test("extractLocalizedBuyboxPriceForMode stays strict for regular-only prices", () => {
+  const $ = load(`
+    <div id="corePrice_feature_div">
+      <span>Regular Price</span>
+      <span class="a-price priceToPay">
+        <span class="a-offscreen">$210.98</span>
+      </span>
+    </div>
+  `);
+
+  assert.equal(
+    extractLocalizedBuyboxPriceForMode($, "B0REGULAR01", "DEAL"),
+    null,
+  );
+  assert.equal(
+    extractLocalizedBuyboxPriceForMode($, "B0REGULAR01", "REGULAR")?.price,
+    210.98,
+  );
+});
+
 test("extractLocalizedBuyboxPriceChoices returns Prime Member and Regular price cards", () => {
   const $ = load(`
     <main>

@@ -70,3 +70,17 @@ test("automatic price-check holds have a distinct action label", () => {
     "Put listings on hold",
   );
 });
+
+test("automatic recovered price checks have a distinct resume label", () => {
+  assert.equal(
+    getEbayActionJobLabel({
+      type: "RESUME",
+      metadata: { kind: "price-check-auto-resume" },
+    }),
+    "Auto resume after recovered price check",
+  );
+  assert.equal(
+    getEbayActionJobLabel({ type: "RESUME", metadata: {} }),
+    "Resume listings",
+  );
+});

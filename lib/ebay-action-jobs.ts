@@ -63,8 +63,11 @@ import {
   prepareEbayPictureUrls,
 } from "@/lib/ebay-image-urls";
 import {
+  getPriceCheckAutoHoldReason,
   isAutoHoldPriceCheckFailureCode,
   isPriceCheckAutoHoldMetadata,
+  isPriceCheckAutoResumeMetadata,
+  isRecoveredDealPriceAutoHold,
 } from "@/lib/price-check-failures";
 import { isLowStockHoldJobMetadata } from "@/lib/low-stock-products";
 import { hasRevisableEbayListing } from "@/lib/ebay-listing-state";
@@ -888,6 +891,9 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
   const automaticPriceCheckHold =
     job.type === EbayActionJobType.HOLD &&
     isPriceCheckAutoHoldMetadata(job.metadata);
+  const automaticPriceCheckResume =
+    job.type === EbayActionJobType.RESUME &&
+    isPriceCheckAutoResumeMetadata(job.metadata);
   const product = await prisma.product.findFirst({
     where: { id: productId, storeId: job.storeId },
     include: {
@@ -899,7 +905,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
   });
 
   if (!product) {
-    if (automaticPriceCheckHold) {
+    if (automaticPriceCheckHold || automaticPriceCheckResume) {
       return { ok: true, failure: null };
     }
 
@@ -1247,9 +1253,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
 
     let holdReason = "Put on hold manually.";
     if (automaticPriceCheckHold) {
-      holdReason = product.priceCheckError?.trim()
-        ? `Automatic hold after failed price check: ${product.priceCheckError.trim()}`
-        : "Automatic hold after failed price check.";
+      holdReason = getPriceCheckAutoHoldReason(product.priceCheckError);
     } else if (isLowStockHoldJobMetadata(job.metadata)) {
       holdReason =
         product.amazonStockLeft !== null
@@ -1279,6 +1283,13 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
   }
 
   if (job.type === EbayActionJobType.RESUME) {
+    if (
+      automaticPriceCheckResume &&
+      !isRecoveredDealPriceAutoHold(product)
+    ) {
+      return { ok: true, failure: null };
+    }
+
     if (
       (product.status !== ProductStatus.ON_HOLD &&
         product.status !== ProductStatus.IMPORTED) ||

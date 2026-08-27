@@ -1,4 +1,21 @@
 import { PriceCheckFailureCode } from "@/app/generated/prisma/enums";
+import { getAmazonPriceUnavailableMessage } from "@/lib/amazon-price-tracking";
+
+export const PRICE_CHECK_AUTO_HOLD_REASON_PREFIX =
+  "Automatic hold after failed price check";
+export const PRICE_CHECK_AUTO_RESUME_JOB_KIND = "price-check-auto-resume";
+export const PRICE_CHECK_AUTO_RESUME_REASON =
+  "limited-time-deal-price-restored";
+
+export function getPriceCheckAutoHoldReason(message?: string | null) {
+  const normalizedMessage = message?.trim();
+  return normalizedMessage
+    ? `${PRICE_CHECK_AUTO_HOLD_REASON_PREFIX}: ${normalizedMessage}`
+    : `${PRICE_CHECK_AUTO_HOLD_REASON_PREFIX}.`;
+}
+
+export const DEAL_PRICE_UNAVAILABLE_AUTO_HOLD_REASON =
+  getPriceCheckAutoHoldReason(getAmazonPriceUnavailableMessage("DEAL"));
 
 export const AUTO_HOLD_PRICE_CHECK_FAILURE_CODES = [
   PriceCheckFailureCode.AMAZON_OUT_OF_STOCK,
@@ -108,6 +125,28 @@ export function isPriceCheckAutoHoldMetadata(metadata: unknown) {
   );
 }
 
+export function isPriceCheckAutoResumeMetadata(metadata: unknown) {
+  return Boolean(
+    metadata &&
+      typeof metadata === "object" &&
+      !Array.isArray(metadata) &&
+      (metadata as Record<string, unknown>).kind ===
+        PRICE_CHECK_AUTO_RESUME_JOB_KIND,
+  );
+}
+
+export function getPriceCheckAutoResumeMetadata(
+  source:
+    | { sourcePriceCheckJobId: string }
+    | { source: "direct-price-check" },
+) {
+  return {
+    kind: PRICE_CHECK_AUTO_RESUME_JOB_KIND,
+    reason: PRICE_CHECK_AUTO_RESUME_REASON,
+    ...source,
+  } as const;
+}
+
 type AutoHoldCandidate = {
   id: string;
   status: string;
@@ -135,6 +174,54 @@ export function selectPriceCheckAutoHoldProductIds(input: {
         Boolean(product.priceCheckError) &&
         isAutoHoldPriceCheckFailureCode(product.priceCheckFailureCode) &&
         !covered.has(product.id),
+    )
+    .map((product) => product.id);
+}
+
+type AutoResumeCandidate = {
+  id: string;
+  status: string;
+  ebayItemId: string | null;
+  amazonPriceTrackingMode: string;
+  amazonPrice: unknown;
+  holdReason: string | null;
+  priceCheckError: string | null;
+  priceCheckFailureCode: PriceCheckFailureCode | null;
+  amazonStockLeft?: number | null;
+};
+
+function hasValidRecoveredPrice(value: unknown) {
+  if (value === null || value === undefined) {
+    return false;
+  }
+
+  const numericValue =
+    typeof value === "number" ? value : Number(String(value));
+  return Number.isFinite(numericValue) && numericValue > 0;
+}
+
+export function isRecoveredDealPriceAutoHold(product: AutoResumeCandidate) {
+  return (
+    product.status === "ON_HOLD" &&
+    Boolean(product.ebayItemId) &&
+    product.amazonPriceTrackingMode === "DEAL" &&
+    hasValidRecoveredPrice(product.amazonPrice) &&
+    product.holdReason === DEAL_PRICE_UNAVAILABLE_AUTO_HOLD_REASON &&
+    !product.priceCheckError &&
+    !product.priceCheckFailureCode
+  );
+}
+
+export function selectPriceCheckAutoResumeProductIds(input: {
+  products: AutoResumeCandidate[];
+  coveredProductIds?: Iterable<string>;
+}) {
+  const covered = new Set(input.coveredProductIds ?? []);
+
+  return input.products
+    .filter(
+      (product) =>
+        isRecoveredDealPriceAutoHold(product) && !covered.has(product.id),
     )
     .map((product) => product.id);
 }

@@ -4,7 +4,7 @@ import type { AmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
 const SCRAPER_MIN_PRICE = 1;
 
 const DEAL_PRICE_LABEL_PATTERN =
-  /deal price|exclusive prime price|prime exclusive price|exclusive prime|prime deal|prime member price/i;
+  /deal price|limited(?:\s+|\s*-\s*)time(?:\s+|\s*-\s*)deal|exclusive prime price|prime exclusive price|exclusive prime|prime deal|prime member price/i;
 const PRIME_MEMBER_PRICE_LABEL_PATTERN = /prime member price/i;
 const REGULAR_PRICE_LABEL_PATTERN = /regular price/i;
 

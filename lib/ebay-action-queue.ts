@@ -1,5 +1,14 @@
 export const ACTIVE_EBAY_ACTION_QUEUE_STATUSES = new Set(["QUEUED", "RUNNING"]);
 
+function hasMetadataKind(metadata: unknown, kind: string) {
+  return Boolean(
+    metadata &&
+      typeof metadata === "object" &&
+      !Array.isArray(metadata) &&
+      (metadata as Record<string, unknown>).kind === kind,
+  );
+}
+
 export type EbayActionQueueJob = {
   id: string;
   status: string;
@@ -57,12 +66,11 @@ export function getEbayActionJobLabel(input: {
   type: string;
   metadata?: unknown;
 }) {
-  if (
-    input.metadata &&
-    typeof input.metadata === "object" &&
-    !Array.isArray(input.metadata) &&
-    (input.metadata as Record<string, unknown>).kind === "price-check-auto-hold"
-  ) {
+  if (hasMetadataKind(input.metadata, "price-check-auto-resume")) {
+    return "Auto resume after recovered price check";
+  }
+
+  if (hasMetadataKind(input.metadata, "price-check-auto-hold")) {
     return "Auto hold after failed price check";
   }
 
