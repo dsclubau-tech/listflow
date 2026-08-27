@@ -102,6 +102,7 @@ interface InlineEditFormProps {
 type InlineUploadJob = {
   id: string;
   status: string;
+  productIds: string[];
   total: number;
   processed: number;
   succeeded: number;
@@ -535,8 +536,11 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
   // Save state
   const [isSaving, setIsSaving] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [importPhase, setImportPhase] = useState<"saving" | "queueing" | null>(null);
+  const [importPhase, setImportPhase] = useState<
+    "preparing" | "saving" | "queueing" | null
+  >(null);
   const [inlineUploadJob, setInlineUploadJob] = useState<InlineUploadJob | null>(null);
+  const saveAndImportGuardRef = useRef(false);
   const [isRegrabbing, setIsRegrabbing] = useState(false);
   const [saveMessage, setSaveMessage] = useState<SaveMessage | null>(null);
   const saveAndImportPercent = useTimedActionProgress(isImporting, {
@@ -548,6 +552,46 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
   const activeInlineUploadJobId = inlineUploadJob && isActiveInlineUploadJob(inlineUploadJob)
     ? inlineUploadJob.id
     : null;
+  const isListed = hasRevisableEbayListing(product);
+
+  useEffect(() => {
+    let cancelled = false;
+    saveAndImportGuardRef.current = false;
+    setInlineUploadJob(null);
+
+    if (isListed) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    async function restoreActiveUploadJob() {
+      try {
+        const response = await fetch("/api/upload/jobs/current", {
+          cache: "no-store",
+        });
+        const data = (await response.json().catch(() => ({}))) as {
+          jobs?: InlineUploadJob[];
+        };
+        const activeJob = data.jobs?.find(
+          (job) =>
+            isActiveInlineUploadJob(job) && job.productIds.includes(product.id),
+        );
+
+        if (!cancelled && response.ok && activeJob) {
+          setInlineUploadJob(activeJob);
+        }
+      } catch {
+        // The server still rejects duplicate active uploads if this lookup fails.
+      }
+    }
+
+    void restoreActiveUploadJob();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isListed, product.id]);
 
   useEffect(() => {
     if (!activeInlineUploadJobId) {
@@ -985,7 +1029,6 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
   }, [saveMessage]);
 
   const isOnHold = product.status === "ON_HOLD" && Boolean(product.ebayItemId);
-  const isListed = hasRevisableEbayListing(product);
   const inlineSuccessMessage =
     saveMessage?.variant === "success" && !saveMessage.title ? saveMessage : null;
   const bannerMessage =
@@ -1403,6 +1446,21 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       return;
     }
 
+    if (
+      saveAndImportGuardRef.current ||
+      isSaving ||
+      isImporting ||
+      isRevising ||
+      isRegrabbing ||
+      activeInlineUploadJobId
+    ) {
+      return;
+    }
+
+    saveAndImportGuardRef.current = true;
+    setIsImporting(true);
+    setImportPhase("preparing");
+
     setSaveMessage(null);
 
     let latestRequiredItemSpecifics = requiredItemSpecifics;
@@ -1435,7 +1493,6 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       setBrand(preparedBrand);
     }
 
-    setIsImporting(true);
     setImportPhase("saving");
     setInlineUploadJob(null);
 
@@ -1444,6 +1501,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       itemSpecificRowsOverride: preparedSpecifics.rows,
     });
     if (!saved) {
+      saveAndImportGuardRef.current = false;
       setIsImporting(false);
       setImportPhase(null);
       return;
@@ -1525,6 +1583,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
         variant: "error",
       });
     } finally {
+      saveAndImportGuardRef.current = false;
       setIsImporting(false);
       setImportPhase(null);
     }
@@ -1945,9 +2004,21 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
           {!isListed && (
             <Button
               onClick={handleSaveAndImport}
-              disabled={isSaving || isImporting || isRevising || isRegrabbing}
+              disabled={
+                isSaving ||
+                isImporting ||
+                isRevising ||
+                isRegrabbing ||
+                Boolean(activeInlineUploadJobId)
+              }
               pending={isImporting}
-              pendingLabel="Importing…"
+              pendingLabel={
+                importPhase === "preparing"
+                  ? "Preparing…"
+                  : importPhase === "saving"
+                    ? "Saving…"
+                    : "Queueing…"
+              }
               variant="primary"
               fullWidth
               className="border-orange-500 bg-orange-500 hover:border-orange-600 hover:bg-orange-600"
@@ -1976,9 +2047,11 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
           <ActionProgressBar
             label={
               isImporting
-                ? importPhase === "queueing"
-                  ? "Queueing eBay upload"
-                  : "Saving draft"
+                ? importPhase === "preparing"
+                  ? "Checking listing requirements"
+                  : importPhase === "queueing"
+                    ? "Queueing eBay upload"
+                    : "Saving draft"
                 : inlineUploadJob?.status === "QUEUED"
                   ? "Queued for eBay"
                   : inlineUploadJob?.status === "RUNNING"

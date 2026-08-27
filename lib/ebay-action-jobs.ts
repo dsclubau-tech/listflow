@@ -57,6 +57,7 @@ import { invalidateJobCaches, invalidateProductCaches } from "@/lib/cache-tags";
 import { resolveDescriptionTemplate } from "@/lib/template-resolver";
 import { deleteProductFromListflow } from "@/lib/product-removal";
 import { uploadProductToEbay } from "@/lib/ebay-upload";
+import { partitionUploadProductIds } from "@/lib/ebay-upload-job-policy";
 import { createEbayImageFromUrl } from "@/lib/ebay-media";
 import {
   getConfiguredPublicImageBaseUrl,
@@ -1978,6 +1979,13 @@ async function runEbayActionJob(jobId: string, worker?: WorkerContext) {
 export async function createEbayActionJob(input: CreateEbayActionJobInput) {
   const productIds = normalizeProductIds(input.productIds);
 
+  if (
+    input.type === EbayActionJobType.UPLOAD_LISTING &&
+    productIds.length > 0
+  ) {
+    return createOrReuseEbayUploadJob({ ...input, productIds });
+  }
+
   const job = await prisma.ebayActionJob.create({
     data: {
       userId: input.userId,
@@ -1995,6 +2003,86 @@ export async function createEbayActionJob(input: CreateEbayActionJobInput) {
   });
 
   return { job: serializeEbayActionJob(job), queued: productIds.length > 0 };
+}
+
+export async function createOrReuseEbayUploadJob(
+  input: Omit<CreateEbayActionJobInput, "type">,
+) {
+  const productIds = normalizeProductIds(input.productIds).sort();
+
+  return prisma.$transaction(async (tx) => {
+    const lockedProducts: Array<{ id: string }> = [];
+
+    // Serialize upload creation per product. This closes the race between two
+    // browser requests that both check for an active job before either creates it.
+    for (const productId of productIds) {
+      const rows = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id"
+        FROM "Product"
+        WHERE "id" = ${productId} AND "storeId" = ${input.storeId}
+        FOR UPDATE
+      `;
+      lockedProducts.push(...rows);
+    }
+
+    const lockedProductIds = new Set(lockedProducts.map((product) => product.id));
+    const validProductIds = productIds.filter((productId) =>
+      lockedProductIds.has(productId),
+    );
+    const activeJobs = await tx.ebayActionJob.findMany({
+      where: {
+        storeId: input.storeId,
+        type: EbayActionJobType.UPLOAD_LISTING,
+        status: { in: ACTIVE_ACTION_JOB_STATUSES },
+        dismissedAt: null,
+        productIds: { hasSome: validProductIds },
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    });
+    const { activeProductIds, queueProductIds } = partitionUploadProductIds({
+      requestedProductIds: validProductIds,
+      alreadyListedProductIds: [],
+      activeJobs,
+    });
+
+    if (queueProductIds.length > 0) {
+      const job = await tx.ebayActionJob.create({
+        data: {
+          userId: input.userId,
+          storeId: input.storeId,
+          type: EbayActionJobType.UPLOAD_LISTING,
+          status: EbayActionJobStatus.QUEUED,
+          productIds: queueProductIds,
+          total: queueProductIds.length,
+          metadata: input.metadata ?? {},
+        },
+      });
+
+      return {
+        job: serializeEbayActionJob(job),
+        queued: true,
+        created: true,
+        reused: activeProductIds.length > 0,
+        activeProductIds,
+      };
+    }
+
+    const existingJob = activeJobs.find((job) =>
+      job.productIds.some((productId) => activeProductIds.includes(productId)),
+    );
+
+    if (!existingJob) {
+      throw new Error("No valid products were found for the eBay upload.");
+    }
+
+    return {
+      job: serializeEbayActionJob(existingJob),
+      queued: true,
+      created: false,
+      reused: true,
+      activeProductIds,
+    };
+  });
 }
 
 export async function getCurrentEbayActionJobs(storeId: string) {

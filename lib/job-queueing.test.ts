@@ -63,3 +63,16 @@ test("Products and eBay Import clients allow another job to be queued", () => {
     /activeImportRunning/,
   );
 });
+
+test("upload job creation locks products and reuses active uploads", () => {
+  const actionSource = readFileSync("lib/ebay-action-jobs.ts", "utf8");
+  const createSource = exportedFunctionSource(
+    actionSource,
+    "createOrReuseEbayUploadJob",
+  );
+
+  assert.match(createSource, /FOR UPDATE/);
+  assert.match(createSource, /productIds: \{ hasSome: validProductIds \}/);
+  assert.match(createSource, /partitionUploadProductIds/);
+  assert.match(createSource, /reused: true/);
+});

@@ -78,3 +78,19 @@ test("new drafts create their default variant in the product transaction", () =>
   assert.match(source, /await tx\.variant\.create/);
   assert.match(source, /data: buildDefaultVariantData/);
 });
+
+test("Save and Import locks before its first asynchronous preparation step", () => {
+  const source = readFileSync("components/InlineEditForm.tsx", "utf8");
+  const handlerStart = source.indexOf("async function handleSaveAndImport()");
+  const handlerEnd = source.indexOf("// ----- Save & Update eBay -----", handlerStart);
+  const handler = source.slice(handlerStart, handlerEnd);
+
+  const guardWrite = handler.indexOf("saveAndImportGuardRef.current = true");
+  const requirementsFetch = handler.indexOf("fetchRequiredSpecificsForCategory()");
+
+  assert.ok(guardWrite >= 0);
+  assert.ok(requirementsFetch > guardWrite);
+  assert.match(handler, /setImportPhase\("preparing"\)/);
+  assert.match(source, /Boolean\(activeInlineUploadJobId\)/);
+  assert.match(source, /job\.productIds\.includes\(product\.id\)/);
+});
