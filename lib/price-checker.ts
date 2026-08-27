@@ -5,7 +5,10 @@ import {
   ProductStatus,
 } from "@/app/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
-import { scrapeAmazonPrice } from "@/lib/amazon-scraper";
+import {
+  scrapeAmazonPrice,
+  type ScrapedAmazonPrice,
+} from "@/lib/amazon-scraper";
 import { launchScraperBrowser } from "@/lib/scraper-browser";
 import { calculateSellPrice } from "@/lib/variant-pricing";
 import { buildReviseInventoryStatusXML } from "@/lib/ebay-xml";
@@ -41,7 +44,7 @@ const PRODUCT_DELAY_MAX_MS = Math.max(
     DEFAULT_PRODUCT_DELAY_MAX_MS
   )
 );
-const DEFAULT_PRODUCT_CHECK_TIMEOUT_MS = 75_000;
+const DEFAULT_PRODUCT_CHECK_TIMEOUT_MS = 120_000;
 const PRODUCT_CHECK_TIMEOUT_MS = Math.max(
   15_000,
   readDelayMs(
@@ -497,7 +500,8 @@ export async function runPriceCheck(
   const scrapeAmazonPriceWithRetry = async (
     productId: string,
     asin: string,
-    priceTrackingMode: AmazonPriceTrackingMode
+    priceTrackingMode: AmazonPriceTrackingMode,
+    shouldAbort: () => boolean = () => false,
   ) => {
     const scrapeWithBrowser = async () => {
       const browser = await getSharedBrowser();
@@ -513,6 +517,10 @@ export async function runPriceCheck(
       return await scrapeWithBrowser();
     } catch (error) {
       await closeSharedBrowser();
+
+      if (shouldAbort()) {
+        throw error;
+      }
 
       logger.warn(
         "price-checker/run",
@@ -597,15 +605,30 @@ export async function runPriceCheck(
         if (simulatedAmazonPrice !== null) {
           currentAmazonPrice = simulatedAmazonPrice;
         } else {
-          const scrapeResult = await withTimeout(
-            scrapeAmazonPriceWithRetry(
-              product.id,
-              product.asin,
-              priceTrackingMode
-            ),
-            PRODUCT_CHECK_TIMEOUT_MS,
-            `Price check timed out after ${Math.round(PRODUCT_CHECK_TIMEOUT_MS / 1000)}s while scraping Amazon.`
-          );
+          let scrapeTimedOut = false;
+          const timeoutMessage =
+            `Price check timed out after ${Math.round(PRODUCT_CHECK_TIMEOUT_MS / 1000)}s while scraping Amazon.`;
+          let scrapeResult: ScrapedAmazonPrice;
+
+          try {
+            scrapeResult = await withTimeout(
+              scrapeAmazonPriceWithRetry(
+                product.id,
+                product.asin,
+                priceTrackingMode,
+                () => scrapeTimedOut,
+              ),
+              PRODUCT_CHECK_TIMEOUT_MS,
+              timeoutMessage,
+            );
+          } catch (error) {
+            if (getErrorMessage(error) === timeoutMessage) {
+              scrapeTimedOut = true;
+              await closeSharedBrowser();
+            }
+            throw error;
+          }
+
           currentAmazonPrice = scrapeResult.price;
           scrapedAmazonStockLeft = scrapeResult.stockLeft;
         }

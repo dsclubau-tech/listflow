@@ -52,6 +52,13 @@ const NON_CURRENT_PRICE_ANCESTOR_SELECTOR = [
   '[id*="coupon"]',
 ].join(",");
 
+const REFERENCE_PRICE_SELECTORS = [
+  ".basisPrice .a-offscreen",
+  ".a-price.a-text-price .a-offscreen",
+  "#listPrice .a-offscreen",
+  "#regularprice_savings .a-offscreen",
+].join(",");
+
 export type AmazonBuyboxPriceResult = {
   asin: string | null;
   containerSelector: string;
@@ -104,6 +111,35 @@ function parseFirstPriceFromText(value: string): number | null {
 
 function normalizeText(value: string) {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function hasPositiveSavingsPercentage(value: string) {
+  const match = normalizeText(value).match(
+    /(?:-\s*(\d+(?:\.\d+)?)\s*%|\b(\d+(?:\.\d+)?)\s*%\s*off\b)/i,
+  );
+  const percentage = Number(match?.[1] ?? match?.[2]);
+  return Number.isFinite(percentage) && percentage > 0;
+}
+
+function hasHigherReferencePrice(
+  $: CheerioAPI,
+  containerSelector: string,
+  currentPrice: number,
+) {
+  let found = false;
+
+  $(containerSelector)
+    .first()
+    .find(REFERENCE_PRICE_SELECTORS)
+    .each((_, element) => {
+      const referencePrice = parseAmazonPriceValue($(element).text());
+      if (referencePrice !== null && referencePrice > currentPrice) {
+        found = true;
+        return false;
+      }
+    });
+
+  return found;
 }
 
 function extractLabelledPrice(
@@ -266,6 +302,10 @@ export function extractLocalizedBuyboxPriceChoices(
           return;
         }
 
+        const hasVerifiedSavingsDeal =
+          hasPositiveSavingsPercentage(containerText) &&
+          hasHigherReferencePrice($, containerSelector, price);
+
         const localNearbyText = normalizeText(
           [
             priceElement.parent().text(),
@@ -279,12 +319,14 @@ export function extractLocalizedBuyboxPriceChoices(
         const selectorLooksDeal = selector.includes("dealprice");
         const localLooksDeal =
           DEAL_PRICE_LABEL_PATTERN.test(localNearbyText) ||
+          hasVerifiedSavingsDeal ||
           /with prime/i.test(localNearbyText);
         const localLooksRegular =
           REGULAR_PRICE_LABEL_PATTERN.test(localNearbyText);
 
         const containerLooksDeal =
           DEAL_PRICE_LABEL_PATTERN.test(containerText) ||
+          hasVerifiedSavingsDeal ||
           /with prime/i.test(containerText);
         const containerLooksRegular =
           REGULAR_PRICE_LABEL_PATTERN.test(containerText);
@@ -313,7 +355,9 @@ export function extractLocalizedBuyboxPriceChoices(
             "DEAL",
             PRIME_MEMBER_PRICE_LABEL_PATTERN.test(localNearbyText)
               ? "Prime member price"
-              : "Deal price",
+              : hasVerifiedSavingsDeal
+                ? "Discounted price"
+                : "Deal price",
           );
           return;
         }

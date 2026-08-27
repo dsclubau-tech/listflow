@@ -323,6 +323,74 @@ test("extractLocalizedBuyboxPriceForMode stays strict for regular-only prices", 
   );
 });
 
+test("extractLocalizedBuyboxPriceChoices treats a verified Amazon discount as a deal", () => {
+  const $ = load(`
+    <div id="corePrice_feature_div">
+      <div class="reinventPricePriceToPayMargin">
+        <span class="savingsPercentage">-8%</span>
+        <span class="a-price priceToPay">
+          <span class="a-offscreen">A$109.99</span>
+        </span>
+      </div>
+      <div class="basisPrice">
+        <span>RRP:</span>
+        <span class="a-price a-text-price">
+          <span class="a-offscreen">A$119.99</span>
+        </span>
+      </div>
+    </div>
+  `);
+
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0DGXWW1S9");
+
+  assert.equal(choices.deal?.price, 109.99);
+  assert.equal(choices.deal?.mode, "DEAL");
+  assert.equal(choices.deal?.label, "Discounted price");
+  assert.equal(choices.regular, null);
+});
+
+test("discount inference requires both savings percentage and a higher reference price", () => {
+  const percentageOnly = load(`
+    <div id="corePrice_feature_div">
+      <span class="savingsPercentage">-8%</span>
+      <span class="a-price priceToPay">
+        <span class="a-offscreen">A$109.99</span>
+      </span>
+    </div>
+  `);
+  const referenceOnly = load(`
+    <div id="corePrice_feature_div">
+      <span class="a-price priceToPay">
+        <span class="a-offscreen">A$109.99</span>
+      </span>
+      <div class="basisPrice">
+        <span class="a-price a-text-price">
+          <span class="a-offscreen">A$119.99</span>
+        </span>
+      </div>
+    </div>
+  `);
+  const nonDiscount = load(`
+    <div id="corePrice_feature_div">
+      <span class="savingsPercentage">-8%</span>
+      <span class="a-price priceToPay">
+        <span class="a-offscreen">A$109.99</span>
+      </span>
+      <div class="basisPrice">
+        <span class="a-price a-text-price">
+          <span class="a-offscreen">A$99.99</span>
+        </span>
+      </div>
+    </div>
+  `);
+
+  for (const $ of [percentageOnly, referenceOnly, nonDiscount]) {
+    const choices = extractLocalizedBuyboxPriceChoices($, "B0STRICT001");
+    assert.equal(choices.deal, null);
+    assert.equal(choices.regular?.price, 109.99);
+  }
+});
+
 test("extractLocalizedBuyboxPriceChoices returns Prime Member and Regular price cards", () => {
   const $ = load(`
     <main>

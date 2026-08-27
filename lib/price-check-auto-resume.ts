@@ -16,6 +16,10 @@ import {
   isPriceCheckAutoResumeMetadata,
   selectPriceCheckAutoResumeProductIds,
 } from "@/lib/price-check-failures";
+import {
+  LOW_STOCK_RESOLVED_HOLD_REASON,
+  LOW_STOCK_THRESHOLD,
+} from "@/lib/low-stock-products";
 
 const ACTIVE_ACTION_STATUSES = [
   EbayActionJobStatus.QUEUED,
@@ -51,11 +55,22 @@ async function resolveCandidateIds(
       storeId: input.storeId,
       status: ProductStatus.ON_HOLD,
       ebayItemId: { not: null },
-      amazonPriceTrackingMode: AmazonPriceTrackingMode.DEAL,
-      holdReason: DEAL_PRICE_UNAVAILABLE_AUTO_HOLD_REASON,
       priceCheckError: null,
       priceCheckFailureCode: null,
       lastPriceCheck: { gte: input.checkedSince },
+      OR: [
+        {
+          amazonPriceTrackingMode: AmazonPriceTrackingMode.DEAL,
+          holdReason: DEAL_PRICE_UNAVAILABLE_AUTO_HOLD_REASON,
+        },
+        {
+          holdReason: LOW_STOCK_RESOLVED_HOLD_REASON,
+          OR: [
+            { amazonStockLeft: null },
+            { amazonStockLeft: { gt: LOW_STOCK_THRESHOLD } },
+          ],
+        },
+      ],
     },
     select: {
       id: true,
@@ -135,7 +150,7 @@ function reportQueuedResumes(
   invalidateJobCaches(context.storeId);
   logger.info(
     "price-check/auto-resume",
-    "Queued automatic resumes after recovered deal price checks",
+    "Queued automatic resumes after recovered Amazon price or stock checks",
     {
       storeId: context.storeId,
       sourcePriceCheckJobId: context.sourcePriceCheckJobId ?? null,

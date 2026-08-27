@@ -67,7 +67,7 @@ import {
   isAutoHoldPriceCheckFailureCode,
   isPriceCheckAutoHoldMetadata,
   isPriceCheckAutoResumeMetadata,
-  isRecoveredDealPriceAutoHold,
+  isRecoveredPriceCheckAutoHold,
 } from "@/lib/price-check-failures";
 import { isLowStockHoldJobMetadata } from "@/lib/low-stock-products";
 import { hasRevisableEbayListing } from "@/lib/ebay-listing-state";
@@ -1285,7 +1285,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
   if (job.type === EbayActionJobType.RESUME) {
     if (
       automaticPriceCheckResume &&
-      !isRecoveredDealPriceAutoHold(product)
+      !isRecoveredPriceCheckAutoHold(product)
     ) {
       return { ok: true, failure: null };
     }

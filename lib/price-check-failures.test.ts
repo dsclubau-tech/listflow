@@ -12,6 +12,8 @@ import {
   isVerifiedAmazonProductPage,
   isPriceCheckAutoHoldMetadata,
   isPriceCheckAutoResumeMetadata,
+  isRecoveredLowStockAutoHold,
+  isRecoveredPriceCheckAutoHold,
   selectPriceCheckAutoHoldProductIds,
   selectPriceCheckAutoResumeProductIds,
 } from "@/lib/price-check-failures";
@@ -209,6 +211,47 @@ test("automatic resume candidates only include recovered false deal-price holds"
     selectPriceCheckAutoResumeProductIds({
       products,
       coveredProductIds: ["recovered"],
+    }),
+    [],
+  );
+});
+
+test("automatic resume candidates include resolved low-stock holds but exclude unsafe holds", () => {
+  const recoveredStock = {
+    id: "stock-recovered",
+    status: "ON_HOLD",
+    ebayItemId: "123",
+    amazonPriceTrackingMode: "REGULAR",
+    amazonPrice: 187.94,
+    holdReason: "Low Amazon stock resolved — product is back in stock on Amazon.",
+    priceCheckError: null,
+    priceCheckFailureCode: null,
+    amazonStockLeft: null,
+  };
+  const products = [
+    recoveredStock,
+    { ...recoveredStock, id: "healthy-count", amazonStockLeft: 8 },
+    { ...recoveredStock, id: "still-low", amazonStockLeft: 3 },
+    { ...recoveredStock, id: "manual", holdReason: "Put on hold manually." },
+    {
+      ...recoveredStock,
+      id: "failed-check",
+      priceCheckError: "Amazon check failed",
+      priceCheckFailureCode: PriceCheckFailureCode.TECHNICAL_ERROR,
+    },
+    { ...recoveredStock, id: "missing-ebay", ebayItemId: null },
+  ];
+
+  assert.equal(isRecoveredLowStockAutoHold(recoveredStock), true);
+  assert.equal(isRecoveredPriceCheckAutoHold(recoveredStock), true);
+  assert.deepEqual(selectPriceCheckAutoResumeProductIds({ products }), [
+    "stock-recovered",
+    "healthy-count",
+  ]);
+  assert.deepEqual(
+    selectPriceCheckAutoResumeProductIds({
+      products,
+      coveredProductIds: ["stock-recovered", "healthy-count"],
     }),
     [],
   );

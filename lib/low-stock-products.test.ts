@@ -5,7 +5,10 @@ import {
   getLowStockResolvedUpdate,
   getLowStockProductWhere,
   isLowStockHoldJobMetadata,
+  isAmazonStockHealthy,
+  isResolvedLowStockHoldReason,
   LOW_STOCK_HOLD_JOB_KIND,
+  LOW_STOCK_RESOLVED_HOLD_REASON,
   LOW_STOCK_THRESHOLD,
 } from "./low-stock-products";
 
@@ -35,7 +38,7 @@ test("getLowStockResolvedUpdate resolves holdReason when stock is healthy", () =
       { status: ProductStatus.ON_HOLD, holdReason: "Low Amazon stock (2 left)." },
       null
     ),
-    { holdReason: "Low Amazon stock resolved — product is back in stock on Amazon." }
+    { holdReason: LOW_STOCK_RESOLVED_HOLD_REASON }
   );
 
   // Case 2: ON_HOLD with Low Amazon stock, scraped stock is > LOW_STOCK_THRESHOLD (e.g., 5) -> resolved
@@ -44,7 +47,7 @@ test("getLowStockResolvedUpdate resolves holdReason when stock is healthy", () =
       { status: ProductStatus.ON_HOLD, holdReason: "Low Amazon stock (1 left)." },
       5
     ),
-    { holdReason: "Low Amazon stock resolved — product is back in stock on Amazon." }
+    { holdReason: LOW_STOCK_RESOLVED_HOLD_REASON }
   );
 
   // Case 3: ON_HOLD with Low Amazon stock, scraped stock is still <= LOW_STOCK_THRESHOLD -> no change
@@ -82,4 +85,16 @@ test("getLowStockResolvedUpdate resolves holdReason when stock is healthy", () =
     ),
     {}
   );
+});
+
+test("healthy stock and resolved low-stock reasons are recognized safely", () => {
+  assert.equal(isAmazonStockHealthy(null), true);
+  assert.equal(isAmazonStockHealthy(4), true);
+  assert.equal(isAmazonStockHealthy(3), false);
+  assert.equal(isAmazonStockHealthy(undefined), false);
+  assert.equal(
+    isResolvedLowStockHoldReason(LOW_STOCK_RESOLVED_HOLD_REASON),
+    true,
+  );
+  assert.equal(isResolvedLowStockHoldReason("Put on hold manually."), false);
 });

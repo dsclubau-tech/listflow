@@ -1,5 +1,9 @@
 import { PriceCheckFailureCode } from "@/app/generated/prisma/enums";
 import { getAmazonPriceUnavailableMessage } from "@/lib/amazon-price-tracking";
+import {
+  isAmazonStockHealthy,
+  isResolvedLowStockHoldReason,
+} from "@/lib/low-stock-products";
 
 export const PRICE_CHECK_AUTO_HOLD_REASON_PREFIX =
   "Automatic hold after failed price check";
@@ -212,6 +216,24 @@ export function isRecoveredDealPriceAutoHold(product: AutoResumeCandidate) {
   );
 }
 
+export function isRecoveredLowStockAutoHold(product: AutoResumeCandidate) {
+  return (
+    product.status === "ON_HOLD" &&
+    Boolean(product.ebayItemId) &&
+    isResolvedLowStockHoldReason(product.holdReason) &&
+    isAmazonStockHealthy(product.amazonStockLeft) &&
+    !product.priceCheckError &&
+    !product.priceCheckFailureCode
+  );
+}
+
+export function isRecoveredPriceCheckAutoHold(product: AutoResumeCandidate) {
+  return (
+    isRecoveredDealPriceAutoHold(product) ||
+    isRecoveredLowStockAutoHold(product)
+  );
+}
+
 export function selectPriceCheckAutoResumeProductIds(input: {
   products: AutoResumeCandidate[];
   coveredProductIds?: Iterable<string>;
@@ -221,7 +243,7 @@ export function selectPriceCheckAutoResumeProductIds(input: {
   return input.products
     .filter(
       (product) =>
-        isRecoveredDealPriceAutoHold(product) && !covered.has(product.id),
+        isRecoveredPriceCheckAutoHold(product) && !covered.has(product.id),
     )
     .map((product) => product.id);
 }

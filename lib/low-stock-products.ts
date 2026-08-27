@@ -3,6 +3,8 @@ import type { Prisma } from "@/app/generated/prisma/client";
 
 export const LOW_STOCK_THRESHOLD = 3;
 export const LOW_STOCK_HOLD_JOB_KIND = "low-stock-bulk-hold";
+export const LOW_STOCK_RESOLVED_HOLD_REASON =
+  "Low Amazon stock resolved — product is back in stock on Amazon.";
 
 export function isLowStockHoldJobMetadata(value: unknown) {
   return (
@@ -22,6 +24,17 @@ export function getLowStockProductWhere(storeId: string) {
   } satisfies Prisma.ProductWhereInput;
 }
 
+export function isAmazonStockHealthy(stockLeft: number | null | undefined) {
+  return (
+    stockLeft === null ||
+    (typeof stockLeft === "number" && stockLeft > LOW_STOCK_THRESHOLD)
+  );
+}
+
+export function isResolvedLowStockHoldReason(reason: string | null | undefined) {
+  return reason === LOW_STOCK_RESOLVED_HOLD_REASON;
+}
+
 export function getLowStockResolvedUpdate(
   product: { status: string; holdReason?: string | null },
   stockLeft: number | null | undefined
@@ -33,15 +46,11 @@ export function getLowStockResolvedUpdate(
     return {};
   }
 
-  const stockIsHealthy =
-    stockLeft === null ||
-    (typeof stockLeft === "number" && stockLeft > LOW_STOCK_THRESHOLD);
-
-  if (!stockIsHealthy) {
+  if (!isAmazonStockHealthy(stockLeft)) {
     return {};
   }
 
   return {
-    holdReason: "Low Amazon stock resolved — product is back in stock on Amazon.",
+    holdReason: LOW_STOCK_RESOLVED_HOLD_REASON,
   };
 }
