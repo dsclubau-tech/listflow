@@ -127,6 +127,23 @@ test("interactive Amazon imports run before background worker queues", () => {
   assert.ok(amazonImportIndex < ebayActionIndex);
 });
 
+test("peer Amazon retries exclude the previous worker in the atomic claim", () => {
+  const source = readFileSync("lib/amazon-import-jobs.ts", "utf8");
+  assert.match(source, /isAmazonImportPeerRetry\(candidate\)/);
+  assert.match(source, /NOT: \{ workerId: worker\.workerId \}/);
+  assert.match(source, /job\.workerId !== worker\.workerId/);
+});
+
+test("the local guard remains active for local production-mode workers", () => {
+  const source = readFileSync("scripts/listflow-worker.ts", "utf8");
+  const guardSource = source.slice(
+    source.indexOf("function acquireLocalWorkerGuard"),
+    source.indexOf("function releaseLocalWorkerGuard"),
+  );
+  assert.match(guardSource, /RAILWAY_SERVICE_NAME/);
+  assert.doesNotMatch(guardSource, /NODE_ENV/);
+});
+
 test("research recovery is lease-aware and claims queued work atomically", () => {
   const source = readFileSync("lib/ebay-research.ts", "utf8");
   const claimedJobSource = source.slice(

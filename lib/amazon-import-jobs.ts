@@ -10,7 +10,10 @@ import {
   executeAmazonImport,
   type AmazonImportExecutionMode,
 } from "@/lib/amazon-import";
-import { shouldRetryAmazonImportOnUnifiedWorker } from "@/lib/amazon-import-job-policy";
+import {
+  getAmazonImportRetryPlan,
+  isAmazonImportPeerRetry,
+} from "@/lib/amazon-import-job-policy";
 import type { AmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
 import type { WorkerContext } from "@/lib/job-coordination";
 import { logger } from "@/lib/logger";
@@ -21,7 +24,7 @@ import {
 } from "@/lib/worker-claim-policy";
 
 const JOB_RETENTION_MS = 24 * 60 * 60 * 1000;
-const UNIFIED_RETRY_DELAY_MS = 1_000;
+const AMAZON_RETRY_DELAY_MS = 1_000;
 const STALE_RUNNING_JOB_MS = Math.max(
   180_000,
   Number(process.env.LISTFLOW_WORKER_LEASE_TTL_MS ?? 90_000) * 2,
@@ -158,9 +161,19 @@ async function findRunnableJobs(storeId: string, worker: WorkerContext) {
       storeId,
       status: AmazonImportJobStatus.QUEUED,
       nextAttemptAt: { lte: now },
-      OR: [
-        { requiredWorkerRole: null },
-        { requiredWorkerRole: worker.workerRole },
+      AND: [
+        {
+          OR: [
+            { requiredWorkerRole: null },
+            { requiredWorkerRole: worker.workerRole },
+          ],
+        },
+        {
+          OR: [
+            { stage: { not: "RETRYING_ON_PEER_WORKER" } },
+            { workerId: { not: worker.workerId } },
+          ],
+        },
       ],
     },
     orderBy: { createdAt: "asc" },
@@ -168,7 +181,9 @@ async function findRunnableJobs(storeId: string, worker: WorkerContext) {
   });
 
   const forcedForWorker = jobs.filter(
-    (job) => job.requiredWorkerRole === worker.workerRole,
+    (job) =>
+      job.requiredWorkerRole === worker.workerRole &&
+      (!isAmazonImportPeerRetry(job) || job.workerId !== worker.workerId),
   );
   const unassigned = jobs.filter((job) => job.requiredWorkerRole === null);
   const policy = await getWorkerClaimPolicy(storeId, worker, now);
@@ -186,11 +201,18 @@ export async function runNextAmazonImportJobForStore(
   const candidates = await findRunnableJobs(storeId, worker);
 
   for (const candidate of candidates) {
+    const peerRetry = isAmazonImportPeerRetry(candidate);
     const claimed = await prisma.amazonImportJob.updateMany({
       where: {
         id: candidate.id,
         status: AmazonImportJobStatus.QUEUED,
         nextAttemptAt: { lte: new Date() },
+        ...(peerRetry
+          ? {
+              stage: "RETRYING_ON_PEER_WORKER",
+              NOT: { workerId: worker.workerId },
+            }
+          : {}),
       },
       data: {
         status: AmazonImportJobStatus.RUNNING,
@@ -283,20 +305,21 @@ export async function runNextAmazonImportJobForStore(
       });
     } catch (error) {
       const details = getErrorDetails(error);
-      const retryOnUnified = shouldRetryAmazonImportOnUnifiedWorker({
+      const retryPlan = getAmazonImportRetryPlan({
         workerRole: worker.workerRole,
         attempts: job.attempts,
+        target: process.env.LISTFLOW_AMAZON_RETRY_TARGET,
       });
 
-      if (retryOnUnified) {
+      if (retryPlan) {
         await prisma.amazonImportJob.update({
           where: { id: job.id },
           data: {
             status: AmazonImportJobStatus.QUEUED,
-            stage: "RETRYING_ON_UNIFIED_WORKER",
+            stage: retryPlan.stage,
             progress: Math.max(latestProgress, 15),
-            requiredWorkerRole: "unified",
-            nextAttemptAt: new Date(Date.now() + UNIFIED_RETRY_DELAY_MS),
+            requiredWorkerRole: retryPlan.requiredWorkerRole,
+            nextAttemptAt: new Date(Date.now() + AMAZON_RETRY_DELAY_MS),
             errorMessage: details.message,
             errorCode: details.code,
             errorStatus: details.status,
@@ -305,8 +328,10 @@ export async function runNextAmazonImportJobForStore(
         });
         jobLogger.warn(
           "amazon-import/job",
-          "Store-specific import failed; queued unified worker retry",
-          details,
+          retryPlan.target === "peer"
+            ? "Store-specific import failed; queued peer worker retry"
+            : "Store-specific import failed; queued unified worker retry",
+          { ...details, retryTarget: retryPlan.target },
         );
       } else {
         await prisma.amazonImportJob.update({

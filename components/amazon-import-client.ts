@@ -186,6 +186,8 @@ export function getAmazonImportStageMessage(stage: string) {
       return "Reading the selected variant Buy Box price.";
     case "RETRYING_ON_UNIFIED_WORKER":
       return "Retrying with the unified worker.";
+    case "RETRYING_ON_PEER_WORKER":
+      return "Retrying with the other store worker.";
     case "RECOVERED_AFTER_WORKER_TIMEOUT":
       return "Resuming after a worker restart.";
     case "CATEGORY_SUGGEST":

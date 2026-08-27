@@ -61,6 +61,17 @@ function Assert-EnvValue($name) {
   }
 }
 
+function Assert-AnyEnvValue($names) {
+  foreach ($name in $names) {
+    $value = Get-EnvValue $name
+    if (-not [string]::IsNullOrWhiteSpace($value) -and $value -notmatch "\[PASSWORD\]|\[YOUR-PASSWORD\]|change-this|your-") {
+      return
+    }
+  }
+
+  throw ".env must contain a real value for one of: $($names -join ', ')."
+}
+
 function Invoke-CheckedCommand($label, $filePath, $arguments) {
   Write-Step $label
   & $filePath @arguments
@@ -100,7 +111,8 @@ try {
   }
 
   Assert-EnvValue "DATABASE_URL"
-  Write-Host ".env found and DATABASE_URL is present."
+  Assert-AnyEnvValue @("LISTFLOW_DEPLOYED_DATABASE_URL", "MIGRATION_SOURCE_DATABASE_URL")
+  Write-Host ".env found and the local workers have deployed database access."
 
   $ebayKeys = @(
     "EBAY_APP_ID",
@@ -121,10 +133,11 @@ try {
     Write-Host "Worker setup can continue, but eBay jobs may fail until these are added."
   }
 
-  Invoke-CheckedCommand "Installing dependencies" "npm.cmd" @("install")
+  Invoke-CheckedCommand "Installing exact dependencies" "npm.cmd" @("ci")
   Invoke-CheckedCommand "Installing Chromium for worker scraping" "npm.cmd" @("run", "browser:install")
   Invoke-CheckedCommand "Generating Prisma client" "npm.cmd" @("exec", "prisma", "generate")
-  Invoke-CheckedCommand "Creating desktop shortcuts" "powershell.exe" @(
+  Invoke-CheckedCommand "Checking the six-worker database configuration" "npm.cmd" @("run", "workers:local:check")
+  Invoke-CheckedCommand "Creating Start All, Stop All, Update, and Repair shortcuts" "powershell.exe" @(
     "-NoProfile",
     "-ExecutionPolicy",
     "Bypass",
@@ -141,8 +154,9 @@ try {
   )
 
   Write-Step "Setup complete"
-  Write-Host "Daily use: double-click Start ListFlow Worker on the desktop."
-  Write-Host "Repair/setup: double-click Repair ListFlow Worker on the desktop."
+  Write-Host "Daily use: double-click Start All 6 ListFlow Workers on the desktop."
+  Write-Host "Graceful stop: double-click Stop All ListFlow Workers."
+  Write-Host "Stable updates: double-click Update ListFlow Workers while this checkout is on master."
 } catch {
   Write-Host ""
   Write-Host "Setup failed: $($_.Exception.Message)" -ForegroundColor Red

@@ -111,29 +111,41 @@ npm.cmd run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
-## Manual Worker PC Setup
+## Six-Worker Company PC Setup
 
 When ListFlow is hosted on Vercel, a trusted Windows PC can run the manual
 worker for long jobs such as price checks, eBay imports, research batches, and
-bulk eBay actions.
+bulk eBay actions. The company setup runs two isolated instances for each of
+the three configured stores. All six processes use the same worker entry point,
+while database leases prevent conflicting work from running twice.
 
 One-time setup on each worker PC:
 
 1. Copy or clone the ListFlow folder to the PC.
 2. Add the real `.env` file to the ListFlow folder. Do not put secrets in the
    setup script.
-3. Double-click `Setup ListFlow Worker.cmd`.
-4. Wait for setup to install dependencies, generate Prisma, and create desktop
-   shortcuts.
+3. Ensure `.env` contains `LISTFLOW_DEPLOYED_DATABASE_URL` (or the existing
+   `MIGRATION_SOURCE_DATABASE_URL`) for the production Supabase database.
+4. Double-click `Setup ListFlow Worker.cmd`.
+5. Wait for setup to install dependencies, validate all three stores, generate
+   Prisma, and create desktop shortcuts.
 
 Daily use:
 
 1. Open the Vercel ListFlow website in the browser.
-2. Double-click `Start ListFlow Worker` only when running long jobs.
-3. Close the worker window when finished.
+2. Double-click `Start All 6 ListFlow Workers`.
+3. Keep the controller window open while workers are needed.
+4. Double-click `Stop All ListFlow Workers` to let active jobs finish before
+   closing the processes.
 
-The setup writes details to `logs/setup-worker.log`. The worker writes runtime
-logs to `logs/worker.log`.
+Stable company updates are published to `master`. Use `Update ListFlow Workers`
+to fetch a clean fast-forward release, install exact dependencies, validate the
+database configuration, and reopen the controller. The updater refuses to
+overwrite local Git changes. Commercial development happens on
+`commercial-development` and is merged into `master` only after verification.
+
+The setup writes details to `logs/setup-worker.log`. Each worker has a separate
+`logs/worker-<store>-<a|b>.log` file.
 
 ## Health Check
 

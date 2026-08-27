@@ -13,7 +13,7 @@ set EXIT_CODE=%ERRORLEVEL%
 
 echo.
 if "%EXIT_CODE%"=="0" (
-  echo Setup complete. You can now use the "Start ListFlow Worker" desktop shortcut.
+  echo Setup complete. You can now use the "Start All 6 ListFlow Workers" desktop shortcut.
 ) else (
   echo Setup failed. Check logs\setup-worker.log for details.
 )

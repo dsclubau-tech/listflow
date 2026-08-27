@@ -14,6 +14,8 @@
     "lint": "eslint",
     "worker": "tsx scripts/listflow-worker.ts",
     "worker:store": "tsx scripts/listflow-worker.ts",
+    "workers:local": "tsx scripts/listflow-local-workers.ts",
+    "workers:local:check": "tsx scripts/check-local-worker-config.ts",
     "worker:shortcut": "powershell -ExecutionPolicy Bypass -File scripts/install-worker-shortcut.ps1",
     "worker:shortcuts": "powershell -ExecutionPolicy Bypass -File scripts/install-store-worker-shortcuts.ps1",
     "migration:preflight": "powershell -ExecutionPolicy Bypass -File scripts/database-migration/Invoke-ListFlowMigration.ps1 -Mode Preflight",
