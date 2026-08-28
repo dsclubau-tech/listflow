@@ -25,6 +25,10 @@ import { getPriceCheckPrerequisiteIssue } from "@/lib/price-check-eligibility";
 import { getPriceCheckFailureCode } from "@/lib/price-check-failures";
 import { getLowStockResolvedUpdate } from "@/lib/low-stock-products";
 import { shouldAutomaticallyApplyPriceIncrease } from "@/lib/price-change-automation";
+import {
+  extractVariantSelectionHints,
+  type VariantSelectionHints,
+} from "@/lib/amazon-variant-selection";
 
 const PRICE_TOLERANCE = 0.01;
 const MIN_SAFE_PRODUCT_DELAY_MS = 1000;
@@ -501,6 +505,7 @@ export async function runPriceCheck(
     productId: string,
     asin: string,
     priceTrackingMode: AmazonPriceTrackingMode,
+    variantHints?: VariantSelectionHints | null,
     shouldAbort: () => boolean = () => false,
   ) => {
     const scrapeWithBrowser = async () => {
@@ -509,7 +514,8 @@ export async function runPriceCheck(
         asin,
         browser,
         supplierSettings.scrapePostcode || undefined,
-        priceTrackingMode
+        priceTrackingMode,
+        variantHints,
       );
     };
 
@@ -597,10 +603,12 @@ export async function runPriceCheck(
       const priceTrackingMode = normalizeAmazonPriceTrackingMode(
         product.amazonPriceTrackingMode
       );
+      const variantHints = extractVariantSelectionHints(product);
 
       try {
         let currentAmazonPrice: number | null;
         let scrapedAmazonStockLeft: number | null | undefined;
+        let scrapeResult: ScrapedAmazonPrice | undefined;
 
         if (simulatedAmazonPrice !== null) {
           currentAmazonPrice = simulatedAmazonPrice;
@@ -608,7 +616,6 @@ export async function runPriceCheck(
           let scrapeTimedOut = false;
           const timeoutMessage =
             `Price check timed out after ${Math.round(PRODUCT_CHECK_TIMEOUT_MS / 1000)}s while scraping Amazon.`;
-          let scrapeResult: ScrapedAmazonPrice;
 
           try {
             scrapeResult = await withTimeout(
@@ -616,6 +623,7 @@ export async function runPriceCheck(
                 product.id,
                 product.asin,
                 priceTrackingMode,
+                variantHints,
                 () => scrapeTimedOut,
               ),
               PRODUCT_CHECK_TIMEOUT_MS,
@@ -640,6 +648,30 @@ export async function runPriceCheck(
         );
 
         if (currentAmazonPrice === null) {
+          if (scrapeResult?.variantSelectionFailed) {
+            await recordProductFailure({
+              productId: product.id,
+              code: PriceCheckFailureCode.AMAZON_VARIANT_SELECTION_REQUIRED,
+              message:
+                scrapeResult.variantSelectionReason ||
+                "Amazon presents product variations, but the saved colour/size could not be selected.",
+              checkedAt,
+            });
+
+            logger.warn(
+              "price-checker/run",
+              "Amazon variant selection required",
+              {
+                productId: product.id,
+                asin: product.asin,
+                reason: scrapeResult.variantSelectionReason,
+              }
+            );
+
+            await reportProductComplete(product.id);
+            continue;
+          }
+
           await recordProductFailure({
             productId: product.id,
             code: PriceCheckFailureCode.AMAZON_PRICE_UNAVAILABLE,

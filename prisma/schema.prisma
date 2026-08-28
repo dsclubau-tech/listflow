@@ -41,6 +41,9 @@ model Store {
   ebayUserId  String?
   ebayStoreId String?
   isActive    Boolean  @default(true)
+  autoCheckEnabled   Boolean   @default(false)
+  autoCheckStartedBy String?
+  autoCheckStartedAt DateTime?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -118,9 +121,15 @@ enum AmazonImportJobKind {
 enum PriceCheckFailureCode {
   AMAZON_OUT_OF_STOCK
   AMAZON_PRICE_UNAVAILABLE
+  AMAZON_VARIANT_SELECTION_REQUIRED
   MISSING_BASELINE
   UNSAFE_PRICE_CHANGE
   TECHNICAL_ERROR
+}
+
+enum PriceCheckJobTrigger {
+  MANUAL
+  AUTOMATIC
 }
 
 enum PriceCheckJobStatus {
@@ -339,11 +348,12 @@ model PriceHistory {
 }
 
 model PriceCheckJob {
-  id                  String              @id @default(cuid())
+  id                  String               @id @default(cuid())
   userId              String
   storeId             String?
   scope               PriceCheckJobScope
-  status              PriceCheckJobStatus @default(QUEUED)
+  trigger             PriceCheckJobTrigger @default(MANUAL)
+  status              PriceCheckJobStatus  @default(QUEUED)
   productIds          String[]            @default([])
   completedProductIds String[]            @default([])
   total               Int                 @default(0)

@@ -3,6 +3,7 @@ import "server-only";
 import {
   PriceCheckJobScope,
   PriceCheckJobStatus,
+  PriceCheckJobTrigger,
   ProductStatus,
 } from "@/app/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
@@ -41,6 +42,7 @@ type PriceCheckJobRecord = {
   storeId: string | null;
   status: PriceCheckJobStatus;
   scope: PriceCheckJobScope;
+  trigger?: PriceCheckJobTrigger;
   productIds: string[];
   completedProductIds: string[];
   total: number;
@@ -65,6 +67,7 @@ type CreateJobInput = {
   storeId: string;
   productIds?: unknown[];
   all?: boolean;
+  trigger?: PriceCheckJobTrigger;
 };
 
 type PriceCheckCounters = Pick<
@@ -175,6 +178,7 @@ export function serializePriceCheckJob(job: PriceCheckJobRecord) {
     id: job.id,
     status: job.status,
     scope: job.scope,
+    trigger: job.trigger ?? PriceCheckJobTrigger.MANUAL,
     total: job.total,
     checked: job.checked,
     changed: job.changed,
@@ -744,6 +748,7 @@ export async function createPriceCheckJob(input: CreateJobInput) {
       userId: input.userId,
       storeId: input.storeId,
       scope,
+      trigger: input.trigger ?? PriceCheckJobTrigger.MANUAL,
       status:
         eligibleProductIds.length > 0
           ? PriceCheckJobStatus.QUEUED

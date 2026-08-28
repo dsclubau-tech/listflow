@@ -80,6 +80,7 @@ async function loadWorkerModules() {
     workerHeartbeat,
     workerSchedule,
     loggerModule,
+    automaticPriceCheck,
   ] = await Promise.all([
     import("../lib/prisma"),
     import("../lib/amazon-import-jobs"),
@@ -91,6 +92,7 @@ async function loadWorkerModules() {
     import("../lib/worker-heartbeat"),
     import("../lib/worker-schedule"),
     import("../lib/logger"),
+    import("../lib/automatic-price-check"),
   ]);
 
   return {
@@ -102,6 +104,12 @@ async function loadWorkerModules() {
     runEbayResearchQueueForStore: ebayResearch.runEbayResearchQueueForStore,
     runNextPriceCheckJobForStore: priceCheckJobs.runNextPriceCheckJobForStore,
     runStockReplenishmentForStore: stockReplenishment.runStockReplenishmentForStore,
+    runAutomaticPriceCheckForStore:
+      automaticPriceCheck.runAutomaticPriceCheckForStore,
+    AUTOMATIC_PRICE_CHECK_TASK_KEY:
+      automaticPriceCheck.AUTOMATIC_PRICE_CHECK_TASK_KEY,
+    AUTOMATIC_PRICE_CHECK_INTERVAL_MS:
+      automaticPriceCheck.AUTOMATIC_PRICE_CHECK_INTERVAL_MS,
     touchWorkerHeartbeat: workerHeartbeat.touchWorkerHeartbeat,
     heartbeatIntervalMs: workerHeartbeat.WORKER_HEARTBEAT_INTERVAL_MS,
     tryClaimWorkerSchedule: workerSchedule.tryClaimWorkerSchedule,
@@ -254,6 +262,51 @@ async function processStore(store: { id: string; name: string; loginId: string |
 
   if (await modules.runNextPriceCheckJobForStore(store.id, worker)) {
     return true;
+  }
+
+  // Automatic Amazon price check (8-hour cadence)
+  const autoCheckClaim = await modules.tryClaimWorkerSchedule({
+    storeId: store.id,
+    taskKey: modules.AUTOMATIC_PRICE_CHECK_TASK_KEY,
+    worker,
+    leaseTtlMs: JOB_LEASE_TTL_MS,
+  });
+
+  if (autoCheckClaim) {
+    try {
+      const result = await modules.withWorkerScheduleClaim(
+        autoCheckClaim,
+        JOB_LEASE_TTL_MS,
+        () => modules.runAutomaticPriceCheckForStore(store.id, worker),
+      );
+
+      if (result.skippedConflict) {
+        await modules.retryWorkerSchedule(
+          autoCheckClaim,
+          Math.max(IDLE_SLEEP_MS, 5_000),
+          result.reason,
+        );
+      } else if (result.skipped) {
+        // Store has auto checks disabled; complete schedule for next cycle
+        await modules.completeWorkerSchedule(
+          autoCheckClaim,
+          modules.AUTOMATIC_PRICE_CHECK_INTERVAL_MS,
+        );
+      } else {
+        await modules.completeWorkerSchedule(
+          autoCheckClaim,
+          modules.AUTOMATIC_PRICE_CHECK_INTERVAL_MS,
+        );
+        return true;
+      }
+    } catch (error) {
+      await modules.retryWorkerSchedule(
+        autoCheckClaim,
+        ERROR_SLEEP_MS,
+        getErrorMessage(error),
+      );
+      throw error;
+    }
   }
 
   if (await modules.runNextEbayImportJobForStore(store.id, worker)) {

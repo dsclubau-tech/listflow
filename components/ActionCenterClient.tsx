@@ -2332,6 +2332,15 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                               Product price check
                             </span>
                             <span
+                              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                                job.trigger === "AUTOMATIC"
+                                  ? "bg-purple-50 text-purple-700 border border-purple-200"
+                                  : "bg-slate-50 text-slate-700 border border-slate-200"
+                              }`}
+                            >
+                              {job.trigger === "AUTOMATIC" ? "Automatic" : "Manual"}
+                            </span>
+                            <span
                               className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClasses(job.status)}`}
                             >
                               {job.status === "CANCELLED" ? "PAUSED" : job.status}
@@ -2812,6 +2821,15 @@ export default function ActionCenterClient({ data }: { data: ActionCenterData })
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="text-sm font-medium text-gray-900">
                               Product price check
+                            </span>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                                job.trigger === "AUTOMATIC"
+                                  ? "bg-purple-50 text-purple-700 border border-purple-200"
+                                  : "bg-slate-50 text-slate-700 border border-slate-200"
+                              }`}
+                            >
+                              {job.trigger === "AUTOMATIC" ? "Automatic" : "Manual"}
                             </span>
                             <span
                               className={`rounded-full px-2 py-0.5 text-xs font-medium ${statusClasses(job.status)}`}

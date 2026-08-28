@@ -23,6 +23,10 @@ import {
   getAmazonTechnicalPageMessage,
   isVerifiedAmazonProductPage,
 } from "@/lib/price-check-failures";
+import {
+  attemptVariantSelection,
+  type VariantSelectionHints,
+} from "@/lib/amazon-variant-selection";
 
 export interface ScrapedProduct {
   title: string;
@@ -65,6 +69,8 @@ export interface ScrapedAmazonPrice {
     regular: number | null;
     deal: number | null;
   };
+  variantSelectionFailed?: boolean;
+  variantSelectionReason?: string;
 }
 
 const USER_AGENTS = [
@@ -582,7 +588,8 @@ export async function scrapeAmazonPrice(
   asin: string,
   browser?: Browser,
   postcode?: string,
-  priceTrackingMode: AmazonPriceTrackingMode = DEFAULT_AMAZON_PRICE_TRACKING_MODE
+  priceTrackingMode: AmazonPriceTrackingMode = DEFAULT_AMAZON_PRICE_TRACKING_MODE,
+  variantSelectionHints?: VariantSelectionHints | null
 ): Promise<ScrapedAmazonPrice> {
   const normalizedAsin = asin.trim().toUpperCase();
 
@@ -714,18 +721,76 @@ export async function scrapeAmazonPrice(
       );
     }
 
-    const stockLeft = await page
+    let stockLeft = await page
       .content()
       .then((html) => extractAmazonNewOfferStockLeft(load(html)))
       .catch(() => null);
 
-    const priceChoices = await extractAmazonBuyboxPriceChoicesFromPage(
+    let priceChoices = await extractAmazonBuyboxPriceChoicesFromPage(
       page,
       normalizedAsin
     );
-    const selectedPrice =
+    let selectedPrice =
       priceTrackingMode === "DEAL" ? priceChoices.deal : priceChoices.regular;
-    const price = selectedPrice?.price ?? null;
+    let price = selectedPrice?.price ?? null;
+
+    // If price is not available on initial page load, check if Amazon presents variations
+    // and attempt to select the exact saved colour/size in safe order
+    if (price === null) {
+      const variantResult = await attemptVariantSelection(
+        page,
+        variantSelectionHints ?? null
+      );
+
+      if (variantResult.hasVariations) {
+        if (!variantResult.matched) {
+          return {
+            price: null,
+            stockLeft: null,
+            priceMode: priceTrackingMode,
+            priceChoices: { regular: null, deal: null },
+            variantSelectionFailed: true,
+            variantSelectionReason:
+              variantResult.reason ||
+              "Amazon presents product variations, but the saved colour/size could not be selected.",
+          };
+        }
+
+        if (variantResult.selected) {
+          // Re-evaluate buybox price after variation selection
+          await page
+            .waitForSelector(
+              "#corePrice_feature_div, .a-price, #priceblock_ourprice, #apex_desktop",
+              { timeout: 8000 }
+            )
+            .catch(() => {});
+
+          priceChoices = await extractAmazonBuyboxPriceChoicesFromPage(
+            page,
+            normalizedAsin
+          );
+          selectedPrice =
+            priceTrackingMode === "DEAL" ? priceChoices.deal : priceChoices.regular;
+          price = selectedPrice?.price ?? null;
+
+          if (price !== null) {
+            stockLeft = await page
+              .content()
+              .then((html) => extractAmazonNewOfferStockLeft(load(html)))
+              .catch(() => null);
+          } else {
+            return {
+              price: null,
+              stockLeft: null,
+              priceMode: priceTrackingMode,
+              priceChoices: { regular: null, deal: null },
+              variantSelectionFailed: true,
+              variantSelectionReason: `Selected variation (${variantResult.selectedDimensions?.join(", ") || "saved variant"}) on Amazon, but no buybox price became available.`,
+            };
+          }
+        }
+      }
+    }
 
     // Diagnostic: log page context when price extraction fails
     if (price === null) {

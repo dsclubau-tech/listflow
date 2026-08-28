@@ -54,6 +54,49 @@ type SubTab = (typeof subTabs)[number];
 const countries = ["Australia", "United States", "United Kingdom", "Canada"];
 const weightUnits = ["Kg", "Lb", "Oz", "G"];
 
+interface AutoCheckSummary {
+  enabled: boolean;
+  intervalHours: number;
+  stores: {
+    storeId: string;
+    storeName: string;
+    loginId: string | null;
+    enabled: boolean;
+    startedBy: string | null;
+    startedAt: string | null;
+    nextRunAt: string | null;
+    lastStartedAt: string | null;
+    lastCompletedAt: string | null;
+    lastError: string | null;
+    activeJobId: string | null;
+    activeJobStatus: string | null;
+  }[];
+}
+
+function formatScheduleDateTime(iso: string | null) {
+  if (!iso) return "Not yet run";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "Not yet run";
+  return d.toLocaleString("en-AU", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatRelativeNext(iso: string | null) {
+  if (!iso) return "Not scheduled";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "Not scheduled";
+  const diffMs = d.getTime() - Date.now();
+  if (diffMs <= 0) return "Due now (next worker cycle)";
+  const hours = Math.floor(diffMs / (1000 * 60 * 60));
+  const mins = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+  if (hours > 0) return `in ${hours}h ${mins}m (${formatScheduleDateTime(iso)})`;
+  return `in ${mins}m (${formatScheduleDateTime(iso)})`;
+}
+
 export default function SupplierSettingsTab() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -62,6 +105,10 @@ export default function SupplierSettingsTab() {
 
   // Settings state
   const [settings, setSettings] = useState<SupplierSettingsData | null>(null);
+
+  // Automatic price check state
+  const [autoCheckStatus, setAutoCheckStatus] = useState<AutoCheckSummary | null>(null);
+  const [autoCheckLoading, setAutoCheckLoading] = useState(false);
 
   // Sidebar
   const [selectedStore, setSelectedStore] = useState("1");
@@ -88,6 +135,55 @@ export default function SupplierSettingsTab() {
     }
   }, []);
 
+  const fetchAutoCheckStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/automatic-price-check");
+      if (res.ok) {
+        setAutoCheckStatus(await res.json());
+      }
+    } catch (error) {
+      console.error("Failed to fetch automatic price check status", error);
+    }
+  }, []);
+
+  const handleStartAutoChecks = async () => {
+    setAutoCheckLoading(true);
+    try {
+      const res = await fetch("/api/automatic-price-check", { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setAutoCheckStatus(data);
+        setToast("Automatic 8-hour price checks started for all active stores.");
+      } else {
+        const err = await res.json();
+        setToast(`Error: ${err.error || "Failed to start automatic checks"}`);
+      }
+    } catch {
+      setToast("Error: Network request failed");
+    } finally {
+      setAutoCheckLoading(false);
+    }
+  };
+
+  const handleStopAutoChecks = async () => {
+    setAutoCheckLoading(true);
+    try {
+      const res = await fetch("/api/automatic-price-check", { method: "DELETE" });
+      if (res.ok) {
+        const data = await res.json();
+        setAutoCheckStatus(data);
+        setToast("Automatic price checks stopped.");
+      } else {
+        const err = await res.json();
+        setToast(`Error: ${err.error || "Failed to stop automatic checks"}`);
+      }
+    } catch {
+      setToast("Error: Network request failed");
+    } finally {
+      setAutoCheckLoading(false);
+    }
+  };
+
   // Fetch policies for selected store
   const fetchPolicies = useCallback(async (storeNum: string) => {
     setPoliciesLoading(true);
@@ -107,7 +203,8 @@ export default function SupplierSettingsTab() {
 
   useEffect(() => {
     fetchSettings();
-  }, [fetchSettings]);
+    fetchAutoCheckStatus();
+  }, [fetchSettings, fetchAutoCheckStatus]);
 
   useEffect(() => {
     fetchPolicies(selectedStore);
@@ -695,82 +792,133 @@ export default function SupplierSettingsTab() {
             </section>
 
             <section>
-              <h3 className="text-sm font-semibold text-gray-800 mb-4">Price Tracking</h3>
-              <div className="rounded-xl border border-gray-200 bg-white p-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div>
-                    <p className="text-sm font-medium text-gray-800">
-                      Enable automatic Amazon to eBay price checks
-                    </p>
-                    <p className="mt-1 text-xs leading-5 text-gray-500">
-                      When enabled, imported products with an ASIN and at least one
-                      variant can be checked on a daily cron run. The configured
-                      hour is in UTC and should match your Railway cron schedule.
+              <h3 className="text-sm font-semibold text-gray-800 mb-4">Price Tracking & Automatic Checks</h3>
+              <div className="space-y-4">
+                {/* Automatic 8-hour Check Schedule Card */}
+                <div className="rounded-xl border border-gray-200 bg-white p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-4">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-sm font-semibold text-gray-900">
+                          Automatic 8-Hour Full Price Checks
+                        </span>
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                            autoCheckStatus?.enabled
+                              ? "bg-green-50 text-green-700 border border-green-200"
+                              : "bg-gray-100 text-gray-600 border border-gray-200"
+                          }`}
+                        >
+                          {autoCheckStatus?.enabled ? "Active (Every 8h)" : "Stopped"}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-xs leading-5 text-gray-500 max-w-xl">
+                        Runs a complete Amazon price check for all active stores every 8 hours using your local workers.
+                        Manual price checks retain priority. If a worker PC is offline, it performs one overdue check upon reconnection.
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      {autoCheckStatus?.enabled ? (
+                        <button
+                          type="button"
+                          onClick={handleStopAutoChecks}
+                          disabled={autoCheckLoading}
+                          className="rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-100 disabled:opacity-50"
+                        >
+                          {autoCheckLoading ? "Stopping..." : "Stop automatic checks"}
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={handleStartAutoChecks}
+                          disabled={autoCheckLoading}
+                          className="rounded-md bg-orange-600 px-3 py-1.5 text-xs font-medium text-white shadow-xs transition hover:bg-orange-700 disabled:opacity-50"
+                        >
+                          {autoCheckLoading ? "Starting..." : "Start automatic checks"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Per-store schedule details */}
+                  {autoCheckStatus?.stores && autoCheckStatus.stores.length > 0 && (
+                    <div className="mt-4 border-t border-gray-100 pt-3">
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                        {autoCheckStatus.stores.map((store) => (
+                          <div
+                            key={store.storeId}
+                            className="rounded-lg border border-gray-100 bg-gray-50/70 p-3 text-xs"
+                          >
+                            <div className="flex items-center justify-between font-medium text-gray-900 mb-1">
+                              <span>{store.storeName}</span>
+                              <span
+                                className={`text-[10px] font-semibold uppercase px-1.5 py-0.5 rounded ${
+                                  store.enabled ? "text-green-700 bg-green-100" : "text-gray-500 bg-gray-200"
+                                }`}
+                              >
+                                {store.enabled ? "Active" : "Off"}
+                              </span>
+                            </div>
+                            <div className="space-y-1 text-gray-600 text-[11px]">
+                              <div>
+                                <span className="text-gray-400">Next run:</span>{" "}
+                                <span className="font-medium text-gray-800">
+                                  {store.enabled ? formatRelativeNext(store.nextRunAt) : "Disabled"}
+                                </span>
+                              </div>
+                              <div>
+                                <span className="text-gray-400">Last completed:</span>{" "}
+                                {formatScheduleDateTime(store.lastCompletedAt)}
+                              </div>
+                              {store.startedBy && (
+                                <div className="text-gray-400 truncate" title={`Starter: ${store.startedBy}`}>
+                                  Started by: <span className="text-gray-600">{store.startedBy}</span>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Auto-Hold and Postcode Settings */}
+                <div className="rounded-xl border border-gray-200 bg-white p-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-sm font-medium text-gray-800">
+                        Put failed products on hold automatically
+                      </p>
+                      <p className="mt-1 text-xs leading-5 text-gray-500">
+                        Confirmed Amazon out of stock, unavailable price, and safety limit breaches
+                        queue an eBay hold. Variant selection warnings remain active on eBay.
+                      </p>
+                    </div>
+                    <ToggleSwitch
+                      checked={settings.autoHoldOnPriceCheckFailure}
+                      onChange={(value) =>
+                        updateField("autoHoldOnPriceCheckFailure", value)
+                      }
+                    />
+                  </div>
+
+                  <div className="mt-4 max-w-xs border-t border-gray-100 pt-4">
+                    <label className="mb-1 block text-xs text-gray-500">
+                      Amazon Delivery Postcode
+                    </label>
+                    <PostcodeAutocomplete
+                      value={settings.scrapePostcode}
+                      onChange={(pc) => updateField("scrapePostcode", pc.replace(/\D/g, ""))}
+                      country="Australia"
+                      placeholder="e.g. 2217"
+                    />
+                    <p className="mt-1 text-xs text-gray-400">
+                      The scraper will set this postcode on Amazon to get local pricing
+                      and availability. Default: 2217 (Kogarah, NSW).
                     </p>
                   </div>
-                  <ToggleSwitch
-                    checked={settings.priceTrackingEnabled}
-                    onChange={(value) => updateField("priceTrackingEnabled", value)}
-                  />
-                </div>
-
-                <div className="mt-4 flex items-start justify-between gap-4 border-t border-gray-200 pt-4">
-                  <div>
-                    <p className="text-sm font-medium text-gray-800">
-                      Put failed products on hold automatically
-                    </p>
-                    <p className="mt-1 text-xs leading-5 text-gray-500">
-                      Confirmed Amazon price, stock, baseline, and safety-limit failures
-                      queue an eBay hold. Temporary technical failures do not.
-                    </p>
-                  </div>
-                  <ToggleSwitch
-                    checked={settings.autoHoldOnPriceCheckFailure}
-                    onChange={(value) =>
-                      updateField("autoHoldOnPriceCheckFailure", value)
-                    }
-                  />
-                </div>
-
-                <div className="mt-4 max-w-xs">
-                  <label className="mb-1 block text-xs text-gray-500">
-                    Check Hour (UTC)
-                  </label>
-                  <select
-                    value={settings.priceCheckHour}
-                    onChange={(e) =>
-                      updateField(
-                        "priceCheckHour",
-                        Number.parseInt(e.target.value, 10) || 0
-                      )
-                    }
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  >
-                    {Array.from({ length: 24 }, (_, hour) => (
-                      <option key={hour} value={hour}>
-                        {hour.toString().padStart(2, "0")}:00 UTC
-                      </option>
-                    ))}
-                  </select>
-                  <p className="mt-1 text-xs text-gray-400">
-                    Example: `06:00 UTC` matches a cron schedule of `0 6 * * *`.
-                  </p>
-                </div>
-
-                <div className="mt-4 max-w-xs">
-                  <label className="mb-1 block text-xs text-gray-500">
-                    Amazon Delivery Postcode
-                  </label>
-                  <PostcodeAutocomplete
-                    value={settings.scrapePostcode}
-                    onChange={(pc) => updateField("scrapePostcode", pc.replace(/\D/g, ""))}
-                    country="Australia"
-                    placeholder="e.g. 2217"
-                  />
-                  <p className="mt-1 text-xs text-gray-400">
-                    The scraper will set this postcode on Amazon to get local pricing
-                    and availability. Default: 2217 (Kogarah, NSW).
-                  </p>
                 </div>
               </div>
             </section>

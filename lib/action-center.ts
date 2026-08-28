@@ -110,6 +110,7 @@ export interface ActionCenterPriceCheckJob {
   id: string;
   status: `${PriceCheckJobStatus}`;
   scope: string;
+  trigger?: "MANUAL" | "AUTOMATIC" | string;
   total: number;
   checked: number;
   changed: number;
