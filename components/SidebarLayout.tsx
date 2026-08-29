@@ -101,11 +101,11 @@ export default function SidebarLayout({
 
       {/* ── Main Content Area ── */}
       <main
-        className={`flex-1 transition-all duration-300 ease-in-out ${
+        className={`flex-1 min-w-0 transition-all duration-300 ease-in-out ${
           collapsed ? "md:ml-16" : "md:ml-64"
         } ml-0 min-h-screen overflow-x-clip bg-tertiary pt-16 md:pt-0`}
       >
-        <div className="w-full max-w-full px-3 py-4 sm:p-6 lg:p-8">
+        <div className="w-full max-w-full min-w-0 px-3 py-4 sm:p-6 lg:p-8">
           {children}
         </div>
       </main>

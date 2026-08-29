@@ -803,8 +803,32 @@ button {
 .listflow-table-drag-container {
   cursor: grab;
   touch-action: pan-y;
+  user-select: none;
+  -webkit-user-select: none;
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 transparent;
+}
+
+.listflow-table-drag-container table,
+.listflow-table-drag-container thead,
+.listflow-table-drag-container tbody,
+.listflow-table-drag-container tr,
+.listflow-table-drag-container th,
+.listflow-table-drag-container td {
+  cursor: inherit;
+}
+
+.listflow-table-drag-container a,
+.listflow-table-drag-container button,
+.listflow-table-drag-container input,
+.listflow-table-drag-container label {
+  cursor: pointer;
+}
+
+.listflow-table-drag-container img {
+  pointer-events: none;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .listflow-table-drag-container::-webkit-scrollbar {
@@ -824,12 +848,7 @@ button {
   background-color: #94a3b8;
 }
 
-.listflow-table-dragging {
-  cursor: grabbing !important;
-  user-select: none !important;
-  -webkit-user-select: none !important;
-}
-
+.listflow-table-dragging,
 .listflow-table-dragging * {
   cursor: grabbing !important;
   user-select: none !important;

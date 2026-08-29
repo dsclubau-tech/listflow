@@ -648,75 +648,90 @@ export default function DraftsTable({
     draggedAt: 0,
   });
 
-  const handleTablePointerDown = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      if (e.button !== 0 && e.pointerType === "mouse") return;
-      const container = tableScrollContainerRef.current;
-      if (!container) return;
+  useEffect(() => {
+    const container = tableScrollContainerRef.current;
+    if (!container) return;
 
+    let isDown = false;
+    let startX = 0;
+    let scrollStart = 0;
+    let hasMoved = false;
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button !== 0 && e.pointerType === "mouse") return;
       const target = e.target as HTMLElement | null;
       if (
         target?.closest(
-          "button, a, input, select, textarea, [role='menu'], [role='dialog'], [data-no-drag], label",
+          "input, select, textarea, [role='menu'], [role='dialog'], [data-no-drag]",
         )
       ) {
         return;
       }
 
-      dragScrollState.current = {
-        isDown: true,
-        startX: e.clientX,
-        scrollStart: container.scrollLeft,
-        moved: false,
-        draggedAt: 0,
-      };
-    },
-    [],
-  );
+      isDown = true;
+      startX = e.clientX;
+      scrollStart = container.scrollLeft;
+      hasMoved = false;
+    };
 
-  const handleTablePointerMove = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      const container = tableScrollContainerRef.current;
-      if (!container || !dragScrollState.current.isDown) return;
+    const onPointerMove = (e: PointerEvent) => {
+      if (!isDown) return;
+      const walk = e.clientX - startX;
 
-      const walk = e.clientX - dragScrollState.current.startX;
-
-      if (Math.abs(walk) > 4) {
-        if (!dragScrollState.current.moved) {
+      if (Math.abs(walk) > 3) {
+        if (!hasMoved) {
+          hasMoved = true;
           dragScrollState.current.moved = true;
           dragScrollState.current.draggedAt = Date.now();
           setIsTableDragging(true);
           try {
-            e.currentTarget.setPointerCapture(e.pointerId);
+            container.setPointerCapture(e.pointerId);
           } catch {
-            // Ignore capture error in environments without pointer capture
+            // ignore
           }
         }
-        container.scrollLeft = dragScrollState.current.scrollStart - walk;
+        container.scrollLeft = scrollStart - walk;
       }
-    },
-    [],
-  );
+    };
 
-  const handleTablePointerUpOrCancel = useCallback(
-    (e: React.PointerEvent<HTMLDivElement>) => {
-      if (!dragScrollState.current.isDown) return;
-      dragScrollState.current.isDown = false;
-      if (dragScrollState.current.moved) {
+    const onPointerUp = (e: PointerEvent) => {
+      if (!isDown) return;
+      isDown = false;
+      if (hasMoved) {
         dragScrollState.current.draggedAt = Date.now();
-        dragScrollState.current.moved = false;
         setIsTableDragging(false);
         try {
-          if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-            e.currentTarget.releasePointerCapture(e.pointerId);
+          if (container.hasPointerCapture(e.pointerId)) {
+            container.releasePointerCapture(e.pointerId);
           }
         } catch {
-          // Ignore
+          // ignore
         }
+
+        const captureClick = (clickEvent: globalThis.MouseEvent) => {
+          clickEvent.stopPropagation();
+          clickEvent.preventDefault();
+        };
+        window.addEventListener("click", captureClick, { capture: true, once: true });
+        setTimeout(() => {
+          window.removeEventListener("click", captureClick, { capture: true });
+          dragScrollState.current.moved = false;
+        }, 150);
       }
-    },
-    [],
-  );
+    };
+
+    container.addEventListener("pointerdown", onPointerDown);
+    container.addEventListener("pointermove", onPointerMove);
+    container.addEventListener("pointerup", onPointerUp);
+    container.addEventListener("pointercancel", onPointerUp);
+
+    return () => {
+      container.removeEventListener("pointerdown", onPointerDown);
+      container.removeEventListener("pointermove", onPointerMove);
+      container.removeEventListener("pointerup", onPointerUp);
+      container.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, []);
   const [bulkImporting, setBulkImporting] = useState(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [isBulkPriceChecking, setIsBulkPriceChecking] = useState(false);
@@ -2132,20 +2147,17 @@ export default function DraftsTable({
       <div
         className={
           isDraftsView
-            ? "max-w-full xl:overflow-clip xl:rounded-2xl xl:border xl:border-gray-200 xl:bg-white xl:shadow-sm"
-            : "max-w-full xl:overflow-clip xl:rounded-lg xl:border xl:border-gray-200 xl:bg-white"
+            ? "w-full max-w-full min-w-0 xl:rounded-2xl xl:border xl:border-gray-200 xl:bg-white xl:shadow-sm"
+            : "w-full max-w-full min-w-0 xl:rounded-lg xl:border xl:border-gray-200 xl:bg-white"
         }
       >
         <div
           ref={tableScrollContainerRef}
-          onPointerDown={handleTablePointerDown}
-          onPointerMove={handleTablePointerMove}
-          onPointerUp={handleTablePointerUpOrCancel}
-          onPointerCancel={handleTablePointerUpOrCancel}
+          onDragStart={(e) => e.preventDefault()}
           className={
             isDraftsView
-              ? "relative max-w-full"
-              : `relative max-w-full xl:overflow-x-auto listflow-table-drag-container ${
+              ? "relative w-full max-w-full min-w-0"
+              : `relative w-full max-w-full min-w-0 xl:overflow-x-auto listflow-table-drag-container ${
                   isTableDragging ? "listflow-table-dragging" : ""
                 }`
           }
@@ -2153,7 +2165,7 @@ export default function DraftsTable({
           <table
             className={`block w-full xl:table ${
               isProductsView
-                ? "xl:min-w-[1458px] xl:table-fixed"
+                ? "xl:min-w-[1462px] xl:table-fixed"
                 : ""
             } ${isSortPending ? "listflow-table-sorting" : ""}`}
           >
@@ -2688,63 +2700,69 @@ export default function DraftsTable({
                       )}
                     </td>
 
-                    {isProductsView && trackingState && promotedAdState && (
+                    {isProductsView && (
                       <td className="hidden xl:table-cell px-3 py-3">
                         <div className="max-w-[13rem]">
-                          <span
-                            className={`mb-1.5 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${promotedAdState.badgeClass}`}
-                            title={promotedAdState.detail}
-                          >
-                            {promotedAdState.label}
-                          </span>
-                          <span
-                            className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${trackingState.badgeClass}`}
-                          >
-                            {trackingState.label}
-                          </span>
-                          <span
-                            className="mt-1 block truncate text-xs text-gray-500"
-                            title={trackingState.detail}
-                          >
-                            {trackingState.detail}
-                          </span>
-                          {trackingState.priceHistoryId && (
-                            <div className="mt-2 flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  handlePriceReview(
-                                    trackingState.priceHistoryId,
-                                    "apply"
-                                  );
-                                }}
-                                disabled={
-                                  reviewingPriceHistoryId ===
-                                  trackingState.priceHistoryId
-                                }
-                                className="rounded bg-emerald-600 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-50"
+                          {promotedAdState && (
+                            <span
+                              className={`mb-1.5 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${promotedAdState.badgeClass}`}
+                              title={promotedAdState.detail}
+                            >
+                              {promotedAdState.label}
+                            </span>
+                          )}
+                          {trackingState && (
+                            <>
+                              <span
+                                className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${trackingState.badgeClass}`}
                               >
-                                Apply
-                              </button>
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  handlePriceReview(
-                                    trackingState.priceHistoryId,
-                                    "dismiss"
-                                  );
-                                }}
-                                disabled={
-                                  reviewingPriceHistoryId ===
-                                  trackingState.priceHistoryId
-                                }
-                                className="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
+                                {trackingState.label}
+                              </span>
+                              <span
+                                className="mt-1 block truncate text-xs text-gray-500"
+                                title={trackingState.detail}
                               >
-                                Dismiss
-                              </button>
-                            </div>
+                                {trackingState.detail}
+                              </span>
+                              {trackingState.priceHistoryId && (
+                                <div className="mt-2 flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      handlePriceReview(
+                                        trackingState.priceHistoryId,
+                                        "apply"
+                                      );
+                                    }}
+                                    disabled={
+                                      reviewingPriceHistoryId ===
+                                      trackingState.priceHistoryId
+                                    }
+                                    className="rounded bg-emerald-600 px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-emerald-700 disabled:opacity-50"
+                                  >
+                                    Apply
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      handlePriceReview(
+                                        trackingState.priceHistoryId,
+                                        "dismiss"
+                                      );
+                                    }}
+                                    disabled={
+                                      reviewingPriceHistoryId ===
+                                      trackingState.priceHistoryId
+                                    }
+                                    className="rounded border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
+                                  >
+                                    Dismiss
+                                  </button>
+                                </div>
+                              )}
+                            </>
                           )}
                         </div>
                       </td>
