@@ -9,7 +9,10 @@ import {
   scrapeAmazonPrice,
   type ScrapedAmazonPrice,
 } from "@/lib/amazon-scraper";
-import { launchScraperBrowser } from "@/lib/scraper-browser";
+import {
+  getBrowserLaunchUserMessage,
+  launchScraperBrowser,
+} from "@/lib/scraper-browser";
 import { calculateSellPrice } from "@/lib/variant-pricing";
 import { buildReviseInventoryStatusXML } from "@/lib/ebay-xml";
 import { callEbayReviseInventoryStatus, getStoreNumber } from "@/lib/ebay";
@@ -538,6 +541,10 @@ export async function runPriceCheck(
           errorMessage: getErrorMessage(error),
         }
       );
+
+      // Brief pause before retry — gives the OS time to release
+      // browser process resources after a crash.
+      await sleep(2000);
 
       try {
         return await scrapeWithBrowser();
@@ -1114,7 +1121,8 @@ export async function runPriceCheck(
           );
         }
       } catch (error) {
-        const message = getErrorMessage(error);
+        const rawMessage = getErrorMessage(error);
+        const message = getBrowserLaunchUserMessage(error) ?? rawMessage;
         const code = getPriceCheckFailureCode(error);
 
         await recordProductFailure({

@@ -85,13 +85,23 @@ export function getBrowserLaunchUserMessage(error: unknown) {
   if (
     lower.includes("executable doesn't exist") ||
     lower.includes("playwright install") ||
-    lower.includes("chromium_headless_shell") ||
     (lower.includes("@sparticuz/chromium") &&
       lower.includes("bin") &&
-      lower.includes("does not exist")) ||
-    lower.includes("browserType.launch".toLowerCase())
+      lower.includes("does not exist"))
   ) {
-    return "Could not start the browser needed to import this Amazon product. Redeploy ListFlow with the browser runtime fix, then try again.";
+    return "The browser executable was not found. Please run 'npx playwright install chromium' on the worker host or configure the browser runtime.";
+  }
+
+  if (
+    lower.includes("browsertype.launch") ||
+    lower.includes("target page, context or browser has been closed") ||
+    lower.includes("browser has been closed") ||
+    lower.includes("browser.newcontext") ||
+    lower.includes("browser.newpage") ||
+    lower.includes("target closed") ||
+    lower.includes("protocol error")
+  ) {
+    return "The browser closed or crashed during the price check. The worker will retry automatically on the next run.";
   }
 
   return null;
