@@ -68,7 +68,7 @@ export default async function EbayResearchPage() {
   }
 
   return (
-    <div className="min-h-full px-4 py-5 md:px-6 md:py-7 2xl:p-8">
+    <div className="w-full">
       <EbayResearchClient
         initialJobs={jobs}
         initialBatches={batches}

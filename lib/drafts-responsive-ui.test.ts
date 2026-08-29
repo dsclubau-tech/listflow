@@ -50,9 +50,8 @@ test("Drafts renderer contains card and desktop table breakpoints", () => {
   const source = readFileSync("components/DraftsTable.tsx", "utf8");
   const editorSource = readFileSync("components/InlineEditForm.tsx", "utf8");
 
-  assert.match(source, /grid-cols-\[auto_4rem_minmax\(0,1fr\)\]/);
+  assert.match(source, /colSpan=\{columnCount\}/);
   assert.match(source, /xl:table-row/);
-  assert.match(source, /data-draft-action-menu/);
   assert.match(editorSource, /Draft editor sections/);
 });
 

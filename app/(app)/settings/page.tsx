@@ -24,7 +24,7 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<Tab>("Store Profile");
 
   return (
-    <div className="min-h-full px-4 py-5 md:px-6 md:py-7 2xl:p-8">
+    <div className="w-full">
       <h1 className="text-xl font-semibold text-gray-900 mb-6">Settings</h1>
 
       {/* Tab navigation */}

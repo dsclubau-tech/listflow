@@ -1811,7 +1811,7 @@ export default function ProductsPageClient({
         </div>
       )}
 
-      <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+      <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-semibold text-gray-900">Products</h1>
           <span className="text-sm text-gray-500">
@@ -1819,7 +1819,7 @@ export default function ProductsPageClient({
           </span>
         </div>
 
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex w-full flex-wrap items-center gap-2.5 sm:w-auto sm:gap-3">
           <form
             role="search"
             onSubmit={(event) => {
@@ -1832,7 +1832,7 @@ export default function ProductsPageClient({
           >
             <div
               ref={searchContainerRef}
-              className="relative w-full sm:w-72 lg:w-80"
+              className="relative flex-1 min-w-0 sm:w-72 lg:w-80 sm:flex-none"
             >
               <svg
                 className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400"
@@ -1961,7 +1961,7 @@ export default function ProductsPageClient({
             </div>
             <button
               type="submit"
-              className="inline-flex h-10 items-center rounded-md bg-gray-900 px-3 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-gray-700"
+              className="flex-none inline-flex h-10 items-center rounded-md bg-gray-900 px-3.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-gray-700"
             >
               Search
             </button>
@@ -2022,7 +2022,7 @@ export default function ProductsPageClient({
               </div>
             )}
           </div>
-          <div className="inline-flex max-w-full overflow-x-auto no-scrollbar rounded-md border border-gray-300 bg-white shadow-sm whitespace-nowrap">
+          <div className="w-full sm:w-auto inline-flex overflow-x-auto no-scrollbar rounded-md border border-gray-300 bg-white shadow-sm whitespace-nowrap">
             {PRODUCT_FILTER_OPTIONS.map((option) => {
               const selected = option.value === displayedProductFilter;
               const loading =

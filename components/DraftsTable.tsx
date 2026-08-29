@@ -2284,14 +2284,14 @@ export default function DraftsTable({
                   : "bg-white hover:bg-gray-50";
               const stickyActionToneClass = isExpanded
                 ? "bg-orange-50"
-                : isFailedDraft
+              : isFailedDraft
                   ? "bg-red-50 group-hover:bg-red-100"
                   : "bg-white group-hover:bg-gray-50";
 
               return (
                 <Fragment key={product.id}>
                   <tr
-                    className={`group grid cursor-pointer grid-cols-[auto_4rem_minmax(0,1fr)] gap-x-3 rounded-2xl border border-gray-200 p-4 shadow-sm transition-colors xl:table-row xl:rounded-none xl:border-0 xl:border-b xl:p-0 xl:shadow-none listflow-row-animate ${rowToneClass}`}
+                    className={`group block w-full cursor-pointer rounded-2xl border border-gray-200 p-0 shadow-sm transition-colors xl:table-row xl:rounded-none xl:border-0 xl:border-b xl:p-0 xl:shadow-none listflow-row-animate ${rowToneClass}`}
                     onClick={() => toggleExpand(product.id)}
                     onKeyDown={(event) => {
                       if (
@@ -2309,9 +2309,227 @@ export default function DraftsTable({
                       handleRowContextMenu(event, product)
                     }
                   >
+                    {/* ── MOBILE CARD LAYOUT (< xl) ── */}
+                    <td colSpan={columnCount} className="block w-full p-3.5 sm:p-4 xl:hidden">
+                      {isProductsView ? (
+                        <div className="flex flex-col gap-3">
+                          {/* Header: Checkbox + Image + Title & ASIN/eBay */}
+                          <div className="flex items-start gap-3">
+                            {hasSelectionColumn && (
+                              <div className="pt-0.5 flex-none" onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  disabled={!isSelectable}
+                                  onChange={() => toggleSelect(product.id)}
+                                  aria-label={`Select ${product.title}`}
+                                  className="h-5 w-5 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                                />
+                              </div>
+                            )}
+                            <div className="flex-none">
+                              {product.images && product.images.length > 0 ? (
+                                <img
+                                  src={product.images[0]}
+                                  alt={product.title}
+                                  className="h-16 w-16 rounded-xl object-cover ring-1 ring-gray-200"
+                                />
+                              ) : (
+                                <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-gray-100 ring-1 ring-gray-200">
+                                  <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                  </svg>
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <span className="block text-sm font-semibold leading-snug text-gray-900 line-clamp-2" title={product.title}>
+                                {product.title}
+                              </span>
+                              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs" onClick={(e) => e.stopPropagation()}>
+                                {product.asin && <AsinLink asin={product.asin} />}
+                                {product.ebayItemId && (
+                                  <a
+                                    href={`https://www.ebay.com.au/itm/${product.ebayItemId}`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="inline-flex items-center gap-1 font-medium text-blue-600 hover:underline"
+                                  >
+                                    <span>eBay: {product.ebayItemId}</span>
+                                    <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                    </svg>
+                                  </a>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Badges Row: Status + Sold + Promoted + Tracking */}
+                          <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
+                            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${getStatusBadgeClasses(product.status)}`}>
+                              {statusBadgeLabels[product.status] || product.status}
+                            </span>
+                            {product.quantitySold > 0 ? (
+                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-600/20">
+                                <svg className="h-3 w-3 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                </svg>
+                                <span>{product.quantitySold} sold</span>
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-500 font-medium">
+                                0 sold
+                              </span>
+                            )}
+                            {promotedAdState && (
+                              <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${promotedAdState.badgeClass}`}>
+                                {promotedAdState.label}
+                              </span>
+                            )}
+                            {trackingState && trackingState.label !== "No change" && (
+                              <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${trackingState.badgeClass}`}>
+                                {trackingState.label}
+                              </span>
+                            )}
+                          </div>
+
+                          {/* Pricing & Profit Micro-Dashboard (Full Width Grid) */}
+                          <div className="rounded-xl border border-gray-200/80 bg-gray-50/70 p-3 grid grid-cols-2 gap-3 text-xs">
+                            <div className="min-w-0">
+                              <div className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-1">Pricing</div>
+                              <PriceCell product={product} />
+                            </div>
+                            <div className="min-w-0 border-l border-gray-200/80 pl-3">
+                              <div className="text-[11px] font-bold uppercase tracking-wider text-gray-400 mb-1">Profit</div>
+                              <ProfitCell product={product} />
+                            </div>
+                          </div>
+
+                          {/* Footer Row: Uploaded Date + Actions */}
+                          <div className="flex items-center justify-between border-t border-gray-100 pt-2 text-xs text-gray-500" onClick={(e) => e.stopPropagation()}>
+                            <span>Uploaded: {formatDate(product.uploadedAt) ?? "-"}</span>
+                            <div className="flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => openInternalNote(product)}
+                                className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+                                  product.internalNote
+                                    ? "text-orange-600 bg-orange-50 hover:bg-orange-100"
+                                    : "text-gray-600 bg-gray-100 hover:bg-gray-200"
+                                }`}
+                              >
+                                <span>{product.internalNote ? "Note: " + product.internalNote.slice(0, 10) + "…" : "+ Note"}</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => toggleExpand(product.id)}
+                                className="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-200"
+                              >
+                                <span>{isExpanded ? "Hide" : "Edit"}</span>
+                                <svg className={`h-3 w-3 text-gray-500 transition-transform ${isExpanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex flex-col gap-3">
+                          {/* Drafts View: Checkbox + Image + Title */}
+                          <div className="flex items-start gap-3">
+                            {hasSelectionColumn && (
+                              <div className="pt-0.5 flex-none" onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  disabled={!isSelectable}
+                                  onChange={() => toggleSelect(product.id)}
+                                  aria-label={`Select ${product.title}`}
+                                  className="h-5 w-5 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                                />
+                              </div>
+                            )}
+                            <div className="flex-none">
+                              {product.images && product.images.length > 0 ? (
+                                <img
+                                  src={product.images[0]}
+                                  alt={product.title}
+                                  className="h-16 w-16 rounded-xl object-cover ring-1 ring-gray-200"
+                                />
+                              ) : (
+                                <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-gray-100 ring-1 ring-gray-200">
+                                  <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                                  </svg>
+                                </div>
+                              )}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <span className="block text-sm font-semibold leading-snug text-gray-900 line-clamp-2" title={product.title}>
+                                {product.title}
+                              </span>
+                              {isFailedDraft && product.errorMessage && (
+                                <span className="mt-1 block text-xs text-red-600 line-clamp-2" title={product.errorMessage}>
+                                  {product.errorMessage}
+                                </span>
+                              )}
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${getStoreBadgeClass(product.store.id, product.store.name)}`}>
+                                  {product.store.name}
+                                </span>
+                                <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${getStatusBadgeClasses(product.status)}`}>
+                                  {statusBadgeLabels[product.status] || product.status}
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Footer Row: Created by + Draft Action Button */}
+                          <div className="flex items-center justify-between border-t border-gray-100 pt-2 text-xs text-gray-500" onClick={(e) => e.stopPropagation()}>
+                            <span>Created by {product.createdBy.name}</span>
+                            <div className="flex items-center gap-2">
+                              {loadingId === product.id ? (
+                                <span className="rounded bg-gray-400 px-2.5 py-1 text-xs text-white">Queueing…</span>
+                              ) : product.status === "FAILED" ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleImport(product.id)}
+                                  className="rounded bg-red-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-700"
+                                >
+                                  Retry
+                                </button>
+                              ) : product.status === "DRAFT" ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleImport(product.id)}
+                                  className="rounded bg-orange-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-orange-600"
+                                >
+                                  Import to eBay
+                                </button>
+                              ) : (
+                                <span className="text-emerald-700 font-semibold">Imported</span>
+                              )}
+                              <button
+                                type="button"
+                                onClick={() => toggleExpand(product.id)}
+                                className="inline-flex items-center gap-1 rounded-md bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700 hover:bg-gray-200"
+                              >
+                                <span>{isExpanded ? "Hide" : "Edit"}</span>
+                                <svg className={`h-3 w-3 text-gray-500 transition-transform ${isExpanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </td>
+
+                    {/* ── DESKTOP TABLE CELLS (>= xl) ── */}
                     {hasSelectionColumn && (
                       <td
-                        className="col-start-1 row-start-1 p-0 xl:table-cell xl:px-3 xl:py-3"
+                        className="hidden xl:table-cell xl:px-3 xl:py-3"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <input
@@ -2325,7 +2543,7 @@ export default function DraftsTable({
                               : undefined
                           }
                           aria-label={`Select ${product.title}`}
-                          className="h-5 w-5 rounded border-gray-300 text-orange-500 focus:ring-orange-500 xl:h-4 xl:w-4"
+                          className="h-4 w-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
                         />
                       </td>
                     )}
@@ -2344,25 +2562,25 @@ export default function DraftsTable({
                     </td>
 
                     <td
-                      className="col-start-2 row-start-1 row-span-2 p-0 xl:table-cell xl:px-3 xl:py-3"
+                      className="hidden xl:table-cell xl:px-3 xl:py-3"
                     >
                       {product.images && product.images.length > 0 ? (
                         <img
                           src={product.images[0]}
                           alt={product.title}
-                          className="h-16 w-16 rounded-xl object-cover ring-1 ring-gray-200 xl:h-12 xl:w-12 xl:rounded-lg"
+                          className="h-12 w-12 rounded-lg object-cover ring-1 ring-gray-200"
                         />
                       ) : (
-                        <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-gray-100 ring-1 ring-gray-200 xl:h-12 xl:w-12 xl:rounded-lg">
+                        <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-gray-100 ring-1 ring-gray-200">
                           <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
                           </svg>
                         </div>
                       )}
                     </td>
 
                     <td
-                      className="col-start-3 row-start-1 min-w-0 p-0 xl:table-cell xl:px-3 xl:py-3"
+                      className="hidden xl:table-cell xl:px-3 xl:py-3"
                     >
                       <div className={isProductsView ? "min-w-0 xl:max-w-[15rem]" : "min-w-0 xl:max-w-xs"}>
                         <span
@@ -2378,104 +2596,6 @@ export default function DraftsTable({
                           >
                             {product.errorMessage}
                           </span>
-                        )}
-                        {isDraftsView && (
-                          <div className="mt-3 flex flex-wrap items-center gap-2 xl:hidden">
-                            <span
-                              className={`inline-flex items-center whitespace-nowrap rounded-full px-2.5 py-1 text-xs font-semibold ${getStoreBadgeClass(product.store.id, product.store.name)}`}
-                            >
-                              {product.store.name}
-                            </span>
-                            <span
-                              className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-semibold ${getStatusBadgeClasses(product.status)}`}
-                              title={
-                                product.status === "ON_HOLD"
-                                  ? getProductHoldReason(product) ?? undefined
-                                  : undefined
-                              }
-                            >
-                              {statusBadgeLabels[product.status] || product.status}
-                            </span>
-                            {product.status === "ON_HOLD" && (
-                              <span
-                                className="basis-full text-xs text-amber-700 font-medium"
-                                title={getProductHoldReason(product) ?? undefined}
-                              >
-                                {getProductHoldReason(product)}
-                              </span>
-                            )}
-                            <span className="basis-full text-xs text-gray-500 sm:basis-auto">
-                              Created by {product.createdBy.name}
-                            </span>
-                          </div>
-                        )}
-                        {isProductsView && (
-                          <div className="mt-2 space-y-2 xl:hidden">
-                            <div className="flex flex-wrap items-center gap-2 text-xs" onClick={(e) => e.stopPropagation()}>
-                              {product.asin && (
-                                <AsinLink asin={product.asin} />
-                              )}
-                              {product.ebayItemId && (
-                                <a
-                                  href={`https://www.ebay.com.au/itm/${product.ebayItemId}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="inline-flex items-center gap-1 font-medium text-blue-600 hover:underline"
-                                >
-                                  <span>eBay: {product.ebayItemId}</span>
-                                  <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                                  </svg>
-                                </a>
-                              )}
-                            </div>
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${getStatusBadgeClasses(product.status)}`}>
-                                {statusBadgeLabels[product.status] || product.status}
-                              </span>
-                              {product.quantitySold > 0 ? (
-                                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-600/20">
-                                  <svg className="h-3 w-3 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                                  </svg>
-                                  <span>{product.quantitySold} sold</span>
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">
-                                  0 sold
-                                </span>
-                              )}
-                              {promotedAdState && (
-                                <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${promotedAdState.badgeClass}`}>
-                                  {promotedAdState.label}
-                                </span>
-                              )}
-                            </div>
-                            <div className="flex flex-wrap items-start gap-4 rounded-lg bg-gray-50 p-2 text-xs">
-                              <div className="flex-1 min-w-[120px]">
-                                <PriceCell product={product} />
-                              </div>
-                              <div className="flex-1 min-w-[120px]">
-                                <ProfitCell product={product} />
-                              </div>
-                            </div>
-                            <div className="flex items-center justify-between text-xs text-gray-500 pt-1" onClick={(e) => e.stopPropagation()}>
-                              <span>Uploaded: {formatDate(product.uploadedAt) ?? "-"}</span>
-                              <div className="flex items-center gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => openInternalNote(product)}
-                                  className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium transition-colors ${
-                                    product.internalNote
-                                      ? "text-orange-600 bg-orange-50 hover:bg-orange-100"
-                                      : "text-gray-500 hover:bg-gray-100"
-                                  }`}
-                                >
-                                  <span>{product.internalNote ? "Edit Note" : "+ Note"}</span>
-                                </button>
-                              </div>
-                            </div>
-                          </div>
                         )}
                       </div>
                     </td>
@@ -2673,7 +2793,7 @@ export default function DraftsTable({
                       className={
                         isProductsView
                           ? `hidden xl:table-cell sticky right-0 z-10 border-l border-gray-100 px-3 py-3 shadow-[-10px_0_14px_-16px_rgba(15,23,42,0.7)] ${stickyActionToneClass}`
-                          : "col-span-3 mt-4 border-t border-gray-200 p-0 pt-4 xl:table-cell xl:mt-0 xl:border-t-0 xl:px-3 xl:py-4"
+                          : "hidden xl:table-cell xl:px-3 xl:py-4"
                       }
                       onClick={(e) => e.stopPropagation()}
                     >
