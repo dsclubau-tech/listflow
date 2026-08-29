@@ -57,4 +57,15 @@ test("product sorting preserves filters, resets pagination, and toggles directio
   const descending = new URL(descendingUrl, "https://listflow.local");
 
   assert.equal(descending.searchParams.get("sortOrder"), "desc");
+
+  const soldSortUrl = buildProductSortUrl("/products", "", "sold");
+  const soldParsed = new URL(soldSortUrl, "https://listflow.local");
+  assert.equal(soldParsed.searchParams.get("sortBy"), "sold");
+  assert.equal(soldParsed.searchParams.get("sortOrder"), "asc");
+
+  const uploadedSortUrl = buildProductSortUrl("/products", "", "uploaded");
+  const uploadedParsed = new URL(uploadedSortUrl, "https://listflow.local");
+  assert.equal(uploadedParsed.searchParams.get("sortBy"), "uploaded");
+  assert.equal(uploadedParsed.searchParams.get("sortOrder"), "asc");
 });
+

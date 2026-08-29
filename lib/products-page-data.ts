@@ -53,6 +53,7 @@ const productRowSelect = {
   title: true,
   price: true,
   quantity: true,
+  quantitySold: true,
   images: true,
   status: true,
   ebayItemId: true,
@@ -124,6 +125,18 @@ const productSortCandidateSelect = {
   id: true,
   price: true,
   amazonPrice: true,
+  quantitySold: true,
+  createdAt: true,
+  status: true,
+  ebayItemId: true,
+  uploadLogs: {
+    where: { status: "SUCCESS" },
+    orderBy: { createdAt: "desc" },
+    take: 1,
+    select: {
+      createdAt: true,
+    },
+  },
   variants: {
     orderBy: { createdAt: "asc" },
     select: {

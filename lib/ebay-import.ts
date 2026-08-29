@@ -573,6 +573,7 @@ function mapEbayItemToProduct(
     description: getItemDescription(item),
     price: getProductPrice(item, variants),
     quantity,
+    quantitySold: getQuantitySold(item),
     category: categoryId,
     categoryName: getString(item, "PrimaryCategory", "CategoryName") || null,
     condition: getCondition(item),

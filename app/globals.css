@@ -799,3 +799,69 @@ button {
   }
 }
 
+/* ── Table drag-to-scroll & dynamic animations ── */
+.listflow-table-drag-container {
+  cursor: grab;
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 transparent;
+}
+
+.listflow-table-drag-container::-webkit-scrollbar {
+  height: 6px;
+}
+
+.listflow-table-drag-container::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.listflow-table-drag-container::-webkit-scrollbar-thumb {
+  background-color: #cbd5e1;
+  border-radius: 9999px;
+}
+
+.listflow-table-drag-container::-webkit-scrollbar-thumb:hover {
+  background-color: #94a3b8;
+}
+
+.listflow-table-dragging {
+  cursor: grabbing !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+.listflow-table-dragging * {
+  cursor: grabbing !important;
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+@keyframes listflow-row-fade-in {
+  from {
+    opacity: 0.85;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.listflow-row-animate {
+  animation: listflow-row-fade-in 0.2s ease-out;
+}
+
+@keyframes listflow-sort-loading {
+  0% {
+    opacity: 0.65;
+  }
+  50% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0.65;
+  }
+}
+
+.listflow-table-sorting {
+  animation: listflow-sort-loading 0.8s ease-in-out infinite;
+}

@@ -2,8 +2,9 @@ import {
   getProductDisplayProfits,
   type ProductProfitCandidate,
 } from "@/lib/product-profit";
+import { getProductUploadedAt } from "@/lib/product-uploaded-at";
 
-export const PRODUCT_SORT_FIELDS = ["price", "profit"] as const;
+export const PRODUCT_SORT_FIELDS = ["price", "profit", "uploaded", "sold"] as const;
 export const PRODUCT_SORT_ORDERS = ["asc", "desc"] as const;
 
 export type ProductSortField = (typeof PRODUCT_SORT_FIELDS)[number];
@@ -11,7 +12,14 @@ export type ProductSortOrder = (typeof PRODUCT_SORT_ORDERS)[number];
 
 type MoneyValue = number | string | { toString(): string } | null | undefined;
 
-export type ProductSortCandidate = ProductProfitCandidate;
+export type ProductSortCandidate = ProductProfitCandidate & {
+  quantitySold?: number | null;
+  uploadedAt?: string | Date | null;
+  createdAt?: string | Date | null;
+  status?: string | null;
+  ebayItemId?: string | null;
+  uploadLogs?: Array<{ createdAt: Date | string }> | null;
+};
 
 function parseMoney(value: MoneyValue) {
   if (value === null || value === undefined) {
@@ -39,12 +47,42 @@ function getProductSortValue(
   product: ProductSortCandidate,
   sortBy: ProductSortField,
 ) {
-  const values =
-    sortBy === "price"
-      ? getProductDisplaySellPrices(product)
-      : getProductDisplayProfits(product);
+  if (sortBy === "price") {
+    const values = getProductDisplaySellPrices(product);
+    return values.length > 0 ? Math.min(...values) : null;
+  }
 
-  return values.length > 0 ? Math.min(...values) : null;
+  if (sortBy === "profit") {
+    const values = getProductDisplayProfits(product);
+    return values.length > 0 ? Math.min(...values) : null;
+  }
+
+  if (sortBy === "sold") {
+    return product.quantitySold ?? 0;
+  }
+
+  if (sortBy === "uploaded") {
+    if (product.uploadedAt) {
+      const parsed = new Date(product.uploadedAt).getTime();
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+
+    const createdDate = product.createdAt ? new Date(product.createdAt) : new Date();
+    const successfulUploadAt = product.uploadLogs?.[0]?.createdAt
+      ? new Date(product.uploadLogs[0].createdAt)
+      : null;
+
+    const uploadedDate = getProductUploadedAt({
+      successfulUploadAt,
+      productCreatedAt: createdDate,
+      ebayItemId: product.ebayItemId,
+      status: product.status ?? "IMPORTED",
+    });
+
+    return uploadedDate ? uploadedDate.getTime() : null;
+  }
+
+  return null;
 }
 
 export function sortProductsByDisplayValue<T extends ProductSortCandidate>(

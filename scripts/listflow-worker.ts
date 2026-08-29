@@ -81,6 +81,7 @@ async function loadWorkerModules() {
     workerSchedule,
     loggerModule,
     automaticPriceCheck,
+    ebaySoldSync,
   ] = await Promise.all([
     import("../lib/prisma"),
     import("../lib/amazon-import-jobs"),
@@ -93,6 +94,7 @@ async function loadWorkerModules() {
     import("../lib/worker-schedule"),
     import("../lib/logger"),
     import("../lib/automatic-price-check"),
+    import("../lib/ebay-sold-sync"),
   ]);
 
   return {
@@ -110,6 +112,10 @@ async function loadWorkerModules() {
       automaticPriceCheck.AUTOMATIC_PRICE_CHECK_TASK_KEY,
     AUTOMATIC_PRICE_CHECK_INTERVAL_MS:
       automaticPriceCheck.AUTOMATIC_PRICE_CHECK_INTERVAL_MS,
+    syncEbaySoldCountsForStore: ebaySoldSync.syncEbaySoldCountsForStore,
+    EBAY_SOLD_COUNT_SYNC_TASK_KEY: ebaySoldSync.EBAY_SOLD_COUNT_SYNC_TASK_KEY,
+    EBAY_SOLD_COUNT_SYNC_INTERVAL_MS:
+      ebaySoldSync.EBAY_SOLD_COUNT_SYNC_INTERVAL_MS,
     touchWorkerHeartbeat: workerHeartbeat.touchWorkerHeartbeat,
     heartbeatIntervalMs: workerHeartbeat.WORKER_HEARTBEAT_INTERVAL_MS,
     tryClaimWorkerSchedule: workerSchedule.tryClaimWorkerSchedule,
@@ -315,6 +321,40 @@ async function processStore(store: { id: string; name: string; loginId: string |
 
   if (await modules.runEbayResearchQueueForStore(store.id, worker)) {
     return true;
+  }
+
+  // 24-hour automatic eBay sold count sync
+  const soldSyncClaim = await modules.tryClaimWorkerSchedule({
+    storeId: store.id,
+    taskKey: modules.EBAY_SOLD_COUNT_SYNC_TASK_KEY,
+    worker,
+    leaseTtlMs: JOB_LEASE_TTL_MS,
+  });
+
+  if (soldSyncClaim) {
+    try {
+      const result = await modules.withWorkerScheduleClaim(
+        soldSyncClaim,
+        JOB_LEASE_TTL_MS,
+        () => modules.syncEbaySoldCountsForStore(store.id, worker),
+      );
+
+      await modules.completeWorkerSchedule(
+        soldSyncClaim,
+        modules.EBAY_SOLD_COUNT_SYNC_INTERVAL_MS,
+      );
+
+      if (result.updatedProducts > 0) {
+        return true;
+      }
+    } catch (error) {
+      await modules.retryWorkerSchedule(
+        soldSyncClaim,
+        ERROR_SLEEP_MS,
+        getErrorMessage(error),
+      );
+      throw error;
+    }
   }
 
   if (!STOCK_REPLENISH_ENABLED) {

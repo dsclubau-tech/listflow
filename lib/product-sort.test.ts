@@ -70,3 +70,38 @@ test("profit sorting uses displayed net profit after fees", () => {
     ["profit-10", "profit-24"],
   );
 });
+
+test("sold sorting sorts products by quantitySold ascending and descending", () => {
+  const products: ProductSortCandidate[] = [
+    { ...candidate("p1", "50", []), quantitySold: 5 },
+    { ...candidate("p2", "50", []), quantitySold: 0 },
+    { ...candidate("p3", "50", []), quantitySold: 12 },
+  ];
+
+  assert.deepEqual(
+    sortProductsByDisplayValue(products, "sold", "asc").map(({ id }) => id),
+    ["p2", "p1", "p3"],
+  );
+  assert.deepEqual(
+    sortProductsByDisplayValue(products, "sold", "desc").map(({ id }) => id),
+    ["p3", "p1", "p2"],
+  );
+});
+
+test("uploaded sorting sorts products by uploaded timestamp ascending and descending", () => {
+  const products: ProductSortCandidate[] = [
+    { ...candidate("p1", "50", []), uploadedAt: "2026-08-20T10:00:00.000Z" },
+    { ...candidate("p2", "50", []), uploadedAt: "2026-08-10T10:00:00.000Z" },
+    { ...candidate("p3", "50", []), uploadedAt: "2026-08-28T10:00:00.000Z" },
+  ];
+
+  assert.deepEqual(
+    sortProductsByDisplayValue(products, "uploaded", "asc").map(({ id }) => id),
+    ["p2", "p1", "p3"],
+  );
+  assert.deepEqual(
+    sortProductsByDisplayValue(products, "uploaded", "desc").map(({ id }) => id),
+    ["p3", "p1", "p2"],
+  );
+});
+

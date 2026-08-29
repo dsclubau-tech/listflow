@@ -230,6 +230,7 @@ model Product {
   description             String                  @db.Text
   price                   Decimal                 @db.Decimal(10, 2)
   quantity                Int                     @default(1)
+  quantitySold            Int                     @default(0)
   category                String
   categoryName            String?
   condition               String                  @default("New")
@@ -275,6 +276,7 @@ model Product {
   @@index([storeId, ebayItemId])
   @@index([storeId, promotedAdStatus])
   @@index([storeId, promotedAdPercent])
+  @@index([storeId, quantitySold])
   @@index([storeId, createdAt])
   @@index([storeId, updatedAt])
   @@index([createdById])

@@ -638,6 +638,60 @@ export default function DraftsTable({
   const previousSelectionScopeKey = useRef(selectionScopeKey);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isSelectingAllListings, setIsSelectingAllListings] = useState(false);
+  const tableScrollContainerRef = useRef<HTMLDivElement | null>(null);
+  const [isTableDragging, setIsTableDragging] = useState(false);
+  const dragScrollState = useRef({
+    isDown: false,
+    startX: 0,
+    scrollLeft: 0,
+    moved: false,
+  });
+
+  const handleTableMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const container = tableScrollContainerRef.current;
+    if (!container) return;
+
+    const target = e.target as HTMLElement | null;
+    if (
+      target?.closest(
+        "button, a, input, select, textarea, [role='menu'], [role='dialog'], [data-no-drag]",
+      )
+    ) {
+      return;
+    }
+
+    dragScrollState.current = {
+      isDown: true,
+      startX: e.pageX - container.offsetLeft,
+      scrollLeft: container.scrollLeft,
+      moved: false,
+    };
+  }, []);
+
+  const handleTableMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    const container = tableScrollContainerRef.current;
+    if (!container || !dragScrollState.current.isDown) return;
+
+    const x = e.pageX - container.offsetLeft;
+    const walk = x - dragScrollState.current.startX;
+
+    if (Math.abs(walk) > 4) {
+      if (!dragScrollState.current.moved) {
+        dragScrollState.current.moved = true;
+        setIsTableDragging(true);
+      }
+      container.scrollLeft = dragScrollState.current.scrollLeft - walk;
+    }
+  }, []);
+
+  const handleTableMouseUpOrLeave = useCallback(() => {
+    dragScrollState.current.isDown = false;
+    if (dragScrollState.current.moved) {
+      dragScrollState.current.moved = false;
+      setIsTableDragging(false);
+    }
+  }, []);
   const [bulkImporting, setBulkImporting] = useState(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [isBulkPriceChecking, setIsBulkPriceChecking] = useState(false);
@@ -2054,16 +2108,25 @@ export default function DraftsTable({
         }
       >
         <div
+          ref={tableScrollContainerRef}
+          onMouseDown={handleTableMouseDown}
+          onMouseMove={handleTableMouseMove}
+          onMouseUp={handleTableMouseUpOrLeave}
+          onMouseLeave={handleTableMouseUpOrLeave}
           className={
             isDraftsView
               ? "relative max-w-full"
-              : "relative max-w-full overflow-x-auto"
+              : `relative max-w-full overflow-x-auto listflow-table-drag-container ${
+                  isTableDragging ? "listflow-table-dragging" : ""
+                }`
           }
         >
           <table
             className={
               isProductsView
-                ? "w-full min-w-[1412px] table-fixed"
+                ? `w-full min-w-[1496px] table-fixed ${
+                    isSortPending ? "listflow-table-sorting" : ""
+                  }`
                 : "block w-full xl:table"
             }
           >
@@ -2076,7 +2139,8 @@ export default function DraftsTable({
               <col className="w-[150px]" />
               <col className="w-[124px]" />
               <col className="w-[132px]" />
-              <col className="w-[92px]" />
+              <col className="w-[96px]" />
+              <col className="w-[84px]" />
               <col className="w-[94px]" />
               <col className="w-[230px]" />
               <col className="w-12" />
@@ -2125,9 +2189,28 @@ export default function DraftsTable({
               {!isProductsView && (
                 <th className="px-3 py-3 text-left">Store</th>
               )}
-              <th className="px-3 py-3 text-left">
-                {isProductsView ? "Uploaded" : "Created by"}
-              </th>
+              {isProductsView ? (
+                <>
+                  <ProductSortHeader
+                    label="Uploaded"
+                    field="uploaded"
+                    sortBy={sortBy}
+                    sortOrder={sortOrder}
+                    isSortPending={isSortPending}
+                    onSortChange={onSortChange}
+                  />
+                  <ProductSortHeader
+                    label="Sold"
+                    field="sold"
+                    sortBy={sortBy}
+                    sortOrder={sortOrder}
+                    isSortPending={isSortPending}
+                    onSortChange={onSortChange}
+                  />
+                </>
+              ) : (
+                <th className="px-3 py-3 text-left">Created by</th>
+              )}
               <th className="px-3 py-3 text-left">Status</th>
               {isProductsView && (
                 <>
@@ -2183,8 +2266,8 @@ export default function DraftsTable({
                   <tr
                     className={
                       isDraftsView
-                        ? `group grid cursor-pointer grid-cols-[auto_4rem_minmax(0,1fr)] gap-x-3 rounded-2xl border border-gray-200 p-4 shadow-sm transition-colors xl:table-row xl:rounded-none xl:border-0 xl:border-b xl:p-0 xl:shadow-none ${rowToneClass}`
-                        : `group cursor-pointer border-b transition-colors ${rowToneClass}`
+                        ? `group grid cursor-pointer grid-cols-[auto_4rem_minmax(0,1fr)] gap-x-3 rounded-2xl border border-gray-200 p-4 shadow-sm transition-colors xl:table-row xl:rounded-none xl:border-0 xl:border-b xl:p-0 xl:shadow-none listflow-row-animate ${rowToneClass}`
+                        : `group cursor-pointer border-b transition-colors listflow-row-animate ${rowToneClass}`
                     }
                     onClick={() => toggleExpand(product.id)}
                     onKeyDown={(event) => {
@@ -2354,6 +2437,37 @@ export default function DraftsTable({
                           : product.createdBy.name}
                       </span>
                     </td>
+
+                    {isProductsView && (
+                      <td className="px-3 py-3">
+                        {product.quantitySold > 0 ? (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-600/20"
+                            title={`${product.quantitySold} item${product.quantitySold === 1 ? "" : "s"} sold on eBay`}
+                          >
+                            <svg
+                              className="h-3 w-3 text-emerald-600"
+                              fill="none"
+                              viewBox="0 0 24 24"
+                              stroke="currentColor"
+                              strokeWidth={2.2}
+                              aria-hidden="true"
+                            >
+                              <path
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                d="M5 13l4 4L19 7"
+                              />
+                            </svg>
+                            <span>{product.quantitySold}</span>
+                          </span>
+                        ) : (
+                          <span className="text-xs font-medium text-gray-400">
+                            0
+                          </span>
+                        )}
+                      </td>
+                    )}
 
                     <td className={isDraftsView ? "hidden px-3 py-4 xl:table-cell" : "px-3 py-3"}>
                       <span
