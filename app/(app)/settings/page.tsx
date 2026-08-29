@@ -24,12 +24,12 @@ export default function SettingsPage() {
   const [activeTab, setActiveTab] = useState<Tab>("Store Profile");
 
   return (
-    <div className="p-8">
+    <div className="min-h-full px-4 py-5 md:px-6 md:py-7 2xl:p-8">
       <h1 className="text-xl font-semibold text-gray-900 mb-6">Settings</h1>
 
       {/* Tab navigation */}
-      <div className="border-b border-gray-200 mb-6">
-        <nav className="flex gap-6">
+      <div className="border-b border-gray-200 mb-6 overflow-x-auto no-scrollbar">
+        <nav className="flex gap-4 sm:gap-6 whitespace-nowrap min-w-max">
           {tabs.map((tab) => (
             <button
               key={tab}

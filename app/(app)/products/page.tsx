@@ -41,7 +41,7 @@ export default async function ProductsPage({
 
   if (!data) {
     return (
-      <div className="p-8">
+      <div className="min-h-full px-4 py-5 md:px-6 md:py-7 2xl:p-8">
         <PageLoadErrorState
           title="Products"
           message="Products are temporarily unavailable. Refresh and try again."
@@ -51,7 +51,7 @@ export default async function ProductsPage({
   }
 
   return (
-    <div className="p-8">
+    <div className="min-h-full px-4 py-5 md:px-6 md:py-7 2xl:p-8">
       <ProductsPageClient
         products={data.products}
         totalCount={data.totalCount}

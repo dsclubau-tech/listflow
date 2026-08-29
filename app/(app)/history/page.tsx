@@ -54,9 +54,9 @@ export default async function HistoryPage({
   });
 
   return (
-    <div className="p-8">
+    <div className="min-h-full px-4 py-5 md:px-6 md:py-7 2xl:p-8">
       {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-semibold text-gray-900">
             Upload History
@@ -88,7 +88,7 @@ export default async function HistoryPage({
           </p>
         </div>
       ) : (
-        <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
           <table className="w-full">
             <thead>
               <tr className="bg-gray-50 border-b text-xs font-medium text-gray-500 uppercase tracking-wide">

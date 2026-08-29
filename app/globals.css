@@ -802,6 +802,7 @@ button {
 /* ── Table drag-to-scroll & dynamic animations ── */
 .listflow-table-drag-container {
   cursor: grab;
+  touch-action: pan-y;
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 transparent;
 }

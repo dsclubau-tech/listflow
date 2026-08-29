@@ -643,55 +643,80 @@ export default function DraftsTable({
   const dragScrollState = useRef({
     isDown: false,
     startX: 0,
-    scrollLeft: 0,
+    scrollStart: 0,
     moved: false,
+    draggedAt: 0,
   });
 
-  const handleTableMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
-    const container = tableScrollContainerRef.current;
-    if (!container) return;
+  const handleTablePointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (e.button !== 0 && e.pointerType === "mouse") return;
+      const container = tableScrollContainerRef.current;
+      if (!container) return;
 
-    const target = e.target as HTMLElement | null;
-    if (
-      target?.closest(
-        "button, a, input, select, textarea, [role='menu'], [role='dialog'], [data-no-drag]",
-      )
-    ) {
-      return;
-    }
-
-    dragScrollState.current = {
-      isDown: true,
-      startX: e.pageX - container.offsetLeft,
-      scrollLeft: container.scrollLeft,
-      moved: false,
-    };
-  }, []);
-
-  const handleTableMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    const container = tableScrollContainerRef.current;
-    if (!container || !dragScrollState.current.isDown) return;
-
-    const x = e.pageX - container.offsetLeft;
-    const walk = x - dragScrollState.current.startX;
-
-    if (Math.abs(walk) > 4) {
-      if (!dragScrollState.current.moved) {
-        dragScrollState.current.moved = true;
-        setIsTableDragging(true);
+      const target = e.target as HTMLElement | null;
+      if (
+        target?.closest(
+          "button, a, input, select, textarea, [role='menu'], [role='dialog'], [data-no-drag], label",
+        )
+      ) {
+        return;
       }
-      container.scrollLeft = dragScrollState.current.scrollLeft - walk;
-    }
-  }, []);
 
-  const handleTableMouseUpOrLeave = useCallback(() => {
-    dragScrollState.current.isDown = false;
-    if (dragScrollState.current.moved) {
-      dragScrollState.current.moved = false;
-      setIsTableDragging(false);
-    }
-  }, []);
+      dragScrollState.current = {
+        isDown: true,
+        startX: e.clientX,
+        scrollStart: container.scrollLeft,
+        moved: false,
+        draggedAt: 0,
+      };
+    },
+    [],
+  );
+
+  const handleTablePointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      const container = tableScrollContainerRef.current;
+      if (!container || !dragScrollState.current.isDown) return;
+
+      const walk = e.clientX - dragScrollState.current.startX;
+
+      if (Math.abs(walk) > 4) {
+        if (!dragScrollState.current.moved) {
+          dragScrollState.current.moved = true;
+          dragScrollState.current.draggedAt = Date.now();
+          setIsTableDragging(true);
+          try {
+            e.currentTarget.setPointerCapture(e.pointerId);
+          } catch {
+            // Ignore capture error in environments without pointer capture
+          }
+        }
+        container.scrollLeft = dragScrollState.current.scrollStart - walk;
+      }
+    },
+    [],
+  );
+
+  const handleTablePointerUpOrCancel = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!dragScrollState.current.isDown) return;
+      dragScrollState.current.isDown = false;
+      if (dragScrollState.current.moved) {
+        dragScrollState.current.draggedAt = Date.now();
+        dragScrollState.current.moved = false;
+        setIsTableDragging(false);
+        try {
+          if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+            e.currentTarget.releasePointerCapture(e.pointerId);
+          }
+        } catch {
+          // Ignore
+        }
+      }
+    },
+    [],
+  );
   const [bulkImporting, setBulkImporting] = useState(false);
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   const [isBulkPriceChecking, setIsBulkPriceChecking] = useState(false);
@@ -1007,6 +1032,10 @@ export default function DraftsTable({
   }
 
   function toggleExpand(productId: string) {
+    if (Date.now() - dragScrollState.current.draggedAt < 200) {
+      return;
+    }
+
     if (expandedProductId === productId) {
       setExpandedProductId(null);
       return;
@@ -2104,34 +2133,32 @@ export default function DraftsTable({
         className={
           isDraftsView
             ? "max-w-full xl:overflow-clip xl:rounded-2xl xl:border xl:border-gray-200 xl:bg-white xl:shadow-sm"
-            : "max-w-full overflow-clip rounded-lg border border-gray-200 bg-white"
+            : "max-w-full xl:overflow-clip xl:rounded-lg xl:border xl:border-gray-200 xl:bg-white"
         }
       >
         <div
           ref={tableScrollContainerRef}
-          onMouseDown={handleTableMouseDown}
-          onMouseMove={handleTableMouseMove}
-          onMouseUp={handleTableMouseUpOrLeave}
-          onMouseLeave={handleTableMouseUpOrLeave}
+          onPointerDown={handleTablePointerDown}
+          onPointerMove={handleTablePointerMove}
+          onPointerUp={handleTablePointerUpOrCancel}
+          onPointerCancel={handleTablePointerUpOrCancel}
           className={
             isDraftsView
               ? "relative max-w-full"
-              : `relative max-w-full overflow-x-auto listflow-table-drag-container ${
+              : `relative max-w-full xl:overflow-x-auto listflow-table-drag-container ${
                   isTableDragging ? "listflow-table-dragging" : ""
                 }`
           }
         >
           <table
-            className={
+            className={`block w-full xl:table ${
               isProductsView
-                ? `w-full min-w-[1496px] table-fixed ${
-                    isSortPending ? "listflow-table-sorting" : ""
-                  }`
-                : "block w-full xl:table"
-            }
+                ? "xl:min-w-[1496px] xl:table-fixed"
+                : ""
+            } ${isSortPending ? "listflow-table-sorting" : ""}`}
           >
           {isProductsView && (
-            <colgroup>
+            <colgroup className="hidden xl:table-column-group">
               <col className="w-12" />
               <col className="w-7" />
               <col className="w-[58px]" />
@@ -2147,7 +2174,7 @@ export default function DraftsTable({
               <col className="w-[128px]" />
             </colgroup>
           )}
-          <thead className={isDraftsView ? "hidden xl:table-header-group" : undefined}>
+          <thead className="hidden xl:table-header-group">
             <tr className="border-b bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
               {hasSelectionColumn && (
                 <th className="px-3 py-3 text-left w-10">
@@ -2229,7 +2256,7 @@ export default function DraftsTable({
               </th>
             </tr>
           </thead>
-          <tbody className={isDraftsView ? "block space-y-3 xl:table-row-group xl:space-y-0" : undefined}>
+          <tbody className="flex flex-col gap-3 p-1 sm:p-2 xl:table-row-group xl:p-0 xl:gap-0">
             {products.map((product) => {
               const isExpanded = expandedProductId === product.id;
               const expandedProduct = isProductsView
@@ -2264,15 +2291,10 @@ export default function DraftsTable({
               return (
                 <Fragment key={product.id}>
                   <tr
-                    className={
-                      isDraftsView
-                        ? `group grid cursor-pointer grid-cols-[auto_4rem_minmax(0,1fr)] gap-x-3 rounded-2xl border border-gray-200 p-4 shadow-sm transition-colors xl:table-row xl:rounded-none xl:border-0 xl:border-b xl:p-0 xl:shadow-none listflow-row-animate ${rowToneClass}`
-                        : `group cursor-pointer border-b transition-colors listflow-row-animate ${rowToneClass}`
-                    }
+                    className={`group grid cursor-pointer grid-cols-[auto_4rem_minmax(0,1fr)] gap-x-3 rounded-2xl border border-gray-200 p-4 shadow-sm transition-colors xl:table-row xl:rounded-none xl:border-0 xl:border-b xl:p-0 xl:shadow-none listflow-row-animate ${rowToneClass}`}
                     onClick={() => toggleExpand(product.id)}
                     onKeyDown={(event) => {
                       if (
-                        isDraftsView &&
                         event.currentTarget === event.target &&
                         (event.key === "Enter" || event.key === " ")
                       ) {
@@ -2280,20 +2302,16 @@ export default function DraftsTable({
                         toggleExpand(product.id);
                       }
                     }}
-                    tabIndex={isDraftsView ? 0 : undefined}
-                    aria-expanded={isDraftsView ? isExpanded : undefined}
-                    aria-controls={isDraftsView ? `draft-editor-${product.id}` : undefined}
+                    tabIndex={0}
+                    aria-expanded={isExpanded}
+                    aria-controls={`product-editor-${product.id}`}
                     onContextMenu={(event) =>
                       handleRowContextMenu(event, product)
                     }
                   >
                     {hasSelectionColumn && (
                       <td
-                        className={
-                          isDraftsView
-                            ? "col-start-1 row-start-1 p-0 xl:table-cell xl:px-3 xl:py-4"
-                            : "px-3 py-3"
-                        }
+                        className="col-start-1 row-start-1 p-0 xl:table-cell xl:px-3 xl:py-3"
                         onClick={(e) => e.stopPropagation()}
                       >
                         <input
@@ -2312,7 +2330,7 @@ export default function DraftsTable({
                       </td>
                     )}
 
-                    <td className={isDraftsView ? "hidden px-2 py-3 xl:table-cell" : "px-2 py-3"}>
+                    <td className="hidden px-2 py-3 xl:table-cell">
                       <svg
                         className={`w-4 h-4 text-gray-400 transition-transform duration-200 ${
                           isExpanded ? "rotate-90" : ""
@@ -2326,11 +2344,7 @@ export default function DraftsTable({
                     </td>
 
                     <td
-                      className={
-                        isDraftsView
-                          ? "col-start-2 row-start-1 row-span-2 p-0 xl:table-cell xl:px-3 xl:py-4"
-                          : "px-3 py-3"
-                      }
+                      className="col-start-2 row-start-1 row-span-2 p-0 xl:table-cell xl:px-3 xl:py-3"
                     >
                       {product.images && product.images.length > 0 ? (
                         <img
@@ -2348,13 +2362,9 @@ export default function DraftsTable({
                     </td>
 
                     <td
-                      className={
-                        isDraftsView
-                          ? "col-start-3 row-start-1 min-w-0 p-0 xl:table-cell xl:px-3 xl:py-4"
-                          : "px-3 py-3"
-                      }
+                      className="col-start-3 row-start-1 min-w-0 p-0 xl:table-cell xl:px-3 xl:py-3"
                     >
-                      <div className={isProductsView ? "max-w-[15rem]" : "min-w-0 xl:max-w-xs"}>
+                      <div className={isProductsView ? "min-w-0 xl:max-w-[15rem]" : "min-w-0 xl:max-w-xs"}>
                         <span
                           className="block text-sm font-semibold leading-5 text-gray-900 xl:truncate"
                           title={product.title}
@@ -2399,27 +2409,95 @@ export default function DraftsTable({
                             </span>
                           </div>
                         )}
+                        {isProductsView && (
+                          <div className="mt-2 space-y-2 xl:hidden">
+                            <div className="flex flex-wrap items-center gap-2 text-xs" onClick={(e) => e.stopPropagation()}>
+                              {product.asin && (
+                                <AsinLink asin={product.asin} />
+                              )}
+                              {product.ebayItemId && (
+                                <a
+                                  href={`https://www.ebay.com.au/itm/${product.ebayItemId}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 font-medium text-blue-600 hover:underline"
+                                >
+                                  <span>eBay: {product.ebayItemId}</span>
+                                  <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                  </svg>
+                                </a>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${getStatusBadgeClasses(product.status)}`}>
+                                {statusBadgeLabels[product.status] || product.status}
+                              </span>
+                              {product.quantitySold > 0 ? (
+                                <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-600/20">
+                                  <svg className="h-3 w-3 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                                  </svg>
+                                  <span>{product.quantitySold} sold</span>
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-0.5 text-xs text-gray-500">
+                                  0 sold
+                                </span>
+                              )}
+                              {promotedAdState && (
+                                <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${promotedAdState.badgeClass}`}>
+                                  {promotedAdState.label}
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex flex-wrap items-start gap-4 rounded-lg bg-gray-50 p-2 text-xs">
+                              <div className="flex-1 min-w-[120px]">
+                                <PriceCell product={product} />
+                              </div>
+                              <div className="flex-1 min-w-[120px]">
+                                <ProfitCell product={product} />
+                              </div>
+                            </div>
+                            <div className="flex items-center justify-between text-xs text-gray-500 pt-1" onClick={(e) => e.stopPropagation()}>
+                              <span>Uploaded: {formatDate(product.uploadedAt) ?? "-"}</span>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => openInternalNote(product)}
+                                  className={`inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium transition-colors ${
+                                    product.internalNote
+                                      ? "text-orange-600 bg-orange-50 hover:bg-orange-100"
+                                      : "text-gray-500 hover:bg-gray-100"
+                                  }`}
+                                >
+                                  <span>{product.internalNote ? "Edit Note" : "+ Note"}</span>
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     </td>
 
                     {isProductsView && (
                       <>
-                        <td className="px-3 py-3">
+                        <td className="hidden xl:table-cell px-3 py-3">
                           <PriceCell product={product} />
                         </td>
 
-                        <td className="px-3 py-3">
+                        <td className="hidden xl:table-cell px-3 py-3">
                           <ProfitCell product={product} />
                         </td>
 
-                        <td className="px-3 py-3">
+                        <td className="hidden xl:table-cell px-3 py-3">
                           <ItemIdCell product={product} />
                         </td>
                       </>
                     )}
 
                     {!isProductsView && (
-                      <td className="hidden px-3 py-4 xl:table-cell">
+                      <td className="hidden xl:table-cell px-3 py-4">
                         <span
                           className={`inline-flex items-center whitespace-nowrap px-2.5 py-0.5 rounded-full text-xs font-medium ${
                             getStoreBadgeClass(product.store.id, product.store.name)
@@ -2430,7 +2508,7 @@ export default function DraftsTable({
                       </td>
                     )}
 
-                    <td className={isDraftsView ? "hidden px-3 py-4 xl:table-cell" : "px-3 py-3"}>
+                    <td className="hidden xl:table-cell px-3 py-3">
                       <span className="whitespace-nowrap text-sm text-gray-500">
                         {isProductsView
                           ? formatDate(product.uploadedAt) ?? "-"
@@ -2439,7 +2517,7 @@ export default function DraftsTable({
                     </td>
 
                     {isProductsView && (
-                      <td className="px-3 py-3">
+                      <td className="hidden xl:table-cell px-3 py-3">
                         {product.quantitySold > 0 ? (
                           <span
                             className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-600/20"
@@ -2469,7 +2547,7 @@ export default function DraftsTable({
                       </td>
                     )}
 
-                    <td className={isDraftsView ? "hidden px-3 py-4 xl:table-cell" : "px-3 py-3"}>
+                    <td className="hidden xl:table-cell px-3 py-3">
                       <span
                         className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusBadgeClasses(product.status)}`}
                         title={
@@ -2491,7 +2569,7 @@ export default function DraftsTable({
                     </td>
 
                     {isProductsView && trackingState && promotedAdState && (
-                      <td className="px-3 py-3">
+                      <td className="hidden xl:table-cell px-3 py-3">
                         <div className="max-w-[13rem]">
                           <span
                             className={`mb-1.5 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${promotedAdState.badgeClass}`}
@@ -2553,7 +2631,7 @@ export default function DraftsTable({
                     )}
 
                     {isProductsView && (
-                      <td className="px-2 py-3" onClick={(e) => e.stopPropagation()}>
+                      <td className="hidden xl:table-cell px-2 py-3" onClick={(e) => e.stopPropagation()}>
                         <button
                           type="button"
                           onClick={() => openInternalNote(product)}
@@ -2594,7 +2672,7 @@ export default function DraftsTable({
                     <td
                       className={
                         isProductsView
-                          ? `sticky right-0 z-10 border-l border-gray-100 px-3 py-3 shadow-[-10px_0_14px_-16px_rgba(15,23,42,0.7)] ${stickyActionToneClass}`
+                          ? `hidden xl:table-cell sticky right-0 z-10 border-l border-gray-100 px-3 py-3 shadow-[-10px_0_14px_-16px_rgba(15,23,42,0.7)] ${stickyActionToneClass}`
                           : "col-span-3 mt-4 border-t border-gray-200 p-0 pt-4 xl:table-cell xl:mt-0 xl:border-t-0 xl:px-3 xl:py-4"
                       }
                       onClick={(e) => e.stopPropagation()}
@@ -2666,7 +2744,7 @@ export default function DraftsTable({
                                 onClick={() => handleDelete(product.id)}
                                 disabled={deletingId === product.id}
                                 pending={deletingId === product.id}
-                                pendingLabel="Deletingâ€¦"
+                                pendingLabel="Deleting…"
                                 variant="danger"
                                 size="md"
                                 className="min-w-[6.5rem] whitespace-nowrap"
@@ -2735,10 +2813,13 @@ export default function DraftsTable({
                                         void handleDelete(product.id);
                                       }}
                                       disabled={deletingId === product.id}
-                                      className="flex min-h-10 w-full items-center rounded-lg px-3 text-left text-sm font-semibold text-quaternary hover:bg-quaternary-soft disabled:opacity-50"
+                                      className="flex min-h-10 w-full items-center gap-2 rounded-lg px-3 text-left text-sm font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
                                       role="menuitem"
                                     >
-                                      {deletingId === product.id ? "Deleting…" : "Delete draft"}
+                                      <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.5} aria-hidden="true">
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M14.74 9l-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 01-2.244 2.077H8.084a2.25 2.25 0 01-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 00-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 013.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 00-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 00-7.5 0" />
+                                      </svg>
+                                      <span>Delete draft</span>
                                     </button>
                                   )}
                                 </div>
@@ -2758,30 +2839,49 @@ export default function DraftsTable({
                               {endingId === product.id || deletingId === product.id ? "Removing..." : "Remove"}
                             </button>
                           )}
+                          <a
+                            href={getFocusedProductUrl(product.id)}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-300 bg-white text-gray-700 shadow-sm transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                            title="Open in new tab"
+                            aria-label={`Open ${product.title} in new tab`}
+                          >
+                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                            </svg>
+                          </a>
+                          {product.ebayItemId && (
+                            <a
+                              href={`https://www.ebay.com.au/itm/${product.ebayItemId}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-300 bg-white text-gray-700 shadow-sm transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                              title="Open on eBay"
+                              aria-label={`Open eBay listing ${product.ebayItemId}`}
+                            >
+                              <PlatformIcon platform="ebay" />
+                            </a>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => toggleExpand(product.id)}
+                            className="inline-flex items-center gap-1 rounded bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-800 hover:bg-gray-200"
+                          >
+                            <span>{isExpanded ? "Close" : "Edit"}</span>
+                          </button>
                         </div>
                       )}
                     </td>
                   </tr>
 
                   {isExpanded && (
-                    <tr
-                      className={
-                        isDraftsView
-                          ? "block overflow-clip rounded-2xl border border-orange-200 bg-gray-50 shadow-sm xl:table-row xl:rounded-none xl:border-0 xl:shadow-none"
-                          : undefined
-                      }
-                    >
+                    <tr className="block overflow-clip rounded-2xl border border-orange-200 bg-gray-50 shadow-sm xl:table-row xl:rounded-none xl:border-0 xl:shadow-none">
                       <td
                         colSpan={columnCount}
-                        className={isDraftsView ? "block p-0 xl:table-cell" : "p-0"}
+                        className="block p-0 xl:table-cell"
                       >
                         <div
-                          id={isDraftsView ? `draft-editor-${product.id}` : undefined}
-                          className={
-                            isProductsView
-                              ? "sticky left-0 w-full max-w-[calc(100vw-1.5rem)] md:max-w-[calc(100vw-5rem)] xl:max-w-none"
-                              : undefined
-                          }
+                          id={`draft-editor-${product.id}`}
+                          className="w-full max-w-full xl:max-w-none"
                         >
                           {expandedProduct ? (
                             <InlineEditForm

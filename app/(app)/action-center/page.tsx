@@ -28,7 +28,7 @@ export default async function ActionCenterPage() {
 
   if (!data) {
     return (
-      <div className="p-8">
+      <div className="min-h-full px-4 py-5 md:px-6 md:py-7 2xl:p-8">
         <PageLoadErrorState
           title="Action Center"
           message="Action Center is temporarily unavailable. Refresh and try again."
@@ -38,7 +38,7 @@ export default async function ActionCenterPage() {
   }
 
   return (
-    <div className="p-8">
+    <div className="min-h-full px-4 py-5 md:px-6 md:py-7 2xl:p-8">
       <ActionCenterClient data={data} />
     </div>
   );
