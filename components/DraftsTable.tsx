@@ -2153,7 +2153,7 @@ export default function DraftsTable({
           <table
             className={`block w-full xl:table ${
               isProductsView
-                ? "xl:min-w-[1496px] xl:table-fixed"
+                ? "xl:min-w-[1458px] xl:table-fixed"
                 : ""
             } ${isSortPending ? "listflow-table-sorting" : ""}`}
           >
@@ -2171,7 +2171,7 @@ export default function DraftsTable({
               <col className="w-[94px]" />
               <col className="w-[230px]" />
               <col className="w-12" />
-              <col className="w-[128px]" />
+              <col className="w-[90px]" />
             </colgroup>
           )}
           <thead className="hidden xl:table-header-group">
@@ -2948,46 +2948,17 @@ export default function DraftsTable({
                           )}
                         </div>
                       ) : (
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center">
                           {(product.status === "IMPORTED" || product.status === "ON_HOLD") && (
                             <button
                               onClick={() => openRemovalDialog(product)}
                               disabled={endingId === product.id || deletingId === product.id}
-                              className="flex items-center gap-1 whitespace-nowrap rounded bg-quaternary px-2 py-1 text-xs font-medium text-white transition-colors hover:bg-quaternary-hover disabled:opacity-40"
+                              className="inline-flex items-center justify-center rounded bg-quaternary px-2.5 py-1 text-xs font-medium text-white transition-colors hover:bg-quaternary-hover disabled:opacity-40"
                               title="Choose how to remove this product"
                             >
                               {endingId === product.id || deletingId === product.id ? "Removing..." : "Remove"}
                             </button>
                           )}
-                          <a
-                            href={getFocusedProductUrl(product.id)}
-                            className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-300 bg-white text-gray-700 shadow-sm transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                            title="Open in new tab"
-                            aria-label={`Open ${product.title} in new tab`}
-                          >
-                            <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                            </svg>
-                          </a>
-                          {product.ebayItemId && (
-                            <a
-                              href={`https://www.ebay.com.au/itm/${product.ebayItemId}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex h-7 w-7 items-center justify-center rounded border border-gray-300 bg-white text-gray-700 shadow-sm transition-colors hover:bg-gray-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-                              title="Open on eBay"
-                              aria-label={`Open eBay listing ${product.ebayItemId}`}
-                            >
-                              <PlatformIcon platform="ebay" />
-                            </a>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => toggleExpand(product.id)}
-                            className="inline-flex items-center gap-1 rounded bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-800 hover:bg-gray-200"
-                          >
-                            <span>{isExpanded ? "Close" : "Edit"}</span>
-                          </button>
                         </div>
                       )}
                     </td>
