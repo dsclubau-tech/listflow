@@ -317,37 +317,39 @@ export default function SupplierSettingsTab() {
   }
 
   return (
-    <div className="flex gap-6">
+    <div className="flex flex-col md:flex-row gap-6 md:gap-8">
       {/* ===== LEFT SIDEBAR ===== */}
-      <div className="w-56 flex-shrink-0">
-        {/* Store selector */}
-        <div className="mb-6">
-          <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
-            eBay account
-          </label>
-          <select
-            value={selectedStore}
-            onChange={(e) => setSelectedStore(e.target.value)}
-            disabled
-            className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-gray-50 text-gray-600 focus:outline-none"
-          >
-            <option value="1">eBay account 1</option>
-            <option value="2">eBay account 2</option>
-            <option value="3">eBay account 3</option>
-          </select>
-        </div>
+      <div className="w-full md:w-56 flex-shrink-0">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-1 gap-4 md:gap-6">
+          {/* Store selector */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+              eBay account
+            </label>
+            <select
+              value={selectedStore}
+              onChange={(e) => setSelectedStore(e.target.value)}
+              disabled
+              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-gray-50 text-gray-600 focus:outline-none"
+            >
+              <option value="1">eBay account 1</option>
+              <option value="2">eBay account 2</option>
+              <option value="3">eBay account 3</option>
+            </select>
+          </div>
 
-        {/* Supplier list */}
-        <div>
-          <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
-            Supplier
-          </label>
-          <div className="border border-orange-300 bg-orange-50 rounded-md px-3 py-2.5 flex items-center gap-2.5">
-            {/* Amazon icon */}
-            <div className="w-7 h-7 rounded-full bg-orange-400 flex items-center justify-center flex-shrink-0">
-              <span className="text-white font-bold text-sm">A</span>
+          {/* Supplier list */}
+          <div>
+            <label className="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-2">
+              Supplier
+            </label>
+            <div className="border border-orange-300 bg-orange-50 rounded-md px-3 py-2.5 flex items-center gap-2.5">
+              {/* Amazon icon */}
+              <div className="w-7 h-7 rounded-full bg-orange-400 flex items-center justify-center flex-shrink-0">
+                <span className="text-white font-bold text-sm">A</span>
+              </div>
+              <span className="text-sm font-medium text-gray-800">Amazon AU</span>
             </div>
-            <span className="text-sm font-medium text-gray-800">Amazon AU</span>
           </div>
         </div>
       </div>
@@ -355,8 +357,8 @@ export default function SupplierSettingsTab() {
       {/* ===== MAIN CONTENT ===== */}
       <div className="flex-1 min-w-0">
         {/* Sub-tab navigation */}
-        <div className="border-b border-gray-200 mb-6">
-          <nav className="flex gap-5">
+        <div className="border-b border-gray-200 mb-6 overflow-x-auto no-scrollbar">
+          <nav className="flex gap-5 min-w-max">
             {subTabs.map((tab) => (
               <button
                 key={tab}
@@ -379,7 +381,7 @@ export default function SupplierSettingsTab() {
             {/* Lister Settings */}
             <section>
               <h3 className="text-sm font-semibold text-gray-800 mb-4">Lister Settings</h3>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">Default Product Quantity</label>
                   <input
@@ -430,7 +432,7 @@ export default function SupplierSettingsTab() {
               ) : !policies ? (
                 <p className="text-xs text-red-400">Could not load policies. Check store credentials.</p>
               ) : (
-                <div className="grid grid-cols-3 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   <div>
                     <label className="block text-xs text-gray-500 mb-1">Payment Policy</label>
                     <select
@@ -477,7 +479,7 @@ export default function SupplierSettingsTab() {
             {/* Advanced Lister Settings */}
             <section>
               <h3 className="text-sm font-semibold text-gray-800 mb-4">Advanced Lister Settings</h3>
-              <div className="grid grid-cols-2 gap-x-8 gap-y-3">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-3">
                 {/* Left column */}
                 <div className="space-y-3">
                   <CheckRow label="Allow Duplicates" checked={false} disabled />
@@ -517,8 +519,8 @@ export default function SupplierSettingsTab() {
             {/* Default Item Specifics */}
             <section>
               <h3 className="text-sm font-semibold text-gray-800 mb-4">Default Item Specifics</h3>
-              <div className="flex items-end gap-3 mb-3">
-                <div className="flex-1">
+              <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] items-end gap-3 mb-3">
+                <div>
                   <label className="block text-xs text-gray-500 mb-1">Name</label>
                   <input
                     type="text"
@@ -528,7 +530,7 @@ export default function SupplierSettingsTab() {
                     placeholder="e.g. Brand"
                   />
                 </div>
-                <div className="flex-1">
+                <div>
                   <label className="block text-xs text-gray-500 mb-1">Description</label>
                   <input
                     type="text"
@@ -542,13 +544,13 @@ export default function SupplierSettingsTab() {
                   type="button"
                   onClick={addItemSpecific}
                   disabled={!specName.trim() || !specValue.trim()}
-                  className="px-4 py-2 text-sm bg-orange-500 hover:bg-orange-600 text-white rounded-md transition-colors disabled:opacity-40"
+                  className="w-full sm:w-auto px-4 py-2 text-sm bg-orange-500 hover:bg-orange-600 text-white rounded-md transition-colors disabled:opacity-40"
                 >
                   Add
                 </button>
               </div>
               {Object.keys(settings.defaultItemSpecifics || {}).length > 0 && (
-                <div className="border border-gray-200 rounded-md overflow-hidden">
+                <div className="border border-gray-200 rounded-md overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wide">
@@ -588,37 +590,37 @@ export default function SupplierSettingsTab() {
               <h3 className="text-sm font-semibold text-gray-800 mb-4">Profit Settings</h3>
 
               {/* Visual calculator bar */}
-              <div className="flex rounded-lg overflow-hidden border border-gray-200 mb-6 text-xs">
-                <div className="bg-gray-100 px-4 py-3 flex-1">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 rounded-lg overflow-hidden border border-gray-200 mb-6 text-xs divide-y sm:divide-y-0 sm:divide-x divide-gray-200">
+                <div className="bg-gray-100 px-4 py-3">
                   <div className="font-medium text-gray-600">Product Cost</div>
-                  <div className="text-gray-800 mt-0.5">A$100.00</div>
+                  <div className="text-gray-800 mt-0.5 font-semibold">A$100.00</div>
                 </div>
-                <div className="bg-green-50 px-4 py-3 flex-1 border-l border-gray-200">
+                <div className="bg-green-50 px-4 py-3">
                   <div className="font-medium text-green-700">Profits</div>
                   <div
-                    className={`mt-0.5 ${
+                    className={`mt-0.5 font-semibold ${
                       pricingCalc.profit < 0 ? "text-red-700" : "text-green-800"
                     }`}
                   >
                     A${pricingCalc.profit.toFixed(2)}
                   </div>
                 </div>
-                <div className="bg-orange-50 px-4 py-3 flex-1 border-l border-gray-200">
+                <div className="bg-orange-50 px-4 py-3">
                   <div className="font-medium text-orange-700">{settings.ebayFeePercent}% Fees</div>
-                  <div className="text-orange-800 mt-0.5">A${pricingCalc.fees.toFixed(2)}</div>
+                  <div className="text-orange-800 mt-0.5 font-semibold">A${pricingCalc.fees.toFixed(2)}</div>
                 </div>
-                <div className="bg-orange-50 px-4 py-3 flex-1 border-l border-gray-200">
+                <div className="bg-orange-50 px-4 py-3">
                   <div className="font-medium text-orange-700">A$ Fee</div>
-                  <div className="text-orange-800 mt-0.5">A${pricingCalc.fixedFee.toFixed(2)}</div>
+                  <div className="text-orange-800 mt-0.5 font-semibold">A${pricingCalc.fixedFee.toFixed(2)}</div>
                 </div>
-                <div className="bg-blue-50 px-4 py-3 flex-1 border-l border-gray-200">
+                <div className="bg-blue-50 px-4 py-3 col-span-2 sm:col-span-1">
                   <div className="font-medium text-blue-700">Total Price</div>
                   <div className="text-blue-800 font-semibold mt-0.5">A${pricingCalc.total.toFixed(2)}</div>
                 </div>
               </div>
 
               {/* Fee/profit inputs */}
-              <div className="grid grid-cols-2 gap-4 mb-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">Fees (%)</label>
                   <input
@@ -661,7 +663,7 @@ export default function SupplierSettingsTab() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-4 mb-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">Default Automation</label>
                   <select
@@ -722,7 +724,7 @@ export default function SupplierSettingsTab() {
             {/* General */}
             <section>
               <h3 className="text-sm font-semibold text-gray-800 mb-4">General</h3>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">Default Weight Unit</label>
                   <select
@@ -750,7 +752,7 @@ export default function SupplierSettingsTab() {
             {/* Monitoring */}
             <section>
               <h3 className="text-sm font-semibold text-gray-800 mb-4">Monitoring</h3>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">Minimum Product Quantity</label>
                   <input
@@ -796,9 +798,9 @@ export default function SupplierSettingsTab() {
               <div className="space-y-4">
                 {/* Automatic 8-hour Check Schedule Card */}
                 <div className="rounded-xl border border-gray-200 bg-white p-4">
-                  <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-semibold text-gray-900">
                           Automatic 8-Hour Full Price Checks
                         </span>
@@ -818,7 +820,7 @@ export default function SupplierSettingsTab() {
                       </p>
                     </div>
 
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 self-start sm:self-auto">
                       {autoCheckStatus?.enabled ? (
                         <button
                           type="button"
@@ -844,7 +846,7 @@ export default function SupplierSettingsTab() {
                   {/* Per-store schedule details */}
                   {autoCheckStatus?.stores && autoCheckStatus.stores.length > 0 && (
                     <div className="mt-4 border-t border-gray-100 pt-3">
-                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                         {autoCheckStatus.stores.map((store) => (
                           <div
                             key={store.storeId}
@@ -886,7 +888,7 @@ export default function SupplierSettingsTab() {
 
                 {/* Auto-Hold and Postcode Settings */}
                 <div className="rounded-xl border border-gray-200 bg-white p-4">
-                  <div className="flex items-start justify-between gap-4">
+                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                     <div>
                       <p className="text-sm font-medium text-gray-800">
                         Put failed products on hold automatically
@@ -896,12 +898,14 @@ export default function SupplierSettingsTab() {
                         queue an eBay hold. Variant selection warnings remain active on eBay.
                       </p>
                     </div>
-                    <ToggleSwitch
-                      checked={settings.autoHoldOnPriceCheckFailure}
-                      onChange={(value) =>
-                        updateField("autoHoldOnPriceCheckFailure", value)
-                      }
-                    />
+                    <div className="self-start sm:self-auto">
+                      <ToggleSwitch
+                        checked={settings.autoHoldOnPriceCheckFailure}
+                        onChange={(value) =>
+                          updateField("autoHoldOnPriceCheckFailure", value)
+                        }
+                      />
+                    </div>
                   </div>
 
                   <div className="mt-4 max-w-xs border-t border-gray-100 pt-4">
@@ -926,12 +930,12 @@ export default function SupplierSettingsTab() {
         )}
 
         {/* ===== SAVE BUTTON (shared across all sub-tabs) ===== */}
-        <div className="mt-8 pt-4 border-t border-gray-200 flex items-center justify-end gap-4">
-          <span className="text-xs text-gray-400">Changes will be applied only for the new products</span>
+        <div className="mt-8 pt-4 border-t border-gray-200 flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-4">
+          <span className="text-xs text-gray-400 text-center sm:text-left">Changes will be applied only for the new products</span>
           <button
             onClick={handleSave}
             disabled={saving}
-            className="px-6 py-2.5 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-50"
+            className="w-full sm:w-auto px-6 py-2.5 bg-orange-500 hover:bg-orange-600 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-50"
           >
             {saving ? "Saving..." : "Save"}
           </button>
