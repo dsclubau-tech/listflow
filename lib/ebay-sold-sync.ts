@@ -16,26 +16,51 @@ export type EbaySoldSyncResult = {
   updatedProducts: number;
 };
 
+export type EbayMetricsProductCandidate = {
+  id: string;
+  ebayItemId: string | null;
+  quantitySold: number;
+  ebayViewCount?: number | null;
+};
+
+export type EbayMetricsProductUpdate = {
+  id: string;
+  nextQuantitySold: number;
+  nextViewCount?: number | null;
+};
+
 export function getEbaySoldSyncUpdates(
-  products: Array<{ id: string; ebayItemId: string | null; quantitySold: number }>,
+  products: Array<EbayMetricsProductCandidate>,
   listings: EbayListingInventorySnapshot[],
-): Array<{ id: string; nextQuantitySold: number }> {
-  const soldByEbayItemId = new Map<string, number>();
+): Array<EbayMetricsProductUpdate> {
+  const listingByEbayItemId = new Map<string, EbayListingInventorySnapshot>();
 
   for (const listing of listings) {
-    soldByEbayItemId.set(listing.itemId, listing.quantitySold);
+    listingByEbayItemId.set(listing.itemId, listing);
   }
 
-  const updates: Array<{ id: string; nextQuantitySold: number }> = [];
+  const updates: Array<EbayMetricsProductUpdate> = [];
 
   for (const product of products) {
     if (!product.ebayItemId) continue;
 
-    const currentEbaySold = soldByEbayItemId.get(product.ebayItemId);
-    if (currentEbaySold !== undefined && currentEbaySold !== product.quantitySold) {
+    const currentListing = listingByEbayItemId.get(product.ebayItemId);
+    if (!currentListing) continue;
+
+    const soldChanged = currentListing.quantitySold !== product.quantitySold;
+    const viewsChanged =
+      currentListing.viewCount !== undefined &&
+      currentListing.viewCount !== (product.ebayViewCount ?? null);
+
+    if (soldChanged || viewsChanged) {
       updates.push({
         id: product.id,
-        nextQuantitySold: currentEbaySold,
+        nextQuantitySold: currentListing.quantitySold,
+        ...(currentListing.viewCount !== undefined
+          ? { nextViewCount: currentListing.viewCount }
+          : product.ebayViewCount !== undefined
+            ? { nextViewCount: product.ebayViewCount }
+            : {}),
       });
     }
   }
@@ -58,6 +83,7 @@ export async function syncEbaySoldCountsForStore(
       id: true,
       ebayItemId: true,
       quantitySold: true,
+      ebayViewCount: true,
     },
   });
 
@@ -77,7 +103,12 @@ export async function syncEbaySoldCountsForStore(
       updates.map((update) =>
         prisma.product.update({
           where: { id: update.id },
-          data: { quantitySold: update.nextQuantitySold },
+          data: {
+            quantitySold: update.nextQuantitySold,
+            ...(update.nextViewCount !== undefined
+              ? { ebayViewCount: update.nextViewCount }
+              : {}),
+          },
         }),
       ),
     );
@@ -85,7 +116,7 @@ export async function syncEbaySoldCountsForStore(
     invalidatePriceCaches(storeId);
   }
 
-  logger.info("ebay/sold-sync", "Completed 24-hour eBay sold count sync", {
+  logger.info("ebay/sold-sync", "Completed 24-hour eBay sold count and view count sync", {
     storeId,
     workerId: worker?.workerId,
     scannedListings: listings.length,

@@ -801,10 +801,10 @@ button {
 
 /* ── Table drag-to-scroll & dynamic animations ── */
 .listflow-table-drag-container {
-  cursor: grab;
+  cursor: default;
   touch-action: pan-y;
-  user-select: none;
-  -webkit-user-select: none;
+  user-select: auto;
+  -webkit-user-select: auto;
   scrollbar-width: thin;
   scrollbar-color: #cbd5e1 transparent;
 }
@@ -815,7 +815,7 @@ button {
 .listflow-table-drag-container tr,
 .listflow-table-drag-container th,
 .listflow-table-drag-container td {
-  cursor: inherit;
+  cursor: default;
 }
 
 .listflow-table-drag-container a,

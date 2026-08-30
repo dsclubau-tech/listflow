@@ -281,7 +281,7 @@ function ItemIdCell({ product }: { product: SerializedProductRow }) {
           className="group -ml-1 inline-flex max-w-full min-w-0 items-center gap-2 rounded-lg border border-transparent px-1 py-0.5 text-gray-700 transition-colors hover:border-orange-200 hover:bg-orange-50 hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400/70"
         >
           <PlatformIcon platform="amazon" />
-          <span className="min-w-0 flex-1 truncate font-mono font-medium">
+          <span className="min-w-0 flex-1 font-mono font-medium">
             {asin.toUpperCase()}
           </span>
           <ExternalLinkGlyph platform="amazon" />
@@ -303,7 +303,7 @@ function ItemIdCell({ product }: { product: SerializedProductRow }) {
           aria-label={`Open eBay item ${ebayItemId}`}
         >
           <PlatformIcon platform="ebay" />
-          <span className="min-w-0 flex-1 truncate font-mono font-medium">
+          <span className="min-w-0 flex-1 font-mono font-medium">
             {ebayItemId}
           </span>
           <ExternalLinkGlyph platform="ebay" />
@@ -2165,7 +2165,7 @@ export default function DraftsTable({
           <table
             className={`block w-full xl:table ${
               isProductsView
-                ? "xl:min-w-[1462px] xl:table-fixed"
+                ? "xl:min-w-[1574px] xl:table-fixed"
                 : ""
             } ${isSortPending ? "listflow-table-sorting" : ""}`}
           >
@@ -2177,8 +2177,9 @@ export default function DraftsTable({
               <col className="w-[280px]" />
               <col className="w-[150px]" />
               <col className="w-[124px]" />
-              <col className="w-[132px]" />
+              <col className="w-[160px]" />
               <col className="w-[96px]" />
+              <col className="w-[84px]" />
               <col className="w-[84px]" />
               <col className="w-[94px]" />
               <col className="w-[230px]" />
@@ -2241,6 +2242,14 @@ export default function DraftsTable({
                   <ProductSortHeader
                     label="Sold"
                     field="sold"
+                    sortBy={sortBy}
+                    sortOrder={sortOrder}
+                    isSortPending={isSortPending}
+                    onSortChange={onSortChange}
+                  />
+                  <ProductSortHeader
+                    label="Views"
+                    field="views"
                     sortBy={sortBy}
                     sortOrder={sortOrder}
                     isSortPending={isSortPending}
@@ -2658,34 +2667,70 @@ export default function DraftsTable({
                     </td>
 
                     {isProductsView && (
-                      <td className="hidden xl:table-cell px-3 py-3">
-                        {product.quantitySold > 0 ? (
-                          <span
-                            className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-600/20"
-                            title={`${product.quantitySold} item${product.quantitySold === 1 ? "" : "s"} sold on eBay`}
-                          >
-                            <svg
-                              className="h-3 w-3 text-emerald-600"
-                              fill="none"
-                              viewBox="0 0 24 24"
-                              stroke="currentColor"
-                              strokeWidth={2.2}
-                              aria-hidden="true"
+                      <>
+                        <td className="hidden xl:table-cell px-3 py-3">
+                          {product.quantitySold > 0 ? (
+                            <span
+                              className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-600/20"
+                              title={`${product.quantitySold} item${product.quantitySold === 1 ? "" : "s"} sold on eBay`}
                             >
-                              <path
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                d="M5 13l4 4L19 7"
-                              />
-                            </svg>
-                            <span>{product.quantitySold}</span>
-                          </span>
-                        ) : (
-                          <span className="text-xs font-medium text-gray-400">
-                            0
-                          </span>
-                        )}
-                      </td>
+                              <svg
+                                className="h-3 w-3 text-emerald-600"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                                strokeWidth={2.2}
+                                aria-hidden="true"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M5 13l4 4L19 7"
+                                />
+                              </svg>
+                              <span>{product.quantitySold}</span>
+                            </span>
+                          ) : (
+                            <span className="text-xs font-medium text-gray-400">
+                              0
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="hidden xl:table-cell px-3 py-3">
+                          {product.ebayViewCount !== null && product.ebayViewCount !== undefined ? (
+                            <span
+                              className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 ring-1 ring-blue-600/20"
+                              title={`${product.ebayViewCount} view${product.ebayViewCount === 1 ? "" : "s"} on eBay`}
+                            >
+                              <svg
+                                className="h-3 w-3 text-blue-600"
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                                strokeWidth={2}
+                                aria-hidden="true"
+                              >
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                                />
+                                <path
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                                />
+                              </svg>
+                              <span>{product.ebayViewCount}</span>
+                            </span>
+                          ) : (
+                            <span className="text-xs font-medium text-gray-400">
+                              -
+                            </span>
+                          )}
+                        </td>
+                      </>
                     )}
 
                     <td className="hidden xl:table-cell px-3 py-3">

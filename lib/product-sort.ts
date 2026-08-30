@@ -4,7 +4,7 @@ import {
 } from "@/lib/product-profit";
 import { getProductUploadedAt } from "@/lib/product-uploaded-at";
 
-export const PRODUCT_SORT_FIELDS = ["price", "profit", "uploaded", "sold"] as const;
+export const PRODUCT_SORT_FIELDS = ["price", "profit", "uploaded", "sold", "views"] as const;
 export const PRODUCT_SORT_ORDERS = ["asc", "desc"] as const;
 
 export type ProductSortField = (typeof PRODUCT_SORT_FIELDS)[number];
@@ -14,6 +14,7 @@ type MoneyValue = number | string | { toString(): string } | null | undefined;
 
 export type ProductSortCandidate = ProductProfitCandidate & {
   quantitySold?: number | null;
+  ebayViewCount?: number | null;
   uploadedAt?: string | Date | null;
   createdAt?: string | Date | null;
   status?: string | null;
@@ -59,6 +60,10 @@ function getProductSortValue(
 
   if (sortBy === "sold") {
     return product.quantitySold ?? 0;
+  }
+
+  if (sortBy === "views") {
+    return product.ebayViewCount ?? 0;
   }
 
   if (sortBy === "uploaded") {

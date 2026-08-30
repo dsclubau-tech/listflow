@@ -232,6 +232,7 @@ model Product {
   price                   Decimal                 @db.Decimal(10, 2)
   quantity                Int                     @default(1)
   quantitySold            Int                     @default(0)
+  ebayViewCount           Int?
   category                String
   categoryName            String?
   condition               String                  @default("New")

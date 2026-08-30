@@ -455,6 +455,7 @@ export function buildGetSellerListXML(page: number): string {
     "SellerProfiles",
     "ShippingPackageDetails",
     "EndTime",
+    "HitCount",
   ]
     .map((selector) => `  <OutputSelector>${selector}</OutputSelector>`)
     .join("\n");
@@ -534,6 +535,7 @@ export function buildGetItemXML(itemId: string): string {
     "SellerProfiles",
     "ShippingPackageDetails",
     "EndTime",
+    "HitCount",
   ]
     .map((selector) => `  <OutputSelector>${selector}</OutputSelector>`)
     .join("\n");

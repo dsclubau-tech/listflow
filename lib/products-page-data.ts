@@ -54,6 +54,7 @@ const productRowSelect = {
   price: true,
   quantity: true,
   quantitySold: true,
+  ebayViewCount: true,
   images: true,
   status: true,
   ebayItemId: true,

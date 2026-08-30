@@ -121,6 +121,7 @@ export interface EbayListingInventorySnapshot {
   quantityAvailable: number;
   quantitySold: number;
   quantityTotal: number | null;
+  viewCount?: number | null;
 }
 
 interface NameValuePair {
@@ -404,6 +405,18 @@ function getQuantitySold(source: unknown) {
   return toInteger(getPath(source, "SellingStatus", "QuantitySold")) ?? 0;
 }
 
+function getHitCount(source: unknown): number | null {
+  const hitCount = toInteger(getPath(source, "HitCount"));
+  if (hitCount !== null) {
+    return Math.max(0, hitCount);
+  }
+  const hitCounter = toInteger(getPath(source, "HitCounter"));
+  if (hitCounter !== null) {
+    return Math.max(0, hitCounter);
+  }
+  return null;
+}
+
 function getTotalQuantity(source: unknown) {
   const quantity = toInteger(getPath(source, "Quantity"));
   if (quantity !== null) {
@@ -574,6 +587,7 @@ function mapEbayItemToProduct(
     price: getProductPrice(item, variants),
     quantity,
     quantitySold: getQuantitySold(item),
+    ebayViewCount: getHitCount(item),
     category: categoryId,
     categoryName: getString(item, "PrimaryCategory", "CategoryName") || null,
     condition: getCondition(item),
@@ -710,6 +724,7 @@ export async function fetchActiveEbayListingInventory(
         quantityAvailable: getAvailableQuantity(item),
         quantitySold: getQuantitySold(item),
         quantityTotal: getTotalQuantity(item),
+        viewCount: getHitCount(item),
       });
     }
 

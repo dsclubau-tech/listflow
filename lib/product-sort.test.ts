@@ -105,3 +105,20 @@ test("uploaded sorting sorts products by uploaded timestamp ascending and descen
   );
 });
 
+test("views sorting sorts products by ebayViewCount ascending and descending", () => {
+  const products: ProductSortCandidate[] = [
+    { ...candidate("p1", "50", []), ebayViewCount: 42 },
+    { ...candidate("p2", "50", []), ebayViewCount: 0 },
+    { ...candidate("p3", "50", []), ebayViewCount: 150 },
+  ];
+
+  assert.deepEqual(
+    sortProductsByDisplayValue(products, "views", "asc").map(({ id }) => id),
+    ["p2", "p1", "p3"],
+  );
+  assert.deepEqual(
+    sortProductsByDisplayValue(products, "views", "desc").map(({ id }) => id),
+    ["p3", "p1", "p2"],
+  );
+});
+
