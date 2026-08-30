@@ -50,12 +50,25 @@ function normalizeSupabasePoolerUrl(connectionString: string) {
   return connectionString;
 }
 
+function parseConnectionTimeout() {
+  const value = process.env.LISTFLOW_DB_CONNECT_TIMEOUT_MS;
+  const parsed = value ? Number.parseInt(value, 10) : Number.NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 30_000;
+}
+
+function parseIdleTimeout() {
+  const value = process.env.LISTFLOW_DB_IDLE_TIMEOUT_MS;
+  const parsed = value ? Number.parseInt(value, 10) : Number.NaN;
+  if (Number.isFinite(parsed) && parsed > 0) return parsed;
+  return process.env.VERCEL === "1" ? 1_000 : 30_000;
+}
+
 function createPrismaClient() {
   const adapter = new PrismaPg({
     connectionString: getDatabaseConnectionString(),
     max: parsePoolMax(),
-    idleTimeoutMillis: 1_000,
-    connectionTimeoutMillis: 10_000,
+    idleTimeoutMillis: parseIdleTimeout(),
+    connectionTimeoutMillis: parseConnectionTimeout(),
     allowExitOnIdle: true,
   });
   return new PrismaClient({ adapter });
