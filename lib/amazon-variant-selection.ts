@@ -14,6 +14,7 @@ export interface VariantSelectionResult {
   matched: boolean;
   reason?: string;
   selectedDimensions?: string[];
+  detectedAsin?: string | null;
 }
 
 function cleanText(value: unknown): string {
@@ -273,11 +274,32 @@ export async function attemptVariantSelection(
     }
   }
 
+  let detectedAsin: string | null = null;
+  if (selectedDimensions.length > 0) {
+    detectedAsin = await page
+      .evaluate(() => {
+        const asinInput =
+          (document.querySelector("#ASIN") as HTMLInputElement)?.value ??
+          (document.querySelector('input[name="ASIN"]') as HTMLInputElement)?.value ??
+          null;
+        if (asinInput) return asinInput.trim().toUpperCase();
+
+        const dataAsin = document.querySelector<HTMLElement>("[data-asin]")?.dataset.asin;
+        if (dataAsin) return dataAsin.trim().toUpperCase();
+
+        const canonical = document.querySelector<HTMLLinkElement>("link[rel='canonical']")?.href;
+        const match = canonical?.match(/\/dp\/([A-Z0-9]{10})/i);
+        return match?.[1]?.toUpperCase() ?? null;
+      })
+      .catch(() => null);
+  }
+
   return {
     hasVariations: true,
     selected: selectedDimensions.length > 0,
     matched: true,
     selectedDimensions,
+    detectedAsin,
   };
 }
 

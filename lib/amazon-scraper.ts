@@ -71,6 +71,8 @@ export interface ScrapedAmazonPrice {
   };
   variantSelectionFailed?: boolean;
   variantSelectionReason?: string;
+  detectedAsin?: string | null;
+  asinRedirected?: boolean;
 }
 
 const USER_AGENTS = [
@@ -529,6 +531,31 @@ async function extractAmazonBuyboxPriceChoicesFromPage(
   return extractLocalizedBuyboxPriceChoices(load(html), asin);
 }
 
+/**
+ * Read the current product ASIN from the page DOM.
+ * Amazon embeds the ASIN in multiple places — we check all of them.
+ */
+async function extractPageAsin(page: Page): Promise<string | null> {
+  return page
+    .evaluate(() => {
+      const fromInput =
+        (document.querySelector("#ASIN") as HTMLInputElement)?.value ??
+        (document.querySelector('input[name="ASIN"]') as HTMLInputElement)?.value ??
+        null;
+      if (fromInput) return fromInput.trim().toUpperCase();
+
+      const dataAsin = document.querySelector<HTMLElement>("[data-asin]")?.dataset.asin;
+      if (dataAsin) return dataAsin.trim().toUpperCase();
+
+      const canonical = document.querySelector<HTMLLinkElement>("link[rel='canonical']")?.href;
+      const canonicalMatch = canonical?.match(/\/dp\/([A-Z0-9]{10})/i);
+      if (canonicalMatch?.[1]) return canonicalMatch[1].toUpperCase();
+
+      return null;
+    })
+    .catch(() => null);
+}
+
 async function extractAmazonBuyingOptionsPrice(
   page: Page,
   normalizedAsin: string,
@@ -677,14 +704,37 @@ export async function scrapeAmazonPrice(
         // extractAmazonPriceFromPage try its own selectors.
       });
 
+    // ── ASIN redirect detection ─────────────────────────────────────────
+    // Amazon silently redirects unavailable variant ASINs to an available
+    // sibling variant (different ASIN, different product). If the page
+    // ASIN doesn't match what we requested, the product is unavailable.
+    const pageAsinBeforeVariants = await extractPageAsin(page);
+    if (
+      pageAsinBeforeVariants &&
+      pageAsinBeforeVariants !== normalizedAsin
+    ) {
+      throw new PriceCheckFailure(
+        PriceCheckFailureCode.AMAZON_ASIN_REDIRECT,
+        `Amazon redirected ASIN ${normalizedAsin} to ${pageAsinBeforeVariants} — the original variant appears unavailable.`
+      );
+    }
+
     // Detect out-of-stock before attempting price extraction
     const stockStatus = await page
       .evaluate(() => {
-        const buybox = document.querySelector("#buybox, #availability");
-        const text = buybox?.textContent?.toLowerCase() ?? "";
+        const elements = [
+          document.querySelector("#buybox"),
+          document.querySelector("#availability"),
+          document.querySelector("#outOfStock"),
+          document.querySelector("#availabilityInsideBuyBox_feature_div"),
+        ];
+        const text = elements
+          .map((el) => el?.textContent?.toLowerCase() ?? "")
+          .join(" ");
         if (
           text.includes("temporarily out of stock") ||
-          text.includes("currently unavailable")
+          text.includes("currently unavailable") ||
+          text.includes("we don't know when or if this item will be back in stock")
         ) {
           return "out_of_stock";
         }
@@ -734,6 +784,8 @@ export async function scrapeAmazonPrice(
       priceTrackingMode === "DEAL" ? priceChoices.deal : priceChoices.regular;
     let price = selectedPrice?.price ?? null;
 
+    let variantSwatchSelected = false;
+
     // If price is not available on initial page load, check if Amazon presents variations
     // and attempt to select the exact saved colour/size in safe order
     if (price === null) {
@@ -757,6 +809,7 @@ export async function scrapeAmazonPrice(
         }
 
         if (variantResult.selected) {
+          variantSwatchSelected = true;
           // Re-evaluate buybox price after variation selection
           await page
             .waitForSelector(
@@ -790,6 +843,18 @@ export async function scrapeAmazonPrice(
           }
         }
       }
+    }
+
+    // ── Final ASIN integrity check ──────────────────────────────────────
+    // Always verify the page ASIN matches what we requested. If Amazon
+    // redirected us to a different variant without explicit variant selection,
+    // we must NOT return the wrong price.
+    const finalPageAsin = await extractPageAsin(page);
+    if (!variantSwatchSelected && finalPageAsin && finalPageAsin !== normalizedAsin) {
+      throw new PriceCheckFailure(
+        PriceCheckFailureCode.AMAZON_ASIN_REDIRECT,
+        `Amazon redirected ASIN ${normalizedAsin} to ${finalPageAsin} — the original variant appears unavailable.`
+      );
     }
 
     // Diagnostic: log page context when price extraction fails
@@ -861,6 +926,8 @@ export async function scrapeAmazonPrice(
         regular: priceChoices.regular?.price ?? null,
         deal: priceChoices.deal?.price ?? null,
       },
+      detectedAsin: finalPageAsin,
+      asinRedirected: false,
     };
   } finally {
     await context.close().catch(() => {});

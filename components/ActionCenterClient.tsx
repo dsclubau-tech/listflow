@@ -324,6 +324,11 @@ function ProductLinks({ product }: { product: ActionCenterProductSummary }) {
         <AsinLink
           asin={product.asin}
           className="text-orange-600 hover:text-orange-800"
+          warning={
+            product.priceCheckFailureCode === "AMAZON_ASIN_REDIRECT"
+              ? "Amazon redirected this ASIN to a different variant — the original product may be unavailable"
+              : null
+          }
         >
           Amazon
         </AsinLink>

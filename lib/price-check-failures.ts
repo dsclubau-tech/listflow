@@ -24,6 +24,7 @@ export const DEAL_PRICE_UNAVAILABLE_AUTO_HOLD_REASON =
 export const AUTO_HOLD_PRICE_CHECK_FAILURE_CODES = [
   PriceCheckFailureCode.AMAZON_OUT_OF_STOCK,
   PriceCheckFailureCode.AMAZON_PRICE_UNAVAILABLE,
+  PriceCheckFailureCode.AMAZON_ASIN_REDIRECT,
   PriceCheckFailureCode.MISSING_BASELINE,
   PriceCheckFailureCode.UNSAFE_PRICE_CHANGE,
 ] as const;

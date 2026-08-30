@@ -74,6 +74,7 @@ export interface ActionCenterProductSummary {
   title: string;
   asin: string | null;
   ebayItemId: string | null;
+  priceCheckFailureCode?: string | null;
 }
 
 export interface PendingReviewActionItem {
@@ -243,12 +244,14 @@ function serializeProduct(product: {
   title: string;
   asin: string | null;
   ebayItemId: string | null;
+  priceCheckFailureCode?: string | null;
 }): ActionCenterProductSummary {
   return {
     id: product.id,
     title: productLinkTitle(product.title),
     asin: product.asin,
     ebayItemId: product.ebayItemId,
+    priceCheckFailureCode: product.priceCheckFailureCode ?? null,
   };
 }
 
@@ -355,6 +358,7 @@ async function getCachedActionCenterQueues(
       asin: true,
       ebayItemId: true,
       priceCheckError: true,
+      priceCheckFailureCode: true,
       lastPriceCheck: true,
     },
   });

@@ -2359,7 +2359,16 @@ export default function DraftsTable({
                                 {product.title}
                               </span>
                               <div className="mt-1 flex flex-wrap items-center gap-2 text-xs" onClick={(e) => e.stopPropagation()}>
-                                {product.asin && <AsinLink asin={product.asin} />}
+                                {product.asin && (
+                                  <AsinLink
+                                    asin={product.asin}
+                                    warning={
+                                      product.priceCheckFailureCode === "AMAZON_ASIN_REDIRECT"
+                                        ? "Amazon redirected this ASIN to a different variant — the original product may be unavailable"
+                                        : null
+                                    }
+                                  />
+                                )}
                                 {product.ebayItemId && (
                                   <a
                                     href={`https://www.ebay.com.au/itm/${product.ebayItemId}`}

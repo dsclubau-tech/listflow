@@ -12,6 +12,7 @@ type AsinLinkProps = Omit<
   children?: ReactNode;
   fallback?: ReactNode;
   stopPropagation?: boolean;
+  warning?: string | null;
 };
 
 export function getAmazonAsinUrl(asin: string) {
@@ -26,6 +27,7 @@ export default function AsinLink({
   onClick,
   stopPropagation = false,
   title,
+  warning,
   ...props
 }: AsinLinkProps) {
   const normalizedAsin = asin?.trim().toUpperCase();
@@ -42,7 +44,7 @@ export default function AsinLink({
     onClick?.(event);
   }
 
-  return (
+  const anchor = (
     <a
       href={getAmazonAsinUrl(normalizedAsin)}
       target="_blank"
@@ -54,5 +56,22 @@ export default function AsinLink({
     >
       {children ?? normalizedAsin}
     </a>
+  );
+
+  if (!warning) {
+    return anchor;
+  }
+
+  return (
+    <span className="inline-flex items-center gap-1">
+      {anchor}
+      <span
+        className="cursor-help text-xs"
+        title={warning}
+        aria-label={warning}
+      >
+        ⚠️
+      </span>
+    </span>
   );
 }

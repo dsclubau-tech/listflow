@@ -21,6 +21,7 @@ import {
 test("only confirmed product failures are eligible for automatic hold", () => {
   assert.equal(isAutoHoldPriceCheckFailureCode(PriceCheckFailureCode.AMAZON_OUT_OF_STOCK), true);
   assert.equal(isAutoHoldPriceCheckFailureCode(PriceCheckFailureCode.AMAZON_PRICE_UNAVAILABLE), true);
+  assert.equal(isAutoHoldPriceCheckFailureCode(PriceCheckFailureCode.AMAZON_ASIN_REDIRECT), true);
   assert.equal(isAutoHoldPriceCheckFailureCode(PriceCheckFailureCode.MISSING_BASELINE), true);
   assert.equal(isAutoHoldPriceCheckFailureCode(PriceCheckFailureCode.UNSAFE_PRICE_CHANGE), true);
   assert.equal(isAutoHoldPriceCheckFailureCode(PriceCheckFailureCode.TECHNICAL_ERROR), false);
@@ -32,8 +33,13 @@ test("typed failures retain their code and unknown errors are technical", () => 
     PriceCheckFailureCode.AMAZON_OUT_OF_STOCK,
     "Out of stock",
   );
+  const asinRedirect = new PriceCheckFailure(
+    PriceCheckFailureCode.AMAZON_ASIN_REDIRECT,
+    "Redirected to different variant",
+  );
 
   assert.equal(getPriceCheckFailureCode(outOfStock), PriceCheckFailureCode.AMAZON_OUT_OF_STOCK);
+  assert.equal(getPriceCheckFailureCode(asinRedirect), PriceCheckFailureCode.AMAZON_ASIN_REDIRECT);
   assert.equal(getPriceCheckFailureCode(new Error("Timeout")), PriceCheckFailureCode.TECHNICAL_ERROR);
 });
 

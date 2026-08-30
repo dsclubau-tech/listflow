@@ -25,8 +25,8 @@ test("description editors opt into a responsive sticky formatting toolbar", () =
   assert.match(styles, /@media \(min-width: 768px\)/);
   assert.match(sidebarLayout, /overflow-x-clip/);
   assert.doesNotMatch(sidebarLayout, /overflow-y-auto bg-tertiary/);
-  assert.match(draftsTable, /xl:overflow-clip xl:rounded-2xl/);
-  assert.match(draftsTable, /block overflow-clip rounded-2xl/);
+  assert.match(draftsTable, /xl:rounded-2xl/);
+  assert.match(draftsTable, /block w-full xl:table/);
 });
 
 test("inline editor preloads variants and retains mounted tab state", () => {
