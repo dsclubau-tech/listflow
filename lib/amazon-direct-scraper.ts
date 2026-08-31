@@ -6,6 +6,7 @@ import {
   type AmazonBuyboxPriceChoices,
   type AmazonBuyboxPriceResult,
 } from "@/lib/amazon-buybox-price";
+import { fetchAmazonDcpShippingFee } from "@/lib/amazon-shipping";
 import {
   extractAmazonPostcodeToken,
   extractAmazonProductTitle,
@@ -1888,10 +1889,40 @@ export async function scrapeAmazonProductDirect(
   }
 
   if (buyboxPrice) {
-    product.price = buyboxPrice.price;
-    product.rawPrice = buyboxPrice.itemPrice ?? buyboxPrice.price;
-    product.shippingPrice = buyboxPrice.shippingFee ?? null;
+    let shippingFee = buyboxPrice.shippingFee ?? null;
+    if (shippingFee === null || shippingFee === 0) {
+      const dcpShippingFee = await fetchAmazonDcpShippingFee(
+        localizedHtml || html,
+        getCookieHeader(cookieJar)
+      );
+      if (dcpShippingFee !== null && dcpShippingFee > 0) {
+        shippingFee = dcpShippingFee;
+      }
+    }
+
+    const itemPrice = buyboxPrice.itemPrice ?? buyboxPrice.price;
+    const effectivePrice =
+      shippingFee !== null && shippingFee > 0
+        ? Math.round((itemPrice + shippingFee) * 100) / 100
+        : itemPrice;
+
+    product.price = effectivePrice;
+    product.rawPrice = itemPrice;
+    product.shippingPrice = shippingFee;
     product.amazonPriceTrackingMode = buyboxPrice.mode;
+
+    if (product.priceChoices.regular) {
+      product.priceChoices.regular.price =
+        shippingFee !== null && shippingFee > 0
+          ? Math.round(((buyboxPrice.mode === "REGULAR" ? itemPrice : product.priceChoices.regular.price) + shippingFee) * 100) / 100
+          : product.priceChoices.regular.price;
+    }
+    if (product.priceChoices.deal) {
+      product.priceChoices.deal.price =
+        shippingFee !== null && shippingFee > 0
+          ? Math.round(((buyboxPrice.mode === "DEAL" ? itemPrice : product.priceChoices.deal.price) + shippingFee) * 100) / 100
+          : product.priceChoices.deal.price;
+    }
   } else {
     product.price = renderedFallbackPrice;
     product.rawPrice = renderedFallbackPrice;

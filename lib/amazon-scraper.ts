@@ -528,6 +528,13 @@ async function extractAmazonBuyboxPriceChoicesFromPage(
   page: Page,
   asin: string
 ) {
+  await page
+    .waitForSelector(
+      "#mir-layout-DELIVERY_BLOCK-slot-PRIMARY_DELIVERY_MESSAGE_LARGE, [data-csa-c-delivery-price], #deliveryBlockMessage",
+      { timeout: 3000 }
+    )
+    .catch(() => {});
+
   const html = await page.content().catch(() => "");
   if (!html) {
     return extractLocalizedBuyboxPriceChoices(load(""), asin);

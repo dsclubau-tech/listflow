@@ -450,7 +450,7 @@ export default function EditVariantModal({
   function updatePricingField(
     field: keyof Pick<
       VariantFormState,
-      "feesPercent" | "feesFixed" | "profitPercent" | "profitFixed"
+      "buyPrice" | "feesPercent" | "feesFixed" | "profitPercent" | "profitFixed"
     >,
     value: string
   ) {
@@ -892,9 +892,11 @@ export default function EditVariantModal({
                 </label>
                 <input
                   type="number"
+                  min="0"
+                  step="0.01"
                   value={form.buyPrice}
-                  readOnly
-                  className="w-full rounded-md border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-700"
+                  onChange={(event) => updatePricingField("buyPrice", event.target.value)}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
                 />
               </div>
 
