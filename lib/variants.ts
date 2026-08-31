@@ -23,6 +23,7 @@ type DefaultVariantSource = {
   profitFixed?: number | null;
   minimumProfit?: number | null;
   profitTiers?: ProfitTierConfig[] | null;
+  itemSpecifics?: unknown;
 };
 
 type VariantSource = Variant & {
@@ -206,6 +207,15 @@ export function buildDefaultVariantData(product: DefaultVariantSource) {
     });
   }
 
+  const variantItemSpecifics: Record<string, string> = {};
+  if (product.itemSpecifics && typeof product.itemSpecifics === "object") {
+    for (const [k, v] of Object.entries(product.itemSpecifics)) {
+      if (typeof v === "string") {
+        variantItemSpecifics[k] = v;
+      }
+    }
+  }
+
   return {
     sku: getAutomaticSku({
       asin: product.asin,
@@ -226,7 +236,7 @@ export function buildDefaultVariantData(product: DefaultVariantSource) {
     includeShipping: true,
     allowMarketplace: true,
     roundCents: null,
-    itemSpecifics: {},
+    itemSpecifics: variantItemSpecifics,
     productId: product.id,
   };
 }

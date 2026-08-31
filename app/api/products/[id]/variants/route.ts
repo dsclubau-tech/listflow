@@ -24,7 +24,7 @@ export async function GET(
 
   const product = await prisma.product.findFirst({
     where: { id: productId, storeId: storeSession.storeId },
-    select: { id: true },
+    select: { id: true, itemSpecifics: true },
   });
 
   if (!product) {
@@ -44,7 +44,23 @@ export async function GET(
     });
   }
 
-  return NextResponse.json(variants.map(serializeVariant));
+  const productSpecs =
+    product.itemSpecifics && typeof product.itemSpecifics === "object"
+      ? (product.itemSpecifics as Record<string, string>)
+      : {};
+
+  return NextResponse.json(
+    variants.map((v) => {
+      const serialized = serializeVariant(v);
+      if (!serialized.itemSpecifics._shippingFee && productSpecs._shippingFee) {
+        serialized.itemSpecifics._shippingFee = String(productSpecs._shippingFee);
+      }
+      if (!serialized.itemSpecifics._rawPrice && productSpecs._rawPrice) {
+        serialized.itemSpecifics._rawPrice = String(productSpecs._rawPrice);
+      }
+      return serialized;
+    })
+  );
 }
 
 export async function POST(

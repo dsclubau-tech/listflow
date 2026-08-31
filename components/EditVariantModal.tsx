@@ -637,6 +637,48 @@ export default function EditVariantModal({
     setForm((prev) => recalculateSellPrice({ ...prev, roundCentsEnabled: checked }));
   }
 
+  function handleIncludeShippingChange(checked: boolean) {
+    setForm((prev) => {
+      const shippingFeeItem = prev.itemSpecifics.find(
+        (item) => item.key === "_shippingFee"
+      );
+      const rawPriceItem = prev.itemSpecifics.find(
+        (item) => item.key === "_rawPrice"
+      );
+
+      const shippingFee = shippingFeeItem ? toNumber(shippingFeeItem.value) : 0;
+      const rawPrice = rawPriceItem ? toNumber(rawPriceItem.value) : 0;
+      const currentBuyPrice = toNumber(prev.buyPrice);
+
+      let nextBuyPriceNumber = currentBuyPrice;
+
+      if (!checked) {
+        if (shippingFee > 0 && rawPrice > 0) {
+          nextBuyPriceNumber = rawPrice;
+        } else if (shippingFee > 0) {
+          nextBuyPriceNumber = Math.max(
+            0,
+            Math.round((currentBuyPrice - shippingFee) * 100) / 100
+          );
+        }
+      } else {
+        if (shippingFee > 0 && rawPrice > 0) {
+          nextBuyPriceNumber = Math.round((rawPrice + shippingFee) * 100) / 100;
+        } else if (shippingFee > 0) {
+          nextBuyPriceNumber = Math.round((currentBuyPrice + shippingFee) * 100) / 100;
+        }
+      }
+
+      const nextState: VariantFormState = {
+        ...prev,
+        includeShipping: checked,
+        buyPrice: toMoneyString(nextBuyPriceNumber),
+      };
+
+      return recalculateSellPriceForState(nextState);
+    });
+  }
+
   function updateSpecific(
     index: number,
     field: "key" | "value",
@@ -996,10 +1038,7 @@ export default function EditVariantModal({
                   type="checkbox"
                   checked={form.includeShipping}
                   onChange={(event) =>
-                    setForm((prev) => ({
-                      ...prev,
-                      includeShipping: event.target.checked,
-                    }))
+                    handleIncludeShippingChange(event.target.checked)
                   }
                   className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
                 />
