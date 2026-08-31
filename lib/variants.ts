@@ -2,7 +2,10 @@ import { Prisma, type Product, type Variant } from "@/app/generated/prisma/clien
 import { dedupeProductImages } from "@/lib/product-images";
 import { prisma } from "@/lib/prisma";
 import { getAutomaticSku } from "@/lib/sku";
-import { calculateSellPrice } from "@/lib/variant-pricing";
+import {
+  calculateProfitPercentFromSellPrice,
+  calculateSellPrice,
+} from "@/lib/variant-pricing";
 import { getTierProfitPercent, type ProfitTierConfig } from "@/lib/profit-tiers";
 import type { VariantPayload, VariantRecord } from "@/types/variant";
 import { variantStatuses } from "@/types/variant";
@@ -192,6 +195,17 @@ export function buildDefaultVariantData(product: DefaultVariantSource) {
     roundCents: null,
   });
 
+  let effectiveProfitPercent = profitPercent;
+  if (effectiveProfitPercent === 0 && sellPrice > 0 && buyPriceNumber > 0) {
+    effectiveProfitPercent = calculateProfitPercentFromSellPrice({
+      buyPrice: buyPriceNumber,
+      sellPrice,
+      feesPercent,
+      feesFixed,
+      profitFixed: 0,
+    });
+  }
+
   return {
     sku: getAutomaticSku({
       asin: product.asin,
@@ -202,7 +216,7 @@ export function buildDefaultVariantData(product: DefaultVariantSource) {
     buyPrice: product.price,
     feesPercent,
     feesFixed,
-    profitPercent,
+    profitPercent: effectiveProfitPercent,
     profitFixed,
     promotedAdPercent: 0,
     sellPrice,

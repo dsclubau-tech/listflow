@@ -27,7 +27,7 @@ test("buildDefaultVariantData applies supplier pricing defaults when creating de
   assert.equal(variant.buyPrice, 100);
   assert.equal(variant.feesPercent, 13);
   assert.equal(variant.feesFixed, 0.33);
-  assert.equal(variant.profitPercent, 0);
+  assert.equal(variant.profitPercent, 14);
   assert.equal(variant.profitFixed, 14);
   assert.equal(variant.status, "IN_STOCK");
   // Sell price for buy=100, fees=13%, feesFixed=0.33, profit=14 -> (100 + 0.33 + 14) / (1 - 0.13) = 114.33 / 0.87 = 131.41

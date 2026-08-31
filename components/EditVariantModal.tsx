@@ -95,19 +95,35 @@ function normalizeItemSpecifics(
 }
 
 function recalculateSellPriceForState(next: VariantFormState) {
+  const buyPrice = toNumber(next.buyPrice);
+  const feesPercent = toNumber(next.feesPercent);
+  const feesFixed = toNumber(next.feesFixed);
+  const profitPercent = toNumber(next.profitPercent);
+  const profitFixed = toNumber(next.profitFixed);
+  const minimumProfit = toNumber(next.minimumProfit);
+
   const sellPrice = calculateSellPrice({
-    buyPrice: toNumber(next.buyPrice),
-    feesPercent: toNumber(next.feesPercent),
-    feesFixed: toNumber(next.feesFixed),
-    profitPercent: toNumber(next.profitPercent),
-    profitFixed: toNumber(next.profitFixed),
+    buyPrice,
+    feesPercent,
+    feesFixed,
+    profitPercent,
+    profitFixed,
     roundCents: next.roundCentsEnabled ? 0.99 : null,
-    minimumProfit: toNumber(next.minimumProfit),
+    minimumProfit,
+  });
+
+  const derivedProfitPercent = calculateProfitPercentFromSellPrice({
+    buyPrice,
+    sellPrice,
+    feesPercent,
+    feesFixed,
+    profitFixed: 0,
   });
 
   return {
     ...next,
     sellPrice: toMoneyString(sellPrice),
+    profitPercent: profitPercent > 0 ? String(profitPercent) : String(derivedProfitPercent),
   };
 }
 
@@ -131,6 +147,22 @@ function buildFormState(props: {
   } = props;
 
   if (variant) {
+    const buyPrice = toNumber(variant.buyPrice.toString());
+    const sellPrice = toNumber(variant.sellPrice.toString());
+    const feesPercent = Number(variant.feesPercent);
+    const feesFixed = Number(variant.feesFixed);
+    let profitPercent = Number(variant.profitPercent);
+
+    if (profitPercent === 0 && sellPrice > 0 && buyPrice > 0) {
+      profitPercent = calculateProfitPercentFromSellPrice({
+        buyPrice,
+        sellPrice,
+        feesPercent,
+        feesFixed,
+        profitFixed: 0,
+      });
+    }
+
     return {
       sku: variant.sku || "",
       title: variant.title,
@@ -138,7 +170,7 @@ function buildFormState(props: {
       buyPrice: variant.buyPrice.toString(),
       feesPercent: String(variant.feesPercent),
       feesFixed: String(variant.feesFixed),
-      profitPercent: String(variant.profitPercent),
+      profitPercent: String(profitPercent),
       profitFixed: String(variant.profitFixed),
       minimumProfit: String(pricingDefaults?.minimumProfit ?? 0),
       promotedAdPercent: String(variant.promotedAdPercent ?? 0),
@@ -161,18 +193,45 @@ function buildFormState(props: {
     };
   }
 
-  return recalculateSellPriceForState({
+  const buyPrice = defaultBuyPrice;
+  const feesPercent = pricingDefaults?.feesPercent ?? 0;
+  const feesFixed = pricingDefaults?.feesFixed ?? 0;
+  let profitPercent = pricingDefaults?.defaultUploadProfitPercent ?? 0;
+  const profitFixed = pricingDefaults?.defaultUploadProfitFixed ?? 0;
+  const minimumProfit = pricingDefaults?.minimumProfit ?? 0;
+
+  const sellPrice = calculateSellPrice({
+    buyPrice,
+    feesPercent,
+    feesFixed,
+    profitPercent,
+    profitFixed,
+    roundCents: null,
+    minimumProfit,
+  });
+
+  if (profitPercent === 0 && sellPrice > 0 && buyPrice > 0) {
+    profitPercent = calculateProfitPercentFromSellPrice({
+      buyPrice,
+      sellPrice,
+      feesPercent,
+      feesFixed,
+      profitFixed: 0,
+    });
+  }
+
+  return {
     sku: defaultSku || "",
     title: "Default",
     imagesText: dedupeProductImages(defaultImages).join("\n"),
     buyPrice: toMoneyString(defaultBuyPrice),
-    feesPercent: String(pricingDefaults?.feesPercent ?? 0),
-    feesFixed: String(pricingDefaults?.feesFixed ?? 0),
-    profitPercent: String(pricingDefaults?.defaultUploadProfitPercent ?? 0),
-    profitFixed: String(pricingDefaults?.defaultUploadProfitFixed ?? 0),
-    minimumProfit: String(pricingDefaults?.minimumProfit ?? 0),
+    feesPercent: String(feesPercent),
+    feesFixed: String(feesFixed),
+    profitPercent: String(profitPercent),
+    profitFixed: String(profitFixed),
+    minimumProfit: String(minimumProfit),
     promotedAdPercent: "0",
-    sellPrice: toMoneyString(defaultBuyPrice),
+    sellPrice: toMoneyString(sellPrice),
     quantity: String(
       getEffectiveListingQuantity(
         isProductOnHold ? "ON_HOLD" : "IMPORTED",
@@ -185,7 +244,7 @@ function buildFormState(props: {
     allowMarketplace: true,
     roundCentsEnabled: false,
     itemSpecifics: [],
-  });
+  };
 }
 
 export default function EditVariantModal({
@@ -395,7 +454,87 @@ export default function EditVariantModal({
     >,
     value: string
   ) {
-    setForm((prev) => recalculateSellPrice({ ...prev, [field]: value }));
+    setForm((prev) => {
+      const next = { ...prev, [field]: value };
+      const buyPrice = toNumber(next.buyPrice);
+      const feesPercent = toNumber(next.feesPercent);
+      const feesFixed = toNumber(next.feesFixed);
+      const minimumProfit = toNumber(next.minimumProfit);
+
+      if (field === "profitPercent") {
+        const profitPercent = toNumber(value);
+        const sellPrice = calculateSellPrice({
+          buyPrice,
+          feesPercent,
+          feesFixed,
+          profitPercent,
+          profitFixed: 0,
+          roundCents: next.roundCentsEnabled ? 0.99 : null,
+          minimumProfit,
+        });
+        const profitFixed = calculateProfitFixedFromSellPrice({
+          buyPrice,
+          sellPrice,
+          feesPercent,
+          feesFixed,
+          profitPercent: 0,
+        });
+        return {
+          ...next,
+          profitPercent: value,
+          profitFixed: toMoneyString(profitFixed),
+          sellPrice: toMoneyString(sellPrice),
+        };
+      }
+
+      if (field === "profitFixed") {
+        const profitFixed = toNumber(value);
+        const sellPrice = calculateSellPrice({
+          buyPrice,
+          feesPercent,
+          feesFixed,
+          profitPercent: 0,
+          profitFixed,
+          roundCents: next.roundCentsEnabled ? 0.99 : null,
+          minimumProfit,
+        });
+        const profitPercent = calculateProfitPercentFromSellPrice({
+          buyPrice,
+          sellPrice,
+          feesPercent,
+          feesFixed,
+          profitFixed: 0,
+        });
+        return {
+          ...next,
+          profitFixed: value,
+          profitPercent: String(profitPercent),
+          sellPrice: toMoneyString(sellPrice),
+        };
+      }
+
+      const sellPrice = calculateSellPrice({
+        buyPrice,
+        feesPercent,
+        feesFixed,
+        profitPercent: toNumber(next.profitPercent),
+        profitFixed: toNumber(next.profitFixed),
+        roundCents: next.roundCentsEnabled ? 0.99 : null,
+        minimumProfit,
+      });
+      const profitPercent = calculateProfitPercentFromSellPrice({
+        buyPrice,
+        sellPrice,
+        feesPercent,
+        feesFixed,
+        profitFixed: 0,
+      });
+      return {
+        ...next,
+        profitPercent: String(profitPercent),
+        sellPrice: toMoneyString(sellPrice),
+      };
+    });
   }
 
   function handleSellPriceChange(value: string) {
@@ -715,11 +854,6 @@ export default function EditVariantModal({
                 }`}
               >
                 ${totalProfit.toFixed(2)}
-                {buyPriceNumber > 0 && (
-                  <span className="text-xs font-normal ml-1.5 opacity-80">
-                    ({((totalProfit / buyPriceNumber) * 100).toFixed(1)}%)
-                  </span>
-                )}
               </p>
               <p
                 className={`text-[11px] sm:text-xs ${

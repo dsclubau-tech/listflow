@@ -35,7 +35,7 @@ export function parseAmazonShippingFeeFromText(
   // 1. Check for explicit paid delivery / shipping costs first
   // E.g. "$69.37 International delivery", "A$69.37 International delivery", "$9.95 delivery", "AU$12.50 shipping"
   const priceBeforeDeliveryMatch = normalized.match(
-    /(?:A(?:U)?\$|US\$|\$)\s*([\d,]+\.\d{2})\s*(?:(?:international\s+)?delivery|shipping)\b/i
+    /(?:A(?:U)?\$|US\$|\$)\s*([\d,]+\.\d{2})\s*(?:[\w\s-]{0,20}?)(?:(?:international\s+)?delivery|shipping)\b/i
   );
   if (priceBeforeDeliveryMatch?.[1]) {
     const parsed = Number.parseFloat(
@@ -48,7 +48,7 @@ export function parseAmazonShippingFeeFromText(
 
   // E.g. "Delivery: $9.95", "International delivery: $69.37", "Shipping fee: $14.00"
   const deliveryBeforePriceMatch = normalized.match(
-    /\b(?:(?:international\s+)?delivery|shipping)(?:\s+fee|\s+cost)?\s*[:\-]?\s*(?:A(?:U)?\$|US\$|\$)\s*([\d,]+\.\d{2})\b/i
+    /\b(?:(?:international\s+)?delivery|shipping)(?:[\w\s:-]{0,20}?)(?:A(?:U)?\$|US\$|\$)\s*([\d,]+\.\d{2})\b/i
   );
   if (deliveryBeforePriceMatch?.[1]) {
     const parsed = Number.parseFloat(
@@ -89,13 +89,13 @@ export function extractAmazonShippingFeeFromCheerio(
   $: CheerioAPI
 ): number | null {
   for (const selector of DELIVERY_SELECTORS) {
-    const element = $(selector).first();
-    if (element.length === 0) continue;
-
-    const text = element.text();
-    const fee = parseAmazonShippingFeeFromText(text);
-    if (fee !== null) {
-      return fee;
+    const elements = $(selector);
+    for (let i = 0; i < elements.length; i++) {
+      const text = $(elements[i]).text();
+      const fee = parseAmazonShippingFeeFromText(text);
+      if (fee !== null) {
+        return fee;
+      }
     }
   }
 
