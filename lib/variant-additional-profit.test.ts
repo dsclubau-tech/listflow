@@ -46,3 +46,25 @@ test("preserves existing net profit after fees before adding supplier profit", (
     29,
   );
 });
+
+test("adds tier-based profit percent on top of flat additional profit", () => {
+  const result = addAdditionalProfitToExistingVariant({
+    buyPrice: 80,
+    sellPrice: 90,
+    feesPercent: 0,
+    feesFixed: 0,
+    profitPercent: 0,
+    additionalProfitPercent: 5,
+    additionalProfitFixed: 10,
+    roundCents: null,
+    profitTiers: [
+      { maxPrice: 100, profitPercent: 9 },
+      { maxPrice: 150, profitPercent: 11 },
+    ],
+  });
+
+  // Flat 5% + Tier 9% for $80 buyPrice = 14% profit
+  assert.equal(result.profitPercent, 14);
+  assert.equal(result.profitFixed, 20); // 10 existing + 10 additional
+});
+

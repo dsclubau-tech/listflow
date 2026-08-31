@@ -2,6 +2,7 @@ import {
   calculateProfitFixedFromSellPrice,
   calculateSellPrice,
 } from "@/lib/variant-pricing";
+import { getTierProfitPercent, type ProfitTierConfig } from "@/lib/profit-tiers";
 
 function normalizeNumber(value: number) {
   return Number.isFinite(value) ? value : 0;
@@ -20,6 +21,7 @@ export function addAdditionalProfitToExistingVariant(input: {
   additionalProfitPercent: number;
   additionalProfitFixed: number;
   roundCents: number | null;
+  profitTiers?: ProfitTierConfig[] | null;
 }) {
   const existingProfitFixed = calculateProfitFixedFromSellPrice({
     buyPrice: input.buyPrice,
@@ -28,9 +30,13 @@ export function addAdditionalProfitToExistingVariant(input: {
     feesFixed: input.feesFixed,
     profitPercent: input.profitPercent,
   });
+  const tierProfitPercent = input.profitTiers
+    ? getTierProfitPercent(input.buyPrice, input.profitTiers)
+    : 0;
   const profitPercent =
     normalizeNumber(input.profitPercent) +
-    Math.max(0, normalizeNumber(input.additionalProfitPercent));
+    Math.max(0, normalizeNumber(input.additionalProfitPercent)) +
+    tierProfitPercent;
   const profitFixed =
     existingProfitFixed +
     Math.max(0, normalizeNumber(input.additionalProfitFixed));

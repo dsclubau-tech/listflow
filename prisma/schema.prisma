@@ -856,8 +856,21 @@ model SupplierSettings {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  store Store? @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  store       Store?       @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  profitTiers ProfitTier[]
 
   @@unique([storeId, supplierName])
   @@index([storeId])
 }
+
+model ProfitTier {
+  id                 String  @id @default(cuid())
+  supplierSettingsId String
+  maxPrice           Float
+  profitPercent      Float
+
+  supplierSettings SupplierSettings @relation(fields: [supplierSettingsId], references: [id], onDelete: Cascade)
+
+  @@index([supplierSettingsId])
+}
+

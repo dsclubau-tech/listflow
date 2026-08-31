@@ -35,6 +35,7 @@ interface SupplierSettingsData {
   scrapePostcode: string;
   storeNumber: number;
   defaultItemSpecifics: Record<string, string>;
+  profitTiers?: { id?: string; maxPrice: number; profitPercent: number }[];
 }
 
 interface PolicyProfile {
@@ -120,6 +121,10 @@ export default function SupplierSettingsTab() {
   // Item specifics
   const [specName, setSpecName] = useState("");
   const [specValue, setSpecValue] = useState("");
+
+  // Profit tiers state
+  const [newTierMaxPrice, setNewTierMaxPrice] = useState("");
+  const [newTierProfitPercent, setNewTierProfitPercent] = useState("");
 
   // Fetch settings
   const fetchSettings = useCallback(async () => {
@@ -231,6 +236,28 @@ export default function SupplierSettingsTab() {
     updateField("defaultItemSpecifics", specs);
   }
 
+  // Profit Tiers
+  function addProfitTier() {
+    const maxPrice = parseFloat(newTierMaxPrice);
+    const profitPercent = parseFloat(newTierProfitPercent);
+    if (!maxPrice || maxPrice <= 0 || !profitPercent || profitPercent <= 0 || !settings) return;
+
+    const existingTiers = settings.profitTiers || [];
+    const nextTiers = [...existingTiers, { maxPrice, profitPercent }].sort(
+      (a, b) => a.maxPrice - b.maxPrice
+    );
+    updateField("profitTiers", nextTiers);
+    setNewTierMaxPrice("");
+    setNewTierProfitPercent("");
+  }
+
+  function removeProfitTier(index: number) {
+    if (!settings) return;
+    const nextTiers = [...(settings.profitTiers || [])];
+    nextTiers.splice(index, 1);
+    updateField("profitTiers", nextTiers);
+  }
+
   // Save
   async function handleSave() {
     if (!settings) return;
@@ -269,6 +296,7 @@ export default function SupplierSettingsTab() {
           scrapePostcode: settings.scrapePostcode,
           storeNumber: parseInt(selectedStore),
           defaultItemSpecifics: settings.defaultItemSpecifics,
+          profitTiers: settings.profitTiers ?? [],
         }),
       });
 
@@ -716,6 +744,99 @@ export default function SupplierSettingsTab() {
                   </div>
                 </div>
               </div>
+            </section>
+
+            {/* Price-Based Profit Tiers */}
+            <section>
+              <div className="mb-4">
+                <h3 className="text-sm font-semibold text-gray-800">
+                  Price-Based Profit Tiers
+                </h3>
+                <p className="text-xs text-gray-500 mt-1">
+                  Set extra percentage-based profit based on product price thresholds (e.g. 9% for products lower than $100, 11% lower than $150, 12% lower than $200). These stack on top of your flat Additional Profit settings above.
+                </p>
+              </div>
+
+              {/* Add Tier inputs */}
+              <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] items-end gap-3 mb-4">
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">
+                    Products lower than (A$)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0.01"
+                    value={newTierMaxPrice}
+                    onChange={(e) => setNewTierMaxPrice(e.target.value)}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    placeholder="e.g. 100"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">
+                    Extra Profit (%)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.1"
+                    value={newTierProfitPercent}
+                    onChange={(e) => setNewTierProfitPercent(e.target.value)}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    placeholder="e.g. 9"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={addProfitTier}
+                  disabled={!newTierMaxPrice || !newTierProfitPercent}
+                  className="w-full sm:w-auto px-4 py-2 text-sm bg-orange-500 hover:bg-orange-600 text-white font-medium rounded-md transition-colors disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
+                >
+                  Add Tier
+                </button>
+              </div>
+
+              {/* Tiers Table */}
+              {(settings.profitTiers && settings.profitTiers.length > 0) ? (
+                <div className="border border-gray-200 rounded-md overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-gray-50 text-xs font-medium text-gray-500 uppercase tracking-wide border-b border-gray-200">
+                        <th className="px-4 py-2.5 text-left">Price Range</th>
+                        <th className="px-4 py-2.5 text-left">Extra Profit %</th>
+                        <th className="px-4 py-2.5 w-16 text-center">Action</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200 bg-white">
+                      {settings.profitTiers.map((tier, idx) => (
+                        <tr key={tier.id || `${tier.maxPrice}-${idx}`} className="hover:bg-gray-50 transition-colors">
+                          <td className="px-4 py-2.5 font-medium text-gray-900">
+                            Lower than A${tier.maxPrice.toFixed(2)}
+                          </td>
+                          <td className="px-4 py-2.5 text-green-700 font-semibold">
+                            +{tier.profitPercent}%
+                          </td>
+                          <td className="px-4 py-2.5 text-center">
+                            <button
+                              type="button"
+                              onClick={() => removeProfitTier(idx)}
+                              className="text-red-500 hover:text-red-700 text-sm font-semibold p-1 hover:bg-red-50 rounded transition-colors cursor-pointer"
+                              title="Delete tier"
+                            >
+                              ✕
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-xs text-gray-400 italic">
+                  No profit tiers added yet. All products will use the standard profit settings above.
+                </p>
+              )}
             </section>
           </div>
         )}

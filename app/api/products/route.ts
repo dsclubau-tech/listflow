@@ -218,6 +218,10 @@ export async function POST(request: Request) {
           additionalProfitPercent: true,
           additionalProfitFixed: true,
           minimumProfit: true,
+          profitTiers: {
+            select: { maxPrice: true, profitPercent: true },
+            orderBy: { maxPrice: "asc" },
+          },
         },
       })) ??
       (await prisma.supplierSettings.findFirst({
@@ -231,6 +235,10 @@ export async function POST(request: Request) {
           additionalProfitPercent: true,
           additionalProfitFixed: true,
           minimumProfit: true,
+          profitTiers: {
+            select: { maxPrice: true, profitPercent: true },
+            orderBy: { maxPrice: "asc" },
+          },
         },
       }));
 
@@ -258,6 +266,7 @@ export async function POST(request: Request) {
             itemSpecifics: resolvedItemSpecifics,
             requiredItemSpecifics,
           });
+
           resolvedItemSpecifics = sanitizeEbayItemSpecifics(
             resolved.itemSpecifics,
           );
@@ -337,6 +346,7 @@ export async function POST(request: Request) {
                   profitFixed:
                     supplierSettings?.additionalProfitFixed ?? 0,
                   minimumProfit: supplierSettings?.minimumProfit ?? 1,
+                  profitTiers: supplierSettings?.profitTiers,
                 }),
               });
 

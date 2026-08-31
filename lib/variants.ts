@@ -3,6 +3,7 @@ import { dedupeProductImages } from "@/lib/product-images";
 import { prisma } from "@/lib/prisma";
 import { getAutomaticSku } from "@/lib/sku";
 import { calculateSellPrice } from "@/lib/variant-pricing";
+import { getTierProfitPercent, type ProfitTierConfig } from "@/lib/profit-tiers";
 import type { VariantPayload, VariantRecord } from "@/types/variant";
 import { variantStatuses } from "@/types/variant";
 
@@ -18,6 +19,7 @@ type DefaultVariantSource = {
   profitPercent?: number | null;
   profitFixed?: number | null;
   minimumProfit?: number | null;
+  profitTiers?: ProfitTierConfig[] | null;
 };
 
 type VariantSource = Variant & {
@@ -172,10 +174,14 @@ export function buildDefaultVariantData(product: DefaultVariantSource) {
   const status = product.quantity > 0 ? "IN_STOCK" : "OUT_OF_STOCK";
   const feesPercent = Math.max(0, toNumber(product.feesPercent, 0));
   const feesFixed = Math.max(0, toNumber(product.feesFixed, 0));
-  const profitPercent = Math.max(0, toNumber(product.profitPercent, 0));
+  const baseProfitPercent = Math.max(0, toNumber(product.profitPercent, 0));
   const profitFixed = toNumber(product.profitFixed, 0);
   const minimumProfit = Math.max(0, toNumber(product.minimumProfit, 0));
   const buyPriceNumber = toNumber(product.price, 0);
+  const tierProfitPercent = product.profitTiers
+    ? getTierProfitPercent(buyPriceNumber, product.profitTiers)
+    : 0;
+  const profitPercent = baseProfitPercent + tierProfitPercent;
   const sellPrice = calculateSellPrice({
     buyPrice: buyPriceNumber,
     feesPercent,
@@ -268,6 +274,10 @@ export async function ensureDefaultVariantForProduct(productId: string) {
                 additionalProfitPercent: true,
                 additionalProfitFixed: true,
                 minimumProfit: true,
+                profitTiers: {
+                  select: { maxPrice: true, profitPercent: true },
+                  orderBy: { maxPrice: "asc" },
+                },
               },
             })) ??
             (await tx.supplierSettings.findFirst({
@@ -282,6 +292,10 @@ export async function ensureDefaultVariantForProduct(productId: string) {
                 additionalProfitPercent: true,
                 additionalProfitFixed: true,
                 minimumProfit: true,
+                profitTiers: {
+                  select: { maxPrice: true, profitPercent: true },
+                  orderBy: { maxPrice: "asc" },
+                },
               },
             }));
 
@@ -295,6 +309,7 @@ export async function ensureDefaultVariantForProduct(productId: string) {
               profitPercent: supplierSettings?.additionalProfitPercent ?? 0,
               profitFixed: supplierSettings?.additionalProfitFixed ?? 0,
               minimumProfit: supplierSettings?.minimumProfit ?? 1,
+              profitTiers: supplierSettings?.profitTiers,
             }),
           });
         },
