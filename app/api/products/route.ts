@@ -215,8 +215,8 @@ export async function POST(request: Request) {
           automaticSkuFilling: true,
           ebayFeePercent: true,
           fixedFeeAmount: true,
-          additionalProfitPercent: true,
-          additionalProfitFixed: true,
+          defaultUploadProfitPercent: true,
+          defaultUploadProfitFixed: true,
           minimumProfit: true,
           profitTiers: {
             select: { maxPrice: true, profitPercent: true },
@@ -232,8 +232,8 @@ export async function POST(request: Request) {
           automaticSkuFilling: true,
           ebayFeePercent: true,
           fixedFeeAmount: true,
-          additionalProfitPercent: true,
-          additionalProfitFixed: true,
+          defaultUploadProfitPercent: true,
+          defaultUploadProfitFixed: true,
           minimumProfit: true,
           profitTiers: {
             select: { maxPrice: true, profitPercent: true },
@@ -342,9 +342,9 @@ export async function POST(request: Request) {
                   feesPercent: supplierSettings?.ebayFeePercent ?? 13,
                   feesFixed: supplierSettings?.fixedFeeAmount ?? 0.33,
                   profitPercent:
-                    supplierSettings?.additionalProfitPercent ?? 0,
+                    supplierSettings?.defaultUploadProfitPercent ?? 0,
                   profitFixed:
-                    supplierSettings?.additionalProfitFixed ?? 0,
+                    supplierSettings?.defaultUploadProfitFixed ?? 0,
                   minimumProfit: supplierSettings?.minimumProfit ?? 1,
                   profitTiers: supplierSettings?.profitTiers,
                 }),

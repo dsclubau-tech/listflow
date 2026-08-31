@@ -51,10 +51,9 @@ export async function getOrCreateStoreSupplierSettings(storeId: string) {
       defaultReturnPolicyId: globalSettings?.defaultReturnPolicyId ?? null,
       ebayFeePercent: globalSettings?.ebayFeePercent ?? 13,
       fixedFeeAmount: globalSettings?.fixedFeeAmount ?? 0.33,
-      additionalProfitPercent: globalSettings?.additionalProfitPercent ?? 0,
-      additionalProfitFixed: globalSettings?.additionalProfitFixed ?? 0,
-      applyAdditionalProfitToExisting:
-        globalSettings?.applyAdditionalProfitToExisting ?? false,
+      defaultUploadProfitPercent:
+        globalSettings?.defaultUploadProfitPercent ?? 0,
+      defaultUploadProfitFixed: globalSettings?.defaultUploadProfitFixed ?? 0,
       minimumProfit: globalSettings?.minimumProfit ?? 1,
       capitalizeTitle: globalSettings?.capitalizeTitle ?? false,
       autofillBrand: globalSettings?.autofillBrand ?? true,

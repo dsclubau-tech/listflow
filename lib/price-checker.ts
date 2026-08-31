@@ -824,6 +824,7 @@ export async function runPriceCheck(
                 profitPercent: variant.profitPercent,
                 profitFixed: variant.profitFixed,
                 roundCents: variant.roundCents,
+                minimumProfit: supplierSettings.minimumProfit,
               });
             } else {
               // Preserve dollar margin when no fees configured
@@ -988,6 +989,7 @@ export async function runPriceCheck(
               profitPercent: variant.profitPercent,
               profitFixed: variant.profitFixed,
               roundCents: variant.roundCents,
+              minimumProfit: supplierSettings.minimumProfit,
             });
           } else {
             // Fallback for variants where the markup was baked into buyPrice

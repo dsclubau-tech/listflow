@@ -16,9 +16,8 @@ interface SupplierSettingsData {
   defaultReturnPolicyId: string | null;
   ebayFeePercent: number;
   fixedFeeAmount: number;
-  additionalProfitPercent: number;
-  additionalProfitFixed: number;
-  applyAdditionalProfitToExisting?: boolean;
+  defaultUploadProfitPercent: number;
+  defaultUploadProfitFixed: number;
   minimumProfit: number;
   capitalizeTitle: boolean;
   autofillBrand: boolean;
@@ -276,10 +275,8 @@ export default function SupplierSettingsTab() {
           defaultReturnPolicyId: settings.defaultReturnPolicyId,
           ebayFeePercent: settings.ebayFeePercent,
           fixedFeeAmount: settings.fixedFeeAmount,
-          additionalProfitPercent: settings.additionalProfitPercent,
-          additionalProfitFixed: settings.additionalProfitFixed,
-          applyAdditionalProfitToExisting:
-            settings.applyAdditionalProfitToExisting ?? false,
+          defaultUploadProfitPercent: settings.defaultUploadProfitPercent,
+          defaultUploadProfitFixed: settings.defaultUploadProfitFixed,
           minimumProfit: settings.minimumProfit,
           capitalizeTitle: settings.capitalizeTitle,
           autofillBrand: settings.autofillBrand,
@@ -315,8 +312,8 @@ export default function SupplierSettingsTab() {
     const cost = 100;
     const feePercent = settings.ebayFeePercent;
     const fixedFee = settings.fixedFeeAmount;
-    const profitPercent = settings.additionalProfitPercent;
-    const profitFixed = settings.additionalProfitFixed;
+    const profitPercent = settings.defaultUploadProfitPercent;
+    const profitFixed = settings.defaultUploadProfitFixed;
     const minProfit = settings.minimumProfit || 0;
 
     const total = calculateSellPrice({
@@ -670,39 +667,27 @@ export default function SupplierSettingsTab() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Additional Profit (%)</label>
+                  <label className="block text-xs text-gray-500 mb-1">Default Upload Profit (%)</label>
                   <input
                     type="number"
                     step="0.1"
-                    value={settings.additionalProfitPercent}
-                    onChange={(e) => updateField("additionalProfitPercent", parseFloat(e.target.value) || 0)}
+                    value={settings.defaultUploadProfitPercent}
+                    onChange={(e) => updateField("defaultUploadProfitPercent", parseFloat(e.target.value) || 0)}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Additional Profit (A$)</label>
+                  <label className="block text-xs text-gray-500 mb-1">Default Upload Profit (A$)</label>
                   <input
                     type="number"
                     step="0.01"
-                    value={settings.additionalProfitFixed}
-                    onChange={(e) => updateField("additionalProfitFixed", parseFloat(e.target.value) || 0)}
+                    value={settings.defaultUploadProfitFixed}
+                    onChange={(e) => updateField("defaultUploadProfitFixed", parseFloat(e.target.value) || 0)}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
                 </div>
-              </div>
-
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
                 <div>
-                  <label className="block text-xs text-gray-500 mb-1">Default Automation</label>
-                  <select
-                    disabled
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm bg-gray-50 text-gray-500"
-                  >
-                    <option>No automation</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs text-gray-500 mb-1">Minimum Profit per Product</label>
+                  <label className="block text-xs text-gray-500 mb-1">Minimum Profit per Product (A$)</label>
                   <input
                     type="number"
                     step="0.01"
@@ -711,12 +696,6 @@ export default function SupplierSettingsTab() {
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
                 </div>
-              </div>
-
-              {/* Dynamic profit toggle - UI only */}
-              <div className="flex items-center gap-3 mb-6">
-                <ToggleSwitch checked={false} disabled />
-                <span className="text-sm text-gray-500">Dynamic profit</span>
               </div>
             </section>
 
@@ -729,20 +708,6 @@ export default function SupplierSettingsTab() {
                   <span className="text-sm text-gray-600">Set Price Cents Value</span>
                 </div>
                 <CheckRow label="Include shipping price" checked={true} disabled />
-                <div className="flex items-start gap-3 pt-1">
-                  <ToggleSwitch
-                    checked={Boolean(settings.applyAdditionalProfitToExisting)}
-                    onChange={(v) => updateField("applyAdditionalProfitToExisting", v)}
-                  />
-                  <div>
-                    <span className="text-sm text-gray-700 font-medium">
-                      Include additional profit to already uploaded products
-                    </span>
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      When enabled, allows including additional profit values when editing existing products.
-                    </p>
-                  </div>
-                </div>
               </div>
             </section>
 
@@ -753,7 +718,7 @@ export default function SupplierSettingsTab() {
                   Price-Based Profit Tiers
                 </h3>
                 <p className="text-xs text-gray-500 mt-1">
-                  Set extra percentage-based profit based on product price thresholds (e.g. 9% for products lower than $100, 11% lower than $150, 12% lower than $200). These stack on top of your flat Additional Profit settings above.
+                  Set extra percentage-based profit based on product price thresholds (e.g. 9% for products lower than $100, 11% lower than $150, 12% lower than $200). These stack on top of your flat Default Upload Profit settings above.
                 </p>
               </div>
 

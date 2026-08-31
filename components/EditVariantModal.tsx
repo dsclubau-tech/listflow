@@ -7,11 +7,11 @@ import {
   applyRoundCents,
   calculateNetProfit,
   calculateProfitFixedFromSellPrice,
+  calculateProfitPercentFromSellPrice,
   calculateSellPrice,
   calculateTotalFees,
 } from "@/lib/variant-pricing";
 import { dedupeProductImages } from "@/lib/product-images";
-import { addAdditionalProfitToExistingVariant } from "@/lib/variant-additional-profit";
 import {
   getEffectiveListingQuantity,
   getStoredQuantityAfterEdit,
@@ -41,10 +41,9 @@ type ModalTab = "pricing" | "general";
 interface SupplierPricingDefaults {
   feesPercent: number;
   feesFixed: number;
-  profitPercent: number;
-  profitFixed: number;
+  defaultUploadProfitPercent: number;
+  defaultUploadProfitFixed: number;
   minimumProfit: number;
-  applyAdditionalProfitToExisting?: boolean;
 }
 
 interface VariantFormState {
@@ -112,29 +111,6 @@ function recalculateSellPriceForState(next: VariantFormState) {
   };
 }
 
-function addSupplierProfitToExistingForm(
-  base: VariantFormState,
-  defaults: SupplierPricingDefaults,
-) {
-  const pricing = addAdditionalProfitToExistingVariant({
-    buyPrice: toNumber(base.buyPrice),
-    sellPrice: toNumber(base.sellPrice),
-    feesPercent: toNumber(base.feesPercent),
-    feesFixed: toNumber(base.feesFixed),
-    profitPercent: toNumber(base.profitPercent),
-    additionalProfitPercent: defaults.profitPercent,
-    additionalProfitFixed: defaults.profitFixed,
-    roundCents: base.roundCentsEnabled ? 0.99 : null,
-  });
-
-  return {
-    ...base,
-    profitFixed: toMoneyString(pricing.profitFixed),
-    profitPercent: String(pricing.profitPercent),
-    sellPrice: toMoneyString(pricing.sellPrice),
-  };
-}
-
 function buildFormState(props: {
   variant: VariantRecord | null;
   defaultBuyPrice: number;
@@ -159,14 +135,14 @@ function buildFormState(props: {
       sku: variant.sku || "",
       title: variant.title,
       imagesText: dedupeProductImages(variant.images).join("\n"),
-      buyPrice: variant.buyPrice,
+      buyPrice: variant.buyPrice.toString(),
       feesPercent: String(variant.feesPercent),
       feesFixed: String(variant.feesFixed),
       profitPercent: String(variant.profitPercent),
       profitFixed: String(variant.profitFixed),
       minimumProfit: String(pricingDefaults?.minimumProfit ?? 0),
       promotedAdPercent: String(variant.promotedAdPercent ?? 0),
-      sellPrice: variant.sellPrice,
+      sellPrice: variant.sellPrice.toString(),
       quantity: String(
         getEffectiveListingQuantity(
           isProductOnHold ? "ON_HOLD" : "IMPORTED",
@@ -192,8 +168,8 @@ function buildFormState(props: {
     buyPrice: toMoneyString(defaultBuyPrice),
     feesPercent: String(pricingDefaults?.feesPercent ?? 0),
     feesFixed: String(pricingDefaults?.feesFixed ?? 0),
-    profitPercent: String(pricingDefaults?.profitPercent ?? 0),
-    profitFixed: String(pricingDefaults?.profitFixed ?? 0),
+    profitPercent: String(pricingDefaults?.defaultUploadProfitPercent ?? 0),
+    profitFixed: String(pricingDefaults?.defaultUploadProfitFixed ?? 0),
     minimumProfit: String(pricingDefaults?.minimumProfit ?? 0),
     promotedAdPercent: "0",
     sellPrice: toMoneyString(defaultBuyPrice),
@@ -243,8 +219,6 @@ export default function EditVariantModal({
   const [pricingDefaults, setPricingDefaults] =
     useState<SupplierPricingDefaults | null>(null);
   const pricingDefaultsRef = useRef<SupplierPricingDefaults | null>(null);
-  const additionalProfitBaseRef = useRef<VariantFormState | null>(null);
-  const [includeAdditionalProfit, setIncludeAdditionalProfit] = useState(false);
 
   useEffect(() => {
     setPortalRoot(document.body);
@@ -286,8 +260,6 @@ export default function EditVariantModal({
 
     setActiveTab("pricing");
     setError(null);
-    setIncludeAdditionalProfit(false);
-    additionalProfitBaseRef.current = null;
     setForm(
       buildFormState({
         variant,
@@ -329,10 +301,9 @@ export default function EditVariantModal({
         const data = (await response.json()) as {
           ebayFeePercent?: number;
           fixedFeeAmount?: number;
-          additionalProfitPercent?: number;
-          additionalProfitFixed?: number;
+          defaultUploadProfitPercent?: number;
+          defaultUploadProfitFixed?: number;
           minimumProfit?: number;
-          applyAdditionalProfitToExisting?: boolean;
         };
 
         if (cancelled) {
@@ -342,23 +313,17 @@ export default function EditVariantModal({
         const nextDefaults: SupplierPricingDefaults = {
           feesPercent: toFiniteNumber(data.ebayFeePercent),
           feesFixed: toFiniteNumber(data.fixedFeeAmount),
-          profitPercent: toFiniteNumber(data.additionalProfitPercent),
-          profitFixed: toFiniteNumber(data.additionalProfitFixed),
-          minimumProfit: toFiniteNumber(data.minimumProfit),
-          applyAdditionalProfitToExisting: Boolean(
-            data.applyAdditionalProfitToExisting
+          defaultUploadProfitPercent: toFiniteNumber(
+            data.defaultUploadProfitPercent
           ),
+          defaultUploadProfitFixed: toFiniteNumber(data.defaultUploadProfitFixed),
+          minimumProfit: toFiniteNumber(data.minimumProfit),
         };
 
         pricingDefaultsRef.current = nextDefaults;
         setPricingDefaults(nextDefaults);
-        if (variant && nextDefaults.applyAdditionalProfitToExisting) {
-          setIncludeAdditionalProfit(true);
-        }
 
         setForm((prev) => {
-          // When creating a new variant (variant === null), apply supplier defaults
-          // if fee/profit fields are zero.
           if (!variant) {
             const allFeesZero =
               toNumber(prev.feesPercent) === 0 &&
@@ -367,28 +332,26 @@ export default function EditVariantModal({
               toNumber(prev.profitFixed) === 0;
 
             if (!allFeesZero) {
-              return prev;
+              return {
+                ...prev,
+                minimumProfit: String(nextDefaults.minimumProfit),
+              };
             }
 
             return recalculateSellPriceForState({
               ...prev,
               feesPercent: String(nextDefaults.feesPercent),
               feesFixed: String(nextDefaults.feesFixed),
-              profitPercent: String(nextDefaults.profitPercent),
-              profitFixed: String(nextDefaults.profitFixed),
+              profitPercent: String(nextDefaults.defaultUploadProfitPercent),
+              profitFixed: String(nextDefaults.defaultUploadProfitFixed),
               minimumProfit: String(nextDefaults.minimumProfit),
             });
           }
 
-          // For existing variants, only add supplier additional profit once if the
-          // settings toggle is enabled.
-          if (nextDefaults.applyAdditionalProfitToExisting) {
-            const base = additionalProfitBaseRef.current ?? prev;
-            additionalProfitBaseRef.current = base;
-            return addSupplierProfitToExistingForm(base, nextDefaults);
-          }
-
-          return prev;
+          return {
+            ...prev,
+            minimumProfit: String(nextDefaults.minimumProfit),
+          };
         });
       } catch {
         // Leave zeroed pricing defaults in place if settings are unavailable.
@@ -438,67 +401,101 @@ export default function EditVariantModal({
   function handleSellPriceChange(value: string) {
     setForm((prev) => {
       const sellPrice = toNumber(value);
+      const buyPrice = toNumber(prev.buyPrice);
+      const feesPercent = toNumber(prev.feesPercent);
+      const feesFixed = toNumber(prev.feesFixed);
+
       const profitFixed = calculateProfitFixedFromSellPrice({
-        buyPrice: toNumber(prev.buyPrice),
+        buyPrice,
         sellPrice,
-        feesPercent: toNumber(prev.feesPercent),
-        feesFixed: toNumber(prev.feesFixed),
-        profitPercent: toNumber(prev.profitPercent),
+        feesPercent,
+        feesFixed,
+        profitPercent: 0,
+      });
+
+      const profitPercent = calculateProfitPercentFromSellPrice({
+        buyPrice,
+        sellPrice,
+        feesPercent,
+        feesFixed,
+        profitFixed: 0,
       });
 
       return {
         ...prev,
         sellPrice: value,
         profitFixed: toMoneyString(profitFixed),
+        profitPercent: String(profitPercent),
       };
     });
   }
 
   function handleSellPriceBlur() {
     setForm((prev) => {
-      const normalizedSellPrice = toMoneyString(
-        applyRoundCents(toNumber(prev.sellPrice), prev.roundCentsEnabled ? 0.99 : null)
+      const buyPrice = toNumber(prev.buyPrice);
+      const feesPercent = toNumber(prev.feesPercent);
+      const feesFixed = toNumber(prev.feesFixed);
+      const minimumProfit = toNumber(prev.minimumProfit);
+      const roundCents = prev.roundCentsEnabled ? 0.99 : null;
+
+      let normalizedSellPriceNumber = applyRoundCents(
+        toNumber(prev.sellPrice),
+        roundCents
       );
+
+      let netProfit = calculateNetProfit({
+        buyPrice,
+        sellPrice: normalizedSellPriceNumber,
+        feesPercent,
+        feesFixed,
+      });
+
+      if (minimumProfit > 0 && netProfit < minimumProfit) {
+        normalizedSellPriceNumber = calculateSellPrice({
+          buyPrice,
+          feesPercent,
+          feesFixed,
+          profitPercent: 0,
+          profitFixed: minimumProfit,
+          roundCents,
+          minimumProfit,
+        });
+
+        netProfit = calculateNetProfit({
+          buyPrice,
+          sellPrice: normalizedSellPriceNumber,
+          feesPercent,
+          feesFixed,
+        });
+      }
+
       const profitFixed = calculateProfitFixedFromSellPrice({
-        buyPrice: toNumber(prev.buyPrice),
-        sellPrice: toNumber(normalizedSellPrice),
-        feesPercent: toNumber(prev.feesPercent),
-        feesFixed: toNumber(prev.feesFixed),
-        profitPercent: toNumber(prev.profitPercent),
+        buyPrice,
+        sellPrice: normalizedSellPriceNumber,
+        feesPercent,
+        feesFixed,
+        profitPercent: 0,
+      });
+
+      const profitPercent = calculateProfitPercentFromSellPrice({
+        buyPrice,
+        sellPrice: normalizedSellPriceNumber,
+        feesPercent,
+        feesFixed,
+        profitFixed: 0,
       });
 
       return {
         ...prev,
-        sellPrice: normalizedSellPrice,
+        sellPrice: toMoneyString(normalizedSellPriceNumber),
         profitFixed: toMoneyString(profitFixed),
+        profitPercent: String(profitPercent),
       };
     });
   }
 
   function handleRoundCentsChange(checked: boolean) {
     setForm((prev) => recalculateSellPrice({ ...prev, roundCentsEnabled: checked }));
-  }
-
-  function handleToggleAdditionalProfit(checked: boolean) {
-    const defaults = pricingDefaultsRef.current ?? pricingDefaults ?? {
-      feesPercent: 13,
-      feesFixed: 0.33,
-      profitPercent: 0,
-      profitFixed: 14,
-      minimumProfit: 1,
-    };
-
-    setIncludeAdditionalProfit(checked);
-    if (checked) {
-      const base = additionalProfitBaseRef.current ?? form;
-      additionalProfitBaseRef.current = base;
-      setForm(addSupplierProfitToExistingForm(base, defaults));
-      return;
-    }
-
-    const base = additionalProfitBaseRef.current;
-    additionalProfitBaseRef.current = null;
-    if (base) setForm(base);
   }
 
   function updateSpecific(
@@ -669,472 +666,446 @@ export default function EditVariantModal({
         onClose();
       }}
     >
-        <form
-          onSubmit={handleSubmit}
-          className="w-full max-w-4xl max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] overflow-hidden rounded-2xl bg-white shadow-2xl flex flex-col"
-        >
-          <div className="border-b border-gray-200 px-4 sm:px-6 py-4 sm:py-5 flex-shrink-0">
-            <div className="flex flex-wrap sm:flex-nowrap items-start justify-between gap-4">
-              <div className="flex items-center gap-3 sm:gap-4 min-w-0">
-                {heroImage ? (
-                  <img
-                    src={heroImage}
-                    alt={form.title || productTitle}
-                    className="h-12 w-12 sm:h-16 sm:w-16 rounded-xl object-cover border border-gray-200"
-                  />
-                ) : (
-                  <div className="h-12 w-12 sm:h-16 sm:w-16 rounded-xl border border-gray-200 bg-gray-100" />
-                )}
-                <div className="min-w-0">
-                  <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
-                    {variant ? "Edit Variant" : "Add Variant"}
-                  </p>
-                  <h2 className="truncate text-base sm:text-lg font-semibold text-gray-900">
-                    {productTitle}
-                  </h2>
-                  <p className="truncate text-xs sm:text-sm text-gray-500">
-                    {form.title.trim() || "Untitled variant"}
-                  </p>
-                </div>
-              </div>
-
-              <div
-                className={`rounded-xl border px-3 sm:px-4 py-2 sm:py-3 text-right flex-shrink-0 ${
-                  isNegativeTotalProfit
-                    ? "border-red-200 bg-red-50"
-                    : "border-emerald-200 bg-emerald-50"
-                }`}
-              >
-                <p
-                  className={`text-[11px] sm:text-xs font-medium uppercase tracking-wide ${
-                    isNegativeTotalProfit ? "text-red-700" : "text-emerald-700"
-                  }`}
-                >
-                  Total Profit
+      <form
+        onSubmit={handleSubmit}
+        className="w-full max-w-4xl max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] overflow-hidden rounded-2xl bg-white shadow-2xl flex flex-col"
+      >
+        <div className="border-b border-gray-200 px-4 sm:px-6 py-4 sm:py-5 flex-shrink-0">
+          <div className="flex flex-wrap sm:flex-nowrap items-start justify-between gap-4">
+            <div className="flex items-center gap-3 sm:gap-4 min-w-0">
+              {heroImage ? (
+                <img
+                  src={heroImage}
+                  alt={form.title || productTitle}
+                  className="h-12 w-12 sm:h-16 sm:w-16 rounded-xl object-cover border border-gray-200"
+                />
+              ) : (
+                <div className="h-12 w-12 sm:h-16 sm:w-16 rounded-xl border border-gray-200 bg-gray-100" />
+              )}
+              <div className="min-w-0">
+                <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                  {variant ? "Edit Variant" : "Add Variant"}
                 </p>
-                <p
-                  className={`text-lg sm:text-xl font-semibold ${
-                    isNegativeTotalProfit ? "text-red-800" : "text-emerald-900"
-                  }`}
-                >
-                  ${totalProfit.toFixed(2)}
-                </p>
-                <p
-                  className={`text-[11px] sm:text-xs ${
-                    isNegativeTotalProfit ? "text-red-700" : "text-emerald-800"
-                  }`}
-                >
-                  Fees ${totalFees.toFixed(2)}
+                <h2 className="truncate text-base sm:text-lg font-semibold text-gray-900">
+                  {productTitle}
+                </h2>
+                <p className="truncate text-xs sm:text-sm text-gray-500">
+                  {form.title.trim() || "Untitled variant"}
                 </p>
               </div>
             </div>
 
-            <div className="mt-4 flex items-center gap-6 border-b border-gray-100">
-              {(["pricing", "general"] as const).map((tab) => (
-                <button
-                  key={tab}
-                  type="button"
-                  onClick={() => setActiveTab(tab)}
-                  className={`border-b-2 pb-3 text-sm font-medium transition-colors ${
-                    activeTab === tab
-                      ? "border-orange-500 text-orange-600"
-                      : "border-transparent text-gray-500 hover:text-gray-700"
-                  }`}
-                >
-                  {tab === "pricing" ? "Pricing" : "General"}
-                </button>
-              ))}
+            <div
+              className={`rounded-xl border px-3 sm:px-4 py-2 sm:py-3 text-right flex-shrink-0 ${
+                isNegativeTotalProfit
+                  ? "border-red-200 bg-red-50"
+                  : "border-emerald-200 bg-emerald-50"
+              }`}
+            >
+              <p
+                className={`text-[11px] sm:text-xs font-medium uppercase tracking-wide ${
+                  isNegativeTotalProfit ? "text-red-700" : "text-emerald-700"
+                }`}
+              >
+                Total Profit
+              </p>
+              <p
+                className={`text-lg sm:text-xl font-semibold ${
+                  isNegativeTotalProfit ? "text-red-800" : "text-emerald-900"
+                }`}
+              >
+                ${totalProfit.toFixed(2)}
+                {buyPriceNumber > 0 && (
+                  <span className="text-xs font-normal ml-1.5 opacity-80">
+                    ({((totalProfit / buyPriceNumber) * 100).toFixed(1)}%)
+                  </span>
+                )}
+              </p>
+              <p
+                className={`text-[11px] sm:text-xs ${
+                  isNegativeTotalProfit ? "text-red-700" : "text-emerald-800"
+                }`}
+              >
+                Fees ${totalFees.toFixed(2)}
+              </p>
             </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 sm:py-5">
-            {activeTab === "pricing" && (
+          <div className="mt-4 flex items-center gap-6 border-b border-gray-100">
+            {(["pricing", "general"] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setActiveTab(tab)}
+                className={`border-b-2 pb-3 text-sm font-medium transition-colors ${
+                  activeTab === tab
+                    ? "border-orange-500 text-orange-600"
+                    : "border-transparent text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                {tab === "pricing" ? "Pricing" : "General"}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 sm:py-5">
+          {activeTab === "pricing" && (
+            <div className="grid gap-4 md:grid-cols-2">
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Buy Price
+                </label>
+                <input
+                  type="number"
+                  value={form.buyPrice}
+                  readOnly
+                  className="w-full rounded-md border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-700"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Sell Price
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={form.sellPrice}
+                  onChange={(event) => handleSellPriceChange(event.target.value)}
+                  onBlur={handleSellPriceBlur}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Fees %
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={form.feesPercent}
+                  onChange={(event) => updatePricingField("feesPercent", event.target.value)}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Fees Fixed
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={form.feesFixed}
+                  onChange={(event) => updatePricingField("feesFixed", event.target.value)}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Profit %
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={form.profitPercent}
+                  onChange={(event) => updatePricingField("profitPercent", event.target.value)}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Profit Fixed
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={form.profitFixed}
+                  onChange={(event) => updatePricingField("profitFixed", event.target.value)}
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Local Promoted Ad Reference %
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.01"
+                  value={form.promotedAdPercent}
+                  onChange={(event) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      promotedAdPercent: event.target.value,
+                    }))
+                  }
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  Reference only. Live eBay ad rates are synced on Products.
+                </p>
+              </div>
+
+              <label className="flex items-center gap-3 rounded-lg border border-gray-200 px-4 py-3">
+                <input
+                  type="checkbox"
+                  checked={form.includeShipping}
+                  onChange={(event) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      includeShipping: event.target.checked,
+                    }))
+                  }
+                  className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                />
+                <span className="text-sm text-gray-700">Include Shipping</span>
+              </label>
+
+              <label className="flex items-center gap-3 rounded-lg border border-gray-200 px-4 py-3">
+                <input
+                  type="checkbox"
+                  checked={form.allowMarketplace}
+                  onChange={(event) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      allowMarketplace: event.target.checked,
+                    }))
+                  }
+                  className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                />
+                <span className="text-sm text-gray-700">Allow Marketplace Sellers</span>
+              </label>
+
+              <label className="flex items-center gap-3 rounded-lg border border-gray-200 px-4 py-3 md:col-span-2">
+                <input
+                  type="checkbox"
+                  checked={form.roundCentsEnabled}
+                  onChange={(event) => handleRoundCentsChange(event.target.checked)}
+                  className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+                />
+                <span className="text-sm text-gray-700">Round Cents to .99</span>
+              </label>
+            </div>
+          )}
+
+          {activeTab === "general" && (
+            <div className="space-y-4">
+              {isProductOnHold && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+                  <p className="font-medium">This eBay listing is on hold. Current quantity is 0.</p>
+                  <p className="mt-1 text-xs">
+                    Set Quantity above 0 and save to queue the listing to resume on eBay.
+                  </p>
+                </div>
+              )}
               <div className="grid gap-4 md:grid-cols-2">
                 <div>
                   <label className="mb-1 block text-sm font-medium text-gray-700">
-                    Buy Price
-                  </label>
-                  <input
-                    type="number"
-                    value={form.buyPrice}
-                    readOnly
-                    className="w-full rounded-md border border-gray-300 bg-gray-50 px-3 py-2 text-sm text-gray-700"
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">
-                    Sell Price
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.sellPrice}
-                    onChange={(event) => handleSellPriceChange(event.target.value)}
-                    onBlur={handleSellPriceBlur}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">
-                    Fees %
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    value={form.feesPercent}
-                    onChange={(event) => updatePricingField("feesPercent", event.target.value)}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">
-                    Fees Fixed
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={form.feesFixed}
-                    onChange={(event) => updatePricingField("feesFixed", event.target.value)}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">
-                    Profit %
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={form.profitPercent}
-                    onChange={(event) => updatePricingField("profitPercent", event.target.value)}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">
-                    Profit Fixed
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={form.profitFixed}
-                    onChange={(event) => updatePricingField("profitFixed", event.target.value)}
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">
-                    Local Promoted Ad Reference %
-                  </label>
-                  <input
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="0.01"
-                    value={form.promotedAdPercent}
-                    onChange={(event) =>
-                      setForm((prev) => ({
-                        ...prev,
-                        promotedAdPercent: event.target.value,
-                      }))
-                    }
-                    className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                  />
-                  <p className="mt-1 text-xs text-gray-500">
-                    Reference only. Live eBay ad rates are synced on Products.
-                  </p>
-                </div>
-
-                <label className="flex items-center gap-3 rounded-lg border border-gray-200 px-4 py-3">
-                  <input
-                    type="checkbox"
-                    checked={form.includeShipping}
-                    onChange={(event) =>
-                      setForm((prev) => ({
-                        ...prev,
-                        includeShipping: event.target.checked,
-                      }))
-                    }
-                    className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
-                  />
-                  <span className="text-sm text-gray-700">Include Shipping</span>
-                </label>
-
-                <label className="flex items-center gap-3 rounded-lg border border-gray-200 px-4 py-3">
-                  <input
-                    type="checkbox"
-                    checked={form.allowMarketplace}
-                    onChange={(event) =>
-                      setForm((prev) => ({
-                        ...prev,
-                        allowMarketplace: event.target.checked,
-                      }))
-                    }
-                    className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
-                  />
-                  <span className="text-sm text-gray-700">Allow Marketplace Sellers</span>
-                </label>
-
-                <label className="flex items-center gap-3 rounded-lg border border-gray-200 px-4 py-3 md:col-span-2">
-                  <input
-                    type="checkbox"
-                    checked={form.roundCentsEnabled}
-                    onChange={(event) => handleRoundCentsChange(event.target.checked)}
-                    className="rounded border-gray-300 text-orange-500 focus:ring-orange-500"
-                  />
-                  <span className="text-sm text-gray-700">Round Cents to .99</span>
-                </label>
-
-                {variant && (
-                  <label
-                    htmlFor="include-additional-profit-toggle"
-                    className="flex items-center justify-between rounded-lg border border-orange-200 bg-orange-50/50 px-4 py-3 md:col-span-2 cursor-pointer hover:bg-orange-50 transition-colors select-none"
-                  >
-                    <div>
-                      <span className="text-sm font-medium text-gray-800">
-                        Include Additional Profit from Settings
-                      </span>
-                      <p className="mt-0.5 text-xs text-gray-500">
-                        {pricingDefaults &&
-                        (pricingDefaults.profitFixed > 0 ||
-                          pricingDefaults.profitPercent > 0)
-                          ? `Adds +A$${pricingDefaults.profitFixed.toFixed(
-                              2
-                            )} and +${pricingDefaults.profitPercent}% on top of existing profit.`
-                          : "Adds supplier additional profit (+A$14.00) to this variant."}
-                      </p>
-                    </div>
-                    <input
-                      type="checkbox"
-                      id="include-additional-profit-toggle"
-                      checked={includeAdditionalProfit}
-                      onChange={(event) =>
-                        handleToggleAdditionalProfit(event.target.checked)
-                      }
-                      className="h-4 w-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500 cursor-pointer"
-                    />
-                  </label>
-                )}
-              </div>
-            )}
-
-            {activeTab === "general" && (
-              <div className="space-y-4">
-                {isProductOnHold && (
-                  <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                    <p className="font-medium">This eBay listing is on hold. Current quantity is 0.</p>
-                    <p className="mt-1 text-xs">
-                      Set Quantity above 0 and save to queue the listing to resume on eBay.
-                    </p>
-                  </div>
-                )}
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">
-                      SKU
-                    </label>
-                    <input
-                      type="text"
-                      value={form.sku}
-                      onChange={(event) =>
-                        setForm((prev) => ({ ...prev, sku: event.target.value }))
-                      }
-                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">
-                      Quantity
-                    </label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="1"
-                      value={form.quantity}
-                      onChange={(event) =>
-                        setForm((prev) => ({ ...prev, quantity: event.target.value }))
-                      }
-                      className={`w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 ${
-                        isProductOnHold
-                          ? "border-amber-300 bg-white font-medium text-gray-900"
-                          : "border-gray-300 text-gray-900"
-                      }`}
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">
-                      Variant Title
-                    </label>
-                    <input
-                      type="text"
-                      value={form.title}
-                      onChange={(event) =>
-                        setForm((prev) => ({ ...prev, title: event.target.value }))
-                      }
-                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="mb-1 block text-sm font-medium text-gray-700">
-                      Inventory Status
-                    </label>
-                    {isProductOnHold ? (
-                      <div
-                        className={`flex h-[38px] items-center rounded-md border px-3 text-sm font-medium ${
-                          willResumeOnSave
-                            ? "border-green-200 bg-green-50 text-green-800"
-                            : "border-amber-200 bg-amber-50 text-amber-800"
-                        }`}
-                      >
-                        {willResumeOnSave
-                          ? `Will resume with quantity ${desiredQuantity}`
-                          : "On Hold (eBay quantity 0)"}
-                      </div>
-                    ) : (
-                      <select
-                        value={form.status}
-                        onChange={(event) =>
-                          setForm((prev) => ({
-                            ...prev,
-                            status: event.target.value as VariantPayload["status"],
-                          }))
-                        }
-                        className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                      >
-                        <option value="IN_STOCK">In Stock</option>
-                        <option value="OUT_OF_STOCK">Out of Stock</option>
-                      </select>
-                    )}
-                  </div>
-                </div>
-
-                <div>
-                  <label className="mb-1 block text-sm font-medium text-gray-700">
-                    Automation
+                    SKU
                   </label>
                   <input
                     type="text"
-                    value={form.automation}
+                    value={form.sku}
                     onChange={(event) =>
-                      setForm((prev) => ({ ...prev, automation: event.target.value }))
+                      setForm((prev) => ({ ...prev, sku: event.target.value }))
                     }
-                    placeholder="Optional automation setting"
                     className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
                 </div>
 
                 <div>
                   <label className="mb-1 block text-sm font-medium text-gray-700">
-                    Variant Images
+                    Quantity
                   </label>
-                  <textarea
-                    value={form.imagesText}
+                  <input
+                    type="number"
+                    min="0"
+                    step="1"
+                    value={form.quantity}
                     onChange={(event) =>
-                      setForm((prev) => ({ ...prev, imagesText: event.target.value }))
+                      setForm((prev) => ({ ...prev, quantity: event.target.value }))
                     }
-                    rows={4}
-                    placeholder="One image URL per line"
+                    className={`w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 ${
+                      isProductOnHold
+                        ? "border-amber-300 bg-white font-medium text-gray-900"
+                        : "border-gray-300 text-gray-900"
+                    }`}
+                  />
+                </div>
+
+                <div>
+                  <label className="mb-1 block text-sm font-medium text-gray-700">
+                    Variant Title
+                  </label>
+                  <input
+                    type="text"
+                    value={form.title}
+                    onChange={(event) =>
+                      setForm((prev) => ({ ...prev, title: event.target.value }))
+                    }
                     className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
                 </div>
 
                 <div>
-                  <div className="mb-2 flex items-center justify-between">
-                    <label className="block text-sm font-medium text-gray-700">
-                      Item Specifics
-                    </label>
-                    <button
-                      type="button"
-                      onClick={addSpecific}
-                      className="text-sm font-medium text-green-600 hover:text-green-800"
+                  <label className="mb-1 block text-sm font-medium text-gray-700">
+                    Inventory Status
+                  </label>
+                  {isProductOnHold ? (
+                    <div
+                      className={`flex h-[38px] items-center rounded-md border px-3 text-sm font-medium ${
+                        willResumeOnSave
+                          ? "border-green-200 bg-green-50 text-green-800"
+                          : "border-amber-200 bg-amber-50 text-amber-800"
+                      }`}
                     >
-                      + Add Specific
-                    </button>
-                  </div>
-
-                  <div className="space-y-2">
-                    {form.itemSpecifics.map((item, index) => (
-                      <div key={index} className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
-                        <input
-                          type="text"
-                          value={item.key}
-                          onChange={(event) =>
-                            updateSpecific(index, "key", event.target.value)
-                          }
-                          placeholder="Name"
-                          className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                        />
-                        <input
-                          type="text"
-                          value={item.value}
-                          onChange={(event) =>
-                            updateSpecific(index, "value", event.target.value)
-                          }
-                          placeholder="Value"
-                          className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => removeSpecific(index)}
-                          className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    ))}
-
-                    {form.itemSpecifics.length === 0 && (
-                      <p className="rounded-md border border-dashed border-gray-300 px-3 py-4 text-sm text-gray-500">
-                        No variant-specific item specifics yet.
-                      </p>
-                    )}
-                  </div>
+                      {willResumeOnSave
+                        ? `Will resume with quantity ${desiredQuantity}`
+                        : "On Hold (eBay quantity 0)"}
+                    </div>
+                  ) : (
+                    <select
+                      value={form.status}
+                      onChange={(event) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          status: event.target.value as VariantPayload["status"],
+                        }))
+                      }
+                      className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                    >
+                      <option value="IN_STOCK">In Stock</option>
+                      <option value="OUT_OF_STOCK">Out of Stock</option>
+                    </select>
+                  )}
                 </div>
               </div>
-            )}
-          </div>
 
-          <div className="border-t border-gray-200 px-6 py-4">
-            <div className="flex items-center justify-between gap-4">
-              <div className="min-h-5 text-sm text-red-600">{error}</div>
-              <div className="flex items-center gap-3">
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSaving}
-                  className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-40"
-                >
-                  {isSaving
-                    ? willResumeOnSave
-                      ? "Saving & Queuing..."
-                      : "Saving..."
-                    : willResumeOnSave
-                      ? "Save & Resume"
-                      : variant
-                        ? "Save Variant"
-                        : "Create Variant"}
-                </button>
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Automation
+                </label>
+                <input
+                  type="text"
+                  value={form.automation}
+                  onChange={(event) =>
+                    setForm((prev) => ({ ...prev, automation: event.target.value }))
+                  }
+                  placeholder="Optional automation setting"
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+
+              <div>
+                <label className="mb-1 block text-sm font-medium text-gray-700">
+                  Variant Images
+                </label>
+                <textarea
+                  value={form.imagesText}
+                  onChange={(event) =>
+                    setForm((prev) => ({ ...prev, imagesText: event.target.value }))
+                  }
+                  rows={4}
+                  placeholder="One image URL per line"
+                  className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                />
+              </div>
+
+              <div>
+                <div className="mb-2 flex items-center justify-between">
+                  <label className="block text-sm font-medium text-gray-700">
+                    Item Specifics
+                  </label>
+                  <button
+                    type="button"
+                    onClick={addSpecific}
+                    className="text-sm font-medium text-green-600 hover:text-green-800"
+                  >
+                    + Add Specific
+                  </button>
+                </div>
+
+                <div className="space-y-2">
+                  {form.itemSpecifics.map((item, index) => (
+                    <div key={index} className="grid gap-2 md:grid-cols-[1fr_1fr_auto]">
+                      <input
+                        type="text"
+                        value={item.key}
+                        onChange={(event) =>
+                          updateSpecific(index, "key", event.target.value)
+                        }
+                        placeholder="Name"
+                        className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                      <input
+                        type="text"
+                        value={item.value}
+                        onChange={(event) =>
+                          updateSpecific(index, "value", event.target.value)
+                        }
+                        placeholder="Value"
+                        className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeSpecific(index)}
+                        className="rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-600 hover:bg-gray-50"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+
+                  {form.itemSpecifics.length === 0 && (
+                    <p className="rounded-md border border-dashed border-gray-300 px-3 py-4 text-sm text-gray-500">
+                      No variant-specific item specifics yet.
+                    </p>
+                  )}
+                </div>
               </div>
             </div>
+          )}
+        </div>
+
+        <div className="border-t border-gray-200 px-6 py-4">
+          <div className="flex items-center justify-between gap-4">
+            <div className="min-h-5 text-sm text-red-600">{error}</div>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-md border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={isSaving}
+                className="rounded-md bg-gray-900 px-4 py-2 text-sm font-medium text-white hover:bg-gray-700 disabled:opacity-40"
+              >
+                {isSaving
+                  ? willResumeOnSave
+                    ? "Saving & Queuing..."
+                    : "Saving..."
+                  : willResumeOnSave
+                    ? "Save & Resume"
+                    : variant
+                      ? "Save Variant"
+                      : "Create Variant"}
+              </button>
+            </div>
           </div>
-        </form>
+        </div>
+      </form>
     </dialog>,
     portalRoot,
   );

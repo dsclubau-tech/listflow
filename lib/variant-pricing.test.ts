@@ -4,6 +4,7 @@ import {
   applyRoundCents,
   calculateNetProfit,
   calculateProfitFixedFromSellPrice,
+  calculateProfitPercentFromSellPrice,
   calculateSellPrice,
   calculateTotalFees,
   calculateTotalProfit,
@@ -66,6 +67,32 @@ test("calculateProfitFixedFromSellPrice inverts the sell-price formula", () => {
       profitPercent: 0,
     }),
     1
+  );
+});
+
+test("calculateProfitPercentFromSellPrice derives percentage profit on cost", () => {
+  // Buy 44.95, Sell 67.94, 13% fees + 0.33 -> net profit 13.83 -> (13.83 / 44.95) * 100 = 30.77%
+  assert.equal(
+    calculateProfitPercentFromSellPrice({
+      buyPrice: 44.95,
+      sellPrice: 67.94,
+      feesPercent: 13,
+      feesFixed: 0.33,
+      profitFixed: 0,
+    }),
+    30.76
+  );
+
+  // Buy 75.99, Sell 105.89, 13% fees + 0.33 -> net profit 15.80 -> (15.80 / 75.99) * 100 = 20.80%
+  assert.equal(
+    calculateProfitPercentFromSellPrice({
+      buyPrice: 75.99,
+      sellPrice: 105.89,
+      feesPercent: 13,
+      feesFixed: 0.33,
+      profitFixed: 0,
+    }),
+    20.8
   );
 });
 
