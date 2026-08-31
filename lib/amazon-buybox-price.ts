@@ -1,5 +1,6 @@
 import type { CheerioAPI } from "cheerio";
 import type { AmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
+import { extractAmazonShippingFeeFromCheerio } from "@/lib/amazon-shipping";
 
 const SCRAPER_MIN_PRICE = 1;
 
@@ -63,6 +64,8 @@ export type AmazonBuyboxPriceResult = {
   asin: string | null;
   containerSelector: string;
   price: number;
+  itemPrice?: number;
+  shippingFee?: number | null;
   priceSource: "localized_buybox" | "rendered_selected_variant_buybox";
   selector: string;
   mode: AmazonPriceTrackingMode;
@@ -71,6 +74,7 @@ export type AmazonBuyboxPriceResult = {
 
 export type AmazonBuyboxPriceChoices = {
   asin: string | null;
+  shippingFee?: number | null;
   regular: AmazonBuyboxPriceResult | null;
   deal: AmazonBuyboxPriceResult | null;
 };
@@ -173,11 +177,20 @@ function buildResult(
   price: number,
   mode: AmazonPriceTrackingMode,
   label = mode === "DEAL" ? "Deal price" : "Regular price",
+  shippingFee: number | null = null,
 ): AmazonBuyboxPriceResult {
+  const itemPrice = price;
+  const effectivePrice =
+    shippingFee !== null && shippingFee > 0
+      ? Math.round((price + shippingFee) * 100) / 100
+      : price;
+
   return {
     asin: asin || null,
     containerSelector,
-    price,
+    price: effectivePrice,
+    itemPrice,
+    shippingFee,
     priceSource: "localized_buybox",
     selector,
     mode,
@@ -227,8 +240,10 @@ export function extractLocalizedBuyboxPriceChoices(
   asin: string
 ): AmazonBuyboxPriceChoices {
   const normalizedAsin = asin.trim().toUpperCase();
+  const shippingFee = extractAmazonShippingFeeFromCheerio($);
   const choices: AmazonBuyboxPriceChoices = {
     asin: normalizedAsin || null,
+    shippingFee,
     regular: null,
     deal: null,
   };
@@ -261,6 +276,7 @@ export function extractLocalizedBuyboxPriceChoices(
         PRIME_MEMBER_PRICE_LABEL_PATTERN.test(containerText)
           ? "Prime member price"
           : "Deal price",
+        shippingFee,
       );
     }
 
@@ -278,7 +294,9 @@ export function extractLocalizedBuyboxPriceChoices(
         containerSelector,
         "label:regular-price",
         labelledRegular,
-        "REGULAR"
+        "REGULAR",
+        "Regular price",
+        shippingFee,
       );
     }
 
@@ -358,6 +376,7 @@ export function extractLocalizedBuyboxPriceChoices(
               : hasVerifiedSavingsDeal
                 ? "Discounted price"
                 : "Deal price",
+            shippingFee,
           );
           return;
         }
@@ -368,7 +387,9 @@ export function extractLocalizedBuyboxPriceChoices(
             containerSelector,
             selector,
             price,
-            "REGULAR"
+            "REGULAR",
+            "Regular price",
+            shippingFee,
           );
         }
       });

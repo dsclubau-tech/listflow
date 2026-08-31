@@ -77,6 +77,13 @@ export async function PATCH(request: Request) {
     }
   }
 
+  if (data.defaultUploadProfitPercent !== undefined) {
+    data.additionalProfitPercent = data.defaultUploadProfitPercent;
+  }
+  if (data.defaultUploadProfitFixed !== undefined) {
+    data.additionalProfitFixed = data.defaultUploadProfitFixed;
+  }
+
   const hasProfitTiers = Array.isArray(body.profitTiers);
   if (Object.keys(data).length === 0 && !hasProfitTiers) {
     return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });

@@ -1,6 +1,7 @@
 import type { Browser, Page } from "playwright-core";
 import { load } from "cheerio";
 import { extractLocalizedBuyboxPriceChoices } from "@/lib/amazon-buybox-price";
+import { parseAmazonShippingFeeFromText } from "@/lib/amazon-shipping";
 import { extractAmazonNewOfferStockLeft } from "@/lib/amazon-stock";
 import { launchScraperBrowser } from "@/lib/scraper-browser";
 import { isUsefulItemSpecificCandidate } from "@/lib/item-specifics";
@@ -34,6 +35,8 @@ export interface ScrapedProduct {
   description: string;
   images: string[];
   price: number | null;
+  rawPrice?: number | null;
+  shippingPrice?: number | null;
   condition: "New"; // Amazon products are always new
   category: string;
   categoryId: string;
@@ -63,6 +66,8 @@ export interface ScrapedProduct {
 
 export interface ScrapedAmazonPrice {
   price: number | null;
+  rawPrice?: number | null;
+  shippingPrice?: number | null;
   stockLeft: number | null;
   priceMode?: AmazonPriceTrackingMode;
   priceChoices?: {
@@ -1292,6 +1297,37 @@ export async function scrapeAmazonProduct(
       }
     }
 
+    const deliveryFeeText = await page
+      .evaluate(() => {
+        const selectors = [
+          "#deliveryBlockMessage",
+          "#mir-layout-DELIVERY_BLOCK-slot-PRIMARY_DELIVERY_MESSAGE_LARGE",
+          "#mir-layout-DELIVERY_BLOCK-slot-SECONDARY_DELIVERY_MESSAGE_LARGE",
+          "#amazonGlobal_feature_div",
+          "#delivery-message",
+          "#ourprice_shippingmessage",
+          "#price-shipping-message",
+          "#freeShippingRegion",
+          "#aod-offer-shipping",
+          "#buybox",
+          "#desktop_buybox",
+          "#apex_desktop",
+        ];
+        for (const selector of selectors) {
+          const el = document.querySelector(selector);
+          if (el?.textContent?.trim()) {
+            return el.textContent.trim();
+          }
+        }
+        return null;
+      })
+      .catch(() => null);
+    const shippingPrice = parseAmazonShippingFeeFromText(deliveryFeeText);
+    const rawPrice = price;
+    if (price !== null && shippingPrice !== null && shippingPrice > 0) {
+      price = Math.round((price + shippingPrice) * 100) / 100;
+    }
+
     // Active variant
     const variantName = await page
       .$eval(
@@ -1726,6 +1762,8 @@ export async function scrapeAmazonProduct(
       description: cleanDescriptionHtml(description),
       images,
       price,
+      rawPrice,
+      shippingPrice,
       condition: "New",
       category,
       categoryId: "",

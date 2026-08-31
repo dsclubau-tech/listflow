@@ -1889,9 +1889,13 @@ export async function scrapeAmazonProductDirect(
 
   if (buyboxPrice) {
     product.price = buyboxPrice.price;
+    product.rawPrice = buyboxPrice.itemPrice ?? buyboxPrice.price;
+    product.shippingPrice = buyboxPrice.shippingFee ?? null;
     product.amazonPriceTrackingMode = buyboxPrice.mode;
   } else {
     product.price = renderedFallbackPrice;
+    product.rawPrice = renderedFallbackPrice;
+    product.shippingPrice = null;
     product.amazonPriceTrackingMode = requestedMode;
     product.priceChoices[requestedMode === "DEAL" ? "deal" : "regular"] = {
       price: renderedFallbackPrice!,

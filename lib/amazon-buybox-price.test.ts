@@ -119,6 +119,28 @@ test("extractLocalizedBuyboxPriceChoices returns deal and regular buybox prices"
   );
 });
 
+test("extractLocalizedBuyboxPriceChoices includes shipping fee in effective price", () => {
+  const $ = load(`
+    <div id="buybox">
+      <div id="corePrice_feature_div">
+        <span class="a-price priceToPay">
+          <span class="a-offscreen">$108.81</span>
+        </span>
+      </div>
+      <div id="mir-layout-DELIVERY_BLOCK-slot-PRIMARY_DELIVERY_MESSAGE_LARGE">
+        <span>$69.37 International delivery Tuesday, 15 September. Details</span>
+      </div>
+    </div>
+  `);
+
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0CCHSMGWT");
+
+  assert.equal(choices.shippingFee, 69.37);
+  assert.equal(choices.regular?.price, 178.18);
+  assert.equal(choices.regular?.itemPrice, 108.81);
+  assert.equal(choices.regular?.shippingFee, 69.37);
+});
+
 test("extractLocalizedBuyboxPriceChoices reads split labelled deal and regular prices", () => {
   const $ = load(`
     <div id="corePrice_feature_div">

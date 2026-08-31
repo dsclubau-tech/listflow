@@ -54,6 +54,10 @@ export async function getOrCreateStoreSupplierSettings(storeId: string) {
       defaultUploadProfitPercent:
         globalSettings?.defaultUploadProfitPercent ?? 0,
       defaultUploadProfitFixed: globalSettings?.defaultUploadProfitFixed ?? 0,
+      additionalProfitPercent:
+        globalSettings?.defaultUploadProfitPercent ?? 0,
+      additionalProfitFixed: globalSettings?.defaultUploadProfitFixed ?? 0,
+      applyAdditionalProfitToExisting: false,
       minimumProfit: globalSettings?.minimumProfit ?? 1,
       capitalizeTitle: globalSettings?.capitalizeTitle ?? false,
       autofillBrand: globalSettings?.autofillBrand ?? true,

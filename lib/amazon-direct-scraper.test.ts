@@ -51,6 +51,7 @@ function amazonProductHtml(input: {
   imageScript?: string | null;
   descriptionHtml?: string | null;
   detailsHtml?: string | null;
+  shippingHtml?: string | null;
 }) {
   const deliveryLocation = input.postcode
     ? `<div id="glow-ingress-line1">Deliver to RK</div><div id="glow-ingress-line2">Kogarah ${input.postcode}</div>`
@@ -88,6 +89,7 @@ function amazonProductHtml(input: {
         ${input.imageScript ?? ""}
         ${pageWide}
         ${buybox}
+        ${input.shippingHtml ?? ""}
         ${input.detailsHtml ?? ""}
         ${
           input.descriptionHtml ??
@@ -250,6 +252,42 @@ test("scrapeAmazonProductDirect uses selected Amazon price tracking mode", async
   assert.equal(product.amazonPriceTrackingMode, "DEAL");
   assert.equal(product.priceChoices?.regular?.price, 79.99);
   assert.equal(product.priceChoices?.deal?.price, 63.99);
+});
+
+test("scrapeAmazonProductDirect includes shipping fee in product buy price", async (t) => {
+  const { scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
+
+  installFetchMock(t, [
+    {
+      body: amazonProductHtml({
+        buyboxPrice: "$108.81",
+        shippingHtml:
+          '<div id="mir-layout-DELIVERY_BLOCK-slot-PRIMARY_DELIVERY_MESSAGE_LARGE"><span>$69.37 International delivery Tuesday, 15 September. Details</span></div>',
+      }),
+    },
+    { body: '{"isValidAddress":1}' },
+    {
+      body: amazonProductHtml({
+        buyboxPrice: "$108.81",
+        shippingHtml:
+          '<div id="mir-layout-DELIVERY_BLOCK-slot-PRIMARY_DELIVERY_MESSAGE_LARGE"><span>$69.37 International delivery Tuesday, 15 September. Details</span></div>',
+        postcode: "2217",
+      }),
+    },
+  ]);
+
+  const product = await scrapeAmazonProductDirect(
+    "https://www.amazon.com.au/dp/B0CCHSMGWT",
+    {
+      postcode: "2217",
+      priceTrackingMode: "REGULAR",
+    }
+  );
+
+  assert.equal(product.price, 178.18);
+  assert.equal(product.rawPrice, 108.81);
+  assert.equal(product.shippingPrice, 69.37);
+  assert.equal(product.priceChoices?.regular?.price, 178.18);
 });
 
 test("scrapeAmazonProductDirect keeps full Amazon title separately from eBay listing title", async (t) => {
