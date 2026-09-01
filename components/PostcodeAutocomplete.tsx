@@ -72,7 +72,7 @@ export function PostcodeAutocomplete({
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     const rawVal = e.target.value;
     setInternalSelectedLocation("");
-    const newLoc = isAu ? getZipcodeLocationText(rawVal, country) : "";
+    const newLoc = isAu ? getZipcodeLocationText(rawVal, country, effectiveSelectedLocation) : "";
     onChange(rawVal, newLoc);
 
     if (debounceTimerRef.current) {
@@ -109,9 +109,10 @@ export function PostcodeAutocomplete({
       e.preventDefault();
       setActiveIndex((prev) => (prev > 0 ? prev - 1 : suggestions.length - 1));
     } else if (e.key === "Enter") {
-      if (activeIndex >= 0 && activeIndex < suggestions.length) {
-        e.preventDefault();
-        handleSelectSuggestion(suggestions[activeIndex]);
+      e.preventDefault();
+      const targetIndex = activeIndex >= 0 ? activeIndex : 0;
+      if (targetIndex < suggestions.length) {
+        handleSelectSuggestion(suggestions[targetIndex]);
       }
     } else if (e.key === "Escape") {
       setIsOpen(false);
@@ -145,21 +146,39 @@ export function PostcodeAutocomplete({
       )}
 
       {isOpen && suggestions.length > 0 && (
-        <ul className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-md bg-white py-1 shadow-lg ring-1 ring-black/5 text-xs">
+        <ul
+          onMouseDown={(e) => e.preventDefault()}
+          className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-md bg-white py-1 shadow-lg ring-1 ring-black/5 text-xs"
+        >
           {suggestions.map((item, index) => {
             const isSelected = index === activeIndex;
+            const isCurrentSelected =
+              resolvedLocation === item.locationText ||
+              resolvedLocation.toLowerCase().startsWith(item.suburb.toLowerCase());
             return (
               <li
                 key={`${item.postcode}-${item.suburb}-${index}`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  handleSelectSuggestion(item);
+                }}
                 onClick={() => handleSelectSuggestion(item)}
                 onMouseEnter={() => setActiveIndex(index)}
                 className={`cursor-pointer px-3 py-2 transition-colors flex items-center justify-between ${
-                  isSelected ? "bg-orange-50 text-orange-900 font-medium" : "text-gray-700 hover:bg-gray-50"
+                  isSelected
+                    ? "bg-orange-50 text-orange-900 font-medium"
+                    : isCurrentSelected
+                      ? "bg-emerald-50 text-emerald-900 font-medium"
+                      : "text-gray-700 hover:bg-gray-50"
                 }`}
               >
                 <div className="flex items-center gap-2">
                   <span className="font-semibold text-gray-900 w-12">{item.postcode}</span>
                   <span className="text-gray-800 font-medium">{item.suburb}</span>
+                  {isCurrentSelected && (
+                    <span className="text-emerald-600 font-bold ml-1 text-xs">✓</span>
+                  )}
                 </div>
                 <span className="text-gray-400 text-[10px] uppercase font-mono">{item.state}</span>
               </li>

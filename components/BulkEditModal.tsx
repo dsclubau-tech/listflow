@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import ActionProgressBar from "@/components/ActionProgressBar";
 import { PostcodeAutocomplete } from "@/components/PostcodeAutocomplete";
-import { getZipcodeLocationText } from "@/lib/ebay-location";
+import { getSuburbsForAuPostcode, getZipcodeLocationText } from "@/lib/ebay-location";
 
 type ToastVariant = "success" | "error";
 
@@ -693,13 +693,15 @@ export default function BulkEditModal({
     }
 
     if (item.field === "location") {
+      const isAu = item.location === "Australia";
+      const auSuburbsData = isAu ? getSuburbsForAuPostcode(item.postalCode) : null;
       const displayLocation =
         item.locationText ||
         getZipcodeLocationText(item.postalCode, item.location);
 
       return (
-        <div className="space-y-1.5">
-          <div className="grid gap-2 sm:grid-cols-[1fr_140px]">
+        <div className="space-y-2">
+          <div className="grid gap-2 sm:grid-cols-[140px_1fr]">
             <select
               value={item.location}
               onChange={(event) =>
@@ -731,9 +733,36 @@ export default function BulkEditModal({
               showHint={false}
             />
           </div>
+
+          {/* If there are multiple suburbs for this postcode, show explicit suburb selector */}
+          {auSuburbsData && auSuburbsData.suburbs.length > 1 && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-gray-500">Suburb:</span>
+              <select
+                value={
+                  auSuburbsData.suburbs.find((sub) =>
+                    displayLocation.toLowerCase().startsWith(sub.toLowerCase()),
+                  ) || auSuburbsData.suburbs[0]
+                }
+                onChange={(e) => {
+                  const chosenSuburb = e.target.value;
+                  const newLocText = `${chosenSuburb}, ${auSuburbsData.state}`;
+                  updateItem(item.id, { locationText: newLocText });
+                }}
+                className="h-8 rounded-md border border-gray-300 bg-white px-2 text-xs font-medium text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+              >
+                {auSuburbsData.suburbs.map((sub) => (
+                  <option key={sub} value={sub}>
+                    {sub} ({item.postalCode})
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
           {displayLocation && (
-            <div className="flex items-center gap-1.5 text-xs text-emerald-700 font-medium">
-              <span>📍 {displayLocation}</span>
+            <div className="flex items-center gap-1.5 text-xs text-emerald-700 font-medium bg-emerald-50 px-2.5 py-1 rounded border border-emerald-200 w-fit">
+              <span>📍 Selected Location: <strong className="font-semibold">{displayLocation}</strong></span>
             </div>
           )}
         </div>

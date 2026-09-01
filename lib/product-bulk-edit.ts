@@ -515,6 +515,7 @@ export async function applyBulkProductEdits(input: ApplyBulkProductEditsInput) {
             resolveEbayLocationMetadata({
               country: metadata.country,
               postalCode: operation.value.postalCode,
+              location: operation.value.locationText,
             }).location;
 
           itemSpecifics = sanitizeEbayItemSpecifics({

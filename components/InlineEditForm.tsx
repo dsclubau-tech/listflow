@@ -34,6 +34,7 @@ import { getPolicyDescriptionTemplateId } from "@/lib/policy-template-descriptio
 import { resolveRequiredItemSpecifics } from "@/lib/required-specific-resolver";
 import {
   getEbayCountryLabel,
+  getSuburbsForAuPostcode,
   resolveEbayLocationMetadata,
 } from "@/lib/ebay-location";
 import {
@@ -2489,6 +2490,34 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500 bg-white"
                 showHint={false}
               />
+              {countryLocation === "Australia" && (() => {
+                const auSuburbs = getSuburbsForAuPostcode(defaultZipcode);
+                if (!auSuburbs || auSuburbs.suburbs.length <= 1) return null;
+                const currentSuburb =
+                  auSuburbs.suburbs.find((sub) =>
+                    resolvedItemLocation.toLowerCase().startsWith(sub.toLowerCase()),
+                  ) || auSuburbs.suburbs[0];
+                return (
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <span className="text-xs font-medium text-gray-500">Suburb:</span>
+                    <select
+                      value={currentSuburb}
+                      onChange={(e) => {
+                        const chosenSuburb = e.target.value;
+                        const newLocText = `${chosenSuburb}, ${auSuburbs.state}`;
+                        setSelectedLocationText(newLocText);
+                      }}
+                      className="h-7 rounded border border-gray-300 bg-white px-2 text-xs text-gray-800 focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                    >
+                      {auSuburbs.suburbs.map((sub) => (
+                        <option key={sub} value={sub}>
+                          {sub} ({defaultZipcode})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              })()}
               <p className="mt-1 text-xs text-gray-500">
                 eBay item location: <span className="font-medium text-emerald-700">{resolvedItemLocation}</span>
               </p>

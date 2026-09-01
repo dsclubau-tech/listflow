@@ -118,6 +118,20 @@ export function getEbayCountryLabel(country: unknown = "Australia") {
   return getEbayCountryMetadata(country).label;
 }
 
+export function getSuburbsForAuPostcode(
+  postalCode: unknown,
+): { suburbs: string[]; state: string } | null {
+  const normalizedPostalCode = normalizeText(postalCode).toUpperCase();
+  if (!normalizedPostalCode) return null;
+  const paddedCode = normalizedPostalCode.padStart(4, "0");
+  const entry = AU_POSTCODES[paddedCode] || AU_POSTCODES[normalizedPostalCode];
+  if (!entry || entry.suburbs.length === 0) return null;
+  return {
+    suburbs: entry.suburbs,
+    state: entry.state,
+  };
+}
+
 export function getZipcodeLocationText(
   postalCode: unknown,
   country: unknown = "Australia",
@@ -142,7 +156,8 @@ export function getZipcodeLocationText(
           return (
             lowerSub === cleanPreferred ||
             cleanPreferred === `${lowerSub}, ${entry.state.toLowerCase()}` ||
-            cleanPreferred.startsWith(`${lowerSub},`)
+            cleanPreferred.startsWith(`${lowerSub},`) ||
+            cleanPreferred.startsWith(lowerSub)
           );
         });
         if (matched) {
