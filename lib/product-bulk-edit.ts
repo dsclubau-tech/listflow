@@ -4,6 +4,7 @@ import { Prisma } from "@/app/generated/prisma/client";
 import { ProductStatus } from "@/app/generated/prisma/enums";
 import { applyKeywordFilter } from "@/lib/keyword-filter";
 import { normalizeItemSpecifics, sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
+import { resolveEbayLocationMetadata } from "@/lib/ebay-location";
 import { resolveProductPolicySelection } from "@/lib/policy-defaults";
 import { prisma } from "@/lib/prisma";
 import { calculateSellPrice } from "@/lib/variant-pricing";
@@ -33,7 +34,7 @@ export type NormalizedBulkEditOperation =
   | { field: "quantity"; value: number }
   | { field: "title"; mode: BulkEditTitleMode; value: string; replaceValue?: string; confirmed?: boolean }
   | { field: "brand"; value: string }
-  | { field: "location"; value: { location: string; postalCode: string } }
+  | { field: "location"; value: { location: string; postalCode: string; locationText?: string } }
   | { field: "templateId"; value: string | null }
   | { field: "dispatchTimeMax"; value: number }
   | { field: "shippingPolicyId" | "returnPolicyId" | "paymentPolicyId" | "policyTemplateId"; value: string | null };
@@ -181,6 +182,8 @@ function normalizeLocationOperation(value: unknown): NormalizedBulkEditOperation
   const source = value as Record<string, unknown>;
   const location = readString(source.location, "Location");
   const postalCode = readString(source.postalCode, "Postcode");
+  const locationText =
+    typeof source.locationText === "string" ? source.locationText.trim() : undefined;
 
   if (!COUNTRY_METADATA[location]) {
     throw new Error("Location must be Australia, United States, or United Kingdom.");
@@ -188,7 +191,7 @@ function normalizeLocationOperation(value: unknown): NormalizedBulkEditOperation
 
   return {
     field: "location",
-    value: { location, postalCode },
+    value: { location, postalCode, locationText },
   };
 }
 
@@ -507,9 +510,16 @@ export async function applyBulkProductEdits(input: ApplyBulkProductEditsInput) {
           productData.itemSpecifics = itemSpecifics;
         } else if (operation.field === "location") {
           const metadata = COUNTRY_METADATA[operation.value.location];
+          const resolvedLocation =
+            operation.value.locationText ||
+            resolveEbayLocationMetadata({
+              country: metadata.country,
+              postalCode: operation.value.postalCode,
+            }).location;
+
           itemSpecifics = sanitizeEbayItemSpecifics({
             ...itemSpecifics,
-            _Location: operation.value.location,
+            _Location: resolvedLocation,
             _PostalCode: operation.value.postalCode,
             _Country: metadata.country,
             _Currency: metadata.currency,

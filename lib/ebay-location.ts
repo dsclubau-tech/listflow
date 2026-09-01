@@ -8,6 +8,26 @@ type AuPostcodeEntry = {
 
 const AU_POSTCODES = auPostcodesData as Record<string, AuPostcodeEntry>;
 
+type IndexedAuEntry = {
+  postcode: string;
+  suburbs: string[];
+  state: string;
+  lowerSuburbs: { name: string; lower: string }[];
+};
+
+// Pre-index entries and lowercased names at module load for fast, allocation-free searches
+const AU_POSTCODE_ENTRIES: IndexedAuEntry[] = Object.entries(AU_POSTCODES).map(
+  ([postcode, entry]) => ({
+    postcode,
+    suburbs: entry.suburbs,
+    state: entry.state,
+    lowerSuburbs: entry.suburbs.map((sub) => ({
+      name: sub,
+      lower: sub.toLowerCase(),
+    })),
+  }),
+);
+
 export type AuPostcodeSuggestion = {
   postcode: string;
   suburb: string;
@@ -101,6 +121,7 @@ export function getEbayCountryLabel(country: unknown = "Australia") {
 export function getZipcodeLocationText(
   postalCode: unknown,
   country: unknown = "Australia",
+  preferredSuburb?: unknown,
 ) {
   const metadata = getEbayCountryMetadata(country);
   const normalizedPostalCode = normalizeText(postalCode).toUpperCase();
@@ -114,6 +135,20 @@ export function getZipcodeLocationText(
     const paddedCode = normalizedPostalCode.padStart(4, "0");
     const entry = AU_POSTCODES[paddedCode] || AU_POSTCODES[normalizedPostalCode];
     if (entry && entry.suburbs.length > 0) {
+      if (typeof preferredSuburb === "string" && preferredSuburb.trim()) {
+        const cleanPreferred = preferredSuburb.trim().toLowerCase();
+        const matched = entry.suburbs.find((sub) => {
+          const lowerSub = sub.toLowerCase();
+          return (
+            lowerSub === cleanPreferred ||
+            cleanPreferred === `${lowerSub}, ${entry.state.toLowerCase()}` ||
+            cleanPreferred.startsWith(`${lowerSub},`)
+          );
+        });
+        if (matched) {
+          return `${matched}, ${entry.state}`;
+        }
+      }
       return `${entry.suburbs[0]}, ${entry.state}`;
     }
   }
@@ -131,17 +166,19 @@ export function searchAuPostcodes(
   const results: AuPostcodeSuggestion[] = [];
   const isNumeric = /^\d+$/.test(cleanQuery);
 
-  for (const [postcode, entry] of Object.entries(AU_POSTCODES)) {
+  for (let i = 0; i < AU_POSTCODE_ENTRIES.length; i++) {
     if (results.length >= limit) break;
+    const entry = AU_POSTCODE_ENTRIES[i];
 
     if (isNumeric) {
-      if (postcode.startsWith(cleanQuery)) {
+      if (entry.postcode.startsWith(cleanQuery)) {
         // For exact postcode match or 3-4 digit query, expand all suburbs
-        if (postcode === cleanQuery || cleanQuery.length >= 3) {
-          for (const sub of entry.suburbs) {
+        if (entry.postcode === cleanQuery || cleanQuery.length >= 3) {
+          for (let j = 0; j < entry.suburbs.length; j++) {
             if (results.length >= limit) break;
+            const sub = entry.suburbs[j];
             results.push({
-              postcode,
+              postcode: entry.postcode,
               suburb: sub,
               state: entry.state,
               locationText: `${sub}, ${entry.state}`,
@@ -150,7 +187,7 @@ export function searchAuPostcodes(
           }
         } else {
           results.push({
-            postcode,
+            postcode: entry.postcode,
             suburb: entry.suburbs[0],
             state: entry.state,
             locationText: `${entry.suburbs[0]}, ${entry.state}`,
@@ -159,18 +196,18 @@ export function searchAuPostcodes(
         }
       }
     } else {
-      const matchingSuburbs = entry.suburbs.filter((sub) =>
-        sub.toLowerCase().includes(cleanQuery),
-      );
-      for (const matchingSuburb of matchingSuburbs) {
+      for (let j = 0; j < entry.lowerSuburbs.length; j++) {
         if (results.length >= limit) break;
-        results.push({
-          postcode,
-          suburb: matchingSuburb,
-          state: entry.state,
-          locationText: `${matchingSuburb}, ${entry.state}`,
-          allSuburbs: entry.suburbs,
-        });
+        const subObj = entry.lowerSuburbs[j];
+        if (subObj.lower.includes(cleanQuery)) {
+          results.push({
+            postcode: entry.postcode,
+            suburb: subObj.name,
+            state: entry.state,
+            locationText: `${subObj.name}, ${entry.state}`,
+            allSuburbs: entry.suburbs,
+          });
+        }
       }
     }
   }
@@ -202,9 +239,14 @@ export function resolveEbayLocationMetadata(input?: {
   const postalCode =
     normalizeText(input?.postalCode).toUpperCase() || metadata.defaultPostalCode;
   const providedLocation = normalizeText(input?.location);
-  const zipcodeLocation = getZipcodeLocationText(postalCode, metadata.code);
+  const isCountryOnly = isCountryOnlyLocation(providedLocation, metadata);
+  const zipcodeLocation = getZipcodeLocationText(
+    postalCode,
+    metadata.code,
+    !isCountryOnly ? providedLocation : undefined,
+  );
   const location =
-    providedLocation && !isCountryOnlyLocation(providedLocation, metadata)
+    providedLocation && !isCountryOnly
       ? providedLocation
       : zipcodeLocation || postalCode || metadata.defaultLocation;
 

@@ -17,6 +17,7 @@ interface PostcodeAutocompleteProps {
   disabled?: boolean;
   maxLength?: number;
   showHint?: boolean;
+  selectedLocationText?: string;
 }
 
 export function PostcodeAutocomplete({
@@ -28,18 +29,23 @@ export function PostcodeAutocomplete({
   disabled = false,
   maxLength = 6,
   showHint = true,
+  selectedLocationText,
 }: PostcodeAutocompleteProps) {
   const [suggestions, setSuggestions] = useState<AuPostcodeSuggestion[]>([]);
   const [isOpen, setIsOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(-1);
-  const [selectedLocation, setSelectedLocation] = useState<string>("");
+  const [internalSelectedLocation, setInternalSelectedLocation] = useState<string>("");
   const containerRef = useRef<HTMLDivElement>(null);
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const countryMetadata = getEbayCountryMetadata(country);
   const isAu = countryMetadata.code === "AU";
 
+  const effectiveSelectedLocation =
+    selectedLocationText !== undefined ? selectedLocationText : internalSelectedLocation;
+
   const resolvedLocation = isAu
-    ? selectedLocation || getZipcodeLocationText(value, country)
+    ? getZipcodeLocationText(value, country, effectiveSelectedLocation) || effectiveSelectedLocation
     : "";
 
   useEffect(() => {
@@ -55,17 +61,31 @@ export function PostcodeAutocomplete({
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
+  }, []);
+
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     const rawVal = e.target.value;
-    setSelectedLocation("");
+    setInternalSelectedLocation("");
     const newLoc = isAu ? getZipcodeLocationText(rawVal, country) : "";
     onChange(rawVal, newLoc);
 
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
     if (isAu && rawVal.trim().length >= 1) {
-      const matches = searchAuPostcodes(rawVal.trim(), 25);
-      setSuggestions(matches);
-      setIsOpen(matches.length > 0);
-      setActiveIndex(-1);
+      debounceTimerRef.current = setTimeout(() => {
+        const matches = searchAuPostcodes(rawVal.trim(), 25);
+        setSuggestions(matches);
+        setIsOpen(matches.length > 0);
+        setActiveIndex(-1);
+      }, 100);
     } else {
       setSuggestions([]);
       setIsOpen(false);
@@ -73,7 +93,7 @@ export function PostcodeAutocomplete({
   }
 
   function handleSelectSuggestion(suggestion: AuPostcodeSuggestion) {
-    setSelectedLocation(suggestion.locationText);
+    setInternalSelectedLocation(suggestion.locationText);
     onChange(suggestion.postcode, suggestion.locationText);
     setIsOpen(false);
     setSuggestions([]);
@@ -119,7 +139,7 @@ export function PostcodeAutocomplete({
       />
 
       {showHint && resolvedLocation && (
-        <span className="mt-1 block text-xs text-emerald-600 font-medium">
+        <span className="mt-1 block text-xs text-emerald-600 font-medium truncate" title={resolvedLocation}>
           📍 {resolvedLocation}
         </span>
       )}
@@ -150,3 +170,4 @@ export function PostcodeAutocomplete({
     </div>
   );
 }
+

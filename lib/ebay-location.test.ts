@@ -59,3 +59,24 @@ test("searchAuPostcodes returns postcode and suburb suggestions by number or nam
   const byName = searchAuPostcodes("Kogarah");
   assert.ok(byName.some((s) => s.postcode === "2217" && s.suburb === "Kogarah"));
 });
+
+test("resolves preferred suburb when multiple suburbs share a postcode (e.g. 2153 Bella Vista vs Baulkham Hills)", () => {
+  // Default without preferred suburb falls back to first suburb
+  assert.equal(getZipcodeLocationText("2153", "Australia"), "Baulkham Hills, NSW");
+
+  // With preferred suburb name
+  assert.equal(getZipcodeLocationText("2153", "Australia", "Bella Vista"), "Bella Vista, NSW");
+  assert.equal(getZipcodeLocationText("2153", "Australia", "Bella Vista, NSW"), "Bella Vista, NSW");
+  assert.equal(getZipcodeLocationText("2153", "Australia", "Norwest"), "Norwest, NSW");
+
+  // resolveEbayLocationMetadata preserves selected location
+  const metadata = resolveEbayLocationMetadata({
+    country: "AU",
+    location: "Bella Vista, NSW",
+    postalCode: "2153",
+  });
+  assert.equal(metadata.location, "Bella Vista, NSW");
+  assert.equal(metadata.postalCode, "2153");
+  assert.equal(metadata.country, "AU");
+});
+

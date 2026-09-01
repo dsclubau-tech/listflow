@@ -445,6 +445,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
   );
   const [countryLocation, setCountryLocation] = useState("Australia");
   const [defaultZipcode, setDefaultZipcode] = useState("3170");
+  const [selectedLocationText, setSelectedLocationText] = useState("");
   const [brand, setBrand] = useState("");
   const [condition, setCondition] = useState(product.condition);
   const [price, setPrice] = useState(product.price.toString());
@@ -721,8 +722,16 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       ) {
         setCountryLocation(getEbayCountryLabel(specs["_Location"]));
       }
-      // Restore zipcode
+      // Restore zipcode and location
       if (specs["_PostalCode"]) setDefaultZipcode(specs["_PostalCode"]);
+      if (
+        specs["_Location"] &&
+        !["Australia", "United States", "United Kingdom", "Canada"].includes(
+          specs["_Location"],
+        )
+      ) {
+        setSelectedLocationText(specs["_Location"]);
+      }
     }
   }, [product.fullTitle, product.itemSpecifics, product.title]);
 
@@ -731,8 +740,9 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       resolveEbayLocationMetadata({
         country: countryLocation,
         postalCode: defaultZipcode,
+        location: selectedLocationText,
       }).location,
-    [countryLocation, defaultZipcode],
+    [countryLocation, defaultZipcode, selectedLocationText],
   );
 
   const missingSpecificsFromError = useMemo(
@@ -1294,6 +1304,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
     const locationMetadata = resolveEbayLocationMetadata({
       country: countryLocation,
       postalCode: defaultZipcode,
+      location: selectedLocationText,
     });
     specificsObj["_Country"] = locationMetadata.country;
     specificsObj["_Currency"] = locationMetadata.currency;
@@ -2469,13 +2480,17 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
               <label className="block text-sm font-medium text-gray-700 mb-1">Default Zipcode</label>
               <PostcodeAutocomplete
                 value={defaultZipcode}
-                onChange={(pc) => setDefaultZipcode(pc)}
+                selectedLocationText={selectedLocationText}
+                onChange={(pc, locText) => {
+                  setDefaultZipcode(pc);
+                  setSelectedLocationText(locText);
+                }}
                 country={countryLocation}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500 bg-white"
                 showHint={false}
               />
               <p className="mt-1 text-xs text-gray-500">
-                eBay item location: {resolvedItemLocation}
+                eBay item location: <span className="font-medium text-emerald-700">{resolvedItemLocation}</span>
               </p>
             </div>
 

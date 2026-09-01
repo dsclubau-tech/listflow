@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import ActionProgressBar from "@/components/ActionProgressBar";
 import { PostcodeAutocomplete } from "@/components/PostcodeAutocomplete";
+import { getZipcodeLocationText } from "@/lib/ebay-location";
 
 type ToastVariant = "success" | "error";
 
@@ -38,6 +39,7 @@ type BulkEditItem = {
   titleMode: TitleMode;
   location: string;
   postalCode: string;
+  locationText?: string;
 };
 
 type PolicyEntry = {
@@ -179,6 +181,7 @@ function makeItem(field: BulkEditField): BulkEditItem {
     titleMode: field === "title" ? "prefix" : "prefix",
     location: "Australia",
     postalCode: "3000",
+    locationText: "Melbourne, VIC",
   };
 }
 
@@ -233,6 +236,7 @@ function buildOperation(item: BulkEditItem) {
       value: {
         location: item.location,
         postalCode: item.postalCode,
+        locationText: item.locationText,
       },
     };
   }
@@ -689,27 +693,49 @@ export default function BulkEditModal({
     }
 
     if (item.field === "location") {
+      const displayLocation =
+        item.locationText ||
+        getZipcodeLocationText(item.postalCode, item.location);
+
       return (
-        <div className="grid gap-2 sm:grid-cols-[1fr_140px]">
-          <select
-            value={item.location}
-            onChange={(event) => updateItem(item.id, { location: event.target.value })}
-            className="h-10 rounded-md border border-gray-300 bg-white px-2 text-sm text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
-          >
-            {LOCATION_OPTIONS.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-          <PostcodeAutocomplete
-            value={item.postalCode}
-            onChange={(pc) => updateItem(item.id, { postalCode: pc })}
-            country={item.location}
-            placeholder="Postcode"
-            className="h-10 w-full rounded-md border border-gray-300 px-3 text-sm text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20 bg-white"
-            showHint={false}
-          />
+        <div className="space-y-1.5">
+          <div className="grid gap-2 sm:grid-cols-[1fr_140px]">
+            <select
+              value={item.location}
+              onChange={(event) =>
+                updateItem(item.id, {
+                  location: event.target.value,
+                  locationText: undefined,
+                })
+              }
+              className="h-10 rounded-md border border-gray-300 bg-white px-2 text-sm text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+            >
+              {LOCATION_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+            <PostcodeAutocomplete
+              value={item.postalCode}
+              selectedLocationText={item.locationText}
+              onChange={(pc, locText) =>
+                updateItem(item.id, {
+                  postalCode: pc,
+                  locationText: locText || undefined,
+                })
+              }
+              country={item.location}
+              placeholder="Postcode"
+              className="h-10 w-full rounded-md border border-gray-300 px-3 text-sm text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20 bg-white"
+              showHint={false}
+            />
+          </div>
+          {displayLocation && (
+            <div className="flex items-center gap-1.5 text-xs text-emerald-700 font-medium">
+              <span>📍 {displayLocation}</span>
+            </div>
+          )}
         </div>
       );
     }
