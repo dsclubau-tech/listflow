@@ -882,13 +882,13 @@ export default function SupplierSettingsTab() {
             <section>
               <h3 className="text-sm font-semibold text-gray-800 mb-4">Price Tracking & Automatic Checks</h3>
               <div className="space-y-4">
-                {/* Automatic 8-hour Check Schedule Card */}
+                {/* Automatic Scheduled Check Schedule Card */}
                 <div className="rounded-xl border border-gray-200 bg-white p-4">
                   <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-semibold text-gray-900">
-                          Automatic 8-Hour Full Price Checks
+                          Automatic Daily Full Price Checks (3x Daily)
                         </span>
                         <span
                           className={`rounded-full px-2 py-0.5 text-xs font-medium ${
@@ -897,12 +897,12 @@ export default function SupplierSettingsTab() {
                               : "bg-gray-100 text-gray-600 border border-gray-200"
                           }`}
                         >
-                          {autoCheckStatus?.enabled ? "Active (Every 8h)" : "Stopped"}
+                          {autoCheckStatus?.enabled ? "Active (4:10 AM, 12:00 PM, 8:00 PM)" : "Stopped"}
                         </span>
                       </div>
                       <p className="mt-1 text-xs leading-5 text-gray-500 max-w-xl">
-                        Runs a complete Amazon price check for all active stores every 8 hours using your local workers.
-                        Manual price checks retain priority. If a worker PC is offline, it performs one overdue check upon reconnection.
+                        Runs a complete Amazon price check for all active stores 3 times daily at 4:10 AM, 12:00 PM, and 8:00 PM using your local workers.
+                        Manual price checks retain priority. Automatic jobs are logged in Job History.
                       </p>
                     </div>
 

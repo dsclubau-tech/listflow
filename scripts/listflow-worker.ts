@@ -110,8 +110,8 @@ async function loadWorkerModules() {
       automaticPriceCheck.runAutomaticPriceCheckForStore,
     AUTOMATIC_PRICE_CHECK_TASK_KEY:
       automaticPriceCheck.AUTOMATIC_PRICE_CHECK_TASK_KEY,
-    AUTOMATIC_PRICE_CHECK_INTERVAL_MS:
-      automaticPriceCheck.AUTOMATIC_PRICE_CHECK_INTERVAL_MS,
+    getNextScheduledCheckTime:
+      automaticPriceCheck.getNextScheduledCheckTime,
     syncEbaySoldCountsForStore: ebaySoldSync.syncEbaySoldCountsForStore,
     EBAY_SOLD_COUNT_SYNC_TASK_KEY: ebaySoldSync.EBAY_SOLD_COUNT_SYNC_TASK_KEY,
     EBAY_SOLD_COUNT_SYNC_INTERVAL_MS:
@@ -292,18 +292,13 @@ async function processStore(store: { id: string; name: string; loginId: string |
           Math.max(IDLE_SLEEP_MS, 5_000),
           result.reason,
         );
-      } else if (result.skipped) {
-        // Store has auto checks disabled; complete schedule for next cycle
-        await modules.completeWorkerSchedule(
-          autoCheckClaim,
-          modules.AUTOMATIC_PRICE_CHECK_INTERVAL_MS,
-        );
       } else {
-        await modules.completeWorkerSchedule(
-          autoCheckClaim,
-          modules.AUTOMATIC_PRICE_CHECK_INTERVAL_MS,
-        );
-        return true;
+        const nextTime = modules.getNextScheduledCheckTime(new Date());
+        const delayMs = Math.max(1000, nextTime.getTime() - Date.now());
+        await modules.completeWorkerSchedule(autoCheckClaim, delayMs);
+        if (!result.skipped) {
+          return true;
+        }
       }
     } catch (error) {
       await modules.retryWorkerSchedule(

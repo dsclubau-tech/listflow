@@ -16,9 +16,17 @@ import {
   createPriceCheckJob,
   runPriceCheckJob,
 } from "@/lib/price-check-jobs";
+import {
+  AUTOMATIC_PRICE_CHECK_TASK_KEY,
+  AUTOMATIC_PRICE_CHECK_TIMES,
+  getNextScheduledCheckTime,
+} from "@/lib/automatic-price-check-schedule";
 
-export const AUTOMATIC_PRICE_CHECK_TASK_KEY = "automatic-price-check";
-export const AUTOMATIC_PRICE_CHECK_INTERVAL_MS = 8 * 60 * 60 * 1000; // 8 hours
+export {
+  AUTOMATIC_PRICE_CHECK_TASK_KEY,
+  AUTOMATIC_PRICE_CHECK_TIMES,
+  getNextScheduledCheckTime,
+};
 
 export interface StoreAutoCheckStatus {
   storeId: string;
@@ -37,7 +45,7 @@ export interface StoreAutoCheckStatus {
 
 export interface AutomaticPriceCheckSummary {
   enabled: boolean;
-  intervalHours: number;
+  scheduledTimes: string[];
   stores: StoreAutoCheckStatus[];
 }
 
@@ -171,7 +179,7 @@ export async function getAutomaticPriceCheckStatus(
   if (stores.length === 0) {
     return {
       enabled: false,
-      intervalHours: 8,
+      scheduledTimes: AUTOMATIC_PRICE_CHECK_TIMES.map((t) => t.label),
       stores: [],
     };
   }
@@ -222,7 +230,7 @@ export async function getAutomaticPriceCheckStatus(
 
   return {
     enabled: anyEnabled,
-    intervalHours: 8,
+    scheduledTimes: AUTOMATIC_PRICE_CHECK_TIMES.map((t) => t.label),
     stores: storeStatuses,
   };
 }

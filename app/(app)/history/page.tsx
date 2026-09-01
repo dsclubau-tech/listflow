@@ -76,20 +76,26 @@ export default async function HistoryPage({
   const requestedPage = parseUploadHistoryPage(params.page);
 
   // Fetch counts for both tabs
-  const [uploadTotalCount, jobTotalCount] = await Promise.all([
-    prisma.uploadLog.count({
-      where: { storeId: storeSession.storeId },
-    }),
-    prisma.ebayActionJob.count({
-      where: { storeId: storeSession.storeId },
-    }),
-  ]);
+  const [uploadTotalCount, ebayActionJobCount, priceCheckJobCount] =
+    await Promise.all([
+      prisma.uploadLog.count({
+        where: { storeId: storeSession.storeId },
+      }),
+      prisma.ebayActionJob.count({
+        where: { storeId: storeSession.storeId },
+      }),
+      prisma.priceCheckJob.count({
+        where: { storeId: storeSession.storeId },
+      }),
+    ]);
+
+  const jobTotalCount = ebayActionJobCount + priceCheckJobCount;
 
   // Fetch data for the active tab
   const currentTotal = activeTab === "jobs" ? jobTotalCount : uploadTotalCount;
   const pagination = getUploadHistoryPagination(currentTotal, requestedPage);
 
-  const [uploadLogs, actionJobs] = await Promise.all([
+  const [uploadLogs, ebayJobs, priceCheckJobs] = await Promise.all([
     activeTab === "uploads"
       ? prisma.uploadLog.findMany({
           where: { storeId: storeSession.storeId },
@@ -107,8 +113,18 @@ export default async function HistoryPage({
       ? prisma.ebayActionJob.findMany({
           where: { storeId: storeSession.storeId },
           orderBy: { createdAt: "desc" },
-          skip: pagination.skip,
-          take: UPLOAD_HISTORY_PAGE_SIZE,
+          take: pagination.skip + UPLOAD_HISTORY_PAGE_SIZE,
+          include: {
+            store: true,
+            user: true,
+          },
+        })
+      : Promise.resolve([]),
+    activeTab === "jobs"
+      ? prisma.priceCheckJob.findMany({
+          where: { storeId: storeSession.storeId },
+          orderBy: { createdAt: "desc" },
+          take: pagination.skip + UPLOAD_HISTORY_PAGE_SIZE,
           include: {
             store: true,
             user: true,
@@ -116,6 +132,48 @@ export default async function HistoryPage({
         })
       : Promise.resolve([]),
   ]);
+
+  const actionJobs = [
+    ...ebayJobs.map((j) => ({
+      id: j.id,
+      typeLabel: getActionJobLabel(j.type),
+      typeRaw: j.type,
+      isAuto: false,
+      store: j.store,
+      userName: j.user?.name ?? "User",
+      total: j.total,
+      succeeded: j.succeeded,
+      failed: j.failed,
+      startedAt: j.startedAt,
+      completedAt: j.completedAt,
+      status: j.status,
+      errorMessage: j.errorMessage,
+      createdAt: j.createdAt,
+    })),
+    ...priceCheckJobs.map((j) => ({
+      id: j.id,
+      typeLabel:
+        j.trigger === "AUTOMATIC" ? "Auto Price Check" : "Price Check",
+      typeRaw: j.trigger === "AUTOMATIC" ? "AUTO_PRICE_CHECK" : "PRICE_CHECK",
+      isAuto: j.trigger === "AUTOMATIC",
+      store: j.store ?? {
+        id: storeSession.storeId,
+        name: storeSession.storeName,
+      },
+      userName:
+        j.trigger === "AUTOMATIC" ? "Auto Schedule" : j.user?.name ?? "User",
+      total: j.total,
+      succeeded: j.checked,
+      failed: j.failed,
+      startedAt: j.startedAt,
+      completedAt: j.completedAt,
+      status: j.status,
+      errorMessage: j.errorMessage || j.reason,
+      createdAt: j.createdAt,
+    })),
+  ]
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+    .slice(pagination.skip, pagination.skip + UPLOAD_HISTORY_PAGE_SIZE);
 
   return (
     <div className="w-full">
@@ -332,11 +390,16 @@ export default async function HistoryPage({
 
                       {/* Action Type */}
                       <td className="px-4 py-3">
-                        <span className="text-sm font-medium text-gray-900 block whitespace-nowrap">
-                          {getActionJobLabel(job.type)}
+                        <span className="text-sm font-medium text-gray-900 flex items-center gap-1.5 whitespace-nowrap">
+                          {job.isAuto && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-100 text-blue-800 border border-blue-200">
+                              AUTO
+                            </span>
+                          )}
+                          {job.typeLabel}
                         </span>
                         <span className="text-xs text-gray-400 font-mono">
-                          {job.type}
+                          {job.typeRaw}
                         </span>
                       </td>
 
@@ -353,7 +416,7 @@ export default async function HistoryPage({
 
                       {/* User */}
                       <td className="px-4 py-3 text-sm text-gray-500">
-                        {job.user.name}
+                        {job.userName}
                       </td>
 
                       {/* Counts / Progress */}

@@ -196,17 +196,6 @@ export function buildDefaultVariantData(product: DefaultVariantSource) {
     roundCents: null,
   });
 
-  let effectiveProfitPercent = profitPercent;
-  if (effectiveProfitPercent === 0 && sellPrice > 0 && buyPriceNumber > 0) {
-    effectiveProfitPercent = calculateProfitPercentFromSellPrice({
-      buyPrice: buyPriceNumber,
-      sellPrice,
-      feesPercent,
-      feesFixed,
-      profitFixed: 0,
-    });
-  }
-
   const variantItemSpecifics: Record<string, string> = {};
   if (product.itemSpecifics && typeof product.itemSpecifics === "object") {
     for (const [k, v] of Object.entries(product.itemSpecifics)) {
@@ -226,7 +215,7 @@ export function buildDefaultVariantData(product: DefaultVariantSource) {
     buyPrice: product.price,
     feesPercent,
     feesFixed,
-    profitPercent: effectiveProfitPercent,
+    profitPercent,
     profitFixed,
     promotedAdPercent: 0,
     sellPrice,
