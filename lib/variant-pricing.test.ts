@@ -138,3 +138,37 @@ test("calculateNetProfit derives actual margin after buy price and fees", () => 
     17
   );
 });
+
+test("calculateProfitPercentFromSellPrice adjusts profit % when sell price changes with fixed additional profit", () => {
+  // Buy 101.99, Sell 105.90, 0% fees, 0 fixed fees, 0 additional profit -> 3.91 profit -> 3.83%
+  const derived1 = calculateProfitPercentFromSellPrice({
+    buyPrice: 101.99,
+    sellPrice: 105.9,
+    feesPercent: 0,
+    feesFixed: 0,
+    profitFixed: 0,
+  });
+  assert.equal(derived1, 3.83);
+
+  // Higher sell price 110.00 -> 8.01 profit -> 7.85%
+  const derived2 = calculateProfitPercentFromSellPrice({
+    buyPrice: 101.99,
+    sellPrice: 110.0,
+    feesPercent: 0,
+    feesFixed: 0,
+    profitFixed: 0,
+  });
+  assert.equal(derived2, 7.85);
+
+  // With A$14 additional profit: net profit 17.00 - 14.00 = 3.00 margin -> 3.00% on $100 buy price
+  const withAdditionalProfit = calculateProfitPercentFromSellPrice({
+    buyPrice: 100,
+    sellPrice: 130.43,
+    feesPercent: 10,
+    feesFixed: 0.38,
+    profitFixed: 14,
+  });
+  // sell 130.43 - fees (13.04 + 0.38 = 13.42) - buy 100 = net 17.01 -> minus 14 additional profit = 3.01 -> 3.01%
+  assert.equal(withAdditionalProfit, 3.01);
+});
+

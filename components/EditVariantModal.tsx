@@ -6,7 +6,6 @@ import { createPortal } from "react-dom";
 import {
   applyRoundCents,
   calculateNetProfit,
-  calculateProfitFixedFromSellPrice,
   calculateProfitPercentFromSellPrice,
   calculateSellPrice,
   calculateTotalFees,
@@ -143,6 +142,19 @@ function buildFormState(props: {
     const sellPrice = toNumber(variant.sellPrice.toString());
     const feesPercent = Number(variant.feesPercent);
     const feesFixed = Number(variant.feesFixed);
+    const profitFixed = Number(variant.profitFixed);
+    let profitPercent = Number(variant.profitPercent);
+
+    if (profitPercent === 0 && profitFixed === 0 && sellPrice > buyPrice && buyPrice > 0) {
+      profitPercent = calculateProfitPercentFromSellPrice({
+        buyPrice,
+        sellPrice,
+        feesPercent,
+        feesFixed,
+        profitFixed: 0,
+      });
+    }
+
     return {
       sku: variant.sku || "",
       title: variant.title,
@@ -150,7 +162,7 @@ function buildFormState(props: {
       buyPrice: variant.buyPrice.toString(),
       feesPercent: String(variant.feesPercent),
       feesFixed: String(variant.feesFixed),
-      profitPercent: String(variant.profitPercent),
+      profitPercent: String(profitPercent),
       profitFixed: String(variant.profitFixed),
       minimumProfit: String(pricingDefaults?.minimumProfit ?? 0),
       promotedAdPercent: String(variant.promotedAdPercent ?? 0),
@@ -456,20 +468,20 @@ export default function EditVariantModal({
       const buyPrice = toNumber(prev.buyPrice);
       const feesPercent = toNumber(prev.feesPercent);
       const feesFixed = toNumber(prev.feesFixed);
-      const profitPercent = toNumber(prev.profitPercent);
+      const profitFixed = toNumber(prev.profitFixed);
 
-      const profitFixed = calculateProfitFixedFromSellPrice({
+      const profitPercent = calculateProfitPercentFromSellPrice({
         buyPrice,
         sellPrice,
         feesPercent,
         feesFixed,
-        profitPercent,
+        profitFixed,
       });
 
       return {
         ...prev,
         sellPrice: value,
-        profitFixed: toMoneyString(profitFixed),
+        profitPercent: String(profitPercent),
       };
     });
   }
@@ -479,7 +491,7 @@ export default function EditVariantModal({
       const buyPrice = toNumber(prev.buyPrice);
       const feesPercent = toNumber(prev.feesPercent);
       const feesFixed = toNumber(prev.feesFixed);
-      const profitPercent = toNumber(prev.profitPercent);
+      const profitFixed = toNumber(prev.profitFixed);
       const minimumProfit = toNumber(prev.minimumProfit);
       const roundCents = prev.roundCentsEnabled ? 0.99 : null;
 
@@ -500,25 +512,25 @@ export default function EditVariantModal({
           buyPrice,
           feesPercent,
           feesFixed,
-          profitPercent,
-          profitFixed: 0,
+          profitPercent: 0,
+          profitFixed,
           roundCents,
           minimumProfit,
         });
       }
 
-      const profitFixed = calculateProfitFixedFromSellPrice({
+      const profitPercent = calculateProfitPercentFromSellPrice({
         buyPrice,
         sellPrice: normalizedSellPriceNumber,
         feesPercent,
         feesFixed,
-        profitPercent,
+        profitFixed,
       });
 
       return {
         ...prev,
         sellPrice: toMoneyString(normalizedSellPriceNumber),
-        profitFixed: toMoneyString(profitFixed),
+        profitPercent: String(profitPercent),
       };
     });
   }
@@ -889,7 +901,7 @@ export default function EditVariantModal({
 
               <div>
                 <label className="mb-1 block text-sm font-medium text-gray-700">
-                  Profit A$
+                  Additional Profit (A$)
                 </label>
                 <input
                   type="number"
@@ -898,6 +910,9 @@ export default function EditVariantModal({
                   onChange={(event) => updatePricingField("profitFixed", event.target.value)}
                   className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
                 />
+                <p className="mt-1 text-xs text-gray-500">
+                  Fixed additional profit added to total profit.
+                </p>
               </div>
 
               <div>
