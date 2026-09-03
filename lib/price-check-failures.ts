@@ -20,6 +20,8 @@ export function getPriceCheckAutoHoldReason(message?: string | null) {
 
 export const DEAL_PRICE_UNAVAILABLE_AUTO_HOLD_REASON =
   getPriceCheckAutoHoldReason(getAmazonPriceUnavailableMessage("DEAL"));
+export const REGULAR_PRICE_UNAVAILABLE_AUTO_HOLD_REASON =
+  getPriceCheckAutoHoldReason(getAmazonPriceUnavailableMessage("REGULAR"));
 
 export const AUTO_HOLD_PRICE_CHECK_FAILURE_CODES = [
   PriceCheckFailureCode.AMAZON_OUT_OF_STOCK,
@@ -217,6 +219,19 @@ export function isRecoveredDealPriceAutoHold(product: AutoResumeCandidate) {
   );
 }
 
+export function isRecoveredRegularPriceAutoHold(product: AutoResumeCandidate) {
+  return (
+    product.status === "ON_HOLD" &&
+    Boolean(product.ebayItemId) &&
+    product.amazonPriceTrackingMode === "REGULAR" &&
+    hasValidRecoveredPrice(product.amazonPrice) &&
+    product.holdReason === REGULAR_PRICE_UNAVAILABLE_AUTO_HOLD_REASON &&
+    !product.priceCheckError &&
+    !product.priceCheckFailureCode &&
+    isAmazonStockHealthy(product.amazonStockLeft)
+  );
+}
+
 export function isRecoveredLowStockAutoHold(product: AutoResumeCandidate) {
   return (
     product.status === "ON_HOLD" &&
@@ -231,6 +246,7 @@ export function isRecoveredLowStockAutoHold(product: AutoResumeCandidate) {
 export function isRecoveredPriceCheckAutoHold(product: AutoResumeCandidate) {
   return (
     isRecoveredDealPriceAutoHold(product) ||
+    isRecoveredRegularPriceAutoHold(product) ||
     isRecoveredLowStockAutoHold(product)
   );
 }

@@ -72,11 +72,17 @@ export default async function HistoryPage({
   }
 
   const params = (await searchParams) ?? {};
-  const activeTab = params.tab === "jobs" ? "jobs" : "uploads";
+  const tabParam = typeof params.tab === "string" ? params.tab : "";
+  const activeTab =
+    tabParam === "jobs"
+      ? "jobs"
+      : tabParam === "auto-checks"
+        ? "auto-checks"
+        : "uploads";
   const requestedPage = parseUploadHistoryPage(params.page);
 
-  // Fetch counts for both tabs
-  const [uploadTotalCount, ebayActionJobCount, priceCheckJobCount] =
+  // Fetch counts for all tabs
+  const [uploadTotalCount, ebayActionJobCount, priceCheckJobCount, autoCheckJobCount] =
     await Promise.all([
       prisma.uploadLog.count({
         where: { storeId: storeSession.storeId },
@@ -87,15 +93,26 @@ export default async function HistoryPage({
       prisma.priceCheckJob.count({
         where: { storeId: storeSession.storeId },
       }),
+      prisma.priceCheckJob.count({
+        where: {
+          storeId: storeSession.storeId,
+          trigger: "AUTOMATIC",
+        },
+      }),
     ]);
 
   const jobTotalCount = ebayActionJobCount + priceCheckJobCount;
 
   // Fetch data for the active tab
-  const currentTotal = activeTab === "jobs" ? jobTotalCount : uploadTotalCount;
+  const currentTotal =
+    activeTab === "jobs"
+      ? jobTotalCount
+      : activeTab === "auto-checks"
+        ? autoCheckJobCount
+        : uploadTotalCount;
   const pagination = getUploadHistoryPagination(currentTotal, requestedPage);
 
-  const [uploadLogs, ebayJobs, priceCheckJobs] = await Promise.all([
+  const [uploadLogs, ebayJobs, priceCheckJobs, autoCheckJobs] = await Promise.all([
     activeTab === "uploads"
       ? prisma.uploadLog.findMany({
           where: { storeId: storeSession.storeId },
@@ -125,6 +142,21 @@ export default async function HistoryPage({
           where: { storeId: storeSession.storeId },
           orderBy: { createdAt: "desc" },
           take: pagination.skip + UPLOAD_HISTORY_PAGE_SIZE,
+          include: {
+            store: true,
+            user: true,
+          },
+        })
+      : Promise.resolve([]),
+    activeTab === "auto-checks"
+      ? prisma.priceCheckJob.findMany({
+          where: {
+            storeId: storeSession.storeId,
+            trigger: "AUTOMATIC",
+          },
+          orderBy: { createdAt: "desc" },
+          skip: pagination.skip,
+          take: UPLOAD_HISTORY_PAGE_SIZE,
           include: {
             store: true,
             user: true,
@@ -184,7 +216,11 @@ export default async function HistoryPage({
             Logs
           </h1>
           <span className="text-sm text-gray-500">
-            ({activeTab === "uploads" ? `${uploadTotalCount} uploads` : `${jobTotalCount} actions`})
+            ({activeTab === "uploads"
+              ? `${uploadTotalCount} uploads`
+              : activeTab === "auto-checks"
+                ? `${autoCheckJobCount} automatic checks`
+                : `${jobTotalCount} actions`})
           </span>
         </div>
         {activeTab === "uploads" && <ClearHistoryButton />}
@@ -212,6 +248,19 @@ export default async function HistoryPage({
             }`}
           >
             Job History ({jobTotalCount})
+          </Link>
+          <Link
+            href="/history?tab=auto-checks"
+            className={`pb-3 text-sm font-medium border-b-2 transition-colors inline-flex items-center gap-1.5 ${
+              activeTab === "auto-checks"
+                ? "border-orange-500 text-orange-600"
+                : "border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300"
+            }`}
+          >
+            <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[10px] font-semibold bg-blue-100 text-blue-800 border border-blue-200">
+              AUTO
+            </span>
+            Auto Price Checks ({autoCheckJobCount})
           </Link>
         </nav>
       </div>
@@ -473,6 +522,156 @@ export default async function HistoryPage({
                             title={job.errorMessage}
                           >
                             {job.errorMessage}
+                          </span>
+                        ) : (
+                          <span className="text-gray-400 text-sm">—</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* Tab 3: Auto Price Checks Content */}
+      {activeTab === "auto-checks" && (
+        <>
+          {autoCheckJobs.length === 0 ? (
+            <div className="bg-white rounded-lg border border-gray-200 p-12 text-center">
+              <svg
+                className="w-12 h-12 mx-auto text-gray-300 mb-4"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
+              <p className="text-gray-500 text-sm">
+                No automatic price checks logged yet. Automatic price checks run 3x daily (4:10 AM, 12:00 PM, 8:00 PM) when enabled in Settings.
+              </p>
+            </div>
+          ) : (
+            <div className="bg-white rounded-lg border border-gray-200 overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-gray-50 border-b text-xs font-medium text-gray-500 uppercase tracking-wide">
+                    <th className="px-4 py-3 text-left">Date & Time</th>
+                    <th className="px-4 py-3 text-left">Action</th>
+                    <th className="px-4 py-3 text-left">Store</th>
+                    <th className="px-4 py-3 text-left">Triggered by</th>
+                    <th className="px-4 py-3 text-left">Progress / Total</th>
+                    <th className="px-4 py-3 text-left">Duration</th>
+                    <th className="px-4 py-3 text-left">Status</th>
+                    <th className="px-4 py-3 text-left">Summary / Error</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {autoCheckJobs.map((job) => (
+                    <tr
+                      key={job.id}
+                      className="bg-white border-b hover:bg-gray-50 transition-colors"
+                    >
+                      {/* Date & Time */}
+                      <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">
+                        {formatDate(job.createdAt)}
+                      </td>
+
+                      {/* Action Type */}
+                      <td className="px-4 py-3">
+                        <span className="text-sm font-medium text-gray-900 flex items-center gap-1.5 whitespace-nowrap">
+                          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-100 text-blue-800 border border-blue-200">
+                            AUTO
+                          </span>
+                          Auto Price Check
+                        </span>
+                        <span className="text-xs text-gray-400 font-mono">
+                          AUTO_PRICE_CHECK
+                        </span>
+                      </td>
+
+                      {/* Store */}
+                      <td className="px-4 py-3">
+                        <span
+                          className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                            getStoreBadgeClass(job.store?.id ?? "", job.store?.name ?? "")
+                          }`}
+                        >
+                          {job.store?.name ?? storeSession.storeName}
+                        </span>
+                      </td>
+
+                      {/* User */}
+                      <td className="px-4 py-3 text-sm text-gray-500">
+                        Auto Schedule (3x Daily)
+                      </td>
+
+                      {/* Counts / Progress */}
+                      <td className="px-4 py-3 text-sm text-gray-600 whitespace-nowrap">
+                        <div>
+                          <span className="font-medium text-gray-900">
+                            {job.checked}
+                          </span>
+                          <span className="text-gray-400"> / </span>
+                          <span>{job.total}</span>
+                          <span className="text-xs text-gray-400 ml-1">items</span>
+                        </div>
+                        {job.changed > 0 && (
+                          <span className="text-xs text-blue-600 font-medium block">
+                            {job.changed} changed
+                          </span>
+                        )}
+                        {job.failed > 0 && (
+                          <span className="text-xs text-red-600 font-medium block">
+                            {job.failed} failed
+                          </span>
+                        )}
+                      </td>
+
+                      {/* Duration */}
+                      <td className="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">
+                        {formatDuration(job.startedAt, job.completedAt)}
+                      </td>
+
+                      {/* Status */}
+                      <td className="px-4 py-3">
+                        {job.status === "COMPLETED" && (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-700">
+                            Completed
+                          </span>
+                        )}
+                        {job.status === "FAILED" && (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                            Failed
+                          </span>
+                        )}
+                        {job.status === "RUNNING" && (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-700 animate-pulse">
+                            Running
+                          </span>
+                        )}
+                        {job.status === "QUEUED" && (
+                          <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
+                            Queued
+                          </span>
+                        )}
+                      </td>
+
+                      {/* Error / Summary */}
+                      <td className="px-4 py-3">
+                        {job.errorMessage || job.reason ? (
+                          <span
+                            className="text-xs text-red-600 max-w-xs block truncate"
+                            title={job.errorMessage || job.reason || ""}
+                          >
+                            {job.errorMessage || job.reason}
                           </span>
                         ) : (
                           <span className="text-gray-400 text-sm">—</span>

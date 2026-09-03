@@ -3,6 +3,7 @@ import test from "node:test";
 import { PriceCheckFailureCode } from "@/app/generated/prisma/enums";
 import {
   DEAL_PRICE_UNAVAILABLE_AUTO_HOLD_REASON,
+  REGULAR_PRICE_UNAVAILABLE_AUTO_HOLD_REASON,
   PriceCheckFailure,
   getPriceCheckAutoHoldReason,
   getPriceCheckAutoResumeMetadata,
@@ -13,6 +14,7 @@ import {
   isPriceCheckAutoHoldMetadata,
   isPriceCheckAutoResumeMetadata,
   isRecoveredLowStockAutoHold,
+  isRecoveredRegularPriceAutoHold,
   isRecoveredPriceCheckAutoHold,
   selectPriceCheckAutoHoldProductIds,
   selectPriceCheckAutoResumeProductIds,
@@ -261,4 +263,30 @@ test("automatic resume candidates include resolved low-stock holds but exclude u
     }),
     [],
   );
+});
+
+test("automatic resume candidates include recovered regular-price holds", () => {
+  const recoveredRegular = {
+    id: "recovered-regular",
+    status: "ON_HOLD",
+    ebayItemId: "123",
+    amazonPriceTrackingMode: "REGULAR",
+    amazonPrice: 299.00,
+    holdReason: REGULAR_PRICE_UNAVAILABLE_AUTO_HOLD_REASON,
+    priceCheckError: null,
+    priceCheckFailureCode: null,
+    amazonStockLeft: null,
+  };
+  const products = [
+    recoveredRegular,
+    { ...recoveredRegular, id: "unresolved-err", priceCheckError: "Error" },
+    { ...recoveredRegular, id: "no-price", amazonPrice: null },
+    { ...recoveredRegular, id: "out-of-stock", amazonStockLeft: 0 },
+  ];
+
+  assert.equal(isRecoveredRegularPriceAutoHold(recoveredRegular), true);
+  assert.equal(isRecoveredPriceCheckAutoHold(recoveredRegular), true);
+  assert.deepEqual(selectPriceCheckAutoResumeProductIds({ products }), [
+    "recovered-regular",
+  ]);
 });

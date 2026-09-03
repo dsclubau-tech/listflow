@@ -793,7 +793,9 @@ export async function scrapeAmazonPrice(
       normalizedAsin
     );
     let selectedPrice =
-      priceTrackingMode === "DEAL" ? priceChoices.deal : priceChoices.regular;
+      priceTrackingMode === "DEAL"
+        ? priceChoices.deal
+        : (priceChoices.regular ?? priceChoices.deal);
     let price = selectedPrice?.price ?? null;
 
     let variantSwatchSelected = false;
@@ -835,7 +837,9 @@ export async function scrapeAmazonPrice(
             normalizedAsin
           );
           selectedPrice =
-            priceTrackingMode === "DEAL" ? priceChoices.deal : priceChoices.regular;
+            priceTrackingMode === "DEAL"
+              ? priceChoices.deal
+              : (priceChoices.regular ?? priceChoices.deal);
           price = selectedPrice?.price ?? null;
 
           if (price !== null) {

@@ -12,6 +12,7 @@ import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import {
   DEAL_PRICE_UNAVAILABLE_AUTO_HOLD_REASON,
+  REGULAR_PRICE_UNAVAILABLE_AUTO_HOLD_REASON,
   getPriceCheckAutoResumeMetadata,
   isPriceCheckAutoResumeMetadata,
   selectPriceCheckAutoResumeProductIds,
@@ -62,6 +63,14 @@ async function resolveCandidateIds(
         {
           amazonPriceTrackingMode: AmazonPriceTrackingMode.DEAL,
           holdReason: DEAL_PRICE_UNAVAILABLE_AUTO_HOLD_REASON,
+        },
+        {
+          amazonPriceTrackingMode: AmazonPriceTrackingMode.REGULAR,
+          holdReason: REGULAR_PRICE_UNAVAILABLE_AUTO_HOLD_REASON,
+          OR: [
+            { amazonStockLeft: null },
+            { amazonStockLeft: { gt: LOW_STOCK_THRESHOLD } },
+          ],
         },
         {
           holdReason: LOW_STOCK_RESOLVED_HOLD_REASON,

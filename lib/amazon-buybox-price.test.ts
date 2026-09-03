@@ -345,7 +345,7 @@ test("extractLocalizedBuyboxPriceForMode stays strict for regular-only prices", 
   );
 });
 
-test("extractLocalizedBuyboxPriceChoices treats a verified Amazon discount as a deal", () => {
+test("extractLocalizedBuyboxPriceChoices treats a verified Amazon discount as both deal and regular", () => {
   const $ = load(`
     <div id="corePrice_feature_div">
       <div class="reinventPricePriceToPayMargin">
@@ -368,7 +368,48 @@ test("extractLocalizedBuyboxPriceChoices treats a verified Amazon discount as a 
   assert.equal(choices.deal?.price, 109.99);
   assert.equal(choices.deal?.mode, "DEAL");
   assert.equal(choices.deal?.label, "Discounted price");
-  assert.equal(choices.regular, null);
+  assert.equal(choices.regular?.price, 109.99);
+  assert.equal(choices.regular?.mode, "REGULAR");
+});
+
+test("extractLocalizedBuyboxPriceChoices keeps regular price active for -48% and -6% discounts", () => {
+  // BlueAnt X6 Speaker case (-48% $299.00, RRP $579.00)
+  const $speaker = load(`
+    <div id="corePrice_feature_div">
+      <span class="savingsPercentage">-48%</span>
+      <span class="a-price priceToPay">
+        <span class="a-offscreen">$299.00</span>
+      </span>
+      <div class="basisPrice">
+        <span>RRP:</span>
+        <span class="a-price a-text-price">
+          <span class="a-offscreen">$579.00</span>
+        </span>
+      </div>
+    </div>
+  `);
+  const speakerChoices = extractLocalizedBuyboxPriceChoices($speaker, "B0D485B3WS");
+  assert.equal(speakerChoices.regular?.price, 299.0);
+  assert.equal(speakerChoices.deal?.price, 299.0);
+
+  // Gawfolk Gaming Monitor case (-6% $159.99, RRP $169.99)
+  const $monitor = load(`
+    <div id="corePrice_feature_div">
+      <span class="savingsPercentage">-6%</span>
+      <span class="a-price priceToPay">
+        <span class="a-offscreen">$159.99</span>
+      </span>
+      <div class="basisPrice">
+        <span>RRP:</span>
+        <span class="a-price a-text-price">
+          <span class="a-offscreen">$169.99</span>
+        </span>
+      </div>
+    </div>
+  `);
+  const monitorChoices = extractLocalizedBuyboxPriceChoices($monitor, "B0GY3GZLY7");
+  assert.equal(monitorChoices.regular?.price, 159.99);
+  assert.equal(monitorChoices.deal?.price, 159.99);
 });
 
 test("discount inference requires both savings percentage and a higher reference price", () => {

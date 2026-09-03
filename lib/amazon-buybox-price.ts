@@ -364,6 +364,13 @@ export function extractLocalizedBuyboxPriceChoices(
           mode = "REGULAR";
         }
 
+        const isExplicitDeal =
+          selectorLooksDeal ||
+          DEAL_PRICE_LABEL_PATTERN.test(localNearbyText) ||
+          DEAL_PRICE_LABEL_PATTERN.test(containerText) ||
+          /with prime/i.test(localNearbyText) ||
+          /with prime/i.test(containerText);
+
         if (mode === "DEAL" && !choices.deal) {
           choices.deal = buildResult(
             normalizedAsin,
@@ -378,7 +385,25 @@ export function extractLocalizedBuyboxPriceChoices(
                 : "Deal price",
             shippingFee,
           );
-          return;
+
+          // If this is a general discount against an RRP/reference price
+          // (not an explicit limited-time deal or prime exclusive), this single
+          // buybox price is also the regular purchasable price on Amazon.
+          if (!isExplicitDeal && !choices.regular) {
+            choices.regular = buildResult(
+              normalizedAsin,
+              containerSelector,
+              selector,
+              price,
+              "REGULAR",
+              "Regular price",
+              shippingFee,
+            );
+          }
+
+          if (isExplicitDeal) {
+            return;
+          }
         }
 
         if (mode === "REGULAR" && !choices.regular) {
