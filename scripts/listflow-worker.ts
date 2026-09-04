@@ -294,8 +294,7 @@ async function processStore(store: { id: string; name: string; loginId: string |
         );
       } else {
         const nextTime = modules.getNextScheduledCheckTime(new Date());
-        const delayMs = Math.max(1000, nextTime.getTime() - Date.now());
-        await modules.completeWorkerSchedule(autoCheckClaim, delayMs);
+        await modules.completeWorkerSchedule(autoCheckClaim, nextTime);
         if (!result.skipped) {
           return true;
         }

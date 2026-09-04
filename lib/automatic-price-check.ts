@@ -16,6 +16,7 @@ import {
   createPriceCheckJob,
   runPriceCheckJob,
 } from "@/lib/price-check-jobs";
+import { getInternalUserId } from "@/lib/store-session";
 import {
   AUTOMATIC_PRICE_CHECK_TASK_KEY,
   AUTOMATIC_PRICE_CHECK_TIMES,
@@ -96,6 +97,9 @@ export async function startAutomaticPriceCheck(options: {
         },
         update: {
           nextRunAt: now,
+          claimedBy: null,
+          claimedByName: null,
+          claimExpiresAt: null,
           lastError: null,
         },
       });
@@ -290,11 +294,20 @@ export async function runAutomaticPriceCheckForStore(
     throw error;
   }
 
-  // Resolve user ID for the job
-  let userId = store.autoCheckStartedBy;
+  // Resolve a valid user ID for the job (foreign key requires a record in User table)
+  let userId: string | null = null;
+  if (store.autoCheckStartedBy) {
+    const user = await prisma.user.findUnique({
+      where: { id: store.autoCheckStartedBy },
+      select: { id: true },
+    });
+    if (user) {
+      userId = user.id;
+    }
+  }
+
   if (!userId) {
-    const firstUser = await prisma.user.findFirst({ select: { id: true } });
-    userId = firstUser?.id ?? "system";
+    userId = await getInternalUserId();
   }
 
   // Create an automatic full price check job

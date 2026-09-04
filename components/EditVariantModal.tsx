@@ -547,7 +547,7 @@ export default function EditVariantModal({
         roundCents
       );
 
-      let netProfit = calculateNetProfit({
+      const netProfit = calculateNetProfit({
         buyPrice,
         sellPrice: normalizedSellPriceNumber,
         feesPercent,

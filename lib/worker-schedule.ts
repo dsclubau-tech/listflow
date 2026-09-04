@@ -163,13 +163,18 @@ export async function withWorkerScheduleClaim<T>(
 
 export async function completeWorkerSchedule(
   claim: WorkerScheduleClaim,
-  intervalMs: number,
+  intervalOrNextRunAt: number | Date,
   now = new Date(),
 ) {
+  const nextRunAt =
+    intervalOrNextRunAt instanceof Date
+      ? intervalOrNextRunAt
+      : new Date(now.getTime() + intervalOrNextRunAt);
+
   const completed = await prisma.workerSchedule.updateMany({
     where: { id: claim.id, claimedBy: claim.workerId },
     data: {
-      nextRunAt: new Date(now.getTime() + intervalMs),
+      nextRunAt,
       claimedBy: null,
       claimedByName: null,
       claimExpiresAt: null,
@@ -189,7 +194,7 @@ export async function completeWorkerSchedule(
     storeId: claim.storeId,
     taskKey: claim.taskKey,
     workerId: claim.workerId,
-    nextRunAt: new Date(now.getTime() + intervalMs).toISOString(),
+    nextRunAt: nextRunAt.toISOString(),
   });
   return true;
 }

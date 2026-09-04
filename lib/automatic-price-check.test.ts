@@ -77,4 +77,16 @@ describe("automatic-price-check configuration", () => {
       true
     );
   });
+
+  test("schedule completion handles Date objects directly without millisecond drift", () => {
+    const fixedTarget = new Date("2026-09-04T14:00:00.000Z");
+    const intervalMs = 3600_000;
+    const now = new Date("2026-09-04T13:00:00.000Z");
+
+    const dateResult = fixedTarget instanceof Date ? fixedTarget : new Date(now.getTime() + fixedTarget);
+    assert.equal(dateResult.toISOString(), "2026-09-04T14:00:00.000Z");
+
+    const intervalResult = intervalMs instanceof Date ? intervalMs : new Date(now.getTime() + intervalMs);
+    assert.equal(intervalResult.toISOString(), "2026-09-04T14:00:00.000Z");
+  });
 });

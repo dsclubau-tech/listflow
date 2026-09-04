@@ -30,6 +30,7 @@ import {
 } from "@/lib/price-checker";
 import { finalizePriceCheckAutoHoldForJob } from "@/lib/price-check-auto-hold";
 import { isWorkerOnlineForStore } from "@/lib/worker-heartbeat";
+import { getInternalUserId } from "@/lib/store-session";
 
 const ACTIVE_JOB_STATUSES: PriceCheckJobStatus[] = [
   PriceCheckJobStatus.QUEUED,
@@ -743,9 +744,22 @@ export async function createPriceCheckJob(input: CreateJobInput) {
     eligibleProductIds.length === 0
       ? selection.emptyReason
       : null;
+  let userId = input.userId;
+  if (userId) {
+    const userExists = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true },
+    });
+    if (!userExists) {
+      userId = await getInternalUserId();
+    }
+  } else {
+    userId = await getInternalUserId();
+  }
+
   const job = await prisma.priceCheckJob.create({
     data: {
-      userId: input.userId,
+      userId,
       storeId: input.storeId,
       scope,
       trigger: input.trigger ?? PriceCheckJobTrigger.MANUAL,

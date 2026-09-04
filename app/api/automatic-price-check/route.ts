@@ -41,8 +41,14 @@ export async function POST(request: Request) {
   }
 
   try {
+    const starterIdentifier =
+      storeSession.storeName ||
+      session.user.name ||
+      storeSession.storeLoginId ||
+      "Store Session";
+
     const status = await startAutomaticPriceCheck({
-      userId: session.user.id || storeSession.storeId,
+      userId: starterIdentifier,
       storeId: body.storeId,
     });
     return NextResponse.json(status);
