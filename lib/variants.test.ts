@@ -18,8 +18,8 @@ test("buildDefaultVariantData applies supplier pricing defaults when creating de
     automaticSkuFilling: true,
     feesPercent: 13,
     feesFixed: 0.33,
-    profitPercent: 0,
-    profitFixed: 14,
+    defaultUploadProfitPercent: 0,
+    defaultUploadProfitFixed: 14,
     minimumProfit: 1,
   });
 
@@ -27,10 +27,12 @@ test("buildDefaultVariantData applies supplier pricing defaults when creating de
   assert.equal(variant.buyPrice, 100);
   assert.equal(variant.feesPercent, 13);
   assert.equal(variant.feesFixed, 0.33);
-  assert.equal(variant.profitPercent, 0);
-  assert.equal(variant.profitFixed, 14);
+  // Default upload profit of $14 is captured as the variant's baseline profitPercent (14% on $100 buy price)
+  assert.equal(variant.profitPercent, 14);
+  // Additional Profit starts at 0 on upload
+  assert.equal(variant.profitFixed, 0);
   assert.equal(variant.status, "IN_STOCK");
-  // Sell price for buy=100, fees=13%, feesFixed=0.33, profit=14 -> (100 + 0.33 + 14) / (1 - 0.13) = 114.33 / 0.87 = 131.41
+  // Sell price for buy=100, fees=13%, feesFixed=0.33, upload profit=14 -> (100 + 0.33 + 14) / (1 - 0.13) = 114.33 / 0.87 = 131.41
   assert.equal(variant.sellPrice, 131.41);
 });
 
@@ -61,5 +63,8 @@ test("buildDefaultVariantData handles Decimal object prices correctly", async ()
 
   // buy = 75, fees = 13%, feeFixed = 0.33, profitFixed = 14 -> (75 + 0.33 + 14) / (1 - 0.13) = 89.33 / 0.87 = 102.68
   assert.equal(variant.sellPrice, 102.68);
+  // (14 / 75) * 100 = 18.67%
+  assert.equal(variant.profitPercent, 18.67);
+  assert.equal(variant.profitFixed, 0);
 });
 

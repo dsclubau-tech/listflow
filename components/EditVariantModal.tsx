@@ -37,7 +37,7 @@ interface EditVariantModalProps {
 
 type ModalTab = "pricing" | "general";
 
-interface SupplierPricingDefaults {
+export interface SupplierPricingDefaults {
   feesPercent: number;
   feesFixed: number;
   defaultUploadProfitPercent: number;
@@ -45,7 +45,7 @@ interface SupplierPricingDefaults {
   minimumProfit: number;
 }
 
-interface VariantFormState {
+export interface VariantFormState {
   sku: string;
   title: string;
   imagesText: string;
@@ -118,7 +118,7 @@ function recalculateSellPriceForState(next: VariantFormState) {
   };
 }
 
-function buildFormState(props: {
+export function buildFormState(props: {
   variant: VariantRecord | null;
   defaultBuyPrice: number;
   defaultQuantity: number;
@@ -142,10 +142,29 @@ function buildFormState(props: {
     const sellPrice = toNumber(variant.sellPrice.toString());
     const feesPercent = Number(variant.feesPercent);
     const feesFixed = Number(variant.feesFixed);
-    const profitFixed = Number(variant.profitFixed);
+    let profitFixed = Number(variant.profitFixed);
     let profitPercent = Number(variant.profitPercent);
 
-    if (profitPercent === 0 && profitFixed === 0 && sellPrice > buyPrice && buyPrice > 0) {
+    if (profitPercent === 0 && profitFixed > 0 && sellPrice > buyPrice && buyPrice > 0) {
+      const netProfit = calculateNetProfit({
+        buyPrice,
+        sellPrice,
+        feesPercent,
+        feesFixed,
+      });
+      // Legacy upload bug: upload profit was stored directly in profitFixed while profitPercent stayed 0.
+      // If profitFixed matches or accounts for the net profit, normalize to baseline profitPercent with 0 additional profit.
+      if (Math.abs(netProfit - profitFixed) <= 0.05 || netProfit >= profitFixed) {
+        profitPercent = calculateProfitPercentFromSellPrice({
+          buyPrice,
+          sellPrice,
+          feesPercent,
+          feesFixed,
+          profitFixed: 0,
+        });
+        profitFixed = 0;
+      }
+    } else if (profitPercent === 0 && profitFixed === 0 && sellPrice > buyPrice && buyPrice > 0) {
       profitPercent = calculateProfitPercentFromSellPrice({
         buyPrice,
         sellPrice,
@@ -163,7 +182,7 @@ function buildFormState(props: {
       feesPercent: String(variant.feesPercent),
       feesFixed: String(variant.feesFixed),
       profitPercent: String(profitPercent),
-      profitFixed: String(variant.profitFixed),
+      profitFixed: String(profitFixed),
       minimumProfit: String(pricingDefaults?.minimumProfit ?? 0),
       promotedAdPercent: String(variant.promotedAdPercent ?? 0),
       sellPrice: variant.sellPrice.toString(),
@@ -188,18 +207,28 @@ function buildFormState(props: {
   const buyPrice = defaultBuyPrice;
   const feesPercent = pricingDefaults?.feesPercent ?? 0;
   const feesFixed = pricingDefaults?.feesFixed ?? 0;
-  const profitPercent = pricingDefaults?.defaultUploadProfitPercent ?? 0;
-  const profitFixed = pricingDefaults?.defaultUploadProfitFixed ?? 0;
+  const defaultUploadProfitPercent =
+    pricingDefaults?.defaultUploadProfitPercent ?? 0;
+  const defaultUploadProfitFixed =
+    pricingDefaults?.defaultUploadProfitFixed ?? 0;
   const minimumProfit = pricingDefaults?.minimumProfit ?? 0;
 
   const sellPrice = calculateSellPrice({
     buyPrice,
     feesPercent,
     feesFixed,
-    profitPercent,
-    profitFixed,
+    profitPercent: defaultUploadProfitPercent,
+    profitFixed: defaultUploadProfitFixed,
     roundCents: null,
     minimumProfit,
+  });
+
+  const baseProfitPercent = calculateProfitPercentFromSellPrice({
+    buyPrice,
+    sellPrice,
+    feesPercent,
+    feesFixed,
+    profitFixed: 0,
   });
 
   return {
@@ -209,8 +238,8 @@ function buildFormState(props: {
     buyPrice: toMoneyString(defaultBuyPrice),
     feesPercent: String(feesPercent),
     feesFixed: String(feesFixed),
-    profitPercent: String(profitPercent),
-    profitFixed: String(profitFixed),
+    profitPercent: String(baseProfitPercent),
+    profitFixed: "0",
     minimumProfit: String(minimumProfit),
     promotedAdPercent: "0",
     sellPrice: toMoneyString(sellPrice),
@@ -379,14 +408,32 @@ export default function EditVariantModal({
               };
             }
 
-            return recalculateSellPriceForState({
+            const nextSellPrice = calculateSellPrice({
+              buyPrice: toNumber(prev.buyPrice),
+              feesPercent: nextDefaults.feesPercent,
+              feesFixed: nextDefaults.feesFixed,
+              profitPercent: nextDefaults.defaultUploadProfitPercent,
+              profitFixed: nextDefaults.defaultUploadProfitFixed,
+              minimumProfit: nextDefaults.minimumProfit,
+              roundCents: prev.roundCentsEnabled ? 0.99 : null,
+            });
+            const nextProfitPercent = calculateProfitPercentFromSellPrice({
+              buyPrice: toNumber(prev.buyPrice),
+              sellPrice: nextSellPrice,
+              feesPercent: nextDefaults.feesPercent,
+              feesFixed: nextDefaults.feesFixed,
+              profitFixed: 0,
+            });
+
+            return {
               ...prev,
               feesPercent: String(nextDefaults.feesPercent),
               feesFixed: String(nextDefaults.feesFixed),
-              profitPercent: String(nextDefaults.defaultUploadProfitPercent),
-              profitFixed: String(nextDefaults.defaultUploadProfitFixed),
+              profitPercent: String(nextProfitPercent),
+              profitFixed: "0",
+              sellPrice: toMoneyString(nextSellPrice),
               minimumProfit: String(nextDefaults.minimumProfit),
-            });
+            };
           }
 
           return {

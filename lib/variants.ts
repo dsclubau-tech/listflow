@@ -21,6 +21,8 @@ type DefaultVariantSource = {
   feesFixed?: number | null;
   profitPercent?: number | null;
   profitFixed?: number | null;
+  defaultUploadProfitPercent?: number | null;
+  defaultUploadProfitFixed?: number | null;
   minimumProfit?: number | null;
   profitTiers?: ProfitTierConfig[] | null;
   itemSpecifics?: unknown;
@@ -178,22 +180,38 @@ export function buildDefaultVariantData(product: DefaultVariantSource) {
   const status = product.quantity > 0 ? "IN_STOCK" : "OUT_OF_STOCK";
   const feesPercent = Math.max(0, toNumber(product.feesPercent, 0));
   const feesFixed = Math.max(0, toNumber(product.feesFixed, 0));
-  const baseProfitPercent = Math.max(0, toNumber(product.profitPercent, 0));
-  const profitFixed = toNumber(product.profitFixed, 0);
+  const defaultUploadProfitPercent = Math.max(
+    0,
+    toNumber(
+      product.defaultUploadProfitPercent ?? product.profitPercent,
+      0
+    )
+  );
+  const defaultUploadProfitFixed = toNumber(
+    product.defaultUploadProfitFixed ?? product.profitFixed,
+    0
+  );
   const minimumProfit = Math.max(0, toNumber(product.minimumProfit, 0));
   const buyPriceNumber = toNumber(product.price, 0);
   const tierProfitPercent = product.profitTiers
     ? getTierProfitPercent(buyPriceNumber, product.profitTiers)
     : 0;
-  const profitPercent = baseProfitPercent + tierProfitPercent;
+  const uploadProfitPercent = defaultUploadProfitPercent + tierProfitPercent;
   const sellPrice = calculateSellPrice({
     buyPrice: buyPriceNumber,
     feesPercent,
     feesFixed,
-    profitPercent,
-    profitFixed,
+    profitPercent: uploadProfitPercent,
+    profitFixed: defaultUploadProfitFixed,
     minimumProfit,
     roundCents: null,
+  });
+  const variantProfitPercent = calculateProfitPercentFromSellPrice({
+    buyPrice: buyPriceNumber,
+    sellPrice,
+    feesPercent,
+    feesFixed,
+    profitFixed: 0,
   });
 
   const variantItemSpecifics: Record<string, string> = {};
@@ -215,8 +233,8 @@ export function buildDefaultVariantData(product: DefaultVariantSource) {
     buyPrice: product.price,
     feesPercent,
     feesFixed,
-    profitPercent,
-    profitFixed,
+    profitPercent: variantProfitPercent,
+    profitFixed: 0,
     promotedAdPercent: 0,
     sellPrice,
     quantity: product.quantity,
@@ -322,6 +340,10 @@ export async function ensureDefaultVariantForProduct(productId: string) {
               profitPercent:
                 supplierSettings?.defaultUploadProfitPercent ?? 0,
               profitFixed: supplierSettings?.defaultUploadProfitFixed ?? 0,
+              defaultUploadProfitPercent:
+                supplierSettings?.defaultUploadProfitPercent ?? 0,
+              defaultUploadProfitFixed:
+                supplierSettings?.defaultUploadProfitFixed ?? 0,
               minimumProfit: supplierSettings?.minimumProfit ?? 1,
               profitTiers: supplierSettings?.profitTiers,
             }),
