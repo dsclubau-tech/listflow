@@ -18,7 +18,7 @@ The delivered contract adheres strictly to ListFlow's design recommendations:
   - `inactive` $\rightarrow$ `count = 0` (confirmed zero; paid operations blocked).
   - `unavailable` $\rightarrow$ `count` omitted (temporary outage; never interpreted as cancellation).
 - **5-second request timeout** with 1 jittered retry on network failure/429/5xx.
-- **Permanent identity key:** Immutable AA Supabase User UUID (Gmail accounts only).
+- **Permanent identity key:** Immutable AA Supabase User UUID (Email/password accounts managed by AA; Google sign-in is NOT enabled).
 
 ---
 
@@ -66,7 +66,7 @@ Content-Type: application/json
 | :--- | :--- | :--- | :--- |
 | **`200 OK`** | `{"status": "active", "count": 1, ...}` | Customer has paid grant. `count` = allowed eBay store slots. | Allow background syncs and worker jobs. Enforce $\text{connected stores} \le \text{count}$. Cache result for 15 minutes. |
 | **`200 OK`** | `{"status": "inactive", "count": 0, ...}` | Subscription inactive / manual grant removed. | Fail-closed: block background processing and active syncs. Do not immediately retry; wait for next 15-minute scheduled poll. |
-| **`404 Not Found`** | `{"error": "user_not_found"}` | User UUID not recognized in AA system. | Treat as inactive / unregistered. Advise user to register via main AA portal. |
+| **`404 Not Found`** | `{"error": "user_not_found"}` | Authenticated user UUID not recognized in AA (stale cache, UUID mismatch, or legacy account unreconciled). | Critical anomaly: log high-severity alert capturing the specific `user_id` for immediate investigation. Do **NOT** show a confusing "please register" message to an authenticated user. Block paid operations safely until identity reconciliation is investigated. |
 | **`503 Service Unavailable`** | `{"status": "unavailable"}` *(count omitted)* | AA service or database is temporarily unreachable. | **Do NOT treat as cancellation.** Preserve queued jobs, pause execution, and retry with exponential backoff. |
 | **`429 Too Many Requests`** | `{"error": "Rate limit exceeded"}` *(Header: `Retry-After: 60`)* | Rate limit hit (limit is 100 req/min). | Pause calls to AA for 60 seconds (or duration specified in header). |
 | **`401 / 403`** | `{"error": "Unauthorized"}` | Machine token is invalid, missing, or revoked. | Emit high-severity admin alert immediately. Do not loop retries. |
@@ -88,18 +88,25 @@ Content-Type: application/json
             ▼                                     ▼
 Execute / Skip Job by Status             Call AA Entitlement Check
                                                   │
-                                   ┌──────────────┴──────────────┐
-                            Status: ACTIVE                Status: UNAVAILABLE
-                                   │                             │
-                                   ▼                             ▼
-                            Allow Work (count)            Keep Jobs Queued
+                 ┌────────────────────────────────┼────────────────────────────────┐
+                 │                                │                                │
+                 ▼                                ▼                                ▼
+          Status: ACTIVE                   Status: INACTIVE              Status: UNAVAILABLE
+                 │                                │                                │
+                 ▼                                ▼                                ▼
+         Allow Work (count)               Block Paid Jobs                  Keep Jobs Queued
+                                      (Poll again in 15m)              (Retry with backoff)
 ```
 
-1. **Staleness Lease (15 Minutes):** Each customer's entitlement snapshot is valid for 15 minutes. Refreshes must be coordinated through the shared database so multiple workers do not trigger concurrent requests for the same customer.
+1. **Staleness Lease (15 Minutes):** Each customer's entitlement snapshot is valid for 15 minutes. Refreshes must be coordinated through the shared database so multiple workers and web requests do not trigger concurrent external requests for the same customer.
 2. **Quota & Rate Limits:** 100 requests/minute per machine credential allows for over 1,500 active customers on standard 15-minute polling without hitting limits.
 3. **Fail-Closed vs. Fail-Safe:**
    - Interactive operations attempting to add new eBay stores fail closed if `active` status is not confirmed.
    - Background queued jobs fail-safe during `unavailable` (503) by postponing execution rather than terminating or failing the job permanently.
+4. **App-Level Dashboard Gating (Single Source of Truth):**
+   - The dashboard layout (`app/(app)/layout.tsx`) validates the customer's local `EntitlementSnapshot` directly against PostgreSQL on every authenticated dashboard request (a cheap, sub-millisecond indexed lookup by `userId`).
+   - **No secondary signed session flag:** Storing a separate signed cookie flag creates split-brain caching and delayed revocation. By reading PostgreSQL directly, there is exactly one authoritative state and one 15-minute staleness boundary.
+   - If the snapshot reports `INACTIVE` or `allowedStores === 0`, the customer is immediately redirected to an internal `/subscription-required` page.
 
 ---
 
@@ -121,11 +128,10 @@ Configure the following in local `.env`, Vercel (Production/Preview), and Railwa
     userId        String   @id // AA Supabase User UUID
     status        String   // ACTIVE, INACTIVE, UNAVAILABLE
     allowedStores Int      @default(0)
-    lastCheckedAt DateTime @default(now())
-    checkedAt     DateTime?
+    checkedAt     DateTime @default(now()) // Authoritative timestamp of latest confirmation
     updatedAt     DateTime @updatedAt
 
-    @@index([lastCheckedAt])
+    @@index([checkedAt])
   }
   ```
 
@@ -134,8 +140,21 @@ Configure the following in local `.env`, Vercel (Production/Preview), and Railwa
   - Strict 5,000ms timeout (`AbortSignal.timeout(5000)`).
   - 1 jittered retry on network failure or 5xx/429.
   - Safe parsing ensuring `unavailable` never sets `allowedStores` to 0.
-- Implement database caching and deduplication to prevent worker stampedes.
+- Implement database caching and deduplication to prevent worker/web stampedes.
 
-### Phase 4: Worker & Store Limit Integration
+### Phase 4: Authentication, Dashboard Gating & Subscription-Required Page
+- **Login Page (`app/login/page.tsx`):**
+  - Retains ListFlow branding with an email and password sign-in form authenticating via AA Supabase (`signInWithPassword`).
+  - **No Google sign-in button or OAuth flow:** Customers are manually provisioned on AA with email and password; Google auth is not enabled.
+- **Internal Informational Page (`/subscription-required`):**
+  - Displays a clean, branded "Subscription Required" message explaining that ListFlow requires an active Automation Alchemists subscription.
+  - Provides direct contact instructions (e.g., email/support link to AA) to request access/store slots, explicitly **avoiding** any automated checkout buttons (since AA subscriptions are manual grants at launch).
+- **Dashboard Layout Guard:**
+  - In `app/(app)/layout.tsx`, inspect `EntitlementSnapshot` for the current user.
+  - If snapshot is older than 15 minutes, trigger a background refresh to AA.
+  - If snapshot is `INACTIVE` or `allowedStores === 0`, redirect immediately to `/subscription-required`.
+
+### Phase 5: Worker & Store Limit Integration
 - **Worker Pre-Claim Check:** In `scripts/listflow-worker.ts`, verify that the store owner's entitlement snapshot is `ACTIVE` before leasing jobs.
 - **Store Creation Guard:** Enforce $\text{Count}(\text{Active Stores}) < \text{Allowed Stores}$ in API routes before authorizing new eBay store connections.
+

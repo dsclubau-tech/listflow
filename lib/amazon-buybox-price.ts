@@ -235,6 +235,28 @@ function parsePriceElement(
   return parseFirstPriceFromText(priceElement.text());
 }
 
+function parseContainerBuyboxPrice($: CheerioAPI, container: any): number | null {
+  for (const sel of [
+    ".apex-core-price-identifier .apex-pricetopay-value",
+    ".apex-pricetopay-value",
+    ".priceToPay",
+    ".header-price",
+    ".a-price:not(.a-text-price)",
+    ".a-price",
+  ]) {
+    const elements = container.find(sel);
+    for (let i = 0; i < elements.length; i++) {
+      const el = elements.eq(i);
+      if (el.closest(NON_CURRENT_PRICE_ANCESTOR_SELECTOR).length > 0) {
+        continue;
+      }
+      const p = parsePriceElement($, el);
+      if (p !== null) return p;
+    }
+  }
+  return null;
+}
+
 export function extractLocalizedBuyboxPriceChoices(
   $: CheerioAPI,
   asin: string
@@ -247,6 +269,72 @@ export function extractLocalizedBuyboxPriceChoices(
     regular: null,
     deal: null,
   };
+
+  // 1. Check for Buybox Accordion cards / Multi-offer rows (e.g. Prime Member Price vs Regular Price)
+  const buybox = $("#buyBoxAccordion, #desktop_buybox, #buybox");
+  if (buybox.length > 0) {
+    const accordionContainerSelector =
+      buybox.filter("#buyBoxAccordion").length > 0
+        ? "#buyBoxAccordion"
+        : buybox.filter("#desktop_buybox").length > 0
+          ? "#desktop_buybox"
+          : "#buybox";
+
+    const primeCard = buybox
+      .find(
+        '#primeSavingsUpsellAccordionRow, [id*="primeSavingsUpsell" i], [data-csa-c-buying-option-type="PRIME_SAVINGS_UPSELL"]'
+      )
+      .filter((_, el) => $(el).find(".a-price").length > 0)
+      .first();
+
+    const regularCard = buybox
+      .find(
+        '[id*="newAccordionRow" i], [id*="regularPrice" i], [data-csa-c-buying-option-type="NEW"]'
+      )
+      .filter((_, el) => $(el).find(".a-price").length > 0)
+      .first();
+
+    let primePrice =
+      primeCard.length > 0 ? parseContainerBuyboxPrice($, primeCard) : null;
+    let regularPrice =
+      regularCard.length > 0 ? parseContainerBuyboxPrice($, regularCard) : null;
+
+    // Also check labelled accordion rows / cards
+    if (primePrice === null || regularPrice === null) {
+      buybox.find(".a-box, .a-accordion-row").each((_, el) => {
+        const row = $(el);
+        const text = normalizeText(row.text());
+        if (primePrice === null && PRIME_MEMBER_PRICE_LABEL_PATTERN.test(text)) {
+          primePrice = parseContainerBuyboxPrice($, row);
+        }
+        if (regularPrice === null && REGULAR_PRICE_LABEL_PATTERN.test(text)) {
+          regularPrice = parseContainerBuyboxPrice($, row);
+        }
+      });
+    }
+
+    if (primePrice !== null && regularPrice !== null) {
+      choices.deal = buildResult(
+        normalizedAsin,
+        accordionContainerSelector,
+        "buybox:prime-accordion",
+        primePrice,
+        "DEAL",
+        "Prime member price",
+        shippingFee,
+      );
+      choices.regular = buildResult(
+        normalizedAsin,
+        accordionContainerSelector,
+        "buybox:regular-accordion",
+        regularPrice,
+        "REGULAR",
+        "Regular price",
+        shippingFee,
+      );
+      return choices;
+    }
+  }
 
   for (const containerSelector of BUYBOX_PRICE_CONTAINER_SELECTORS) {
     const container = $(containerSelector).first();
@@ -320,6 +408,20 @@ export function extractLocalizedBuyboxPriceChoices(
           return;
         }
 
+        const buyingOptionElement = priceElement.closest("[data-csa-c-buying-option-type]");
+        const buyingOptionType = (
+          buyingOptionElement.attr("data-csa-c-buying-option-type") || ""
+        ).toUpperCase();
+        const isPrimeUpsellOption =
+          buyingOptionType === "PRIME_SAVINGS_UPSELL" ||
+          priceElement.closest(
+            '#primeSavingsUpsellAccordionRow, [id*="primeSavingsUpsell" i]'
+          ).length > 0;
+        const isNewOption =
+          buyingOptionType === "NEW" ||
+          priceElement.closest('[id*="newAccordionRow" i], [id*="regularPrice" i]').length >
+            0;
+
         const hasVerifiedSavingsDeal =
           hasPositiveSavingsPercentage(containerText) &&
           hasHigherReferencePrice($, containerSelector, price);
@@ -336,11 +438,12 @@ export function extractLocalizedBuyboxPriceChoices(
         );
         const selectorLooksDeal = selector.includes("dealprice");
         const localLooksDeal =
+          isPrimeUpsellOption ||
           DEAL_PRICE_LABEL_PATTERN.test(localNearbyText) ||
           hasVerifiedSavingsDeal ||
           /with prime/i.test(localNearbyText);
         const localLooksRegular =
-          REGULAR_PRICE_LABEL_PATTERN.test(localNearbyText);
+          isNewOption || REGULAR_PRICE_LABEL_PATTERN.test(localNearbyText);
 
         const containerLooksDeal =
           DEAL_PRICE_LABEL_PATTERN.test(containerText) ||
@@ -350,8 +453,10 @@ export function extractLocalizedBuyboxPriceChoices(
           REGULAR_PRICE_LABEL_PATTERN.test(containerText);
 
         let mode: AmazonPriceTrackingMode;
-        if (selectorLooksDeal) {
+        if (selectorLooksDeal || isPrimeUpsellOption) {
           mode = "DEAL";
+        } else if (isNewOption) {
+          mode = "REGULAR";
         } else if (localLooksDeal && !localLooksRegular) {
           mode = "DEAL";
         } else if (localLooksRegular && !localLooksDeal) {
@@ -365,6 +470,7 @@ export function extractLocalizedBuyboxPriceChoices(
         }
 
         const isExplicitDeal =
+          isPrimeUpsellOption ||
           selectorLooksDeal ||
           DEAL_PRICE_LABEL_PATTERN.test(localNearbyText) ||
           DEAL_PRICE_LABEL_PATTERN.test(containerText) ||
@@ -378,7 +484,7 @@ export function extractLocalizedBuyboxPriceChoices(
             selector,
             price,
             "DEAL",
-            PRIME_MEMBER_PRICE_LABEL_PATTERN.test(localNearbyText)
+            isPrimeUpsellOption || PRIME_MEMBER_PRICE_LABEL_PATTERN.test(localNearbyText)
               ? "Prime member price"
               : hasVerifiedSavingsDeal
                 ? "Discounted price"

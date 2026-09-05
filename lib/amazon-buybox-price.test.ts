@@ -493,3 +493,55 @@ test("extractLocalizedBuyboxPriceChoices returns Prime Member and Regular price 
   assert.notEqual(choices.deal?.price, 129);
   assert.notEqual(choices.regular?.price, 129);
 });
+
+test("extractLocalizedBuyboxPriceChoices extracts distinct Regular and Prime prices when corePrice shows discounted prime price", () => {
+  const $ = load(`
+    <main>
+      <!-- Center column core price feature div showing Prime price and discount against RRP -->
+      <div id="corePrice_feature_div">
+        <div class="reinventPriceSavingsPercentageMargin savingsPercentage">-60%</div>
+        <span class="a-price priceToPay">
+          <span class="a-offscreen">A$119.99</span>
+        </span>
+        <div class="basisPrice">
+          <span>RRP:</span>
+          <span class="a-price a-text-price">
+            <span class="a-offscreen">A$299.99</span>
+          </span>
+        </div>
+      </div>
+      <!-- Right-side Buybox accordion with both Prime savings upsell and Regular price cards -->
+      <div id="desktop_buybox">
+        <div id="buyBoxAccordion">
+          <div id="primeSavingsUpsellAccordionRow" data-csa-c-buying-option-type="PRIME_SAVINGS_UPSELL">
+            <div class="header-price">
+              <span class="a-price">
+                <span class="a-offscreen">A$119.99</span>
+              </span>
+            </div>
+            <span>Prime Savings Exclusive</span>
+          </div>
+          <div id="newAccordionRow" data-csa-c-buying-option-type="NEW">
+            <div class="header-price">
+              <span class="a-price">
+                <span class="a-offscreen">A$299.99</span>
+              </span>
+            </div>
+            <span>Regular Price</span>
+          </div>
+        </div>
+      </div>
+    </main>
+  `);
+
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0FY6B7WZ5");
+
+  assert.equal(choices.regular?.price, 299.99);
+  assert.equal(choices.regular?.mode, "REGULAR");
+  assert.equal(choices.regular?.label, "Regular price");
+
+  assert.equal(choices.deal?.price, 119.99);
+  assert.equal(choices.deal?.mode, "DEAL");
+  assert.equal(choices.deal?.label, "Prime member price");
+});
+
