@@ -68,7 +68,7 @@ export default async function HistoryPage({
   const storeSession = await getCurrentStoreSession();
 
   if (!storeSession) {
-    redirect("/login");
+    return null;
   }
 
   const params = (await searchParams) ?? {};

@@ -18,7 +18,7 @@ export default async function ProductsPage({
   const storeSession = await getCurrentStoreSession();
 
   if (!storeSession) {
-    redirect("/login");
+    return null;
   }
 
   let data: Awaited<ReturnType<typeof getCachedProductsPageData>> | null = null;

@@ -6,6 +6,8 @@ import {
 } from "@/lib/store-session";
 import { createClient } from "@/lib/supabase/server";
 import { getOrRefreshEntitlement } from "@/lib/aa-entitlement";
+import { auth } from "@/auth";
+import { prisma } from "@/lib/prisma";
 
 export default async function DashboardLayout({
   children,
@@ -48,6 +50,18 @@ export default async function DashboardLayout({
   const storeSession = await getCurrentStoreSession();
 
   if (!storeSession) {
+    const legacySession = await auth();
+    const legacyStoreId = legacySession?.user?.storeId;
+    if (legacyStoreId) {
+      const store = await prisma.store.findUnique({
+        where: { id: legacyStoreId },
+        select: { ownerUserId: true },
+      });
+      if (store?.ownerUserId) {
+        redirect("/subscription-required");
+      }
+    }
+
     if (aaUserId) {
       redirect("/subscription-required");
     } else {

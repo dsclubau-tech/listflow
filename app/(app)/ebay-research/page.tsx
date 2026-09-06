@@ -17,7 +17,7 @@ export default async function EbayResearchPage() {
   const storeSession = await getCurrentStoreSession();
 
   if (!storeSession) {
-    redirect("/login");
+    return null;
   }
 
   let jobs: Awaited<ReturnType<typeof getRecentEbayResearchJobs>> = [];

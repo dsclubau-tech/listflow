@@ -7,7 +7,7 @@ export default async function DraftsPage() {
   const storeSession = await getCurrentStoreSession();
 
   if (!storeSession) {
-    redirect("/login");
+    return null;
   }
 
   const data = await getCachedDraftsPageData(storeSession.storeId);

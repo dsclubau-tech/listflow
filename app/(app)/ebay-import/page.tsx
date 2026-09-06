@@ -7,7 +7,7 @@ export default async function EbayImportPage() {
   const storeSession = await getCurrentStoreSession();
 
   if (!storeSession) {
-    redirect("/login");
+    return null;
   }
 
   const stores = await prisma.store.findMany({

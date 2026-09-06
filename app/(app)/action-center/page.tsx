@@ -9,7 +9,7 @@ export default async function ActionCenterPage() {
   const storeSession = await getCurrentStoreSession();
 
   if (!storeSession) {
-    redirect("/login");
+    return null;
   }
 
   let data: Awaited<ReturnType<typeof getActionCenterData>> | null = null;

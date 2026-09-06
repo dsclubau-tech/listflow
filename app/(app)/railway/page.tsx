@@ -11,7 +11,7 @@ export default async function RailwayPage() {
   const storeSession = await getCurrentStoreSession();
 
   if (!storeSession) {
-    redirect("/login");
+    return null;
   }
 
   return <RailwayUsageClient />;

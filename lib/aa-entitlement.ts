@@ -31,7 +31,8 @@ export async function fetchEntitlementFromAA(
   const endpoint =
     process.env.AA_ENTITLEMENT_CHECK_URL ||
     "https://tdevgrwmafwrsmeymjzd.supabase.co/functions/v1/entitlement-check";
-  const token = process.env.AA_ENTITLEMENT_BEARER_TOKEN;
+  const rawToken = process.env.AA_ENTITLEMENT_BEARER_TOKEN;
+  const token = rawToken?.trim().split(/\s+/)[0];
   const productSlug = process.env.AA_PRODUCT_SLUG || "listflow";
 
   if (!token) {
