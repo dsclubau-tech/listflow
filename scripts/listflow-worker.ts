@@ -82,6 +82,7 @@ async function loadWorkerModules() {
     loggerModule,
     automaticPriceCheck,
     ebaySoldSync,
+    aaEntitlement,
   ] = await Promise.all([
     import("../lib/prisma"),
     import("../lib/amazon-import-jobs"),
@@ -95,10 +96,12 @@ async function loadWorkerModules() {
     import("../lib/logger"),
     import("../lib/automatic-price-check"),
     import("../lib/ebay-sold-sync"),
+    import("../lib/aa-entitlement"),
   ]);
 
   return {
     prisma: prismaModule.prisma,
+    getOrRefreshEntitlement: aaEntitlement.getOrRefreshEntitlement,
     runNextAmazonImportJobForStore:
       amazonImportJobs.runNextAmazonImportJobForStore,
     runNextEbayImportJobForStore: ebayImportJobs.runNextEbayImportJobForStore,
@@ -236,6 +239,7 @@ async function getActiveStores() {
       id: true,
       name: true,
       loginId: true,
+      ownerUserId: true,
     },
   });
 }
@@ -255,8 +259,55 @@ async function heartbeat(storeIds = heartbeatStoreIds) {
   );
 }
 
-async function processStore(store: { id: string; name: string; loginId: string | null }) {
+async function processStore(store: {
+  id: string;
+  name: string;
+  loginId: string | null;
+  ownerUserId?: string | null;
+}) {
   const worker = getWorkerContext();
+
+  // Entitlement & Per-Store Ranking Gate
+  if (store.ownerUserId) {
+    const entitlement = await modules.getOrRefreshEntitlement(store.ownerUserId);
+
+    if (entitlement.status !== "ACTIVE" || entitlement.allowedStores <= 0) {
+      modules.logger.warn(
+        "worker",
+        "[ENTITLEMENT_HOLD] Store owner has no active subscription. Skipping worker jobs.",
+        {
+          storeId: store.id,
+          loginId: store.loginId,
+          ownerUserId: store.ownerUserId,
+          status: entitlement.status,
+        }
+      );
+      return false;
+    }
+
+    // Rank stores for owner by createdAt ASC: rank must be <= allowedStores
+    const ownerStores = await modules.prisma.store.findMany({
+      where: { ownerUserId: store.ownerUserId, isActive: true },
+      orderBy: { createdAt: "asc" },
+      select: { id: true },
+    });
+
+    const rank = ownerStores.findIndex((s) => s.id === store.id) + 1;
+    if (rank === 0 || rank > entitlement.allowedStores) {
+      modules.logger.warn(
+        "worker",
+        `[ENTITLEMENT_HOLD] Store rank (${rank}) exceeds subscription allowance (${entitlement.allowedStores}). Skipping worker jobs.`,
+        {
+          storeId: store.id,
+          loginId: store.loginId,
+          ownerUserId: store.ownerUserId,
+          rank,
+          allowedStores: entitlement.allowedStores,
+        }
+      );
+      return false;
+    }
+  }
 
   if (await modules.runNextAmazonImportJobForStore(store.id, worker)) {
     return true;
@@ -424,6 +475,17 @@ async function main() {
   }
 
   modules = await loadWorkerModules();
+
+  try {
+    const dbUserRes = await modules.prisma.$queryRawUnsafe<Array<{ current_user: string }>>(
+      "SELECT current_user;"
+    );
+    const dbUser = dbUserRes[0]?.current_user || "unknown";
+    console.log(`Database connected user: ${dbUser}`);
+    modules.logger.info("worker/db", `Connected to database as ${dbUser}`, { dbUser });
+  } catch (err: any) {
+    console.warn(`Could not verify current database user: ${err?.message || err}`);
+  }
 
   const stores = await getActiveStores();
 

@@ -44,6 +44,7 @@ model Store {
   autoCheckEnabled   Boolean   @default(false)
   autoCheckStartedBy String?
   autoCheckStartedAt DateTime?
+  ownerUserId        String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -67,7 +68,20 @@ model Store {
   appLogs                 AppLog[]
   ebayListingAsins        EbayListingAsin[]
   favoriteResearchQueries FavoriteResearchQuery[]
+
+  @@index([ownerUserId])
 }
+
+model EntitlementSnapshot {
+  userId        String   @id
+  status        String
+  allowedStores Int      @default(0)
+  checkedAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([checkedAt])
+}
+
 
 model LoginAttempt {
   id        String   @id @default(cuid())
