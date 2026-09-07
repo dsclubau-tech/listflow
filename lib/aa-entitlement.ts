@@ -96,15 +96,36 @@ export async function fetchEntitlementFromAA(
         }
       }
 
-      // 2. HTTP 404: User not found in AA
+      // 2. HTTP 404: Distinguish between explicit identity anomaly vs gateway/infrastructure 404
       if (response.status === 404) {
-        console.error(
-          `[AA_ENTITLEMENT_ANOMALY] High-severity identity anomaly: authenticated user UUID ${userId} returned 404 user_not_found from AA.`
+        let errorBody: any = null;
+        try {
+          errorBody = await response.json();
+        } catch {
+          // Non-JSON response (e.g. gateway HTML or plain text)
+        }
+
+        const isUserNotFound =
+          errorBody?.error === "user_not_found" ||
+          errorBody?.message === "user_not_found";
+
+        if (isUserNotFound) {
+          console.error(
+            `[AA_ENTITLEMENT_ANOMALY] High-severity identity anomaly: authenticated user UUID ${userId} returned explicit user_not_found from AA.`
+          );
+          // Fail closed safely without showing user registration advice
+          return {
+            status: "INACTIVE",
+            allowedStores: 0,
+          };
+        }
+
+        console.warn(
+          `[AA_ENTITLEMENT_GATEWAY_404] AA gateway returned HTTP 404 (${JSON.stringify(errorBody)}). Treating as transient UNAVAILABLE to protect active customer sessions.`
         );
-        // Fail closed safely without showing user registration advice
         return {
-          status: "INACTIVE",
-          allowedStores: 0,
+          status: "UNAVAILABLE",
+          allowedStores: lastKnownSnapshot?.allowedStores ?? 0,
         };
       }
 
@@ -235,18 +256,28 @@ export async function getOrRefreshEntitlement(
       const fresh = await fetchEntitlementFromAA(userId, snapshot);
       const checkedAt = new Date();
 
+      // If service is UNAVAILABLE but customer was previously ACTIVE, preserve active access
+      const statusToSave =
+        fresh.status === "UNAVAILABLE" && snapshot?.status === "ACTIVE"
+          ? "ACTIVE"
+          : fresh.status;
+      const allowedStoresToSave =
+        fresh.status === "UNAVAILABLE" && snapshot?.status === "ACTIVE"
+          ? snapshot.allowedStores
+          : fresh.allowedStores;
+
       // Upsert into local PostgreSQL EntitlementSnapshot
       const saved = await prisma.entitlementSnapshot.upsert({
         where: { userId },
         create: {
           userId,
-          status: fresh.status,
-          allowedStores: fresh.allowedStores,
+          status: statusToSave,
+          allowedStores: allowedStoresToSave,
           checkedAt,
         },
         update: {
-          status: fresh.status,
-          allowedStores: fresh.allowedStores,
+          status: statusToSave,
+          allowedStores: allowedStoresToSave,
           checkedAt,
         },
       });

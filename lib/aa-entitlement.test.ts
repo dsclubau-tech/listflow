@@ -94,6 +94,29 @@ test("fetchEntitlementFromAA - 404 user_not_found fails closed without retry", a
   assert.equal(result.allowedStores, 0);
 });
 
+test("fetchEntitlementFromAA - 404 gateway/infrastructure error treats as UNAVAILABLE and preserves last-known allowedStores", async () => {
+  let callCount = 0;
+  globalThis.fetch = async () => {
+    callCount++;
+    return new Response(
+      JSON.stringify({ code: "NOT_FOUND", message: "Requested function was not found" }),
+      {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      }
+    );
+  };
+
+  const result = await fetchEntitlementFromAA("user-123", {
+    status: "ACTIVE",
+    allowedStores: 3,
+  });
+
+  assert.equal(callCount, 1);
+  assert.equal(result.status, "UNAVAILABLE");
+  assert.equal(result.allowedStores, 3);
+});
+
 test("fetchEntitlementFromAA - 401/403 machine token error preserves last-known snapshot (like 503)", async () => {
   let callCount = 0;
   globalThis.fetch = async () => {

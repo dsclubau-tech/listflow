@@ -7,6 +7,54 @@ import { useState } from "react";
 export default function SubscriptionRequiredPage() {
   const router = useRouter();
   const [signingOut, setSigningOut] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<{
+    type: "error" | "info" | "success";
+    text: string;
+  } | null>(null);
+
+  const handleRefreshSubscription = async () => {
+    try {
+      setRefreshing(true);
+      setStatusMessage(null);
+
+      const res = await fetch("/api/entitlement/refresh", {
+        method: "POST",
+      });
+
+      const data = await res.json().catch(() => ({}));
+
+      if (!res.ok) {
+        setStatusMessage({
+          type: "error",
+          text: data.error || "Failed to check subscription. Please try again.",
+        });
+        setRefreshing(false);
+        return;
+      }
+
+      if (data.status === "ACTIVE" && data.allowedStores > 0) {
+        setStatusMessage({
+          type: "success",
+          text: `Subscription active (${data.allowedStores} store slot${data.allowedStores > 1 ? "s" : ""})! Entering ListFlow...`,
+        });
+        router.push("/");
+        router.refresh();
+      } else {
+        setStatusMessage({
+          type: "info",
+          text: "No active subscription detected yet on Automation Alchemists. If you recently updated your grants, please allow a moment and try again.",
+        });
+        setRefreshing(false);
+      }
+    } catch {
+      setStatusMessage({
+        type: "error",
+        text: "Network error checking subscription status. Please try again.",
+      });
+      setRefreshing(false);
+    }
+  };
 
   const handleSignOut = async () => {
     try {
@@ -64,13 +112,52 @@ export default function SubscriptionRequiredPage() {
 
           <div className="border-t border-slate-800 pt-3">
             <p className="text-xs text-slate-400 leading-relaxed">
-              Subscriptions are managed centrally via the Automation Alchemists portal. If you recently purchased or updated your subscription, please allow a few minutes for entitlement synchronization.
+              Subscriptions are managed centrally via the Automation Alchemists portal. If you recently purchased or updated your subscription, click <strong>Refresh Subscription</strong> below.
             </p>
           </div>
         </div>
 
+        {/* Status Message Banner */}
+        {statusMessage && (
+          <div
+            className={`mb-6 p-3 rounded-xl border text-xs leading-relaxed ${
+              statusMessage.type === "success"
+                ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-200"
+                : statusMessage.type === "error"
+                ? "bg-rose-500/10 border-rose-500/30 text-rose-200"
+                : "bg-amber-500/10 border-amber-500/30 text-amber-200"
+            }`}
+          >
+            {statusMessage.text}
+          </div>
+        )}
+
         {/* Action Buttons */}
         <div className="space-y-3">
+          <button
+            type="button"
+            onClick={handleRefreshSubscription}
+            disabled={refreshing || signingOut}
+            className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-medium text-sm transition-all duration-150 shadow-lg shadow-emerald-600/20 disabled:opacity-50"
+          >
+            {refreshing ? (
+              <>
+                <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                </svg>
+                Checking Entitlement...
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                </svg>
+                Refresh Subscription
+              </>
+            )}
+          </button>
+
           <a
             href="mailto:support@automationalchemists.com"
             className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-medium text-sm transition-all duration-150 shadow-lg shadow-indigo-600/20"
@@ -94,7 +181,7 @@ export default function SubscriptionRequiredPage() {
           <button
             type="button"
             onClick={handleSignOut}
-            disabled={signingOut}
+            disabled={signingOut || refreshing}
             className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium text-sm border border-slate-700 transition-all duration-150 disabled:opacity-50"
           >
             {signingOut ? "Signing out..." : "Sign Out"}
