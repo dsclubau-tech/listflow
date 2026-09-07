@@ -3,6 +3,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import CopyButton from "@/components/ui/CopyButton";
 import EditVariantModal from "@/components/EditVariantModal";
 import { calculateNetProfit } from "@/lib/variant-pricing";
 import type { VariantRecord } from "@/types/variant";
@@ -231,7 +232,14 @@ export default function ProductVariantsEditor({
                       )}
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-gray-500">
-                      {variant.sku || "-"}
+                      {variant.sku ? (
+                        <span className="inline-flex items-center gap-1.5">
+                          <span>{variant.sku}</span>
+                          <CopyButton text={variant.sku} label="Copy SKU" />
+                        </span>
+                      ) : (
+                        "-"
+                      )}
                     </td>
                     <td className="px-4 py-3 text-gray-900">
                       ${toNumber(variant.sellPrice).toFixed(2)}

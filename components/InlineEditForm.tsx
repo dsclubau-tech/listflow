@@ -5,6 +5,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import AsinLink from "@/components/AsinLink";
+import CopyButton from "@/components/ui/CopyButton";
 import ImageLightbox from "@/components/ImageLightbox";
 import { PostcodeAutocomplete } from "@/components/PostcodeAutocomplete";
 import type { Product, Store, User } from "@/app/generated/prisma/client";
@@ -2318,10 +2319,13 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
               <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
                 <span>Required for Amazon price tracking.</span>
                 {currentAsin && isValidAsin(currentAsin) && (
-                  <AsinLink
-                    asin={currentAsin}
-                    className="font-mono text-orange-600 hover:text-orange-800 hover:underline"
-                  />
+                  <span className="inline-flex items-center gap-1">
+                    <AsinLink
+                      asin={currentAsin}
+                      className="font-mono text-orange-600 hover:text-orange-800 hover:underline"
+                    />
+                    <CopyButton text={currentAsin} label="Copy ASIN" />
+                  </span>
                 )}
               </div>
             </div>

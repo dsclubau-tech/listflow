@@ -14,6 +14,7 @@ import { useRouter } from "next/navigation";
 import AsinLink from "@/components/AsinLink";
 import ActionProgressBar from "@/components/ActionProgressBar";
 import Button from "@/components/ui/Button";
+import CopyButton from "@/components/ui/CopyButton";
 import { hasMissingItemSpecifics } from "@/components/draft-upload-response";
 import InlineEditForm from "@/components/InlineEditForm";
 import {
@@ -274,18 +275,21 @@ function ItemIdCell({ product }: { product: SerializedProductRow }) {
   return (
     <div className="space-y-1 text-xs">
       {asin ? (
-        <AsinLink
-          asin={asin}
-          stopPropagation
-          aria-label={`Open Amazon product ${asin}`}
-          className="group -ml-1 inline-flex max-w-full min-w-0 items-center gap-2 rounded-lg border border-transparent px-1 py-0.5 text-gray-700 transition-colors hover:border-orange-200 hover:bg-orange-50 hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400/70"
-        >
-          <PlatformIcon platform="amazon" />
-          <span className="min-w-0 flex-1 font-mono font-medium">
-            {asin.toUpperCase()}
-          </span>
-          <ExternalLinkGlyph platform="amazon" />
-        </AsinLink>
+        <div className="flex items-center gap-1">
+          <AsinLink
+            asin={asin}
+            stopPropagation
+            aria-label={`Open Amazon product ${asin}`}
+            className="group -ml-1 inline-flex max-w-full min-w-0 items-center gap-2 rounded-lg border border-transparent px-1 py-0.5 text-gray-700 transition-colors hover:border-orange-200 hover:bg-orange-50 hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400/70"
+          >
+            <PlatformIcon platform="amazon" />
+            <span className="min-w-0 flex-1 font-mono font-medium">
+              {asin.toUpperCase()}
+            </span>
+            <ExternalLinkGlyph platform="amazon" />
+          </AsinLink>
+          <CopyButton text={asin.toUpperCase()} label="Copy ASIN" />
+        </div>
       ) : (
         <div className="flex min-w-0 items-center gap-2 px-1 py-0.5">
           <PlatformIcon platform="amazon" />
@@ -293,21 +297,24 @@ function ItemIdCell({ product }: { product: SerializedProductRow }) {
         </div>
       )}
       {ebayItemId ? (
-        <a
-          href={`https://www.ebay.com.au/itm/${ebayItemId}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(event) => event.stopPropagation()}
-          className="group -ml-1 inline-flex max-w-full min-w-0 items-center gap-2 rounded-lg border border-transparent px-1 py-0.5 text-gray-700 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70"
-          title={`Open eBay item ${ebayItemId}`}
-          aria-label={`Open eBay item ${ebayItemId}`}
-        >
-          <PlatformIcon platform="ebay" />
-          <span className="min-w-0 flex-1 font-mono font-medium">
-            {ebayItemId}
-          </span>
-          <ExternalLinkGlyph platform="ebay" />
-        </a>
+        <div className="flex items-center gap-1">
+          <a
+            href={`https://www.ebay.com.au/itm/${ebayItemId}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(event) => event.stopPropagation()}
+            className="group -ml-1 inline-flex max-w-full min-w-0 items-center gap-2 rounded-lg border border-transparent px-1 py-0.5 text-gray-700 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/70"
+            title={`Open eBay item ${ebayItemId}`}
+            aria-label={`Open eBay item ${ebayItemId}`}
+          >
+            <PlatformIcon platform="ebay" />
+            <span className="min-w-0 flex-1 font-mono font-medium">
+              {ebayItemId}
+            </span>
+            <ExternalLinkGlyph platform="ebay" />
+          </a>
+          <CopyButton text={ebayItemId} label="Copy eBay Item ID" />
+        </div>
       ) : (
         <div className="flex min-w-0 items-center gap-2 px-1 py-0.5">
           <PlatformIcon platform="ebay" />
@@ -2369,27 +2376,39 @@ export default function DraftsTable({
                               </span>
                               <div className="mt-1 flex flex-wrap items-center gap-2 text-xs" onClick={(e) => e.stopPropagation()}>
                                 {product.asin && (
-                                  <AsinLink
-                                    asin={product.asin}
-                                    warning={
-                                      product.priceCheckFailureCode === "AMAZON_ASIN_REDIRECT"
-                                        ? "Amazon redirected this ASIN to a different variant — the original product may be unavailable"
-                                        : null
-                                    }
-                                  />
+                                  <div className="inline-flex items-center gap-1">
+                                    <AsinLink
+                                      asin={product.asin}
+                                      warning={
+                                        product.priceCheckFailureCode === "AMAZON_ASIN_REDIRECT"
+                                          ? "Amazon redirected this ASIN to a different variant — the original product may be unavailable"
+                                          : null
+                                      }
+                                    />
+                                    <CopyButton
+                                      text={product.asin.toUpperCase()}
+                                      label="Copy ASIN"
+                                    />
+                                  </div>
                                 )}
                                 {product.ebayItemId && (
-                                  <a
-                                    href={`https://www.ebay.com.au/itm/${product.ebayItemId}`}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center gap-1 font-medium text-blue-600 hover:underline"
-                                  >
-                                    <span>eBay: {product.ebayItemId}</span>
-                                    <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                                    </svg>
-                                  </a>
+                                  <div className="inline-flex items-center gap-1">
+                                    <a
+                                      href={`https://www.ebay.com.au/itm/${product.ebayItemId}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="inline-flex items-center gap-1 font-medium text-blue-600 hover:underline"
+                                    >
+                                      <span>eBay: {product.ebayItemId}</span>
+                                      <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                                      </svg>
+                                    </a>
+                                    <CopyButton
+                                      text={product.ebayItemId}
+                                      label="Copy eBay Item ID"
+                                    />
+                                  </div>
                                 )}
                               </div>
                             </div>

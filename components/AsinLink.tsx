@@ -3,6 +3,7 @@ import type {
   MouseEvent,
   ReactNode,
 } from "react";
+import CopyButton from "@/components/ui/CopyButton";
 
 type AsinLinkProps = Omit<
   AnchorHTMLAttributes<HTMLAnchorElement>,
@@ -13,6 +14,7 @@ type AsinLinkProps = Omit<
   fallback?: ReactNode;
   stopPropagation?: boolean;
   warning?: string | null;
+  showCopyButton?: boolean;
 };
 
 export function getAmazonAsinUrl(asin: string) {
@@ -28,6 +30,7 @@ export default function AsinLink({
   stopPropagation = false,
   title,
   warning,
+  showCopyButton = false,
   ...props
 }: AsinLinkProps) {
   const normalizedAsin = asin?.trim().toUpperCase();
@@ -58,20 +61,29 @@ export default function AsinLink({
     </a>
   );
 
-  if (!warning) {
+  if (!warning && !showCopyButton) {
     return anchor;
   }
 
   return (
     <span className="inline-flex items-center gap-1">
       {anchor}
-      <span
-        className="cursor-help text-xs"
-        title={warning}
-        aria-label={warning}
-      >
-        ⚠️
-      </span>
+      {showCopyButton && (
+        <CopyButton
+          text={normalizedAsin}
+          label="Copy ASIN"
+          stopPropagation={stopPropagation}
+        />
+      )}
+      {warning && (
+        <span
+          className="cursor-help text-xs"
+          title={warning}
+          aria-label={warning}
+        >
+          ⚠️
+        </span>
+      )}
     </span>
   );
 }
