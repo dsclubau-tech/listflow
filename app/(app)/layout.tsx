@@ -30,6 +30,7 @@ export default async function DashboardLayout({
 
   // 2. If authenticated via AA Supabase, verify entitlement snapshot
   let overLimitWarning: string | null = null;
+  let userStores: Array<{ id: string; name: string; loginId: string | null; rank: number }> = [];
 
   if (aaUserId) {
     const entitlement = await getOrRefreshEntitlement(aaUserId);
@@ -39,6 +40,15 @@ export default async function DashboardLayout({
     }
 
     const { stores, allowedStores } = await getUserStoresWithRanking(aaUserId);
+    userStores = stores
+      .filter((s) => s.isEntitled)
+      .map((s) => ({
+        id: s.id,
+        name: s.name,
+        loginId: s.loginId,
+        rank: s.rank,
+      }));
+
     const overLimitStores = stores.filter((s) => !s.isEntitled);
 
     if (overLimitStores.length > 0) {
@@ -69,10 +79,36 @@ export default async function DashboardLayout({
     }
   }
 
+  // If userStores not populated yet (e.g. legacy session), resolve via ownerUserId
+  if (userStores.length === 0 && storeSession.ownerUserId) {
+    const { stores } = await getUserStoresWithRanking(storeSession.ownerUserId);
+    userStores = stores
+      .filter((s) => s.isEntitled)
+      .map((s) => ({
+        id: s.id,
+        name: s.name,
+        loginId: s.loginId,
+        rank: s.rank,
+      }));
+  }
+
+  if (userStores.length === 0) {
+    userStores = [
+      {
+        id: storeSession.storeId,
+        name: storeSession.storeName,
+        loginId: storeSession.storeLoginId,
+        rank: 1,
+      },
+    ];
+  }
+
   return (
     <SidebarLayout
       userName={storeSession.storeName}
       userEmail={storeSession.storeLoginId}
+      currentStoreId={storeSession.storeId}
+      stores={userStores}
     >
       {overLimitWarning && (
         <div className="mx-4 mt-4 p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-200 text-xs flex items-center justify-between shadow-sm">

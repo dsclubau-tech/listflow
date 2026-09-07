@@ -26,6 +26,13 @@ export type StoreWithRanking = {
   isEntitled: boolean;
 };
 
+export type StoreOption = {
+  id: string;
+  name: string;
+  loginId: string | null;
+  rank: number;
+};
+
 /**
  * Returns all active stores for a customer with 1-based rank by createdAt ASC
  * and whether each store is within the customer's allowedStores limit.
@@ -133,11 +140,26 @@ export async function getCurrentStoreSession(): Promise<CurrentStoreSession | nu
     return null;
   }
 
-  // If store is linked to an AA owner, enforce entitlement
+  // If store is linked to an AA owner, enforce entitlement and honor active store cookie
   if (store.ownerUserId) {
     const entitlement = await getOrRefreshEntitlement(store.ownerUserId);
     if (entitlement.status !== "ACTIVE" || entitlement.allowedStores <= 0) {
       return null;
+    }
+
+    const cookieStore = await cookies();
+    const activeStoreId = cookieStore.get("listflow_active_store_id")?.value;
+    if (activeStoreId && activeStoreId !== storeId) {
+      const { stores } = await getUserStoresWithRanking(store.ownerUserId);
+      const selected = stores.find((s) => s.id === activeStoreId && s.isEntitled);
+      if (selected) {
+        return {
+          storeId: selected.id,
+          storeName: selected.name,
+          storeLoginId: selected.loginId || selected.id,
+          ownerUserId: store.ownerUserId,
+        };
+      }
     }
   }
 

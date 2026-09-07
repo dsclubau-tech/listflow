@@ -1,13 +1,18 @@
 "use client";
 
+import { useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import PageRefreshButton from "@/components/PageRefreshButton";
+import StoreSwitcherModal from "@/components/StoreSwitcherModal";
+import type { StoreOption } from "@/lib/store-session";
 
 interface SidebarProps {
   userName: string;
   userEmail: string;
+  currentStoreId?: string;
+  stores?: StoreOption[];
   collapsed?: boolean;
   onToggle?: () => void;
   mobileOpen?: boolean;
@@ -17,11 +22,14 @@ interface SidebarProps {
 export default function Sidebar({
   userName,
   userEmail,
+  currentStoreId,
+  stores = [],
   collapsed = false,
   onToggle,
   mobileOpen = false,
   onMobileClose,
 }: SidebarProps) {
+  const [switcherOpen, setSwitcherOpen] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
 
@@ -178,10 +186,27 @@ export default function Sidebar({
       {isMobile || !collapsed ? (
         <div>
           <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
-              <p className="truncate text-sm font-medium text-white">{userName}</p>
-              <p className="truncate text-xs text-tertiary/70">{userEmail}</p>
-            </div>
+            <button
+              type="button"
+              onClick={() => setSwitcherOpen(true)}
+              className="min-w-0 flex-1 text-left p-1.5 -m-1 rounded-xl hover:bg-white/10 transition-all group cursor-pointer"
+              title="Click to switch store"
+            >
+              <div className="flex items-center gap-1.5">
+                <p className="truncate text-sm font-semibold text-white group-hover:text-teal-200 transition-colors">
+                  {userName}
+                </p>
+                <svg
+                  className="w-3.5 h-3.5 text-tertiary/70 group-hover:text-teal-200 transition-colors flex-shrink-0"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l4-4 4 4m0 6l-4 4-4-4" />
+                </svg>
+              </div>
+              <p className="truncate text-xs text-tertiary/70 mt-0.5">{userEmail}</p>
+            </button>
             <PageRefreshButton />
           </div>
           <button
@@ -202,12 +227,14 @@ export default function Sidebar({
         </div>
       ) : (
         <div className="flex flex-col items-center gap-2">
-          <div
-            title={`${userName} (${userEmail})`}
-            className="w-8 h-8 rounded-full bg-tertiary text-primary font-bold text-xs flex items-center justify-center"
+          <button
+            type="button"
+            onClick={() => setSwitcherOpen(true)}
+            title={`Switch store (Current: ${userName})`}
+            className="w-8 h-8 rounded-full bg-tertiary text-primary font-bold text-xs flex items-center justify-center hover:ring-2 hover:ring-teal-300 transition-all cursor-pointer"
           >
             {userInitial}
-          </div>
+          </button>
           <PageRefreshButton />
           <button
             type="button"
@@ -332,6 +359,14 @@ export default function Sidebar({
         {/* User Section */}
         {renderUserSection(false)}
       </aside>
+
+      {/* Store Switcher Modal */}
+      <StoreSwitcherModal
+        isOpen={switcherOpen}
+        onClose={() => setSwitcherOpen(false)}
+        stores={stores}
+        currentStoreId={currentStoreId}
+      />
     </>
   );
 }

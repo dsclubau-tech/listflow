@@ -2,10 +2,13 @@
 
 import { useState, useSyncExternalStore } from "react";
 import Sidebar from "@/components/Sidebar";
+import type { StoreOption } from "@/lib/store-session";
 
 interface SidebarLayoutProps {
   userName: string;
   userEmail: string;
+  currentStoreId?: string;
+  stores?: StoreOption[];
   children: React.ReactNode;
 }
 
@@ -41,6 +44,8 @@ function getServerSidebarPreference() {
 export default function SidebarLayout({
   userName,
   userEmail,
+  currentStoreId,
+  stores,
   children,
 }: SidebarLayoutProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -93,6 +98,8 @@ export default function SidebarLayout({
       <Sidebar
         userName={userName}
         userEmail={userEmail}
+        currentStoreId={currentStoreId}
+        stores={stores}
         collapsed={collapsed}
         onToggle={handleToggle}
         mobileOpen={mobileOpen}
