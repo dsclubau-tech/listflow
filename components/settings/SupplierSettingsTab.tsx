@@ -34,7 +34,13 @@ interface SupplierSettingsData {
   scrapePostcode: string;
   storeNumber: number;
   defaultItemSpecifics: Record<string, string>;
-  profitTiers?: { id?: string; maxPrice: number; profitPercent: number }[];
+  profitTiers?: {
+    id?: string;
+    tierType?: "LOWER_THAN" | "HIGHER_THAN" | "BETWEEN" | string;
+    minPrice?: number | null;
+    maxPrice?: number | null;
+    profitPercent: number;
+  }[];
 }
 
 interface PolicyProfile {
@@ -122,6 +128,8 @@ export default function SupplierSettingsTab() {
   const [specValue, setSpecValue] = useState("");
 
   // Profit tiers state
+  const [newTierType, setNewTierType] = useState<"LOWER_THAN" | "HIGHER_THAN" | "BETWEEN">("LOWER_THAN");
+  const [newTierMinPrice, setNewTierMinPrice] = useState("");
   const [newTierMaxPrice, setNewTierMaxPrice] = useState("");
   const [newTierProfitPercent, setNewTierProfitPercent] = useState("");
 
@@ -237,15 +245,44 @@ export default function SupplierSettingsTab() {
 
   // Profit Tiers
   function addProfitTier() {
-    const maxPrice = parseFloat(newTierMaxPrice);
     const profitPercent = parseFloat(newTierProfitPercent);
-    if (!maxPrice || maxPrice <= 0 || !profitPercent || profitPercent <= 0 || !settings) return;
+    if (!profitPercent || profitPercent <= 0 || !settings) return;
+
+    let tier: {
+      id?: string;
+      tierType: "LOWER_THAN" | "HIGHER_THAN" | "BETWEEN";
+      minPrice?: number | null;
+      maxPrice?: number | null;
+      profitPercent: number;
+    };
+
+    if (newTierType === "LOWER_THAN") {
+      const maxPrice = parseFloat(newTierMaxPrice);
+      if (!maxPrice || maxPrice <= 0) return;
+      tier = { tierType: "LOWER_THAN", minPrice: 0, maxPrice, profitPercent };
+    } else if (newTierType === "HIGHER_THAN") {
+      const minPrice = parseFloat(newTierMinPrice);
+      if (!minPrice || minPrice <= 0) return;
+      tier = { tierType: "HIGHER_THAN", minPrice, maxPrice: null, profitPercent };
+    } else {
+      const minPrice = parseFloat(newTierMinPrice);
+      const maxPrice = parseFloat(newTierMaxPrice);
+      if (!minPrice || minPrice <= 0 || !maxPrice || maxPrice <= minPrice) return;
+      tier = { tierType: "BETWEEN", minPrice, maxPrice, profitPercent };
+    }
 
     const existingTiers = settings.profitTiers || [];
-    const nextTiers = [...existingTiers, { maxPrice, profitPercent }].sort(
-      (a, b) => a.maxPrice - b.maxPrice
-    );
+    const nextTiers = [...existingTiers, tier].sort((a, b) => {
+      const aMin = a.minPrice ?? 0;
+      const bMin = b.minPrice ?? 0;
+      if (aMin !== bMin) return aMin - bMin;
+      const aMax = a.maxPrice ?? Infinity;
+      const bMax = b.maxPrice ?? Infinity;
+      return aMax - bMax;
+    });
+
     updateField("profitTiers", nextTiers);
+    setNewTierMinPrice("");
     setNewTierMaxPrice("");
     setNewTierProfitPercent("");
   }
@@ -718,26 +755,98 @@ export default function SupplierSettingsTab() {
                   Price-Based Profit Tiers
                 </h3>
                 <p className="text-xs text-gray-500 mt-1">
-                  Set extra percentage-based profit based on product price thresholds (e.g. 9% for products lower than $100, 11% lower than $150, 12% lower than $200). These stack on top of your flat Default Upload Profit settings above.
+                  Set extra percentage-based profit based on product price thresholds (e.g. 9% for products lower than $100, 12% between $100–$200, 15% for products higher than $200). These stack on top of your flat Default Upload Profit settings above.
                 </p>
               </div>
 
               {/* Add Tier inputs */}
-              <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] items-end gap-3 mb-4">
+              <div className="grid grid-cols-1 sm:grid-cols-[auto_1fr_1fr_auto] items-end gap-3 mb-4">
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">
-                    Products lower than (A$)
+                    Condition
                   </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    min="0.01"
-                    value={newTierMaxPrice}
-                    onChange={(e) => setNewTierMaxPrice(e.target.value)}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
-                    placeholder="e.g. 100"
-                  />
+                  <select
+                    value={newTierType}
+                    onChange={(e) => {
+                      setNewTierType(e.target.value as "LOWER_THAN" | "HIGHER_THAN" | "BETWEEN");
+                      setNewTierMinPrice("");
+                      setNewTierMaxPrice("");
+                    }}
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500 bg-white"
+                  >
+                    <option value="LOWER_THAN">Products lower than (&lt;)</option>
+                    <option value="HIGHER_THAN">Products higher than (≥)</option>
+                    <option value="BETWEEN">Products between</option>
+                  </select>
                 </div>
+
+                {newTierType === "LOWER_THAN" && (
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">
+                      Products lower than (A$)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      value={newTierMaxPrice}
+                      onChange={(e) => setNewTierMaxPrice(e.target.value)}
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      placeholder="e.g. 100"
+                    />
+                  </div>
+                )}
+
+                {newTierType === "HIGHER_THAN" && (
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">
+                      Products higher than or equal to (A$)
+                    </label>
+                    <input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      value={newTierMinPrice}
+                      onChange={(e) => setNewTierMinPrice(e.target.value)}
+                      className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                      placeholder="e.g. 200"
+                    />
+                  </div>
+                )}
+
+                {newTierType === "BETWEEN" && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">
+                        From (A$)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        value={newTierMinPrice}
+                        onChange={(e) => setNewTierMinPrice(e.target.value)}
+                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        placeholder="e.g. 100"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">
+                        To (A$)
+                      </label>
+                      <input
+                        type="number"
+                        step="0.01"
+                        min="0.01"
+                        value={newTierMaxPrice}
+                        onChange={(e) => setNewTierMaxPrice(e.target.value)}
+                        className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
+                        placeholder="e.g. 200"
+                      />
+                    </div>
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">
                     Extra Profit (%)
@@ -749,13 +858,19 @@ export default function SupplierSettingsTab() {
                     value={newTierProfitPercent}
                     onChange={(e) => setNewTierProfitPercent(e.target.value)}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
-                    placeholder="e.g. 9"
+                    placeholder="e.g. 15"
                   />
                 </div>
+
                 <button
                   type="button"
                   onClick={addProfitTier}
-                  disabled={!newTierMaxPrice || !newTierProfitPercent}
+                  disabled={
+                    !newTierProfitPercent ||
+                    (newTierType === "LOWER_THAN" && !newTierMaxPrice) ||
+                    (newTierType === "HIGHER_THAN" && !newTierMinPrice) ||
+                    (newTierType === "BETWEEN" && (!newTierMinPrice || !newTierMaxPrice))
+                  }
                   className="w-full sm:w-auto px-4 py-2 text-sm bg-orange-500 hover:bg-orange-600 text-white font-medium rounded-md transition-colors disabled:opacity-40 cursor-pointer disabled:cursor-not-allowed"
                 >
                   Add Tier
@@ -774,26 +889,56 @@ export default function SupplierSettingsTab() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-200 bg-white">
-                      {settings.profitTiers.map((tier, idx) => (
-                        <tr key={tier.id || `${tier.maxPrice}-${idx}`} className="hover:bg-gray-50 transition-colors">
-                          <td className="px-4 py-2.5 font-medium text-gray-900">
-                            Lower than A${tier.maxPrice.toFixed(2)}
-                          </td>
-                          <td className="px-4 py-2.5 text-green-700 font-semibold">
-                            +{tier.profitPercent}%
-                          </td>
-                          <td className="px-4 py-2.5 text-center">
-                            <button
-                              type="button"
-                              onClick={() => removeProfitTier(idx)}
-                              className="text-red-500 hover:text-red-700 text-sm font-semibold p-1 hover:bg-red-50 rounded transition-colors cursor-pointer"
-                              title="Delete tier"
-                            >
-                              ✕
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
+                      {settings.profitTiers.map((tier, idx) => {
+                        const isHigher =
+                          tier.tierType === "HIGHER_THAN" ||
+                          ((tier.minPrice ?? 0) > 0 && !(tier.maxPrice && tier.maxPrice > 0));
+                        const isBetween =
+                          tier.tierType === "BETWEEN" ||
+                          ((tier.minPrice ?? 0) > 0 && (tier.maxPrice ?? 0) > (tier.minPrice ?? 0));
+
+                        let label = `Lower than A$${(tier.maxPrice ?? 0).toFixed(2)}`;
+                        if (isHigher) {
+                          label = `Higher than A$${(tier.minPrice ?? 0).toFixed(2)}`;
+                        } else if (isBetween) {
+                          label = `A$${(tier.minPrice ?? 0).toFixed(2)} – A$${(tier.maxPrice ?? 0).toFixed(2)}`;
+                        }
+
+                        return (
+                          <tr
+                            key={tier.id || `${tier.tierType}-${tier.minPrice}-${tier.maxPrice}-${idx}`}
+                            className="hover:bg-gray-50 transition-colors"
+                          >
+                            <td className="px-4 py-2.5 font-medium text-gray-900 flex items-center gap-2">
+                              <span
+                                className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                                  isHigher
+                                    ? "bg-purple-100 text-purple-800"
+                                    : isBetween
+                                    ? "bg-blue-100 text-blue-800"
+                                    : "bg-teal-100 text-teal-800"
+                                }`}
+                              >
+                                {isHigher ? "Higher" : isBetween ? "Between" : "Lower"}
+                              </span>
+                              <span>{label}</span>
+                            </td>
+                            <td className="px-4 py-2.5 text-green-700 font-semibold">
+                              +{tier.profitPercent}%
+                            </td>
+                            <td className="px-4 py-2.5 text-center">
+                              <button
+                                type="button"
+                                onClick={() => removeProfitTier(idx)}
+                                className="text-red-500 hover:text-red-700 text-sm font-semibold p-1 hover:bg-red-50 rounded transition-colors cursor-pointer"
+                                title="Delete tier"
+                              >
+                                ✕
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>

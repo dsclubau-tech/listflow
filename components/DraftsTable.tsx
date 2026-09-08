@@ -249,25 +249,6 @@ function PlatformIcon({ platform }: { platform: "amazon" | "ebay" }) {
   );
 }
 
-function ExternalLinkGlyph({ platform }: { platform: "amazon" | "ebay" }) {
-  return (
-    <svg
-      aria-hidden="true"
-      className={
-        platform === "amazon"
-          ? "h-3 w-3 shrink-0 text-gray-300 transition-colors group-hover:text-orange-500"
-          : "h-3 w-3 shrink-0 text-gray-300 transition-colors group-hover:text-blue-500"
-      }
-      fill="none"
-      viewBox="0 0 24 24"
-      stroke="currentColor"
-      strokeWidth={2}
-    >
-      <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-6 3L21 3m0 0h-5.25M21 3v5.25" />
-    </svg>
-  );
-}
-
 function ItemIdCell({ product }: { product: SerializedProductRow }) {
   const asin = product.asin?.trim();
   const ebayItemId = product.ebayItemId?.trim();
@@ -283,10 +264,9 @@ function ItemIdCell({ product }: { product: SerializedProductRow }) {
             className="group -ml-1 inline-flex max-w-full min-w-0 items-center gap-2 rounded-lg border border-transparent px-1 py-0.5 text-gray-700 transition-colors hover:border-orange-200 hover:bg-orange-50 hover:text-gray-950 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-orange-400/70"
           >
             <PlatformIcon platform="amazon" />
-            <span className="min-w-0 flex-1 font-mono font-medium">
+            <span className="whitespace-nowrap font-mono font-medium">
               {asin.toUpperCase()}
             </span>
-            <ExternalLinkGlyph platform="amazon" />
           </AsinLink>
           <CopyButton text={asin.toUpperCase()} label="Copy ASIN" />
         </div>
@@ -308,10 +288,9 @@ function ItemIdCell({ product }: { product: SerializedProductRow }) {
             aria-label={`Open eBay item ${ebayItemId}`}
           >
             <PlatformIcon platform="ebay" />
-            <span className="min-w-0 flex-1 font-mono font-medium">
+            <span className="whitespace-nowrap font-mono font-medium">
               {ebayItemId}
             </span>
-            <ExternalLinkGlyph platform="ebay" />
           </a>
           <CopyButton text={ebayItemId} label="Copy eBay Item ID" />
         </div>

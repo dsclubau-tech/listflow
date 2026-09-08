@@ -306,8 +306,8 @@ export async function ensureDefaultVariantForProduct(productId: string) {
                 defaultUploadProfitFixed: true,
                 minimumProfit: true,
                 profitTiers: {
-                  select: { maxPrice: true, profitPercent: true },
-                  orderBy: { maxPrice: "asc" },
+                  select: { id: true, tierType: true, minPrice: true, maxPrice: true, profitPercent: true },
+                  orderBy: [{ minPrice: "asc" }, { maxPrice: "asc" }],
                 },
               },
             })) ??
@@ -324,8 +324,8 @@ export async function ensureDefaultVariantForProduct(productId: string) {
                 defaultUploadProfitFixed: true,
                 minimumProfit: true,
                 profitTiers: {
-                  select: { maxPrice: true, profitPercent: true },
-                  orderBy: { maxPrice: "asc" },
+                  select: { id: true, tierType: true, minPrice: true, maxPrice: true, profitPercent: true },
+                  orderBy: [{ minPrice: "asc" }, { maxPrice: "asc" }],
                 },
               },
             }));

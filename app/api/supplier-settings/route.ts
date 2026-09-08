@@ -3,6 +3,11 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { getOrCreateStoreSupplierSettings } from "@/lib/supplier-settings";
+import {
+  normalizeTier,
+  type ProfitTierConfig,
+  type NormalizedTier,
+} from "@/lib/profit-tiers";
 
 export async function GET() {
   const session = await auth();
@@ -16,7 +21,7 @@ export async function GET() {
     where: { id: baseSettings.id },
     include: {
       profitTiers: {
-        orderBy: { maxPrice: "asc" },
+        orderBy: [{ minPrice: "asc" }, { maxPrice: "asc" }],
       },
     },
   });
@@ -90,21 +95,9 @@ export async function PATCH(request: Request) {
   }
 
   const profitTiers = hasProfitTiers
-    ? body.profitTiers
-        .map((t: unknown) => {
-          const item = t as Record<string, unknown>;
-          return {
-            maxPrice:
-              typeof item?.maxPrice === "number"
-                ? item.maxPrice
-                : parseFloat(String(item?.maxPrice ?? "")) || 0,
-            profitPercent:
-              typeof item?.profitPercent === "number"
-                ? item.profitPercent
-                : parseFloat(String(item?.profitPercent ?? "")) || 0,
-          };
-        })
-        .filter((t: { maxPrice: number; profitPercent: number }) => t.maxPrice > 0 && t.profitPercent > 0)
+    ? (body.profitTiers as unknown[])
+        .map((t) => normalizeTier(t as ProfitTierConfig))
+        .filter((t): t is NormalizedTier => t !== null)
     : undefined;
 
   const updated = await prisma.$transaction(async (tx) => {
@@ -114,9 +107,11 @@ export async function PATCH(request: Request) {
       });
       if (profitTiers.length > 0) {
         await tx.profitTier.createMany({
-          data: profitTiers.map((t: { maxPrice: number; profitPercent: number }) => ({
+          data: profitTiers.map((t) => ({
             supplierSettingsId: settings.id,
-            maxPrice: t.maxPrice,
+            tierType: t.tierType,
+            minPrice: t.minPrice,
+            maxPrice: t.maxPrice > 0 ? t.maxPrice : null,
             profitPercent: t.profitPercent,
           })),
         });
@@ -129,7 +124,7 @@ export async function PATCH(request: Request) {
         data,
         include: {
           profitTiers: {
-            orderBy: { maxPrice: "asc" },
+            orderBy: [{ minPrice: "asc" }, { maxPrice: "asc" }],
           },
         },
       });
@@ -139,7 +134,7 @@ export async function PATCH(request: Request) {
       where: { id: settings.id },
       include: {
         profitTiers: {
-          orderBy: { maxPrice: "asc" },
+          orderBy: [{ minPrice: "asc" }, { maxPrice: "asc" }],
         },
       },
     });

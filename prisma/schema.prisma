@@ -884,7 +884,9 @@ model SupplierSettings {
 model ProfitTier {
   id                 String  @id @default(cuid())
   supplierSettingsId String
-  maxPrice           Float
+  tierType           String  @default("LOWER_THAN")
+  minPrice           Float?  @default(0)
+  maxPrice           Float?
   profitPercent      Float
 
   supplierSettings SupplierSettings @relation(fields: [supplierSettingsId], references: [id], onDelete: Cascade)
