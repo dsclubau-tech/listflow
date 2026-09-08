@@ -1,13 +1,19 @@
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import SidebarLayout from "@/components/SidebarLayout";
 import {
   getCurrentStoreSession,
   getUserStoresWithRanking,
+  type StoreOption,
 } from "@/lib/store-session";
 import { createClient } from "@/lib/supabase/server";
 import { getOrRefreshEntitlement } from "@/lib/aa-entitlement";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import {
+  verifyStoreUnlockToken,
+  PROFILE_UNLOCK_COOKIE_NAME,
+} from "@/lib/profile-lock";
 
 export default async function DashboardLayout({
   children,
@@ -30,7 +36,7 @@ export default async function DashboardLayout({
 
   // 2. If authenticated via AA Supabase, verify entitlement snapshot
   let overLimitWarning: string | null = null;
-  let userStores: Array<{ id: string; name: string; loginId: string | null; rank: number }> = [];
+  let userStores: StoreOption[] = [];
 
   if (aaUserId) {
     const entitlement = await getOrRefreshEntitlement(aaUserId);
@@ -47,6 +53,8 @@ export default async function DashboardLayout({
         name: s.name,
         loginId: s.loginId,
         rank: s.rank,
+        hasPassword: s.hasPassword,
+        profileLockEnabled: s.profileLockEnabled,
       }));
 
     const overLimitStores = stores.filter((s) => !s.isEntitled);
@@ -89,8 +97,18 @@ export default async function DashboardLayout({
         name: s.name,
         loginId: s.loginId,
         rank: s.rank,
+        hasPassword: s.hasPassword,
+        profileLockEnabled: s.profileLockEnabled,
       }));
   }
+
+  const currentStore = await prisma.store.findUnique({
+    where: { id: storeSession.storeId },
+    select: {
+      password: true,
+      profileLockEnabled: true,
+    },
+  });
 
   if (userStores.length === 0) {
     userStores = [
@@ -99,9 +117,20 @@ export default async function DashboardLayout({
         name: storeSession.storeName,
         loginId: storeSession.storeLoginId,
         rank: 1,
+        hasPassword: Boolean(currentStore?.password),
+        profileLockEnabled: currentStore?.profileLockEnabled ?? true,
       },
     ];
   }
+
+  // Check if profile lock is active for the current store
+  const cookieStore = await cookies();
+  const unlockToken = cookieStore.get(PROFILE_UNLOCK_COOKIE_NAME)?.value;
+  const isProfileLocked = Boolean(
+    currentStore?.password &&
+      currentStore?.profileLockEnabled !== false &&
+      !verifyStoreUnlockToken(storeSession.storeId, unlockToken)
+  );
 
   return (
     <SidebarLayout
@@ -109,6 +138,7 @@ export default async function DashboardLayout({
       userEmail={storeSession.storeLoginId}
       currentStoreId={storeSession.storeId}
       stores={userStores}
+      initialLocked={isProfileLocked}
     >
       {overLimitWarning && (
         <div className="mx-4 mt-4 p-3.5 bg-amber-500/10 border border-amber-500/30 rounded-xl text-amber-200 text-xs flex items-center justify-between shadow-sm">

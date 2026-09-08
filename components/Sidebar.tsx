@@ -17,6 +17,8 @@ interface SidebarProps {
   onToggle?: () => void;
   mobileOpen?: boolean;
   onMobileClose?: () => void;
+  onLockProfile?: () => void;
+  onOpenSwitcher?: () => void;
 }
 
 export default function Sidebar({
@@ -28,10 +30,20 @@ export default function Sidebar({
   onToggle,
   mobileOpen = false,
   onMobileClose,
+  onLockProfile,
+  onOpenSwitcher,
 }: SidebarProps) {
   const [switcherOpen, setSwitcherOpen] = useState(false);
   const pathname = usePathname();
   const router = useRouter();
+
+  const handleOpenSwitcher = () => {
+    if (onOpenSwitcher) {
+      onOpenSwitcher();
+    } else {
+      setSwitcherOpen(true);
+    }
+  };
 
   const links = [
     {
@@ -188,7 +200,7 @@ export default function Sidebar({
           <div className="flex items-start justify-between gap-2">
             <button
               type="button"
-              onClick={() => setSwitcherOpen(true)}
+              onClick={handleOpenSwitcher}
               className="min-w-0 flex-1 text-left p-1.5 -m-1 rounded-xl hover:bg-white/10 transition-all group cursor-pointer"
               title="Click to switch store"
             >
@@ -209,33 +221,70 @@ export default function Sidebar({
             </button>
             <PageRefreshButton />
           </div>
-          <button
-            type="button"
-            onClick={() => signOut({ callbackUrl: "/login" })}
-            className="mt-3 flex items-center gap-2 text-sm text-tertiary/70 hover:text-white transition-colors"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                strokeWidth={2}
-                d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
-              />
-            </svg>
-            <span>Sign out</span>
-          </button>
+          <div className="mt-3 flex items-center justify-between pt-2 border-t border-white/10">
+            {onLockProfile && (
+              <button
+                type="button"
+                onClick={onLockProfile}
+                className="flex items-center gap-1.5 text-xs text-tertiary/70 hover:text-amber-300 transition-colors cursor-pointer"
+                title="Lock current store profile"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                  />
+                </svg>
+                <span>Lock Profile</span>
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => signOut({ callbackUrl: "/login" })}
+              className="flex items-center gap-1.5 text-xs text-tertiary/70 hover:text-white transition-colors cursor-pointer"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+                />
+              </svg>
+              <span>Sign out</span>
+            </button>
+          </div>
         </div>
       ) : (
         <div className="flex flex-col items-center gap-2">
           <button
             type="button"
-            onClick={() => setSwitcherOpen(true)}
+            onClick={handleOpenSwitcher}
             title={`Switch store (Current: ${userName})`}
             className="w-8 h-8 rounded-full bg-tertiary text-primary font-bold text-xs flex items-center justify-center hover:ring-2 hover:ring-teal-300 transition-all cursor-pointer"
           >
             {userInitial}
           </button>
           <PageRefreshButton />
+          {onLockProfile && (
+            <button
+              type="button"
+              onClick={onLockProfile}
+              title="Lock profile"
+              className="p-1 text-tertiary/70 hover:text-amber-300 hover:bg-white/10 rounded transition-colors cursor-pointer"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"
+                />
+              </svg>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => signOut({ callbackUrl: "/login" })}
@@ -360,13 +409,15 @@ export default function Sidebar({
         {renderUserSection(false)}
       </aside>
 
-      {/* Store Switcher Modal */}
-      <StoreSwitcherModal
-        isOpen={switcherOpen}
-        onClose={() => setSwitcherOpen(false)}
-        stores={stores}
-        currentStoreId={currentStoreId}
-      />
+      {/* Store Switcher Modal (if not externally controlled) */}
+      {!onOpenSwitcher && (
+        <StoreSwitcherModal
+          isOpen={switcherOpen}
+          onClose={() => setSwitcherOpen(false)}
+          stores={stores}
+          currentStoreId={currentStoreId}
+        />
+      )}
     </>
   );
 }

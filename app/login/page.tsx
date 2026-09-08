@@ -67,6 +67,18 @@ function LoginForm() {
         setError("Invalid store ID or password. Please try again.");
         setIsLoading(false);
       } else {
+        try {
+          await fetch("/api/stores/profile-lock/unlock", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              storeId: trimmed.toLowerCase(),
+              password,
+            }),
+          });
+        } catch {
+          // Non-blocking
+        }
         window.location.assign(callbackUrl);
       }
     } catch {

@@ -2,6 +2,8 @@
 
 import { useState, useSyncExternalStore } from "react";
 import Sidebar from "@/components/Sidebar";
+import StoreSwitcherModal from "@/components/StoreSwitcherModal";
+import ProfileLockScreen from "@/components/ProfileLockScreen";
 import type { StoreOption } from "@/lib/store-session";
 
 interface SidebarLayoutProps {
@@ -9,6 +11,7 @@ interface SidebarLayoutProps {
   userEmail: string;
   currentStoreId?: string;
   stores?: StoreOption[];
+  initialLocked?: boolean;
   children: React.ReactNode;
 }
 
@@ -45,10 +48,14 @@ export default function SidebarLayout({
   userName,
   userEmail,
   currentStoreId,
-  stores,
+  stores = [],
+  initialLocked = false,
   children,
 }: SidebarLayoutProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [isLocked, setIsLocked] = useState(initialLocked);
+
   const collapsed = useSyncExternalStore(
     subscribeToSidebarPreference,
     getSidebarPreference,
@@ -61,6 +68,15 @@ export default function SidebarLayout({
       window.dispatchEvent(new Event(STORAGE_EVENT));
     } catch {
       // Ignore localStorage errors
+    }
+  };
+
+  const handleLockProfile = async () => {
+    setIsLocked(true);
+    try {
+      await fetch("/api/stores/profile-lock/lock", { method: "POST" });
+    } catch {
+      // Ignore network errors on lock
     }
   };
 
@@ -104,6 +120,8 @@ export default function SidebarLayout({
         onToggle={handleToggle}
         mobileOpen={mobileOpen}
         onMobileClose={() => setMobileOpen(false)}
+        onLockProfile={handleLockProfile}
+        onOpenSwitcher={() => setSwitcherOpen(true)}
       />
 
       {/* ── Main Content Area ── */}
@@ -116,6 +134,25 @@ export default function SidebarLayout({
           {children}
         </div>
       </main>
+
+      {/* ── Store Switcher Modal ── */}
+      <StoreSwitcherModal
+        isOpen={switcherOpen}
+        onClose={() => setSwitcherOpen(false)}
+        stores={stores}
+        currentStoreId={currentStoreId}
+      />
+
+      {/* ── Workspace Profile Lock Screen Overlay ── */}
+      {isLocked && currentStoreId && (
+        <ProfileLockScreen
+          storeId={currentStoreId}
+          storeName={userName}
+          storeLoginId={userEmail}
+          onUnlock={() => setIsLocked(false)}
+          onOpenSwitcher={() => setSwitcherOpen(true)}
+        />
+      )}
     </div>
   );
 }

@@ -24,6 +24,8 @@ export type StoreWithRanking = {
   createdAt: Date;
   rank: number;
   isEntitled: boolean;
+  hasPassword?: boolean;
+  profileLockEnabled?: boolean;
 };
 
 export type StoreOption = {
@@ -31,6 +33,8 @@ export type StoreOption = {
   name: string;
   loginId: string | null;
   rank: number;
+  hasPassword?: boolean;
+  profileLockEnabled?: boolean;
 };
 
 /**
@@ -45,7 +49,14 @@ export async function getUserStoresWithRanking(userId: string): Promise<{
   const stores = await prisma.store.findMany({
     where: { ownerUserId: userId, isActive: true },
     orderBy: { createdAt: "asc" },
-    select: { id: true, name: true, loginId: true, createdAt: true },
+    select: {
+      id: true,
+      name: true,
+      loginId: true,
+      createdAt: true,
+      password: true,
+      profileLockEnabled: true,
+    },
   });
 
   const entitlement = await getOrRefreshEntitlement(userId);
@@ -60,6 +71,8 @@ export async function getUserStoresWithRanking(userId: string): Promise<{
       createdAt: store.createdAt,
       rank,
       isEntitled: rank <= allowedStores,
+      hasPassword: Boolean(store.password),
+      profileLockEnabled: store.profileLockEnabled ?? true,
     };
   });
 
