@@ -393,6 +393,7 @@ export function buildAddItemXML(
 ${skuXml}
     <Quantity>${quantity}</Quantity>
     <ConditionID>${conditionId}</ConditionID>
+    <HitCounter>HiddenStyle</HitCounter>
 ${productListingDetailsXml}
 ${pictureDetailsXml}
 ${itemSpecificsXml}
@@ -617,6 +618,7 @@ export function buildReviseItemXML(
   <WarningLevel>High</WarningLevel>
   <Item>
     <ItemID>${escapeXml(product.ebayItemId)}</ItemID>
+    <HitCounter>HiddenStyle</HitCounter>
 ${skuXml}
 ${includeTitle ? `    <Title>${escapeXml(toEbayListingTitle(product.title))}</Title>` : ""}
 ${includeDescription ? `    <Description><![CDATA[${product.description}]]></Description>` : ""}

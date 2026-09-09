@@ -130,3 +130,42 @@ export async function syncEbaySoldCountsForStore(
     updatedProducts: updates.length,
   };
 }
+
+export async function syncEbaySoldCountsForAllStores(): Promise<{
+  storesProcessed: number;
+  totalScanned: number;
+  totalTracked: number;
+  totalUpdated: number;
+}> {
+  const { prisma } = await import("@/lib/prisma");
+  const stores = await prisma.store.findMany({
+    select: { id: true, name: true },
+  });
+
+  let totalScanned = 0;
+  let totalTracked = 0;
+  let totalUpdated = 0;
+  let storesProcessed = 0;
+
+  for (const store of stores) {
+    try {
+      const res = await syncEbaySoldCountsForStore(store.id);
+      totalScanned += res.scannedListings;
+      totalTracked += res.totalTracked;
+      totalUpdated += res.updatedProducts;
+      storesProcessed += 1;
+    } catch (err) {
+      logger.warn("ebay/sold-sync", `Failed to sync eBay sold/views for store ${store.id}`, {
+        storeId: store.id,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  return {
+    storesProcessed,
+    totalScanned,
+    totalTracked,
+    totalUpdated,
+  };
+}

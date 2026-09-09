@@ -624,6 +624,13 @@ export default function DraftsTable({
   const previousSelectionScopeKey = useRef(selectionScopeKey);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [isSelectingAllListings, setIsSelectingAllListings] = useState(false);
+  const [isMobileActionsOpen, setIsMobileActionsOpen] = useState(false);
+
+  useEffect(() => {
+    if (selectedIds.length === 0) {
+      setIsMobileActionsOpen(false);
+    }
+  }, [selectedIds.length]);
   const tableScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const [isTableDragging, setIsTableDragging] = useState(false);
   const dragScrollState = useRef({
@@ -2104,8 +2111,52 @@ export default function DraftsTable({
         </div>
       )}
 
+      {/* Mobile Select All Toolbar */}
+      {hasSelectionColumn && pageSelectableIds.length > 0 && (
+        <div className="mb-3 flex items-center justify-between rounded-xl border border-blue-200/80 bg-blue-50/60 px-3 py-2 text-sm xl:hidden shadow-xs">
+          <label className="inline-flex items-center gap-2.5 cursor-pointer select-none font-medium text-gray-800">
+            <input
+              type="checkbox"
+              checked={allPageSelected}
+              onChange={toggleSelectAll}
+              className="h-4 w-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
+              aria-label={`Select all ${pageSelectableIds.length} listings on this page`}
+            />
+            <span className="text-xs font-semibold">Select all {pageSelectableIds.length}</span>
+          </label>
+          <div className="flex items-center gap-2 text-xs">
+            {selectedIds.length > 0 ? (
+              <>
+                <span className="font-semibold text-blue-900">
+                  {selectedIds.length} selected
+                </span>
+                {isProductsView && totalListingCount > pageSelectableIds.length && !allMatchingSelected && (
+                  <button
+                    type="button"
+                    onClick={() => void selectAllListings()}
+                    disabled={isSelectingAllListings || isSelectAllListingsLoading}
+                    className="font-medium text-blue-700 hover:underline disabled:opacity-60"
+                  >
+                    {isSelectingAllListings ? "…" : `All ${totalListingCount}`}
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setSelectedIds([])}
+                  className="font-medium text-gray-500 hover:text-gray-800 underline ml-1"
+                >
+                  Clear
+                </button>
+              </>
+            ) : (
+              <span className="text-gray-400 text-[11px]">Tap to select page</span>
+            )}
+          </div>
+        </div>
+      )}
+
       {selectedIds.length > 0 && (
-        <div className="mb-2 flex min-h-5 flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+        <div className="mb-2 hidden min-h-5 flex-wrap items-center gap-x-3 gap-y-1 text-sm xl:flex">
           <span className="font-medium text-gray-500">
             {selectedIds.length} selected
           </span>
@@ -2409,6 +2460,61 @@ export default function DraftsTable({
                               <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-500 font-medium">
                                 0 sold
                               </span>
+                            )}
+                            {isProductsView && (
+                              product.ebayViewCount !== null && product.ebayViewCount !== undefined && product.ebayViewCount > 0 ? (
+                                <span
+                                  className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 ring-1 ring-blue-600/20"
+                                  title={`${product.ebayViewCount} view${product.ebayViewCount === 1 ? "" : "s"} on eBay`}
+                                >
+                                  <svg
+                                    className="h-3 w-3 text-blue-600"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    stroke="currentColor"
+                                    strokeWidth={2}
+                                    aria-hidden="true"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                                    />
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                                    />
+                                  </svg>
+                                  <span>{product.ebayViewCount} views</span>
+                                </span>
+                              ) : (
+                                <span
+                                  className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-500 font-medium"
+                                  title={product.ebayViewCount ? `${product.ebayViewCount} views on eBay` : "0 views on eBay"}
+                                >
+                                  <svg
+                                    className="h-3 w-3 text-gray-400"
+                                    fill="none"
+                                    viewBox="0 0 24 24"
+                                    stroke="currentColor"
+                                    strokeWidth={2}
+                                    aria-hidden="true"
+                                  >
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"
+                                    />
+                                    <path
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
+                                    />
+                                  </svg>
+                                  <span>{product.ebayViewCount ?? 0} views</span>
+                                </span>
+                              )
                             )}
                             {promotedAdState && (
                               <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${promotedAdState.badgeClass}`}>
@@ -2724,7 +2830,7 @@ export default function DraftsTable({
                             </span>
                           ) : (
                             <span className="text-xs font-medium text-gray-400">
-                              -
+                              {product.ebayItemId ? "0" : "-"}
                             </span>
                           )}
                         </td>
@@ -3243,12 +3349,13 @@ export default function DraftsTable({
         <div className="h-44 sm:h-28 xl:h-24" aria-hidden="true" />
       )}
 
+      {/* Desktop Floating Bulk Actions Bar */}
       {selectedIds.length > 0 && (
         <div
           className={
             isDraftsView
-              ? "fixed bottom-4 left-[17rem] right-4 z-30 flex flex-col gap-3 rounded-2xl border border-gray-200 bg-white/95 p-4 shadow-2xl backdrop-blur md:left-[17.5rem] md:right-6 xl:flex-row xl:items-center xl:justify-between"
-              : "fixed bottom-0 left-64 right-0 bg-white border-t border-gray-200 shadow-lg p-4 z-30 flex items-center justify-between"
+              ? "fixed bottom-4 left-[17rem] right-4 z-30 hidden xl:flex flex-col gap-3 rounded-2xl border border-gray-200 bg-white/95 p-4 shadow-2xl backdrop-blur md:left-[17.5rem] md:right-6 xl:flex-row xl:items-center xl:justify-between"
+              : "fixed bottom-0 xl:left-64 left-0 right-0 bg-white border-t border-gray-200 shadow-lg p-4 z-30 hidden xl:flex items-center justify-between"
           }
           aria-live="polite"
         >
@@ -3522,6 +3629,283 @@ export default function DraftsTable({
                       ) : (
                         `Dismiss ${selectedPendingCount} Pending`
                       )}
+                    </button>
+                  </>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Mobile Collapsed Floating Action Pill */}
+      {selectedIds.length > 0 && !isMobileActionsOpen && (
+        <div className="fixed bottom-5 inset-x-0 z-30 flex justify-center px-4 xl:hidden pointer-events-none">
+          <button
+            type="button"
+            onClick={() => setIsMobileActionsOpen(true)}
+            className="pointer-events-auto inline-flex items-center gap-2.5 rounded-full bg-gray-900 px-5 py-3 text-sm font-semibold text-white shadow-2xl ring-2 ring-white/20 transition-all active:scale-95 hover:bg-gray-800 cursor-pointer"
+            aria-label="Open bulk action options"
+          >
+            <span className="flex h-2.5 w-2.5 rounded-full bg-orange-400 animate-pulse" />
+            <span>{selectedIds.length} Selected</span>
+            <span className="text-gray-500">•</span>
+            <span className="flex items-center gap-1 text-orange-400 font-bold">
+              Actions
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M5 15l7-7 7 7" />
+              </svg>
+            </span>
+          </button>
+        </div>
+      )}
+
+      {/* Mobile Action Drawer Backdrop */}
+      {selectedIds.length > 0 && isMobileActionsOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50 backdrop-blur-xs transition-opacity xl:hidden"
+          onClick={() => setIsMobileActionsOpen(false)}
+          aria-hidden="true"
+        />
+      )}
+
+      {/* Mobile Slide-up Bottom Sheet (Action Drawer with Slider Grab Handle) */}
+      {selectedIds.length > 0 && isMobileActionsOpen && (
+        <div
+          className="fixed inset-x-0 bottom-0 z-50 max-h-[85vh] overflow-y-auto rounded-t-2xl border-t border-gray-200 bg-white p-4 pb-8 shadow-2xl transition-transform duration-300 ease-out xl:hidden flex flex-col gap-3.5"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Bulk actions sheet"
+        >
+          {/* Slider Grab Handle */}
+          <div
+            onClick={() => setIsMobileActionsOpen(false)}
+            className="flex cursor-grab flex-col items-center justify-center py-1 -mt-1 -mb-1"
+            role="button"
+            aria-label="Slide down to close"
+          >
+            <div className="h-1.5 w-12 rounded-full bg-gray-300 transition-colors hover:bg-gray-400 active:bg-gray-500" />
+          </div>
+
+          {/* Header with Title & Close */}
+          <div className="flex items-center justify-between border-b border-gray-100 pb-2.5">
+            <div className="min-w-0">
+              <div className="text-sm font-bold text-gray-900">
+                {selectedIds.length} product{selectedIds.length === 1 ? "" : "s"} selected
+              </div>
+              {isProductsView && selectedPriceCheckSummary && selectedPriceCheckSummary.ineligibleCount > 0 && (
+                <div className="mt-0.5 text-xs text-amber-700 truncate max-w-xs" title={selectedPriceCheckSummary.message}>
+                  {selectedPriceCheckSummary.message}
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setIsMobileActionsOpen(false)}
+              className="rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 transition-colors"
+              aria-label="Close"
+            >
+              <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          {/* Mobile Actions Grid */}
+          <div className="grid grid-cols-2 gap-2 pt-1">
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedIds([]);
+                setIsMobileActionsOpen(false);
+              }}
+              className="w-full py-2.5 px-3 border border-gray-300 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-50 transition-colors text-center"
+            >
+              Deselect All
+            </button>
+
+            {isDraftsView && (
+              <>
+                <Button
+                  onClick={() => {
+                    handleBulkImport();
+                    setIsMobileActionsOpen(false);
+                  }}
+                  disabled={bulkImporting || isBulkDeleting}
+                  pending={bulkImporting}
+                  pendingLabel="Queueing…"
+                  variant="primary"
+                  fullWidth
+                  className="border-orange-500 bg-orange-500 text-xs py-2.5"
+                >
+                  Queue Selected
+                </Button>
+                <Button
+                  onClick={() => {
+                    handleBulkDelete();
+                    setIsMobileActionsOpen(false);
+                  }}
+                  disabled={isBulkDeleting || bulkImporting}
+                  pending={isBulkDeleting}
+                  pendingLabel="Deleting…"
+                  variant="danger"
+                  fullWidth
+                  className="text-xs py-2.5 col-span-2"
+                >
+                  Delete Selected
+                </Button>
+              </>
+            )}
+
+            {isProductsView && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    handleBulkPriceCheck();
+                    setIsMobileActionsOpen(false);
+                  }}
+                  disabled={isBulkPriceChecking}
+                  title={selectedPriceCheckSummary?.message}
+                  className="w-full py-2.5 px-3 bg-gray-900 hover:bg-gray-800 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-60 flex items-center justify-center gap-1.5"
+                >
+                  {isBulkPriceChecking ? (
+                    "Queueing..."
+                  ) : selectedPriceCheckSummary && selectedPriceCheckSummary.eligibleCount > 0 ? (
+                    `Check ${selectedPriceCheckSummary.eligibleCount} Price${selectedPriceCheckSummary.eligibleCount === 1 ? "" : "s"}`
+                  ) : (
+                    "Check Price"
+                  )}
+                </button>
+
+                {onBulkEditSelected && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onBulkEditSelected(selectedIds);
+                      setIsMobileActionsOpen(false);
+                    }}
+                    disabled={selectedIds.length === 0}
+                    className="w-full py-2.5 px-3 border border-gray-300 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-60 flex items-center justify-center gap-1.5"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.8}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 7.125 16.875 4.5" />
+                    </svg>
+                    Bulk Edit
+                  </button>
+                )}
+
+                {onManagePromotionsSelected && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onManagePromotionsSelected(selectedIds);
+                      setIsMobileActionsOpen(false);
+                    }}
+                    disabled={selectedIds.length === 0 || isPromotionJobActive}
+                    className="w-full py-2.5 px-3 rounded-lg border border-violet-200 text-xs font-medium text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-60 flex items-center justify-center gap-1.5"
+                  >
+                    Manage Promotions
+                  </button>
+                )}
+
+                {onSyncSelectedEbayAds && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      void onSyncSelectedEbayAds(selectedIds);
+                      setIsMobileActionsOpen(false);
+                    }}
+                    disabled={isEbayAdsSyncing || selectedIds.length === 0}
+                    className="w-full py-2.5 px-3 border border-blue-200 text-blue-700 text-xs font-medium rounded-lg hover:bg-blue-50 transition-colors disabled:opacity-60 flex items-center justify-center gap-1.5"
+                  >
+                    <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.8}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m14.356-2A8 8 0 006.582 9m0 0H9m11 11v-5h-.581m0 0A8.003 8.003 0 017.64 15m11.778 0H15" />
+                    </svg>
+                    Sync {selectedIds.length} Ad{selectedIds.length === 1 ? "" : "s"}
+                  </button>
+                )}
+
+                {selectedImportedCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleBulkHoldSelected();
+                      setIsMobileActionsOpen(false);
+                    }}
+                    disabled={isBulkHolding}
+                    className="w-full py-2.5 px-3 bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-60 flex items-center justify-center gap-1.5"
+                  >
+                    {isBulkHolding ? "Holding..." : `Put ${selectedImportedCount} On Hold`}
+                  </button>
+                )}
+
+                {selectedOnHoldCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleBulkResumeSelected();
+                      setIsMobileActionsOpen(false);
+                    }}
+                    disabled={isBulkResuming}
+                    className="w-full py-2.5 px-3 bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-60 flex items-center justify-center gap-1.5"
+                  >
+                    {isBulkResuming ? "Resuming..." : `Resume ${selectedOnHoldCount} On Hold`}
+                  </button>
+                )}
+
+                {selectedListedCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleBulkRemoveFromListflowSelected();
+                      setIsMobileActionsOpen(false);
+                    }}
+                    disabled={isBulkRemovingListflow || isBulkEnding}
+                    className="w-full py-2.5 px-3 rounded-lg border border-quaternary text-xs font-medium text-quaternary transition-colors hover:bg-quaternary-soft disabled:opacity-60 flex items-center justify-center gap-1.5"
+                  >
+                    {isBulkRemovingListflow ? "Removing..." : "Remove from ListFlow"}
+                  </button>
+                )}
+
+                {selectedListedCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      handleBulkEndAndRemoveSelected();
+                      setIsMobileActionsOpen(false);
+                    }}
+                    disabled={isBulkEnding || isBulkRemovingListflow}
+                    className="w-full py-2.5 px-3 rounded-lg bg-quaternary text-xs font-medium text-white transition-colors hover:bg-quaternary-hover disabled:opacity-60 flex items-center justify-center gap-1.5 col-span-2"
+                  >
+                    {isBulkEnding ? "Queueing..." : "End on eBay & Remove"}
+                  </button>
+                )}
+
+                {selectedPendingCount > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleBulkApplySelected();
+                        setIsMobileActionsOpen(false);
+                      }}
+                      disabled={isBulkApplying || isBulkDismissing}
+                      className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-60 flex items-center justify-center gap-1.5"
+                    >
+                      {isBulkApplying ? "Applying..." : `Apply ${selectedPendingCount} Pending`}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        handleBulkDismissSelected();
+                        setIsMobileActionsOpen(false);
+                      }}
+                      disabled={isBulkApplying || isBulkDismissing}
+                      className="w-full py-2.5 px-3 border border-gray-300 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-60 flex items-center justify-center gap-1.5"
+                    >
+                      {isBulkDismissing ? "Dismissing..." : `Dismiss ${selectedPendingCount} Pending`}
                     </button>
                   </>
                 )}

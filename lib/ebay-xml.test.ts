@@ -41,6 +41,20 @@ test("buildAddItemXML sends custom label as eBay SKU", () => {
   assert.match(xml, /<SKU>B07VJ5LG19<\/SKU>/);
 });
 
+test("buildAddItemXML sends HitCounter HiddenStyle to track eBay views", () => {
+  const xml = buildAddItemXML(buildTestProduct());
+  assert.match(xml, /<HitCounter>HiddenStyle<\/HitCounter>/);
+});
+
+test("buildReviseItemXML sends HitCounter HiddenStyle to track eBay views", () => {
+  const product = {
+    ...buildTestProduct(),
+    ebayItemId: "307056203187",
+  } as Parameters<typeof buildReviseItemXML>[0];
+  const xml = buildReviseItemXML(product);
+  assert.match(xml, /<HitCounter>HiddenStyle<\/HitCounter>/);
+});
+
 test("buildAddItemXML caps eBay title without changing description", () => {
   const longTitle =
     "ZipString Aracna Glow-in-The-Dark Webshooter - Superhero String Launcher Toy for Kids, Teens & Adults - Patented, Reloading, Durable & Viral Web Shooting Action Toy";
