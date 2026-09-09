@@ -12,8 +12,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const currentStore = await getCurrentStoreSession(session.user.id);
-  if (!currentStore) {
+  const storeSession = await getCurrentStoreSession();
+  if (!storeSession) {
     return NextResponse.json(
       { error: "No store found or selected" },
       { status: 400 }
@@ -21,20 +21,20 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await syncEbaySoldCountsForStore(currentStore.id);
+    const result = await syncEbaySoldCountsForStore(storeSession.storeId);
     log.info("ebay/sync-views/route", "Manual eBay views & sold sync completed", {
-      storeId: currentStore.id,
+      storeId: storeSession.storeId,
       ...result,
     });
 
     return NextResponse.json({
       success: true,
-      storeId: currentStore.id,
+      storeId: storeSession.storeId,
       ...result,
     });
   } catch (error) {
     log.error("ebay/sync-views/route", "Failed to sync eBay views & sold counts", error, {
-      storeId: currentStore.id,
+      storeId: storeSession.storeId,
     });
 
     return NextResponse.json(
