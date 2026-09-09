@@ -1088,9 +1088,10 @@ function normalizeDescriptionImageUrl(value: string) {
     const url = new URL(raw);
     const isAmazonImageHost =
       /(^|\.)media-amazon\.com$/i.test(url.hostname) ||
-      /(^|\.)ssl-images-amazon\.com$/i.test(url.hostname);
+      /(^|\.)ssl-images-amazon\.com$/i.test(url.hostname) ||
+      /(^|\.)images-amazon\.com$/i.test(url.hostname);
     const isAplusMedia =
-      /^\/images\/S\/aplus-media-library-service-media\//i.test(url.pathname) ||
+      /^\/images\/(?:S|I)\//i.test(url.pathname) ||
       /^\/images\/G\/.*\/aplus/i.test(url.pathname);
 
     if (

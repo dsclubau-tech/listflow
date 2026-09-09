@@ -1430,15 +1430,29 @@ export async function scrapeAmazonProduct(
 
       function extractImageUrl(element: HTMLImageElement): string {
         const candidates = [
+          element.getAttribute("data-a-hires"),
           element.getAttribute("data-old-hires"),
           element.getAttribute("data-src"),
           element.currentSrc,
           element.src,
         ];
 
+        const noscriptHtml = element.parentElement?.querySelector("noscript")?.textContent;
+        if (noscriptHtml) {
+          const noscriptSrc = noscriptHtml.match(/src=["'](https?:\/\/[^"'\s]+)["']/i);
+          if (noscriptSrc && noscriptSrc[1]) {
+            candidates.push(noscriptSrc[1]);
+          }
+        }
+
         for (const candidate of candidates) {
           const value = normalizeText(candidate);
-          if (/^https?:\/\//i.test(value)) {
+          if (
+            /^https?:\/\//i.test(value) &&
+            !/play-button|play_icon|spinner|loading|transparent|pixel|grey-pixel|sprite|video/i.test(
+              value
+            )
+          ) {
             return value;
           }
         }

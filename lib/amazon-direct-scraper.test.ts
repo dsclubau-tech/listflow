@@ -1031,6 +1031,26 @@ test("renderAmazonDescription strips literal img tags from paragraph text", asyn
   assert.doesNotMatch(description, /product-image\.jpg/);
 });
 
+test("renderAmazonDescription preserves A+ content images from /images/S/aplus-media/ and images-amazon.com", async () => {
+  const { renderAmazonDescription } = await loadAmazonDirectScraper();
+  const $ = load(`
+    <div id="aplus">
+      <div class="aplus-v2">
+        <h3>Multi-Axis Adjustments</h3>
+        <img src="https://m.media-amazon.com/images/S/aplus-media/vc/5a4be46a-7fd5-4677-94d7-497d5d5904d0.__CR0,0,1464,600_PT0_SX1464_V1___.jpg" alt="Ceiling mount banner" />
+        <img src="https://images-amazon.com/images/S/aplus-media/sc/7f1a2b3c.jpg" alt="Diagram" />
+        <img src="https://m.media-amazon.com/images/I/71xyz._AC_SL1500_.jpg" alt="Product photo" />
+      </div>
+    </div>
+  `);
+
+  const description = renderAmazonDescription($);
+  assert.match(description, /Multi-Axis Adjustments/);
+  assert.match(description, /5a4be46a-7fd5-4677-94d7-497d5d5904d0/);
+  assert.match(description, /7f1a2b3c\.jpg/);
+  assert.match(description, /71xyz\.jpg/);
+});
+
 test("scrapeAmazonProductDirect fails when only page-wide prices exist after postcode check", async (t) => {
   const { AmazonDirectScrapeError, scrapeAmazonProductDirect } =
     await loadAmazonDirectScraper();
