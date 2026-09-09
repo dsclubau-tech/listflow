@@ -970,7 +970,7 @@ const DESCRIPTION_EXCLUDED_CONTAINER_SELECTOR = [
   "table.a-bordered.comparison",
 ].join(", ");
 const DESCRIPTION_EXCLUDED_TEXT_PATTERN =
-  /^(?:product description|see more product details|report an issue|from the manufacturer|from the brand|compare with similar items?|looking for specific info\??|customers who viewed this item also viewed)[.:!]?$/i;
+  /^(?:about this item|product description|see more product details|report an issue|from the manufacturer|from the brand|compare with similar items?|looking for specific info\??|customers who viewed this item also viewed)[.:!]?$/i;
 
 function stripLiteralDescriptionImageMarkup(value: string) {
   return value.replace(
@@ -1223,7 +1223,6 @@ function collectDescriptionBlocks($: CheerioAPI) {
       !/^make sure this fits/i.test(normalizeText(item.text())),
   );
   if (visibleFeatureItems.length > 0) {
-    blocks.push({ type: "heading", html: "About this item" });
     pushList(visibleFeatureItems);
   }
 
@@ -1344,9 +1343,8 @@ export function renderAmazonDescription($: CheerioAPI) {
   const rendered = blocks
     .map((block, index) => {
       if (block.type === "heading") {
-        const sectionHeading =
-          block.html === "About this item" || block.html === "Product Description";
-        const color = block.html === "About this item" ? "#e60000" : "#111";
+        const sectionHeading = block.html === "Product Description";
+        const color = "#111";
         return `<div style="margin:${index === 0 ? "0" : "24px"} 0 12px;font-size:${sectionHeading ? "22px" : "20px"};font-weight:700;line-height:1.35;color:${color};white-space:normal;overflow-wrap:anywhere;word-break:break-word;">${block.html}</div>`;
       }
 
@@ -1358,7 +1356,7 @@ export function renderAmazonDescription($: CheerioAPI) {
         return `<div style="margin:0 0 16px;">${block.items
           .map(
             (item) =>
-              `<div style="margin:0 0 8px;padding-left:18px;text-indent:-18px;font-size:16px;line-height:1.8;color:#333;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">&#8226; ${item}</div>`
+              `<div style="margin:0 0 12px;padding-left:24px;text-indent:-24px;font-size:16px;line-height:1.65;color:#222;white-space:normal;overflow-wrap:break-word;word-break:normal;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#e60000;box-shadow:0 0 0 3px rgba(230,0,0,0.18);vertical-align:1px;margin-right:12px;"></span>${item}</div>`
           )
           .join("")}</div>`;
       }

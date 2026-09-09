@@ -1380,7 +1380,7 @@ export async function scrapeAmazonProduct(
       }
 
       const excludedDescriptionTextPattern =
-        /^(?:product description|see more product details|report an issue|from the manufacturer|from the brand|compare with similar items?|looking for specific info\??|customers who viewed this item also viewed)[.:!]?$/i;
+        /^(?:about this item|product description|see more product details|report an issue|from the manufacturer|from the brand|compare with similar items?|looking for specific info\??|customers who viewed this item also viewed)[.:!]?$/i;
 
       function escapeHtml(value: string): string {
         return value
@@ -1586,7 +1586,6 @@ export async function scrapeAmazonProduct(
 
       const featureItems = featureBullets ? collectListItems(featureBullets) : [];
       if (featureItems.length > 0) {
-        pushHeading("About this item", 2);
         pushList(featureItems);
       }
 
@@ -1658,7 +1657,7 @@ export async function scrapeAmazonProduct(
           return `<div style="margin:0 0 16px;">${block.items
             .map(
               (item) =>
-                `<div style="margin:0 0 8px;padding-left:18px;text-indent:-18px;font-size:16px;line-height:1.8;color:#333;white-space:normal;overflow-wrap:anywhere;word-break:break-word;">&#8226; ${escapeHtml(
+                `<div style="margin:0 0 12px;padding-left:24px;text-indent:-24px;font-size:16px;line-height:1.65;color:#222;white-space:normal;overflow-wrap:break-word;word-break:normal;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#e60000;box-shadow:0 0 0 3px rgba(230,0,0,0.18);vertical-align:1px;margin-right:12px;"></span>${escapeHtml(
                   item
                 )}</div>`
             )

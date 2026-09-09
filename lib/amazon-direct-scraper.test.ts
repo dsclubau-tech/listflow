@@ -421,7 +421,6 @@ test("renderAmazonDescription keeps About bullets then Product Description A+ co
   `);
 
   const description = renderAmazonDescription($);
-  const aboutIndex = description.indexOf("About this item");
   const bulletIndex = description.indexOf("<strong>VA panel</strong>");
   const productDescriptionIndex = description.indexOf("Product Description");
   const standardIndex = description.indexOf("Standard product description.");
@@ -430,8 +429,8 @@ test("renderAmazonDescription keeps About bullets then Product Description A+ co
   const aplusTextIndex = description.indexOf("Capturing every detail.");
   const secondImageIndex = description.indexOf("detail-large.jpg");
 
-  assert.equal(aboutIndex >= 0, true);
-  assert.equal(aboutIndex < bulletIndex, true);
+  assert.doesNotMatch(description, /About this item/);
+  assert.equal(bulletIndex >= 0, true);
   assert.equal(bulletIndex < productDescriptionIndex, true);
   assert.equal(productDescriptionIndex < standardIndex, true);
   assert.equal(standardIndex < headingIndex, true);
@@ -451,7 +450,8 @@ test("renderAmazonDescription imports whichever requested Amazon section is avai
     load('<div id="aplus"><p>Only A+ description</p></div>'),
   );
 
-  assert.match(aboutOnly, /About this item/);
+  assert.match(aboutOnly, /Only bullet/);
+  assert.doesNotMatch(aboutOnly, /About this item/);
   assert.doesNotMatch(aboutOnly, /Product Description/);
   assert.match(descriptionOnly, /Product Description/);
   assert.doesNotMatch(descriptionOnly, /About this item/);
