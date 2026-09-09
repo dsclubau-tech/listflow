@@ -260,6 +260,31 @@ function prepareRequiredSpecificRows(input: {
   return { rows, missingNames };
 }
 
+function pruneObsoleteCategorySpecifics(
+  rows: DraftItemSpecificRow[],
+  newCategoryName: string,
+): DraftItemSpecificRow[] {
+  const isBookCategory = /book|fiction|literature|magazine|comic/i.test(newCategoryName);
+  const bookOnlyKeys = new Set([
+    "author",
+    "book title",
+    "isbn",
+    "publication year",
+    "publisher",
+    "narrator",
+    "literary movement",
+    "book series",
+  ]);
+
+  return rows.filter((row) => {
+    const key = row.key.trim().toLowerCase();
+    if (!isBookCategory && bookOnlyKeys.has(key)) {
+      return false;
+    }
+    return true;
+  });
+}
+
 // ----- VERO keywords -----
 
 const VERO_KEYWORDS = [
@@ -698,11 +723,15 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
   useEffect(() => {
     const specs = product.itemSpecifics as Record<string, string> | null;
     if (specs && typeof specs === "object") {
-      // Restore visible specs (exclude internal _-prefixed metadata)
+      // Restore visible specs (exclude internal _-prefixed metadata), pruning obsolete specs
+      const rawRows = Object.entries(specs)
+        .filter(([key]) => !key.startsWith("_"))
+        .map(([key, value]) => ({ key, value }));
       setItemSpecifics(
-        Object.entries(specs)
-          .filter(([key]) => !key.startsWith("_"))
-          .map(([key, value]) => ({ key, value }))
+        pruneObsoleteCategorySpecifics(
+          rawRows,
+          product.categoryName || categoryName || ""
+        )
       );
       const inferredBrand = inferBrandItemSpecific({
         itemSpecifics: specs,
@@ -747,10 +776,28 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
     [countryLocation, defaultZipcode, selectedLocationText],
   );
 
-  const missingSpecificsFromError = useMemo(
-    () => parseMissingItemSpecificNames(product.errorMessage),
-    [product.errorMessage]
-  );
+  const missingSpecificsFromError = useMemo(() => {
+    if (product.category && category.trim() !== product.category.trim()) {
+      return [];
+    }
+    const names = parseMissingItemSpecificNames(product.errorMessage);
+    if (!categoryName) return names;
+    const isBookCategory = /book|fiction|literature|magazine|comic/i.test(categoryName);
+    const bookOnlyKeys = new Set([
+      "author",
+      "book title",
+      "isbn",
+      "publication year",
+      "publisher",
+      "narrator",
+      "literary movement",
+      "book series",
+    ]);
+    if (!isBookCategory) {
+      return names.filter((name) => !bookOnlyKeys.has(name.trim().toLowerCase()));
+    }
+    return names;
+  }, [category, categoryName, product.category, product.errorMessage]);
 
   const fetchRequiredSpecificsForCategory = useCallback(async () => {
     if (!/^\d+$/.test(category.trim())) {
@@ -843,7 +890,15 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       brand,
       title,
     });
-    if (preparedBrand && isPlaceholderBrand(brand)) {
+    const brandLooksStale =
+      Boolean(
+        brand &&
+        preparedBrand &&
+        preparedBrand.toLowerCase() !== brand.toLowerCase() &&
+        title.toLowerCase().includes(preparedBrand.toLowerCase()) &&
+        !title.toLowerCase().includes(brand.toLowerCase()),
+      );
+    if (preparedBrand && (isPlaceholderBrand(brand) || brandLooksStale)) {
       setBrand(preparedBrand);
     }
   }, [brand, categoryName, description, itemSpecifics, requiredItemSpecifics, title]);
@@ -2243,7 +2298,10 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                   <input
                     type="text"
                     value={category}
-                    onChange={(e) => setCategory(e.target.value)}
+                    onChange={(e) => {
+                      setCategory(e.target.value);
+                      setSaveMessage(null);
+                    }}
                     className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
                     placeholder="e.g. 171114"
                   />
@@ -2290,6 +2348,10 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                         setCategory(s.categoryId);
                         setCategoryName(s.categoryName);
                         setShowCatDropdown(false);
+                        setSaveMessage(null);
+                        setItemSpecifics((current) =>
+                          pruneObsoleteCategorySpecifics(current, s.categoryName)
+                        );
                       }}
                       className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-orange-50 hover:text-orange-700 transition-colors"
                     >

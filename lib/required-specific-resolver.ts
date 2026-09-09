@@ -306,7 +306,9 @@ function inferCompatibleBrand(
     }) ??
     readItemSpecificValue(specifics, ["Compatible Brand"]);
 
-  const matched = matchAllowedSpecificValue(brandValue, allowedValues);
+  const matched = matchAllowedSpecificValue(brandValue, allowedValues, {
+    brand: true,
+  });
 
   if (matched && !isUnavailableBrandValue(matched)) {
     return { value: matched, source: "amazon" as const };
@@ -353,6 +355,22 @@ function inferCompatibleBrand(
       value: universal,
       source: "ebay_allowed_default" as const,
     };
+  }
+
+  if (brandValue && !isUnavailableBrandValue(brandValue)) {
+    return {
+      value: brandValue,
+      source: "amazon" as const,
+    };
+  }
+
+  if (allowedValues && allowedValues.length > 0) {
+    const fallback = allowedValues.find((v) =>
+      /^(?:universal|for universal|unbranded|does not apply|generic)$/i.test(v.trim()),
+    );
+    if (fallback) {
+      return { value: fallback, source: "ebay_allowed_default" as const };
+    }
   }
 
   return { value: null, source: "missing" as const };
@@ -576,6 +594,22 @@ function inferRequiredSpecific(
 
   if (normalized === "compatible model") {
     return inferCompatibleModel(input, specifics, required.values, text);
+  }
+
+  const BOOK_SPECIFIC_NAMES = new Set([
+    "author",
+    "book title",
+    "isbn",
+    "publication year",
+    "publisher",
+    "narrator",
+    "literary movement",
+    "book series",
+  ]);
+
+  const isBookCategory = /book|fiction|literature|magazine|comic/i.test(input.categoryName ?? "");
+  if (BOOK_SPECIFIC_NAMES.has(normalized) && !isBookCategory) {
+    return { value: null, source: "missing" as const };
   }
 
   // Generic fallback: try to match any allowed value from Amazon data or title/description

@@ -496,3 +496,48 @@ test("resolveRequiredItemSpecifics does not infer a Form Factor from generic mic
   assert.deepEqual(result.addedItemSpecifics, {});
   assert.deepEqual(result.missingItemSpecifics, ["Form Factor"]);
 });
+
+test("resolveRequiredItemSpecifics infers Compatible Brand using brand fallback instead of leaving it missing", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "Drew&Cole 5 Minute CleverChef 700W Non-Stick Multicooker, Make Quick-Meals",
+    categoryName: "Small Kitchen Appliance Parts",
+    brand: "DREW & COLE",
+    itemSpecifics: {
+      Brand: "DREW & COLE",
+      "Brand Name": "DREW & COLE",
+    },
+    requiredItemSpecifics: [
+      {
+        name: "Compatible Brand",
+        values: ["Breville", "De'Longhi", "Morphy Richards", "Universal"],
+      },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics["Compatible Brand"], "Universal");
+  assert.deepEqual(result.missingItemSpecifics, []);
+});
+
+test("resolveRequiredItemSpecifics does not infer book fields when category is appliances", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "Drew&Cole 5 Minute CleverChef 700W Non-Stick Multicooker, Make Quick-Meals",
+    categoryName: "Small Kitchen Appliances",
+    brand: "DREW & COLE",
+    itemSpecifics: {
+      Brand: "DREW & COLE",
+    },
+    requiredItemSpecifics: [
+      {
+        name: "Author",
+        values: ["Joanna Cole", "Various"],
+      },
+      {
+        name: "Book Title",
+        values: [],
+      },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics["Author"], undefined);
+  assert.equal(result.itemSpecifics["Book Title"], undefined);
+});

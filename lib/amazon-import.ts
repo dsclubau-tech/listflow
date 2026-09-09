@@ -189,8 +189,16 @@ export async function executeAmazonImport({
       totalSuggestions: suggestions.length,
     });
     if (suggestions.length > 0) {
-      categoryId = suggestions[0].categoryId;
-      categoryName = suggestions[0].categoryName;
+      const amazonCat = (product.category || "").toLowerCase();
+      const isAmazonBook = /book|magazine|comic|fiction|audiobook/i.test(amazonCat);
+      const filtered = isAmazonBook
+        ? suggestions
+        : suggestions.filter(
+            (s) => !/^(?:books|magazines|textbooks)\b/i.test(s.categoryName.trim()),
+          );
+      const picked = (filtered.length > 0 ? filtered : suggestions)[0];
+      categoryId = picked.categoryId;
+      categoryName = picked.categoryName;
     }
   } catch (error) {
     logStage("category_suggest", Date.now() - categoryStartedAt, {

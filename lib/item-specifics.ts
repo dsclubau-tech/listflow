@@ -221,10 +221,31 @@ export function inferBrandItemSpecific(input: {
   allowedValues?: string[];
 }) {
   const specifics = normalizeItemSpecifics(input.itemSpecifics);
+  const brandNameScraped = readItemSpecificValue(specifics, ["Brand Name"]);
+  const existingBrand = input.brand || readItemSpecificValue(specifics, ["Brand"]);
+
+  let primaryCandidate = existingBrand;
+  if (
+    brandNameScraped &&
+    existingBrand &&
+    brandNameScraped.toLowerCase() !== existingBrand.toLowerCase() &&
+    input.title
+  ) {
+    const titleLower = input.title.toLowerCase();
+    const scrapedInTitle = brandNameScraped
+      .toLowerCase()
+      .split(/\s+/)
+      .some((w) => w.length > 2 && titleLower.includes(w));
+    const existingInTitle = titleLower.includes(existingBrand.toLowerCase());
+    if (scrapedInTitle && !existingInTitle) {
+      primaryCandidate = brandNameScraped;
+    }
+  }
+
   const candidates = [
-    input.brand,
-    readItemSpecificValue(specifics, ["Brand"]),
-    readItemSpecificValue(specifics, ["Brand Name"]),
+    primaryCandidate,
+    brandNameScraped,
+    existingBrand,
     readItemSpecificValue(specifics, ["Manufacturer"]),
     readItemSpecificValue(specifics, ["Maker"]),
   ];
@@ -234,9 +255,15 @@ export function inferBrandItemSpecific(input: {
       continue;
     }
 
-    const matched = matchAllowedSpecificValue(candidate, input.allowedValues);
+    const matched = matchAllowedSpecificValue(candidate, input.allowedValues, {
+      brand: true,
+    });
     if (matched && !isUnavailableBrandValue(matched)) {
       return matched;
+    }
+
+    if (candidate && candidate.trim() && !isUnavailableBrandValue(candidate.trim())) {
+      return candidate.trim();
     }
   }
 
@@ -250,7 +277,11 @@ export function inferBrandItemSpecific(input: {
       if (isUnavailableBrandValue(titlePrefix)) {
         continue;
       }
-      const matched = matchAllowedSpecificValue(titlePrefix, input.allowedValues);
+      const matched = matchAllowedSpecificValue(
+        titlePrefix,
+        input.allowedValues,
+        { brand: true },
+      );
       if (matched && !isUnavailableBrandValue(matched)) {
         return matched;
       }
@@ -278,7 +309,8 @@ function normalizeSpecificValue(value: string) {
 
 export function matchAllowedSpecificValue(
   candidate: string | null | undefined,
-  allowedValues?: string[]
+  allowedValues?: string[],
+  options?: { brand?: boolean }
 ) {
   const normalizedCandidate = normalizeSpecificValue(candidate ?? "");
   if (!normalizedCandidate) {
@@ -296,13 +328,12 @@ export function matchAllowedSpecificValue(
     }
   }
 
-  // 2. Substring Match
+  // 2. Substring Match - candidate must contain the full allowed value
   for (const value of allowedValues) {
     const normalizedAllowed = normalizeSpecificValue(value);
     if (
       normalizedAllowed.length >= 3 &&
-      (normalizedCandidate.includes(normalizedAllowed) ||
-        normalizedAllowed.includes(normalizedCandidate))
+      normalizedCandidate.includes(normalizedAllowed)
     ) {
       return value;
     }
@@ -352,6 +383,18 @@ export function matchAllowedSpecificValue(
     const intersection = candidateTokens.filter((t) => allowedTokens.includes(t));
 
     if (intersection.length > 0) {
+      if (options?.brand) {
+        const candidateCoversAllowed = allowedTokens.every((t) =>
+          candidateTokens.includes(t)
+        );
+        const allowedCoversCandidate = candidateTokens.every((t) =>
+          allowedTokens.includes(t)
+        );
+        if (!candidateCoversAllowed && !allowedCoversCandidate) {
+          continue;
+        }
+      }
+
       // Calculate basic intersection score
       let score = intersection.length * 10;
 
@@ -619,6 +662,10 @@ export function inferTypeItemSpecific(input: {
     {
       values: ["Steam Mop", "Mop", "Floor Cleaner", "Cleaner"],
       patterns: [/\bsteam[-\s]?mop\b/i, /\bmop\b/i],
+    },
+    {
+      values: ["Multicooker", "Multi-Cooker", "Slow Cooker", "Pressure Cooker", "Electric Cooker", "Cooker"],
+      patterns: [/\bmulti[-\s]?cooker\b/i, /\bslow[-\s]?cooker\b/i, /\bpressure[-\s]?cooker\b/i, /\belectric\s+cooker\b/i, /\bcleverchef\b/i],
     },
     {
       values: ["Water Bottle"],

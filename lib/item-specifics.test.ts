@@ -258,3 +258,38 @@ test("parseMissingItemSpecificNames extracts missing eBay specifics", () => {
     ["Volume"]
   );
 });
+
+test("inferBrandItemSpecific does not match Cole & Mason for DREW & COLE", () => {
+  assert.equal(
+    inferBrandItemSpecific({
+      brand: "DREW & COLE",
+      allowedValues: ["Cole & Mason", "Breville", "Russell Hobbs"],
+    }),
+    "DREW & COLE"
+  );
+});
+
+test("inferBrandItemSpecific prefers scraped Brand Name when existing brand was corrupted and title matches scraped brand", () => {
+  assert.equal(
+    inferBrandItemSpecific({
+      brand: "Cole & Mason",
+      title: "Drew&Cole 5 Minute CleverChef 700W Non-Stick Multicooker, Make Quick-Meals",
+      itemSpecifics: {
+        Brand: "Cole & Mason",
+        "Brand Name": "DREW & COLE",
+      },
+      allowedValues: ["Cole & Mason", "Breville"],
+    }),
+    "DREW & COLE"
+  );
+});
+
+test("inferTypeItemSpecific infers Multicooker from title", () => {
+  assert.equal(
+    inferTypeItemSpecific({
+      title: "Drew&Cole 5 Minute CleverChef 700W Non-Stick Multicooker, Make Quick-Meals",
+      allowedValues: ["Multicooker", "Slow Cooker", "Pressure Cooker"],
+    }),
+    "Multicooker"
+  );
+});

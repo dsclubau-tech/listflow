@@ -942,6 +942,20 @@ function withInferredItemSpecifics(
     }
   }
 
+  if (!next.Model) {
+    const model = next["Model Number"] || next["Item model number"] || next["Model name"] || next["Model Name"];
+    if (model) {
+      next.Model = model;
+    }
+  }
+
+  if (!next.MPN) {
+    const mpn = next["Manufacturer Part Number"] || next["Part Number"];
+    if (mpn) {
+      next.MPN = mpn;
+    }
+  }
+
   return next;
 }
 

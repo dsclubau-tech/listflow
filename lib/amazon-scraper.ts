@@ -193,9 +193,13 @@ const AMAZON_TO_EBAY_FIELD_MAP: Record<string, string> = {
   "wattage":                "Wattage",
   "connectivity technology":"Connectivity",
   "number of items":        "Number of Items",
-  "item model number":      "Model Number",
-  "manufacturer part number": "Manufacturer Part Number",
-  "part number":            "Manufacturer Part Number",
+  "brand name":             "Brand",
+  "model":                  "Model",
+  "model number":           "Model",
+  "item model number":      "Model",
+  "manufacturer part number": "MPN",
+  "part number":            "MPN",
+  "mpn":                    "MPN",
   "special feature":        "Features",
   "special features":       "Features",
 };
@@ -266,6 +270,12 @@ function normalizeItemSpecificsForEbay(
     if (mappedKey) {
       // Use the eBay-standard name, don't overwrite if already set
       if (!result[mappedKey]) result[mappedKey] = value;
+      if (mappedKey === "Model" && !result["Model Number"]) {
+        result["Model Number"] = value;
+      }
+      if (mappedKey === "MPN" && !result["Manufacturer Part Number"]) {
+        result["Manufacturer Part Number"] = value;
+      }
     } else {
       // Pass through as-is (capitalize first letter for consistency)
       const cleanKey = rawKey.trim();

@@ -8,7 +8,10 @@ import SlideOver from "@/components/SlideOver";
 import RichTextEditor from "@/components/RichTextEditor";
 import type { ScrapedProduct } from "@/components/AddProductModal";
 import { reportClientError } from "@/lib/client-logger";
-import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
+import {
+  inferBrandItemSpecific,
+  sanitizeEbayItemSpecifics,
+} from "@/lib/item-specifics";
 import {
   DEFAULT_AMAZON_PRICE_TRACKING_MODE,
   getAmazonPriceTrackingLabel,
@@ -69,6 +72,31 @@ interface DraftEditFormProps {
 }
 
 const tabs = ["Product", "Description", "Images", "Item Specifications"];
+
+function pruneObsoleteCategorySpecifics(
+  rows: Array<{ key: string; value: string }>,
+  newCategoryName: string,
+): Array<{ key: string; value: string }> {
+  const isBookCategory = /book|fiction|literature|magazine|comic/i.test(newCategoryName);
+  const bookOnlyKeys = new Set([
+    "author",
+    "book title",
+    "isbn",
+    "publication year",
+    "publisher",
+    "narrator",
+    "literary movement",
+    "book series",
+  ]);
+
+  return rows.filter((row) => {
+    const key = row.key.trim().toLowerCase();
+    if (!isBookCategory && bookOnlyKeys.has(key)) {
+      return false;
+    }
+    return true;
+  });
+}
 
 export default function DraftEditForm({
   isOpen,
@@ -170,6 +198,7 @@ export default function DraftEditForm({
             setCatSuggestions(data);
             setCategory((current) => (!current || !/^\d+$/.test(current.trim()) ? data[0].categoryId : current));
             setCategoryName((current) => (!current ? data[0].categoryName : current));
+            setItemSpecifics((prev) => pruneObsoleteCategorySpecifics(prev, data[0].categoryName));
           }
         })
         .catch(() => {})
@@ -208,7 +237,12 @@ export default function DraftEditForm({
         normalizeAmazonPriceTrackingMode(scrapedData.amazonPriceTrackingMode)
       );
       setQuantity(String(defaults?.quantity ?? 1));
-      setBrand(scrapedData.brand);
+      const inferredBrand = inferBrandItemSpecific({
+        itemSpecifics: scrapedData.itemSpecifics,
+        brand: scrapedData.brand,
+        title: scrapedTitle,
+      });
+      setBrand(inferredBrand || scrapedData.brand);
       setVariant(scrapedData.variantName || "");
       setDescription(
         prependTitleToDescription(scrapedTitle, scrapedData.description)
@@ -222,13 +256,16 @@ export default function DraftEditForm({
         manualImageFileInputRef.current.value = "";
       }
       setItemSpecifics(
-        Object.entries({
-          ...(defaults?.defaultItemSpecifics ?? {}),
-          ...scrapedData.itemSpecifics,
-        }).map(([key, value]) => ({
-          key,
-          value,
-        }))
+        pruneObsoleteCategorySpecifics(
+          Object.entries({
+            ...(defaults?.defaultItemSpecifics ?? {}),
+            ...scrapedData.itemSpecifics,
+          }).map(([key, value]) => ({
+            key,
+            value,
+          })),
+          scrapedData.categoryName || scrapedData.category || ""
+        )
       );
       setActiveTab(0);
       setErrors({});
@@ -946,7 +983,15 @@ export default function DraftEditForm({
                     <input
                       type="text"
                       value={category}
-                      onChange={(e) => setCategory(e.target.value)}
+                      onChange={(e) => {
+                        setCategory(e.target.value);
+                        setErrors((prev) => {
+                          if (!prev.category) return prev;
+                          const copy = { ...prev };
+                          delete copy.category;
+                          return copy;
+                        });
+                      }}
                       className="flex-1 px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
                       placeholder="e.g. 171114"
                     />
@@ -994,6 +1039,15 @@ export default function DraftEditForm({
                           setCategory(s.categoryId);
                           setCategoryName(s.categoryName);
                           setShowCatDropdown(false);
+                          setItemSpecifics((prev) =>
+                            pruneObsoleteCategorySpecifics(prev, s.categoryName)
+                          );
+                          setErrors((prev) => {
+                            if (!prev.category) return prev;
+                            const copy = { ...prev };
+                            delete copy.category;
+                            return copy;
+                          });
                         }}
                         className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-orange-50 hover:text-orange-700 transition-colors"
                       >
