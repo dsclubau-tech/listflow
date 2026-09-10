@@ -17,6 +17,7 @@ import { calculateSellPrice } from "@/lib/variant-pricing";
 import { buildReviseInventoryStatusXML } from "@/lib/ebay-xml";
 import { callEbayReviseInventoryStatus, getStoreNumber } from "@/lib/ebay";
 import { logger } from "@/lib/logger";
+import { AdaptiveDelay } from "@/lib/adaptive-delay";
 import { invalidatePriceCaches } from "@/lib/cache-tags";
 import {
   getAmazonPriceTrackingLabel,
@@ -51,6 +52,7 @@ const PRODUCT_DELAY_MAX_MS = Math.max(
     DEFAULT_PRODUCT_DELAY_MAX_MS
   )
 );
+const ADAPTIVE_MAX_DELAY_MS = 30_000;
 const DEFAULT_PRODUCT_CHECK_TIMEOUT_MS = 120_000;
 const PRODUCT_CHECK_TIMEOUT_MS = Math.max(
   15_000,
@@ -404,6 +406,7 @@ export async function runPriceCheck(
     failed: 0,
     skipped: 0,
   };
+  const throttle = new AdaptiveDelay(PRODUCT_DELAY_MIN_MS, ADAPTIVE_MAX_DELAY_MS);
   const reportProgress = async () => {
     if (!options.onProgress) {
       return;
@@ -613,6 +616,7 @@ export async function runPriceCheck(
       const variantHints = extractVariantSelectionHints(product);
 
       try {
+        const scrapeStartMs = Date.now();
         let currentAmazonPrice: number | null;
         let scrapedAmazonStockLeft: number | null | undefined;
         let scrapeResult: ScrapedAmazonPrice | undefined;
@@ -646,6 +650,11 @@ export async function runPriceCheck(
 
           currentAmazonPrice = scrapeResult.price;
           scrapedAmazonStockLeft = scrapeResult.stockLeft;
+          if (currentAmazonPrice !== null) {
+            throttle.onSuccess(Date.now() - scrapeStartMs);
+          } else {
+            throttle.onFailure();
+          }
         }
 
         const amazonStockUpdate = getAmazonStockUpdate(scrapedAmazonStockLeft);
@@ -1123,6 +1132,7 @@ export async function runPriceCheck(
           );
         }
       } catch (error) {
+        throttle.onFailure();
         const rawMessage = getErrorMessage(error);
         const message = getBrowserLaunchUserMessage(error) ?? rawMessage;
         const code = getPriceCheckFailureCode(error);
@@ -1152,7 +1162,16 @@ export async function runPriceCheck(
           return finishCancelled();
         }
 
-        await sleep(getProductDelayMs());
+        if (throttle.failures > 0) {
+          logger.info("price-checker/throttle", "Adaptive backoff active", {
+            delayMs: throttle.delayMs,
+            consecutiveFailures: throttle.failures,
+            productId: product.id,
+            asin: product.asin,
+          });
+        }
+
+        await sleep(throttle.delayMs);
       }
     }
   } finally {

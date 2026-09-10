@@ -545,3 +545,87 @@ test("extractLocalizedBuyboxPriceChoices extracts distinct Regular and Prime pri
   assert.equal(choices.deal?.label, "Prime member price");
 });
 
+test("extractLocalizedBuyboxPriceChoices falls back to currency sweep when all standard selectors miss", () => {
+  const $ = load(`
+    <main id="dp">
+      <div id="centerCol">
+        <div class="custom-new-redesign-wrapper">
+          <span class="random-price-label-2026">$84.50</span>
+        </div>
+      </div>
+    </main>
+  `);
+
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0TESTFALL1");
+
+  assert.ok(choices.regular !== null);
+  assert.equal(choices.regular?.price, 84.5);
+  assert.equal(choices.regular?.selector, "fallback:currency-sweep");
+  assert.equal(choices.regular?.mode, "REGULAR");
+  assert.equal(choices.regular?.priceSource, "localized_buybox");
+});
+
+test("extractLocalizedBuyboxPriceChoices fallback ignores prices in recommendation/video-card widgets outside buybox", () => {
+  const $ = load(`
+    <main>
+      <section class="sponsored-products">
+        <span class="some-price">$19.99</span>
+      </section>
+      <div id="related-items">
+        <div>$49.95</div>
+      </div>
+    </main>
+  `);
+
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0TESTFALL2");
+
+  assert.equal(choices.regular, null);
+  assert.equal(choices.deal, null);
+});
+
+test("extractLocalizedBuyboxPriceChoices fallback ignores coupon and basis prices inside buybox", () => {
+  const $ = load(`
+    <main id="dp">
+      <div id="centerCol">
+        <div class="basisPrice">
+          <span class="a-offscreen">$120.00</span>
+        </div>
+        <div class="coupon">
+          <span>Save $10.00 with coupon</span>
+        </div>
+        <div class="novel-unrecognized-container">
+          <span class="novel-unrecognized-tag">A$67.80</span>
+        </div>
+      </div>
+    </main>
+  `);
+
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0TESTFALL3");
+
+  assert.ok(choices.regular !== null);
+  assert.equal(choices.regular?.price, 67.8);
+  assert.equal(choices.regular?.selector, "fallback:currency-sweep");
+});
+
+test("extractLocalizedBuyboxPriceChoices prefers standard selectors when available and does not trigger fallback", () => {
+  const $ = load(`
+    <main id="dp">
+      <div id="centerCol">
+        <div id="corePrice_feature_div">
+          <span class="a-price priceToPay">
+            <span class="a-offscreen">$49.00</span>
+          </span>
+        </div>
+        <div class="unrelated-text">
+          <span>A$99.00</span>
+        </div>
+      </div>
+    </main>
+  `);
+
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0TESTFALL4");
+
+  assert.ok(choices.regular !== null);
+  assert.equal(choices.regular?.price, 49.0);
+  assert.notEqual(choices.regular?.selector, "fallback:currency-sweep");
+});

@@ -257,6 +257,75 @@ function parseContainerBuyboxPrice($: CheerioAPI, container: any): number | null
   return null;
 }
 
+const BUYBOX_FALLBACK_REGION_SELECTORS = [
+  "#centerCol",
+  "#ppd",
+  "#dp",
+  "#apex_desktop",
+  "#corePrice_feature_div",
+  "#buybox",
+  "#desktop_buybox",
+] as const;
+
+function fallbackBuyboxPriceSweep(
+  $: CheerioAPI,
+  asin: string,
+  shippingFee: number | null
+): AmazonBuyboxPriceResult | null {
+  for (const containerSelector of BUYBOX_FALLBACK_REGION_SELECTORS) {
+    const container = $(containerSelector).first();
+    if (container.length === 0) {
+      continue;
+    }
+
+    let foundResult: AmazonBuyboxPriceResult | null = null;
+
+    container.find("span, div, b, strong, p").each((_, element) => {
+      if (foundResult) {
+        return false;
+      }
+
+      const el = $(element);
+
+      if (el.closest(NON_CURRENT_PRICE_ANCESTOR_SELECTOR).length > 0) {
+        return;
+      }
+
+      const directText = el.clone().children().remove().end().text().trim() || el.text().trim();
+      if (!directText || directText.length > 30) {
+        return;
+      }
+
+      if (/coupon|save\s+\$|\boff\b/i.test(directText)) {
+        return;
+      }
+
+      const price = parseFirstPriceFromText(directText);
+      if (price !== null && price >= SCRAPER_MIN_PRICE) {
+        console.info(
+          `[amazon/buybox] Fallback buybox currency sweep matched price for ${asin}: $${price} (${containerSelector})`
+        );
+        foundResult = buildResult(
+          asin,
+          containerSelector,
+          "fallback:currency-sweep",
+          price,
+          "REGULAR",
+          "Regular price",
+          shippingFee,
+        );
+        return false;
+      }
+    });
+
+    if (foundResult) {
+      return foundResult;
+    }
+  }
+
+  return null;
+}
+
 export function extractLocalizedBuyboxPriceChoices(
   $: CheerioAPI,
   asin: string
@@ -528,6 +597,15 @@ export function extractLocalizedBuyboxPriceChoices(
       if (choices.regular && choices.deal) {
         return choices;
       }
+    }
+  }
+
+  // Last-resort structural fallback: if all selectors missed,
+  // sweep the buybox region for currency-formatted text.
+  if (!choices.regular && !choices.deal) {
+    const fallback = fallbackBuyboxPriceSweep($, normalizedAsin, shippingFee);
+    if (fallback) {
+      choices.regular = fallback;
     }
   }
 
