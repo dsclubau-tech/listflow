@@ -69,3 +69,27 @@ test("product sorting preserves filters, resets pagination, and toggles directio
   assert.equal(uploadedParsed.searchParams.get("sortOrder"), "asc");
 });
 
+test("product sorting supports explicit sort orders without toggling", () => {
+  const url = buildProductSortUrl("/products", "page=2&q=shoes", "views", "desc");
+  const parsed = new URL(url, "https://listflow.local");
+
+  assert.equal(parsed.searchParams.get("page"), "1");
+  assert.equal(parsed.searchParams.get("q"), "shoes");
+  assert.equal(parsed.searchParams.get("sortBy"), "views");
+  assert.equal(parsed.searchParams.get("sortOrder"), "desc");
+});
+
+test("product sorting clears sortBy and sortOrder when nextSortBy is null", () => {
+  const url = buildProductSortUrl(
+    "/products",
+    "page=3&sortBy=price&sortOrder=asc&q=phone",
+    null,
+  );
+  const parsed = new URL(url, "https://listflow.local");
+
+  assert.equal(parsed.searchParams.get("page"), "1");
+  assert.equal(parsed.searchParams.get("q"), "phone");
+  assert.equal(parsed.searchParams.has("sortBy"), false);
+  assert.equal(parsed.searchParams.has("sortOrder"), false);
+});
+

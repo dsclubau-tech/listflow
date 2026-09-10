@@ -55,6 +55,23 @@ test("Drafts renderer contains card and desktop table breakpoints", () => {
   assert.match(editorSource, /Draft editor sections/);
 });
 
+test("Drafts renderer renders mobile sort dropdown bar with ascending and descending options", () => {
+  const source = readFileSync("components/DraftsTable.tsx", "utf8");
+
+  assert.match(source, /id="mobile-sort-select"/);
+  assert.match(source, /value="price-asc"/);
+  assert.match(source, /value="price-desc"/);
+  assert.match(source, /value="profit-asc"/);
+  assert.match(source, /value="profit-desc"/);
+  assert.match(source, /value="uploaded-asc"/);
+  assert.match(source, /value="uploaded-desc"/);
+  assert.match(source, /value="sold-asc"/);
+  assert.match(source, /value="sold-desc"/);
+  assert.match(source, /value="views-asc"/);
+  assert.match(source, /value="views-desc"/);
+  assert.match(source, /xl:hidden/);
+});
+
 test("draft editor gallery uses a lightbox while description images remain editable", () => {
   const tableSource = readFileSync("components/DraftsTable.tsx", "utf8");
   const editorSource = readFileSync("components/InlineEditForm.tsx", "utf8");

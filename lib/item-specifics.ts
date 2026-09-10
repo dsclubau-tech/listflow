@@ -134,6 +134,18 @@ function normalizeMissingSpecificName(value: string) {
     .trim();
 }
 
+const IGNORED_SPECIFIC_NAMES = new Set([
+  "none",
+  "null",
+  "undefined",
+  "schema",
+  "error",
+  "item",
+  "xml",
+  "true",
+  "false",
+]);
+
 export function parseMissingItemSpecificNames(message: string | null | undefined) {
   if (!message) {
     return [] as string[];
@@ -149,7 +161,11 @@ export function parseMissingItemSpecificNames(message: string | null | undefined
     let match: RegExpExecArray | null;
     while ((match = pattern.exec(message)) !== null) {
       const name = normalizeMissingSpecificName(match[1] ?? "");
-      if (name) {
+      if (
+        name &&
+        !name.includes(".") &&
+        !IGNORED_SPECIFIC_NAMES.has(name.toLowerCase())
+      ) {
         names.push(name);
       }
     }
@@ -160,6 +176,8 @@ export function parseMissingItemSpecificNames(message: string | null | undefined
     if (
       name &&
       name.length <= 40 &&
+      !name.includes(".") &&
+      !IGNORED_SPECIFIC_NAMES.has(name.toLowerCase()) &&
       /^[A-Za-z][A-Za-z0-9 /&().-]*$/.test(name) &&
       !/\s/.test(name.trim()) &&
       /missing|add|;\s*$/i.test(message)
@@ -170,6 +188,9 @@ export function parseMissingItemSpecificNames(message: string | null | undefined
 
   const seen = new Set<string>();
   return names.filter((name) => {
+    if (name.includes(".") || IGNORED_SPECIFIC_NAMES.has(name.toLowerCase())) {
+      return false;
+    }
     const normalized = normalizeSpecificName(name);
     if (!normalized || seen.has(normalized)) {
       return false;

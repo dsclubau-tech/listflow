@@ -1,4 +1,4 @@
-import type { ProductSortField } from "@/lib/product-sort";
+import type { ProductSortField, ProductSortOrder } from "@/lib/product-sort";
 
 export type ProductQuickFilter =
   | "all"
@@ -26,16 +26,26 @@ export function buildProductFilterUrl(
 export function buildProductSortUrl(
   pathname: string,
   currentQuery: string,
-  nextSortBy: ProductSortField,
+  nextSortBy: ProductSortField | null,
+  explicitOrder?: ProductSortOrder,
 ) {
   const params = new URLSearchParams(currentQuery);
+  params.set("page", "1");
+
+  if (!nextSortBy) {
+    params.delete("sortBy");
+    params.delete("sortOrder");
+    const query = params.toString();
+    return query ? `${pathname}?${query}` : pathname;
+  }
+
   const currentSortBy = params.get("sortBy");
   const currentSortOrder =
     params.get("sortOrder") === "desc" ? "desc" : "asc";
   const nextSortOrder =
-    currentSortBy === nextSortBy && currentSortOrder === "asc" ? "desc" : "asc";
+    explicitOrder ??
+    (currentSortBy === nextSortBy && currentSortOrder === "asc" ? "desc" : "asc");
 
-  params.set("page", "1");
   params.set("sortBy", nextSortBy);
   params.set("sortOrder", nextSortOrder);
 

@@ -259,6 +259,15 @@ test("parseMissingItemSpecificNames extracts missing eBay specifics", () => {
   );
 });
 
+test("parseMissingItemSpecificNames ignores eBay XML schema errors and parameter paths", () => {
+  assert.deepEqual(
+    parseMissingItemSpecificNames(
+      "Schema XML error; AddItemRequest.Item.HitCounter; None"
+    ),
+    []
+  );
+});
+
 test("inferBrandItemSpecific does not match Cole & Mason for DREW & COLE", () => {
   assert.equal(
     inferBrandItemSpecific({

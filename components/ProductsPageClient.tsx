@@ -1163,9 +1163,19 @@ export default function ProductsPageClient({
     navigateProductsPage(1, parsed);
   }
 
-  function handleProductSortChange(nextSortBy: ProductSortField) {
+  function handleProductSortChange(
+    nextSortBy: ProductSortField | null,
+    nextSortOrder?: ProductSortOrder,
+  ) {
     startProductSortTransition(() => {
-      router.push(buildProductSortUrl(pathname, searchParamsString, nextSortBy));
+      router.push(
+        buildProductSortUrl(
+          pathname,
+          searchParamsString,
+          nextSortBy,
+          nextSortOrder,
+        ),
+      );
     });
   }
 

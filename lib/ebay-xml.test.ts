@@ -41,18 +41,18 @@ test("buildAddItemXML sends custom label as eBay SKU", () => {
   assert.match(xml, /<SKU>B07VJ5LG19<\/SKU>/);
 });
 
-test("buildAddItemXML sends HitCounter HiddenStyle to track eBay views", () => {
+test("buildAddItemXML omits deprecated HitCounter to avoid schema errors", () => {
   const xml = buildAddItemXML(buildTestProduct());
-  assert.match(xml, /<HitCounter>HiddenStyle<\/HitCounter>/);
+  assert.doesNotMatch(xml, /<HitCounter>/);
 });
 
-test("buildReviseItemXML sends HitCounter HiddenStyle to track eBay views", () => {
+test("buildReviseItemXML omits deprecated HitCounter to avoid schema errors", () => {
   const product = {
     ...buildTestProduct(),
     ebayItemId: "307056203187",
   } as Parameters<typeof buildReviseItemXML>[0];
   const xml = buildReviseItemXML(product);
-  assert.match(xml, /<HitCounter>HiddenStyle<\/HitCounter>/);
+  assert.doesNotMatch(xml, /<HitCounter>/);
 });
 
 test("buildAddItemXML caps eBay title without changing description", () => {

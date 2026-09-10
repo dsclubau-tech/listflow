@@ -51,7 +51,10 @@ interface DraftsTableProps {
   sortBy?: ProductSortField | null;
   sortOrder?: ProductSortOrder;
   isSortPending?: boolean;
-  onSortChange?: (sortBy: ProductSortField) => void;
+  onSortChange?: (
+    sortBy: ProductSortField | null,
+    sortOrder?: ProductSortOrder,
+  ) => void;
   autoExpandProductId?: string | null;
   onSelectionChange?: (selectedIds: string[]) => void;
   onPriceCheckSelected?: (productIds: string[]) => Promise<void>;
@@ -412,7 +415,10 @@ function ProductSortHeader({
   sortBy: ProductSortField | null;
   sortOrder: ProductSortOrder;
   isSortPending: boolean;
-  onSortChange?: (sortBy: ProductSortField) => void;
+  onSortChange?: (
+    sortBy: ProductSortField | null,
+    sortOrder?: ProductSortOrder,
+  ) => void;
 }) {
   const isActive = sortBy === field;
   const nextOrder = isActive && sortOrder === "asc" ? "descending" : "ascending";
@@ -2152,6 +2158,89 @@ export default function DraftsTable({
               <span className="text-gray-400 text-[11px]">Tap to select page</span>
             )}
           </div>
+        </div>
+      )}
+
+      {/* Mobile Sort Dropdown Bar */}
+      {isProductsView && onSortChange && (
+        <div className="mb-3 flex items-center justify-between gap-2.5 rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm xl:hidden shadow-xs">
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <label
+              htmlFor="mobile-sort-select"
+              className="flex items-center gap-1.5 text-xs font-semibold text-gray-700 shrink-0 select-none"
+            >
+              <svg
+                className="h-3.5 w-3.5 text-gray-500"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+                strokeWidth={2}
+                aria-hidden="true"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M3 4h13M3 8h9m-9 4h6m4 0l4-4m0 0l4 4m-4-4v12"
+                />
+              </svg>
+              <span>Sort:</span>
+            </label>
+            <select
+              id="mobile-sort-select"
+              aria-label="Sort listings"
+              value={sortBy ? `${sortBy}-${sortOrder}` : ""}
+              disabled={isSortPending}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (!val) {
+                  onSortChange(null);
+                } else {
+                  const [field, order] = val.split("-") as [
+                    ProductSortField,
+                    ProductSortOrder,
+                  ];
+                  onSortChange(field, order);
+                }
+              }}
+              className="w-full truncate rounded-lg border border-gray-300 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-800 shadow-xs transition-colors focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20 disabled:cursor-wait disabled:opacity-60"
+            >
+              <option value="">Default (Newest first)</option>
+              <optgroup label="Price">
+                <option value="price-asc">Price: Low to High (Ascending)</option>
+                <option value="price-desc">Price: High to Low (Descending)</option>
+              </optgroup>
+              <optgroup label="Profit">
+                <option value="profit-asc">Profit: Low to High (Ascending)</option>
+                <option value="profit-desc">Profit: High to Low (Descending)</option>
+              </optgroup>
+              <optgroup label="Uploaded">
+                <option value="uploaded-asc">Uploaded: Oldest to Newest (Ascending)</option>
+                <option value="uploaded-desc">Uploaded: Newest to Oldest (Descending)</option>
+              </optgroup>
+              <optgroup label="Sold">
+                <option value="sold-asc">Sold: Low to High (Ascending)</option>
+                <option value="sold-desc">Sold: High to Low (Descending)</option>
+              </optgroup>
+              <optgroup label="Views">
+                <option value="views-asc">Views: Low to High (Ascending)</option>
+                <option value="views-desc">Views: High to Low (Descending)</option>
+              </optgroup>
+            </select>
+          </div>
+          {isSortPending ? (
+            <span className="shrink-0 text-xs font-medium text-orange-600 animate-pulse">
+              Sorting…
+            </span>
+          ) : sortBy ? (
+            <button
+              type="button"
+              onClick={() => onSortChange(null)}
+              className="shrink-0 text-xs font-medium text-gray-500 hover:text-gray-800 underline"
+              title="Reset sorting to default"
+            >
+              Reset
+            </button>
+          ) : null}
         </div>
       )}
 
