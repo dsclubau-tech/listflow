@@ -35,7 +35,9 @@ import {
 import {
   PriceCheckTimingRecorder,
   resolvePriceCheckOptimizationConfig,
+  type PriceCheckOptimizationConfig,
 } from "@/lib/price-check-optimizations";
+import { reportCompletedProductCallbacks } from "@/lib/price-check-progress";
 
 const PRICE_TOLERANCE = 0.01;
 const MIN_SAFE_PRODUCT_DELAY_MS = 1000;
@@ -86,6 +88,8 @@ export type PriceCheckProductFailure = {
 
 interface RunPriceCheckOptions {
   jobId?: string;
+  optimizationConfig?: PriceCheckOptimizationConfig;
+  completionIncludesProgress?: boolean;
   storeId?: string;
   productIds?: string[];
   ignoreSchedule?: boolean;
@@ -352,7 +356,9 @@ function getAmazonStockUpdate(stockLeft: number | null | undefined) {
 export async function runPriceCheck(
   options: RunPriceCheckOptions = {}
 ): Promise<PriceCheckResult> {
-  const optimizationConfig = resolvePriceCheckOptimizationConfig(options.storeId);
+  const optimizationConfig =
+    options.optimizationConfig ??
+    resolvePriceCheckOptimizationConfig(options.storeId);
   const timing = new PriceCheckTimingRecorder(optimizationConfig.timingEnabled);
   let runOutcome: "completed" | "cancelled" | "failed" = "completed";
 
@@ -462,27 +468,32 @@ export async function runPriceCheck(
   };
   const reportProductComplete = async (productId: string) => {
     try {
-      await reportProgress();
-
-      if (!options.onProductComplete) {
-        return;
-      }
-
-      try {
-        await measureStage("checkpoint-write", () =>
-          Promise.resolve(
-            options.onProductComplete?.(productId, {
-              ...result,
-              total: products.length,
-            }),
-          ),
-        );
-      } catch (error) {
-        logger.warn("price-checker/run", "Price check completion callback failed", {
-          productId,
-          errorMessage: getErrorMessage(error),
-        });
-      }
+      await reportCompletedProductCallbacks({
+        completionIncludesProgress:
+          options.completionIncludesProgress === true,
+        reportProgress,
+        reportCompletion: options.onProductComplete
+          ? () =>
+              measureStage("checkpoint-write", () =>
+                Promise.resolve(
+                  options.onProductComplete?.(productId, {
+                    ...result,
+                    total: products.length,
+                  }),
+                ),
+              )
+          : undefined,
+        onCompletionError: (error) => {
+          logger.warn(
+            "price-checker/run",
+            "Price check completion callback failed",
+            {
+              productId,
+              errorMessage: getErrorMessage(error),
+            },
+          );
+        },
+      });
     } finally {
       const startedAt = productStartedAt.get(productId);
       if (startedAt !== undefined) {

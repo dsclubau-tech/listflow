@@ -28,6 +28,7 @@ import {
   type PriceCheckProgress,
   type PriceCheckResult,
 } from "@/lib/price-checker";
+import { resolvePriceCheckOptimizationConfig } from "@/lib/price-check-optimizations";
 import { finalizePriceCheckAutoHoldForJob } from "@/lib/price-check-auto-hold";
 import { isWorkerOnlineForStore } from "@/lib/worker-heartbeat";
 import { getInternalUserId } from "@/lib/store-session";
@@ -546,9 +547,16 @@ async function runPriceCheckJobClaimed(jobId: string) {
   }
 
   try {
+    const optimizationConfig = resolvePriceCheckOptimizationConfig(
+      job.storeId ?? undefined,
+    );
     const result = await runPriceCheck({
       jobId: job.id,
       storeId: job.storeId ?? undefined,
+      optimizationConfig,
+      completionIncludesProgress: optimizationConfig.enabled.includes(
+        "progress-write",
+      ),
       productIds: checkpoint.productIdsToCheck,
       ignoreSchedule: true,
       onProgress: (progress) =>
