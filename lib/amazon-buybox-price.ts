@@ -5,7 +5,8 @@ import { extractAmazonShippingFeeFromCheerio } from "@/lib/amazon-shipping";
 const SCRAPER_MIN_PRICE = 1;
 
 const DEAL_PRICE_LABEL_PATTERN =
-  /deal price|limited(?:\s+|\s*-\s*)time(?:\s+|\s*-\s*)deal|exclusive prime price|prime exclusive price|exclusive prime|prime deal|prime member price/i;
+  /deal price|lightning(?:\s+|\s*-\s*)deal|limited(?:\s+|\s*-\s*)time(?:\s+|\s*-\s*)deal|exclusive prime price|prime exclusive price|exclusive prime|prime deal|prime member price/i;
+const LIGHTNING_DEAL_LABEL_PATTERN = /lightning(?:\s+|\s*-\s*)deal/i;
 const PRIME_MEMBER_PRICE_LABEL_PATTERN = /prime member price/i;
 const REGULAR_PRICE_LABEL_PATTERN = /regular price/i;
 
@@ -351,7 +352,7 @@ export function extractLocalizedBuyboxPriceChoices(
 
     const primeCard = buybox
       .find(
-        '#primeSavingsUpsellAccordionRow, [id*="primeSavingsUpsell" i], [data-csa-c-buying-option-type="PRIME_SAVINGS_UPSELL"]'
+        '#primeSavingsUpsellAccordionRow, [id*="primeSavingsUpsell" i], [data-csa-c-buying-option-type="PRIME_SAVINGS_UPSELL"], [id*="dealAccordion" i], [data-csa-c-buying-option-type="DEAL"]'
       )
       .filter((_, el) => $(el).find(".a-price").length > 0)
       .first();
@@ -373,7 +374,7 @@ export function extractLocalizedBuyboxPriceChoices(
       buybox.find(".a-box, .a-accordion-row").each((_, el) => {
         const row = $(el);
         const text = normalizeText(row.text());
-        if (primePrice === null && PRIME_MEMBER_PRICE_LABEL_PATTERN.test(text)) {
+        if (primePrice === null && DEAL_PRICE_LABEL_PATTERN.test(text)) {
           primePrice = parseContainerBuyboxPrice($, row);
         }
         if (regularPrice === null && REGULAR_PRICE_LABEL_PATTERN.test(text)) {
@@ -383,13 +384,39 @@ export function extractLocalizedBuyboxPriceChoices(
     }
 
     if (primePrice !== null && regularPrice !== null) {
+      const isPrimeSavingsCard =
+        primeCard.length > 0 &&
+        (
+          (primeCard.attr("data-csa-c-buying-option-type") || "").toUpperCase() === "PRIME_SAVINGS_UPSELL" ||
+          /primeSavingsUpsell/i.test(primeCard.attr("id") || "")
+        );
+
+      let dealLabel: string;
+      if (isPrimeSavingsCard) {
+        dealLabel = "Prime member price";
+      } else {
+        const dealCardText = normalizeText(
+          (primeCard.length > 0 ? primeCard.text() : "") +
+          " " +
+          buybox.find(".a-box, .a-accordion-row").filter((_, el) => {
+            const t = normalizeText($(el).text());
+            return DEAL_PRICE_LABEL_PATTERN.test(t) && !REGULAR_PRICE_LABEL_PATTERN.test(t);
+          }).first().text()
+        );
+        dealLabel = LIGHTNING_DEAL_LABEL_PATTERN.test(dealCardText)
+          ? "Lightning Deal"
+          : PRIME_MEMBER_PRICE_LABEL_PATTERN.test(dealCardText)
+            ? "Prime member price"
+            : "Deal price";
+      }
+
       choices.deal = buildResult(
         normalizedAsin,
         accordionContainerSelector,
-        "buybox:prime-accordion",
+        "buybox:deal-accordion",
         primePrice,
         "DEAL",
-        "Prime member price",
+        dealLabel,
         shippingFee,
       );
       choices.regular = buildResult(
@@ -432,7 +459,9 @@ export function extractLocalizedBuyboxPriceChoices(
         "DEAL",
         PRIME_MEMBER_PRICE_LABEL_PATTERN.test(containerText)
           ? "Prime member price"
-          : "Deal price",
+          : LIGHTNING_DEAL_LABEL_PATTERN.test(containerText)
+            ? "Lightning Deal"
+            : "Deal price",
         shippingFee,
       );
     }
@@ -483,8 +512,9 @@ export function extractLocalizedBuyboxPriceChoices(
         ).toUpperCase();
         const isPrimeUpsellOption =
           buyingOptionType === "PRIME_SAVINGS_UPSELL" ||
+          buyingOptionType === "DEAL" ||
           priceElement.closest(
-            '#primeSavingsUpsellAccordionRow, [id*="primeSavingsUpsell" i]'
+            '#primeSavingsUpsellAccordionRow, [id*="primeSavingsUpsell" i], [id*="dealAccordion" i], [data-csa-c-buying-option-type="DEAL"]'
           ).length > 0;
         const isNewOption =
           buyingOptionType === "NEW" ||
@@ -555,9 +585,11 @@ export function extractLocalizedBuyboxPriceChoices(
             "DEAL",
             isPrimeUpsellOption || PRIME_MEMBER_PRICE_LABEL_PATTERN.test(localNearbyText)
               ? "Prime member price"
-              : hasVerifiedSavingsDeal
-                ? "Discounted price"
-                : "Deal price",
+              : LIGHTNING_DEAL_LABEL_PATTERN.test(localNearbyText) || LIGHTNING_DEAL_LABEL_PATTERN.test(containerText)
+                ? "Lightning Deal"
+                : hasVerifiedSavingsDeal
+                  ? "Discounted price"
+                  : "Deal price",
             shippingFee,
           );
 

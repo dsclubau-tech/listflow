@@ -629,3 +629,93 @@ test("extractLocalizedBuyboxPriceChoices prefers standard selectors when availab
   assert.equal(choices.regular?.price, 49.0);
   assert.notEqual(choices.regular?.selector, "fallback:currency-sweep");
 });
+
+test("extractLocalizedBuyboxPriceChoices reads Lightning Deal accordion with data-csa-c-buying-option-type DEAL", () => {
+  const $ = load(`
+    <main>
+      <div id="desktop_buybox">
+        <div id="buyBoxAccordion">
+          <div id="dealAccordionRow" data-csa-c-buying-option-type="DEAL">
+            <div class="header-price">
+              <span class="a-price">
+                <span class="a-offscreen">A$94.99</span>
+              </span>
+            </div>
+            <span>Lightning Deal</span>
+          </div>
+          <div id="newAccordionRow" data-csa-c-buying-option-type="NEW">
+            <div class="header-price">
+              <span class="a-price">
+                <span class="a-offscreen">A$99.99</span>
+              </span>
+            </div>
+            <span>Regular Price</span>
+          </div>
+        </div>
+      </div>
+    </main>
+  `);
+
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0GKQDRYLP");
+
+  assert.equal(choices.deal?.price, 94.99);
+  assert.equal(choices.deal?.mode, "DEAL");
+  assert.equal(choices.deal?.label, "Lightning Deal");
+  assert.equal(choices.regular?.price, 99.99);
+  assert.equal(choices.regular?.mode, "REGULAR");
+  assert.equal(choices.regular?.label, "Regular price");
+});
+
+test("extractLocalizedBuyboxPriceChoices reads Lightning Deal labelled boxes", () => {
+  const $ = load(`
+    <div id="desktop_buybox">
+      <div class="a-box">
+        <span>Lightning Deal</span>
+        <span class="a-price priceToPay">
+          <span class="a-offscreen">$49.95</span>
+        </span>
+      </div>
+      <div class="a-box">
+        <span>Regular Price</span>
+        <span class="a-price">
+          <span class="a-offscreen">$59.99</span>
+        </span>
+      </div>
+    </div>
+  `);
+
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0LIGHTNING1");
+
+  assert.equal(choices.deal?.price, 49.95);
+  assert.equal(choices.deal?.mode, "DEAL");
+  assert.equal(choices.deal?.label, "Lightning Deal");
+  assert.equal(choices.regular?.price, 59.99);
+  assert.equal(choices.regular?.mode, "REGULAR");
+});
+
+test("extractLocalizedBuyboxPriceChoices reads labelled Lightning Deal text in corePrice", () => {
+  const $ = load(`
+    <div id="corePrice_feature_div">
+      <div>
+        <span>Lightning Deal</span>
+        <span class="a-price priceToPay">
+          <span class="a-offscreen">A$94.99</span>
+        </span>
+      </div>
+      <div>
+        <span>Regular Price</span>
+        <span class="a-price">
+          <span class="a-offscreen">A$99.99</span>
+        </span>
+      </div>
+    </div>
+  `);
+
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0LIGHTNING2");
+
+  assert.equal(choices.deal?.price, 94.99);
+  assert.equal(choices.deal?.mode, "DEAL");
+  assert.equal(choices.deal?.label, "Lightning Deal");
+  assert.equal(choices.regular?.price, 99.99);
+  assert.equal(choices.regular?.mode, "REGULAR");
+});
