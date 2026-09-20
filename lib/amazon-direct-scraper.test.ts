@@ -1087,3 +1087,55 @@ test("scrapeAmazonProductDirect fails when only page-wide prices exist after pos
     }
   );
 });
+
+test("normalizeItemSpecificsForEbay maps processor fields and keeps allowlisted electronics fields", async () => {
+  const { normalizeItemSpecificsForEbay } = await loadAmazonDirectScraper();
+
+  const normalized = normalizeItemSpecificsForEbay({
+    "Processor Brand": "Allwinner",
+    "Processor Speed": "1.8 GHz",
+    "RAM Size": "4 GB",
+    "Hard Drive Size": "64 GB",
+    "Operating System": "Android 13",
+    Resolution: "1280x800",
+    "Graphics Coprocessor": "Mali-G31",
+    "Unknown Nonallowlisted Spec": "Should Be Dropped",
+  });
+
+  assert.equal(normalized["Processor"], "Allwinner");
+  assert.equal(normalized["Processor Speed"], "1.8 GHz");
+  assert.equal(normalized["RAM Size"], "4 GB");
+  assert.equal(normalized["Hard Drive Size"], "64 GB");
+  assert.equal(normalized["Operating System"], "Android 13");
+  assert.equal(normalized["Resolution"], "1280x800");
+  assert.equal(normalized["Graphics Coprocessor"], "Mali-G31");
+  assert.equal(normalized["Unknown Nonallowlisted Spec"], undefined);
+});
+
+test("extractItemSpecifics extracts and maps Processor Brand from tech specs table", async () => {
+  const { extractItemSpecifics } = await loadAmazonDirectScraper();
+  const $ = load(`
+    <table id="productDetails_techSpec_section_1">
+      <tbody>
+        <tr>
+          <th>Processor Brand</th>
+          <td>Allwinner</td>
+        </tr>
+        <tr>
+          <th>RAM Size</th>
+          <td>4 GB</td>
+        </tr>
+        <tr>
+          <th>Operating System</th>
+          <td>Android 13</td>
+        </tr>
+      </tbody>
+    </table>
+  `);
+
+  const specifics = extractItemSpecifics($);
+  assert.equal(specifics["Processor"], "Allwinner");
+  assert.equal(specifics["RAM Size"], "4 GB");
+  assert.equal(specifics["Operating System"], "Android 13");
+});
+

@@ -127,6 +127,20 @@ const AMAZON_UNMAPPED_ITEM_SPECIFIC_ALLOWLIST = new Set([
   "lens type",
   "focus type",
   "lens mount",
+  "processor",
+  "processor brand",
+  "processor speed",
+  "processor count",
+  "ram size",
+  "ram type",
+  "hard drive size",
+  "hard disk size",
+  "storage capacity",
+  "operating system",
+  "resolution",
+  "display resolution maximum",
+  "graphics coprocessor",
+  "gpu brand",
 ]);
 
 const AMAZON_TO_EBAY_FIELD_MAP: Record<string, string> = {
@@ -165,6 +179,12 @@ const AMAZON_TO_EBAY_FIELD_MAP: Record<string, string> = {
   "part number": "Manufacturer Part Number",
   "special feature": "Features",
   "special features": "Features",
+  "processor brand": "Processor",
+  "processor type": "Processor",
+  "cpu manufacturer": "Processor",
+  "cpu model": "Processor",
+  "cpu model manufacturer": "Processor",
+  "chip brand": "Processor",
 };
 
 export class AmazonDirectScrapeError extends Error {
@@ -533,7 +553,7 @@ function shouldKeepMappedItemSpecific(mappedKey: string, value: string) {
   return true;
 }
 
-function normalizeItemSpecificsForEbay(specs: Record<string, string>) {
+export function normalizeItemSpecificsForEbay(specs: Record<string, string>) {
   const result: Record<string, string> = {};
 
   for (const [rawKey, value] of Object.entries(specs)) {
@@ -829,7 +849,7 @@ function extractVariantName($: CheerioAPI) {
   );
 }
 
-function extractItemSpecifics($: CheerioAPI) {
+export function extractItemSpecifics($: CheerioAPI) {
   const specs: Record<string, string> = {};
 
   function addSpec(rawKey: string | null | undefined, rawValue: string | null | undefined) {

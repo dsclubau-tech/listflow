@@ -522,6 +522,39 @@ function inferModel(
   return { value: null, source: "missing" as const };
 }
 
+function inferProcessor(
+  specifics: ItemSpecificsRecord,
+  allowedValues: string[] | undefined,
+  text: ReturnType<typeof buildSourceText>,
+) {
+  const candidateNames = [
+    "Processor",
+    "Processor Brand",
+    "Processor Type",
+    "CPU Manufacturer",
+    "CPU Model",
+    "Chip Brand",
+  ];
+
+  for (const name of candidateNames) {
+    const candidate = readItemSpecificValue(specifics, [name]);
+    if (!candidate) {
+      continue;
+    }
+
+    if (!allowedValues || allowedValues.length === 0) {
+      return { value: candidate, source: "amazon" as const };
+    }
+
+    const matched = matchAllowedSpecificValue(candidate, allowedValues);
+    if (matched) {
+      return { value: matched, source: "amazon" as const };
+    }
+  }
+
+  return inferGenericAspect(specifics, allowedValues, text);
+}
+
 function inferRequiredSpecific(
   input: ResolveRequiredSpecificsInput,
   specifics: ItemSpecificsRecord,
@@ -594,6 +627,14 @@ function inferRequiredSpecific(
 
   if (normalized === "compatible model") {
     return inferCompatibleModel(input, specifics, required.values, text);
+  }
+
+  if (
+    normalized === "processor" ||
+    normalized === "processor type" ||
+    normalized === "processor model"
+  ) {
+    return inferProcessor(specifics, required.values, text);
   }
 
   const BOOK_SPECIFIC_NAMES = new Set([

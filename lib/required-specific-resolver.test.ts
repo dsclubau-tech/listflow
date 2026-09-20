@@ -541,3 +541,140 @@ test("resolveRequiredItemSpecifics does not infer book fields when category is a
   assert.equal(result.itemSpecifics["Author"], undefined);
   assert.equal(result.itemSpecifics["Book Title"], undefined);
 });
+
+test("resolveRequiredItemSpecifics preserves valid existing Processor specific", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: '10 Inch Android 13 Tablet 64GB ROM',
+    categoryName: "Tablets & eReaders",
+    brand: "Generic",
+    itemSpecifics: {
+      Brand: "Generic",
+      Processor: "Allwinner",
+    },
+    requiredItemSpecifics: [
+      {
+        name: "Processor",
+        values: ["Allwinner", "Apple", "Intel", "MediaTek", "Qualcomm"],
+      },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics.Processor, "Allwinner");
+  assert.deepEqual(result.missingItemSpecifics, []);
+  assert.equal(
+    result.decisions.find((d) => d.name === "Processor")?.source,
+    "user",
+  );
+});
+
+test("resolveRequiredItemSpecifics infers Processor from unmapped Processor Brand specific", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: '10 Inch Android 13 Tablet 64GB ROM',
+    categoryName: "Tablets & eReaders",
+    brand: "Generic",
+    itemSpecifics: {
+      Brand: "Generic",
+      "Processor Brand": "Allwinner",
+    },
+    requiredItemSpecifics: [
+      {
+        name: "Processor",
+        values: ["Allwinner", "Apple", "Intel", "MediaTek", "Qualcomm"],
+      },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics.Processor, "Allwinner");
+  assert.deepEqual(result.missingItemSpecifics, []);
+  assert.equal(
+    result.decisions.find((d) => d.name === "Processor")?.source,
+    "amazon",
+  );
+});
+
+test("resolveRequiredItemSpecifics infers Processor from CPU Manufacturer specific", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: '10 Inch Android 13 Tablet 64GB ROM',
+    categoryName: "Tablets & eReaders",
+    brand: "Generic",
+    itemSpecifics: {
+      Brand: "Generic",
+      "CPU Manufacturer": "MediaTek",
+    },
+    requiredItemSpecifics: [
+      {
+        name: "Processor",
+        values: ["Allwinner", "Apple", "Intel", "MediaTek", "Qualcomm"],
+      },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics.Processor, "MediaTek");
+  assert.deepEqual(result.missingItemSpecifics, []);
+});
+
+test("resolveRequiredItemSpecifics accepts candidate when eBay allowed values are empty", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: '10 Inch Android 13 Tablet 64GB ROM',
+    categoryName: "Tablets & eReaders",
+    brand: "Generic",
+    itemSpecifics: {
+      Brand: "Generic",
+      Processor: "Allwinner A133",
+    },
+    requiredItemSpecifics: [
+      {
+        name: "Processor",
+        values: [],
+      },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics.Processor, "Allwinner A133");
+  assert.deepEqual(result.missingItemSpecifics, []);
+});
+
+test("resolveRequiredItemSpecifics infers Processor from title when not in specifics", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: '10 Inch Allwinner Quad Core Android 13 Tablet 64GB ROM',
+    categoryName: "Tablets & eReaders",
+    brand: "Generic",
+    itemSpecifics: {
+      Brand: "Generic",
+    },
+    requiredItemSpecifics: [
+      {
+        name: "Processor",
+        values: ["Allwinner", "Apple", "Intel", "MediaTek"],
+      },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics.Processor, "Allwinner");
+  assert.deepEqual(result.missingItemSpecifics, []);
+  assert.equal(
+    result.decisions.find((d) => d.name === "Processor")?.source,
+    "title",
+  );
+});
+
+test("resolveRequiredItemSpecifics marks Processor as missing when no data matches", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: '10 Inch Android 13 Tablet 64GB ROM',
+    categoryName: "Tablets & eReaders",
+    brand: "Generic",
+    itemSpecifics: {
+      Brand: "Generic",
+    },
+    requiredItemSpecifics: [
+      {
+        name: "Processor",
+        values: ["Allwinner", "Apple", "Intel", "MediaTek"],
+      },
+    ],
+  });
+
+  assert.equal(result.itemSpecifics.Processor, undefined);
+  assert.deepEqual(result.missingItemSpecifics, ["Processor"]);
+});
+
