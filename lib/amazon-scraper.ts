@@ -3,6 +3,7 @@ import { load } from "cheerio";
 import { extractLocalizedBuyboxPriceChoices } from "@/lib/amazon-buybox-price";
 import { parseAmazonShippingFeeFromText } from "@/lib/amazon-shipping";
 import { extractAmazonNewOfferStockLeft } from "@/lib/amazon-stock";
+import { extractAmazonPriceSnapshot } from "@/lib/amazon-price-snapshot";
 import { launchScraperBrowser } from "@/lib/scraper-browser";
 import { isUsefulItemSpecificCandidate } from "@/lib/item-specifics";
 import {
@@ -82,6 +83,7 @@ export interface ScrapedAmazonPrice {
 
 export type AmazonPriceScrapeOptions = {
   onTiming?: (stage: string, durationMs: number) => void;
+  sharedSnapshot?: boolean;
 };
 
 async function measureAmazonPriceStage<T>(
@@ -574,6 +576,20 @@ async function extractAmazonBuyboxPriceChoicesFromPage(
   return extractLocalizedBuyboxPriceChoices(load(html), asin);
 }
 
+async function waitForAmazonDeliveryContent(page: Page) {
+  await page
+    .waitForSelector(
+      "#mir-layout-DELIVERY_BLOCK-slot-PRIMARY_DELIVERY_MESSAGE_LARGE, [data-csa-c-delivery-price], #deliveryBlockMessage",
+      { timeout: 3000 },
+    )
+    .catch(() => {});
+}
+
+async function captureAmazonPriceSnapshot(page: Page, asin: string) {
+  const html = await page.content().catch(() => "");
+  return extractAmazonPriceSnapshot(html, asin);
+}
+
 /**
  * Read the current product ASIN from the page DOM.
  * Amazon embeds the ASIN in multiple places — we check all of them.
@@ -827,18 +843,32 @@ export async function scrapeAmazonPrice(
       );
     }
 
-    let stockLeft = await measureAmazonPriceStage(options, "stock-extraction", () =>
-      page
-        .content()
-        .then((html) => extractAmazonNewOfferStockLeft(load(html)))
-        .catch(() => null),
-    );
-
-    let priceChoices = await measureAmazonPriceStage(
-      options,
-      "price-extraction",
-      () => extractAmazonBuyboxPriceChoicesFromPage(page, normalizedAsin),
-    );
+    let stockLeft: number | null;
+    let priceChoices: ReturnType<typeof extractAmazonPriceSnapshot>["priceChoices"];
+    if (options?.sharedSnapshot) {
+      await measureAmazonPriceStage(options, "delivery-readiness", () =>
+        waitForAmazonDeliveryContent(page),
+      );
+      const snapshot = await measureAmazonPriceStage(
+        options,
+        "snapshot-extraction",
+        () => captureAmazonPriceSnapshot(page, normalizedAsin),
+      );
+      stockLeft = snapshot.stockLeft;
+      priceChoices = snapshot.priceChoices;
+    } else {
+      stockLeft = await measureAmazonPriceStage(options, "stock-extraction", () =>
+        page
+          .content()
+          .then((html) => extractAmazonNewOfferStockLeft(load(html)))
+          .catch(() => null),
+      );
+      priceChoices = await measureAmazonPriceStage(
+        options,
+        "price-extraction",
+        () => extractAmazonBuyboxPriceChoicesFromPage(page, normalizedAsin),
+      );
+    }
     let selectedPrice =
       priceTrackingMode === "DEAL"
         ? priceChoices.deal
@@ -879,18 +909,31 @@ export async function scrapeAmazonPrice(
             )
             .catch(() => {});
 
-          priceChoices = await measureAmazonPriceStage(
-            options,
-            "price-extraction",
-            () => extractAmazonBuyboxPriceChoicesFromPage(page, normalizedAsin),
-          );
+          if (options?.sharedSnapshot) {
+            await measureAmazonPriceStage(options, "delivery-readiness", () =>
+              waitForAmazonDeliveryContent(page),
+            );
+            const snapshot = await measureAmazonPriceStage(
+              options,
+              "snapshot-extraction",
+              () => captureAmazonPriceSnapshot(page, normalizedAsin),
+            );
+            stockLeft = snapshot.stockLeft;
+            priceChoices = snapshot.priceChoices;
+          } else {
+            priceChoices = await measureAmazonPriceStage(
+              options,
+              "price-extraction",
+              () => extractAmazonBuyboxPriceChoicesFromPage(page, normalizedAsin),
+            );
+          }
           selectedPrice =
             priceTrackingMode === "DEAL"
               ? priceChoices.deal
               : (priceChoices.regular ?? priceChoices.deal);
           price = selectedPrice?.price ?? null;
 
-          if (price !== null) {
+          if (price !== null && !options?.sharedSnapshot) {
             stockLeft = await measureAmazonPriceStage(
               options,
               "stock-extraction",

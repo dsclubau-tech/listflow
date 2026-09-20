@@ -593,8 +593,15 @@ export async function runPriceCheck(
         priceTrackingMode,
         variantHints,
         timing.enabled
-          ? { onTiming: (stage, durationMs) => timing.record(stage, durationMs) }
-          : undefined,
+          ? {
+              onTiming: (stage, durationMs) => timing.record(stage, durationMs),
+              sharedSnapshot: optimizationConfig.enabled.includes(
+                "shared-snapshot",
+              ),
+            }
+          : optimizationConfig.enabled.includes("shared-snapshot")
+            ? { sharedSnapshot: true }
+            : undefined,
       );
     };
 
