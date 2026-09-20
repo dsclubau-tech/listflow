@@ -80,6 +80,27 @@ export interface ScrapedAmazonPrice {
   asinRedirected?: boolean;
 }
 
+export type AmazonPriceScrapeOptions = {
+  onTiming?: (stage: string, durationMs: number) => void;
+};
+
+async function measureAmazonPriceStage<T>(
+  options: AmazonPriceScrapeOptions | undefined,
+  stage: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const startedAt = Date.now();
+  try {
+    return await operation();
+  } finally {
+    try {
+      options?.onTiming?.(stage, Date.now() - startedAt);
+    } catch {
+      // Performance instrumentation must never change scraper behavior.
+    }
+  }
+}
+
 const USER_AGENTS = [
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -638,7 +659,8 @@ export async function scrapeAmazonPrice(
   browser?: Browser,
   postcode?: string,
   priceTrackingMode: AmazonPriceTrackingMode = DEFAULT_AMAZON_PRICE_TRACKING_MODE,
-  variantSelectionHints?: VariantSelectionHints | null
+  variantSelectionHints?: VariantSelectionHints | null,
+  options?: AmazonPriceScrapeOptions,
 ): Promise<ScrapedAmazonPrice> {
   const normalizedAsin = asin.trim().toUpperCase();
 
@@ -670,10 +692,12 @@ export async function scrapeAmazonPrice(
       });
     });
 
-    await page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
-      waitUntil: "domcontentloaded",
-      timeout: 20000,
-    });
+    await measureAmazonPriceStage(options, "navigation", () =>
+      page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
+        waitUntil: "domcontentloaded",
+        timeout: 20000,
+      }),
+    );
 
     // Set delivery postcode so Amazon shows AU-local prices and availability.
     // If the first attempt fails, retry — a failed postcode causes Amazon to
@@ -684,7 +708,11 @@ export async function scrapeAmazonPrice(
       let postcodeApplied = false;
 
       for (let attempt = 1; attempt <= MAX_POSTCODE_ATTEMPTS; attempt++) {
-        const success = await setAmazonDeliveryPostcode(page, postcode);
+        const success = await measureAmazonPriceStage(
+          options,
+          "postcode-setup",
+          () => setAmazonDeliveryPostcode(page, postcode),
+        );
         if (success) {
           postcodeApplied = true;
           break;
@@ -699,32 +727,38 @@ export async function scrapeAmazonPrice(
         if (attempt < MAX_POSTCODE_ATTEMPTS) {
           // Reload the page before retrying — Amazon sometimes needs a
           // fresh page load to show the location popup again.
-          await page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
-            waitUntil: "domcontentloaded",
-            timeout: 20000,
-          });
+          await measureAmazonPriceStage(options, "postcode-reload", () =>
+            page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
+              waitUntil: "domcontentloaded",
+              timeout: 20000,
+            }),
+          );
         }
       }
 
       // Reload after postcode is set to get updated prices
       if (postcodeApplied) {
-        await page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
-          waitUntil: "domcontentloaded",
-          timeout: 20000,
-        });
+        await measureAmazonPriceStage(options, "postcode-reload", () =>
+          page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
+            waitUntil: "domcontentloaded",
+            timeout: 20000,
+          }),
+        );
       }
     }
 
     // Wait for Amazon's JS to render price elements into the DOM.
-    await page
-      .waitForSelector(
-        "#corePrice_feature_div, .a-price, #priceblock_ourprice, #apex_desktop",
-        { timeout: 10000 }
-      )
-      .catch(() => {
-        // Price containers didn't appear — fall through and let
-        // extractAmazonPriceFromPage try its own selectors.
-      });
+    await measureAmazonPriceStage(options, "price-readiness", () =>
+      page
+        .waitForSelector(
+          "#corePrice_feature_div, .a-price, #priceblock_ourprice, #apex_desktop",
+          { timeout: 10000 },
+        )
+        .catch(() => {
+          // Price containers didn't appear — fall through and let
+          // extractAmazonPriceFromPage try its own selectors.
+        }),
+    );
 
     // ── ASIN redirect detection ─────────────────────────────────────────
     // Amazon silently redirects unavailable variant ASINs to an available
@@ -793,14 +827,17 @@ export async function scrapeAmazonPrice(
       );
     }
 
-    let stockLeft = await page
-      .content()
-      .then((html) => extractAmazonNewOfferStockLeft(load(html)))
-      .catch(() => null);
+    let stockLeft = await measureAmazonPriceStage(options, "stock-extraction", () =>
+      page
+        .content()
+        .then((html) => extractAmazonNewOfferStockLeft(load(html)))
+        .catch(() => null),
+    );
 
-    let priceChoices = await extractAmazonBuyboxPriceChoicesFromPage(
-      page,
-      normalizedAsin
+    let priceChoices = await measureAmazonPriceStage(
+      options,
+      "price-extraction",
+      () => extractAmazonBuyboxPriceChoicesFromPage(page, normalizedAsin),
     );
     let selectedPrice =
       priceTrackingMode === "DEAL"
@@ -842,9 +879,10 @@ export async function scrapeAmazonPrice(
             )
             .catch(() => {});
 
-          priceChoices = await extractAmazonBuyboxPriceChoicesFromPage(
-            page,
-            normalizedAsin
+          priceChoices = await measureAmazonPriceStage(
+            options,
+            "price-extraction",
+            () => extractAmazonBuyboxPriceChoicesFromPage(page, normalizedAsin),
           );
           selectedPrice =
             priceTrackingMode === "DEAL"
@@ -853,10 +891,15 @@ export async function scrapeAmazonPrice(
           price = selectedPrice?.price ?? null;
 
           if (price !== null) {
-            stockLeft = await page
-              .content()
-              .then((html) => extractAmazonNewOfferStockLeft(load(html)))
-              .catch(() => null);
+            stockLeft = await measureAmazonPriceStage(
+              options,
+              "stock-extraction",
+              () =>
+                page
+                  .content()
+                  .then((html) => extractAmazonNewOfferStockLeft(load(html)))
+                  .catch(() => null),
+            );
           } else {
             return {
               price: null,

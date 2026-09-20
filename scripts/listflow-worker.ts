@@ -1,6 +1,7 @@
 import "dotenv/config";
 
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import Module from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -13,8 +14,30 @@ import {
   type WorkerRole,
 } from "../lib/worker-routing";
 import { configureWorkerDatabaseProfile } from "../lib/worker-database-profile";
+import { getPriceCheckOptimizationEnvironmentSummary } from "../lib/price-check-optimizations";
 
 const workerDatabaseProfile = configureWorkerDatabaseProfile();
+
+function getRuntimeRevision() {
+  const environmentRevision =
+    process.env.LISTFLOW_REVISION?.trim() ||
+    process.env.VERCEL_GIT_COMMIT_SHA?.trim() ||
+    process.env.RAILWAY_GIT_COMMIT_SHA?.trim();
+  if (environmentRevision) return environmentRevision;
+
+  try {
+    return execFileSync(process.platform === "win32" ? "git.exe" : "git", [
+      "rev-parse",
+      "HEAD",
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "unknown";
+  }
+}
 
 const moduleWithLoad = Module as unknown as {
   _load: (
@@ -544,6 +567,18 @@ async function main() {
   console.log(`Worker role: ${workerRole}`);
   console.log(`Amazon retry target: ${amazonRetryTarget}`);
   console.log(`Database profile: ${workerDatabaseProfile}`);
+  const runtimeRevision = getRuntimeRevision();
+  const priceCheckOptimizations = getPriceCheckOptimizationEnvironmentSummary();
+  console.log(`Revision: ${runtimeRevision}`);
+  console.log(
+    `Price-check timing: ${priceCheckOptimizations.timingEnabled ? "enabled" : "disabled"}`,
+  );
+  console.log(
+    `Price-check optimizations: ${priceCheckOptimizations.requested.join(", ") || "none"}`,
+  );
+  console.log(
+    `Price-check optimization stores: ${priceCheckOptimizations.allowedStoreIds.join(", ") || "none"}`,
+  );
   console.log("Waiting for jobs...");
   if (STOCK_REPLENISH_ENABLED) {
     console.log(
@@ -554,6 +589,8 @@ async function main() {
     workerId,
     workerName,
     workerRole,
+    revision: runtimeRevision,
+    priceCheckOptimizations,
     storeFilter: storeFilters,
     stockReplenishEnabled: STOCK_REPLENISH_ENABLED,
     stockReplenishIntervalMs: STOCK_REPLENISH_INTERVAL_MS,

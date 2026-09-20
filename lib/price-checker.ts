@@ -32,6 +32,10 @@ import {
   extractVariantSelectionHints,
   type VariantSelectionHints,
 } from "@/lib/amazon-variant-selection";
+import {
+  PriceCheckTimingRecorder,
+  resolvePriceCheckOptimizationConfig,
+} from "@/lib/price-check-optimizations";
 
 const PRICE_TOLERANCE = 0.01;
 const MIN_SAFE_PRODUCT_DELAY_MS = 1000;
@@ -81,6 +85,7 @@ export type PriceCheckProductFailure = {
 };
 
 interface RunPriceCheckOptions {
+  jobId?: string;
   storeId?: string;
   productIds?: string[];
   ignoreSchedule?: boolean;
@@ -225,13 +230,24 @@ async function automaticallyApplyPriceIncrease(input: {
   variants: CalculatedVariantPrice[];
   nextPrimarySellPrice: number;
   checkedAt: Date;
+  recordTiming?: (stage: string, durationMs: number) => void;
 }) {
   let reviseResult: Awaited<ReturnType<typeof reviseProductPrice>>;
+  const measure = async <T>(stage: string, operation: () => Promise<T>) => {
+    const startedAt = Date.now();
+    try {
+      return await operation();
+    } finally {
+      input.recordTiming?.(stage, Date.now() - startedAt);
+    }
+  };
 
   try {
-    reviseResult = await reviseProductPrice(
-      input.product,
-      input.nextPrimarySellPrice,
+    reviseResult = await measure("ebay-update", () =>
+      reviseProductPrice(
+        input.product,
+        input.nextPrimarySellPrice,
+      ),
     );
   } catch (error) {
     reviseResult = {
@@ -244,7 +260,7 @@ async function automaticallyApplyPriceIncrease(input: {
     const errorMessage =
       reviseResult.errorMessage || "Failed to revise eBay listing.";
 
-    await prisma.$transaction(async (tx) => {
+    await measure("database-write", () => prisma.$transaction(async (tx) => {
       await tx.priceHistory.updateMany({
         where: {
           productId: input.product.id,
@@ -265,12 +281,12 @@ async function automaticallyApplyPriceIncrease(input: {
           priceCheckFailureCode: PriceCheckFailureCode.TECHNICAL_ERROR,
         },
       });
-    });
+    }));
 
     return { success: false as const, errorMessage };
   }
 
-  await prisma.$transaction(async (tx) => {
+  await measure("database-write", () => prisma.$transaction(async (tx) => {
     await Promise.all(
       input.variants.map((variant) =>
         tx.variant.update({
@@ -304,7 +320,7 @@ async function automaticallyApplyPriceIncrease(input: {
         errorMessage: null,
       },
     });
-  });
+  }));
 
   return { success: true as const, errorMessage: null };
 }
@@ -336,6 +352,22 @@ function getAmazonStockUpdate(stockLeft: number | null | undefined) {
 export async function runPriceCheck(
   options: RunPriceCheckOptions = {}
 ): Promise<PriceCheckResult> {
+  const optimizationConfig = resolvePriceCheckOptimizationConfig(options.storeId);
+  const timing = new PriceCheckTimingRecorder(optimizationConfig.timingEnabled);
+  let runOutcome: "completed" | "cancelled" | "failed" = "completed";
+
+  if (optimizationConfig.unknown.length > 0) {
+    logger.warn(
+      "price-checker/config",
+      "Unknown price-check optimization disabled all requested optimizations",
+      {
+        jobId: options.jobId,
+        storeId: options.storeId,
+        unknown: optimizationConfig.unknown,
+      },
+    );
+  }
+
   const supplierSettings = await getSupplierSettings(options.storeId);
 
   if (!options.ignoreSchedule && !supplierSettings.priceTrackingEnabled) {
@@ -404,13 +436,24 @@ export async function runPriceCheck(
     failed: 0,
     skipped: 0,
   };
+  const measureStage = async <T>(stage: string, operation: () => Promise<T>) => {
+    const startedAt = Date.now();
+    try {
+      return await operation();
+    } finally {
+      timing.record(stage, Date.now() - startedAt);
+    }
+  };
+  const productStartedAt = new Map<string, number>();
   const reportProgress = async () => {
     if (!options.onProgress) {
       return;
     }
 
     try {
-      await options.onProgress({ ...result, total: products.length });
+      await measureStage("progress-write", () =>
+        Promise.resolve(options.onProgress?.({ ...result, total: products.length })),
+      );
     } catch (error) {
       logger.warn("price-checker/run", "Price check progress callback failed", {
         errorMessage: getErrorMessage(error),
@@ -418,30 +461,47 @@ export async function runPriceCheck(
     }
   };
   const reportProductComplete = async (productId: string) => {
-    await reportProgress();
-
-    if (!options.onProductComplete) {
-      return;
-    }
-
     try {
-      await options.onProductComplete(productId, { ...result, total: products.length });
-    } catch (error) {
-      logger.warn("price-checker/run", "Price check completion callback failed", {
-        productId,
-        errorMessage: getErrorMessage(error),
-      });
+      await reportProgress();
+
+      if (!options.onProductComplete) {
+        return;
+      }
+
+      try {
+        await measureStage("checkpoint-write", () =>
+          Promise.resolve(
+            options.onProductComplete?.(productId, {
+              ...result,
+              total: products.length,
+            }),
+          ),
+        );
+      } catch (error) {
+        logger.warn("price-checker/run", "Price check completion callback failed", {
+          productId,
+          errorMessage: getErrorMessage(error),
+        });
+      }
+    } finally {
+      const startedAt = productStartedAt.get(productId);
+      if (startedAt !== undefined) {
+        timing.record("product-total", Date.now() - startedAt);
+        productStartedAt.delete(productId);
+      }
     }
   };
   const recordProductFailure = async (input: PriceCheckProductFailure) => {
-    await prisma.product.update({
-      where: { id: input.productId },
-      data: {
-        lastPriceCheck: input.checkedAt,
-        priceCheckError: input.message,
-        priceCheckFailureCode: input.code,
-      },
-    });
+    await measureStage("database-write", () =>
+      prisma.product.update({
+        where: { id: input.productId },
+        data: {
+          lastPriceCheck: input.checkedAt,
+          priceCheckError: input.message,
+          priceCheckFailureCode: input.code,
+        },
+      }),
+    );
     result.failed += 1;
 
     if (!options.onProductFailure) {
@@ -478,6 +538,7 @@ export async function runPriceCheck(
     }
   };
   const finishCancelled = () => {
+    runOutcome = "cancelled";
     invalidateRunCaches();
 
     return {
@@ -513,18 +574,23 @@ export async function runPriceCheck(
   ) => {
     const scrapeWithBrowser = async () => {
       const browser = await getSharedBrowser();
+      timing.increment("scrape-attempts");
       return scrapeAmazonPrice(
         asin,
         browser,
         supplierSettings.scrapePostcode || undefined,
         priceTrackingMode,
         variantHints,
+        timing.enabled
+          ? { onTiming: (stage, durationMs) => timing.record(stage, durationMs) }
+          : undefined,
       );
     };
 
     try {
       return await scrapeWithBrowser();
     } catch (error) {
+      timing.increment("scrape-retries");
       await closeSharedBrowser();
 
       if (shouldAbort()) {
@@ -544,7 +610,7 @@ export async function runPriceCheck(
 
       // Brief pause before retry — gives the OS time to release
       // browser process resources after a crash.
-      await sleep(2000);
+      await measureStage("retry-backoff", () => sleep(2000));
 
       try {
         return await scrapeWithBrowser();
@@ -570,6 +636,7 @@ export async function runPriceCheck(
     }
 
     result.checked += 1;
+    productStartedAt.set(product.id, Date.now());
 
       const checkedAt = new Date();
 
@@ -582,14 +649,14 @@ export async function runPriceCheck(
 
         result.skipped += 1;
 
-        await prisma.product.update({
+        await measureStage("database-write", () => prisma.product.update({
           where: { id: product.id },
           data: {
             lastPriceCheck: null,
             priceCheckError: null,
             priceCheckFailureCode: null,
           },
-        });
+        }));
 
         logger.info("price-checker/run", "Price check skipped for untracked product", {
           productId: product.id,
@@ -711,7 +778,7 @@ export async function runPriceCheck(
           const primaryVariant = product.variants[0];
           const currentAmazonPriceDecimal = toMoneyDecimal(currentAmazonPrice);
 
-          await prisma.$transaction(async (tx) => {
+          await measureStage("database-write", () => prisma.$transaction(async (tx) => {
             await tx.product.update({
               where: { id: product.id },
               data: {
@@ -730,7 +797,7 @@ export async function runPriceCheck(
                 buyPrice: currentAmazonPriceDecimal,
               },
             });
-          });
+          }));
 
           logger.info("price-checker/run", "First check — baseline established", {
             productId: product.id,
@@ -778,7 +845,7 @@ export async function runPriceCheck(
           if (!buyPriceMismatch) {
             result.skipped += 1;
 
-            await prisma.product.update({
+            await measureStage("database-write", () => prisma.product.update({
               where: { id: product.id },
               data: {
                 amazonPrice: toMoneyDecimal(currentAmazonPrice),
@@ -788,7 +855,7 @@ export async function runPriceCheck(
                 priceCheckError: null,
                 priceCheckFailureCode: null,
               },
-            });
+            }));
 
             await reportProductComplete(product.id);
             continue;
@@ -844,7 +911,7 @@ export async function runPriceCheck(
           const mismatchChangePercent =
             ((currentAmazonPrice - primaryBuyPrice) / primaryBuyPrice) * 100;
 
-          await prisma.$transaction(async (tx) => {
+          await measureStage("database-write", () => prisma.$transaction(async (tx) => {
             await tx.priceHistory.updateMany({
               where: {
                 productId: product.id,
@@ -886,7 +953,7 @@ export async function runPriceCheck(
                 createdAt: checkedAt,
               })),
             });
-          });
+          }));
 
           result.changed += 1;
           const mismatchPrimarySellPrice =
@@ -905,6 +972,7 @@ export async function runPriceCheck(
                 variants: mismatchVariants,
                 nextPrimarySellPrice: mismatchPrimarySellPrice,
                 checkedAt,
+                recordTiming: (stage, durationMs) => timing.record(stage, durationMs),
               });
 
             if (automaticApplication.success) {
@@ -1017,7 +1085,7 @@ export async function runPriceCheck(
           continue;
         }
 
-        await prisma.$transaction(async (tx) => {
+        await measureStage("database-write", () => prisma.$transaction(async (tx) => {
           await tx.priceHistory.updateMany({
             where: {
               productId: product.id,
@@ -1059,7 +1127,7 @@ export async function runPriceCheck(
               createdAt: checkedAt,
             })),
           });
-        });
+        }));
 
         result.changed += 1;
 
@@ -1074,6 +1142,7 @@ export async function runPriceCheck(
             variants: nextVariants,
             nextPrimarySellPrice,
             checkedAt,
+            recordTiming: (stage, durationMs) => timing.record(stage, durationMs),
           });
 
           if (automaticApplication.success) {
@@ -1152,12 +1221,25 @@ export async function runPriceCheck(
           return finishCancelled();
         }
 
-        await sleep(getProductDelayMs());
+        await measureStage("pacing-sleep", () => sleep(getProductDelayMs()));
       }
     }
+  } catch (error) {
+    runOutcome = "failed";
+    throw error;
   } finally {
     await closeSharedBrowser();
     invalidateRunCaches();
+    if (timing.enabled) {
+      logger.info("price-checker/timing", "Price check timing summary", {
+        jobId: options.jobId,
+        storeId: options.storeId,
+        outcome: runOutcome,
+        optimizations: optimizationConfig.enabled,
+        result,
+        timing: timing.snapshot(),
+      });
+    }
   }
 
   return result;

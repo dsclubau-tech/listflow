@@ -547,6 +547,7 @@ async function runPriceCheckJobClaimed(jobId: string) {
 
   try {
     const result = await runPriceCheck({
+      jobId: job.id,
       storeId: job.storeId ?? undefined,
       productIds: checkpoint.productIdsToCheck,
       ignoreSchedule: true,
