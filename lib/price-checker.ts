@@ -38,6 +38,10 @@ import {
   type PriceCheckOptimizationConfig,
 } from "@/lib/price-check-optimizations";
 import { reportCompletedProductCallbacks } from "@/lib/price-check-progress";
+import {
+  createAmazonDeliveryStateSession,
+  resetAmazonDeliveryState,
+} from "@/lib/amazon-delivery-state";
 
 const PRICE_TOLERANCE = 0.01;
 const MIN_SAFE_PRODUCT_DELAY_MS = 1000;
@@ -375,6 +379,11 @@ export async function runPriceCheck(
   }
 
   const supplierSettings = await getSupplierSettings(options.storeId);
+  const deliveryState =
+    optimizationConfig.enabled.includes("delivery-state") &&
+    supplierSettings.scrapePostcode
+      ? createAmazonDeliveryStateSession(supplierSettings.scrapePostcode)
+      : undefined;
 
   if (!options.ignoreSchedule && !supplierSettings.priceTrackingEnabled) {
     return {
@@ -569,6 +578,9 @@ export async function runPriceCheck(
     return sharedBrowser;
   };
   const closeSharedBrowser = async () => {
+    if (deliveryState) {
+      resetAmazonDeliveryState(deliveryState);
+    }
     if (sharedBrowser) {
       const browserToClose = sharedBrowser;
       sharedBrowser = null;
@@ -583,30 +595,38 @@ export async function runPriceCheck(
     variantHints?: VariantSelectionHints | null,
     shouldAbort: () => boolean = () => false,
   ) => {
-    const scrapeWithBrowser = async () => {
+    const scrapeWithBrowser = async (allowDeliveryStateReuse: boolean) => {
       const browser = await getSharedBrowser();
       timing.increment("scrape-attempts");
+      const sharedSnapshot = optimizationConfig.enabled.includes(
+        "shared-snapshot",
+      );
       return scrapeAmazonPrice(
         asin,
         browser,
         supplierSettings.scrapePostcode || undefined,
         priceTrackingMode,
         variantHints,
-        timing.enabled
+        timing.enabled || sharedSnapshot || deliveryState
           ? {
-              onTiming: (stage, durationMs) => timing.record(stage, durationMs),
-              sharedSnapshot: optimizationConfig.enabled.includes(
-                "shared-snapshot",
-              ),
+              ...(timing.enabled
+                ? {
+                    onTiming: (stage: string, durationMs: number) =>
+                      timing.record(stage, durationMs),
+                  }
+                : {}),
+              sharedSnapshot,
+              deliveryState,
+              allowDeliveryStateReuse,
+              onDeliveryStateEvent: (event) =>
+                timing.increment(`delivery-state-${event}`),
             }
-          : optimizationConfig.enabled.includes("shared-snapshot")
-            ? { sharedSnapshot: true }
-            : undefined,
+          : undefined,
       );
     };
 
     try {
-      return await scrapeWithBrowser();
+      return await scrapeWithBrowser(true);
     } catch (error) {
       timing.increment("scrape-retries");
       await closeSharedBrowser();
@@ -631,7 +651,7 @@ export async function runPriceCheck(
       await measureStage("retry-backoff", () => sleep(2000));
 
       try {
-        return await scrapeWithBrowser();
+        return await scrapeWithBrowser(false);
       } catch (retryError) {
         await closeSharedBrowser();
 

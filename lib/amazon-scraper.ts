@@ -1,4 +1,4 @@
-import type { Browser, Page } from "playwright-core";
+import type { Browser, BrowserContext, Page } from "playwright-core";
 import { load } from "cheerio";
 import { extractLocalizedBuyboxPriceChoices } from "@/lib/amazon-buybox-price";
 import { parseAmazonShippingFeeFromText } from "@/lib/amazon-shipping";
@@ -29,6 +29,14 @@ import {
   attemptVariantSelection,
   type VariantSelectionHints,
 } from "@/lib/amazon-variant-selection";
+import {
+  canReuseAmazonDeliveryState,
+  hasExactAmazonDeliveryPostcode,
+  resetAmazonDeliveryState,
+  seedAmazonDeliveryState,
+  type AmazonDeliveryStateSession,
+  type AmazonDeliveryStorageState,
+} from "@/lib/amazon-delivery-state";
 
 export interface ScrapedProduct {
   title: string;
@@ -84,6 +92,11 @@ export interface ScrapedAmazonPrice {
 export type AmazonPriceScrapeOptions = {
   onTiming?: (stage: string, durationMs: number) => void;
   sharedSnapshot?: boolean;
+  deliveryState?: AmazonDeliveryStateSession;
+  allowDeliveryStateReuse?: boolean;
+  onDeliveryStateEvent?: (
+    event: "seeded" | "reused" | "rejected" | "reset",
+  ) => void;
 };
 
 async function measureAmazonPriceStage<T>(
@@ -101,6 +114,84 @@ async function measureAmazonPriceStage<T>(
       // Performance instrumentation must never change scraper behavior.
     }
   }
+}
+
+function reportAmazonDeliveryStateEvent(
+  options: AmazonPriceScrapeOptions | undefined,
+  event: "seeded" | "reused" | "rejected" | "reset",
+) {
+  try {
+    options?.onDeliveryStateEvent?.(event);
+  } catch {
+    // Performance instrumentation must never change scraper behavior.
+  }
+}
+
+async function createAmazonPricePage(
+  browser: Browser,
+  userAgent: string,
+  storageState?: AmazonDeliveryStorageState,
+) {
+  const context = await browser.newContext({
+    userAgent,
+    viewport: { width: 1920, height: 1080 },
+    ...(storageState ? { storageState } : {}),
+  });
+  const page = await context.newPage();
+
+  await page.route("**/*", (route) => {
+    const type = route.request().resourceType();
+    if (["image", "media", "font"].includes(type)) {
+      return route.abort();
+    }
+    return route.continue();
+  });
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "webdriver", {
+      get: () => false,
+    });
+  });
+
+  return { context, page };
+}
+
+async function getAmazonDeliveryLocationText(page: Page) {
+  return page
+    .evaluate(() =>
+      [
+        "#glow-ingress-line1",
+        "#glow-ingress-line2",
+        "#nav-global-location-data-modal-action",
+      ]
+        .map((selector) => document.querySelector(selector)?.textContent ?? "")
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim(),
+    )
+    .catch(() => "");
+}
+
+async function verifyExactAmazonDeliveryPostcode(page: Page, postcode: string) {
+  await page
+    .waitForFunction(
+      (expected) => {
+        const text = [
+          "#glow-ingress-line1",
+          "#glow-ingress-line2",
+          "#nav-global-location-data-modal-action",
+        ]
+          .map((selector) => document.querySelector(selector)?.textContent ?? "")
+          .join(" ");
+        return text.split(/\D+/).includes(expected);
+      },
+      postcode,
+      { timeout: 2500 },
+    )
+    .catch(() => {});
+  return hasExactAmazonDeliveryPostcode(
+    await getAmazonDeliveryLocationText(page),
+    postcode,
+  );
 }
 
 const USER_AGENTS = [
@@ -685,29 +776,28 @@ export async function scrapeAmazonPrice(
   }
 
   const ownedBrowser = browser ?? (await launchScraperBrowser());
-  const context = await ownedBrowser.newContext({
-    userAgent: getRandomUserAgent(),
-    viewport: { width: 1920, height: 1080 },
-  });
-  const page = await context.newPage();
-
-  // Block heavy assets (images, videos, fonts) to prevent OOM renderer crashes and accelerate DOM loading.
-  await page.route("**/*", (route) => {
-    const type = route.request().resourceType();
-    if (["image", "media", "font"].includes(type)) {
-      return route.abort();
-    }
-    return route.continue();
-  });
+  const deliveryState =
+    postcode && options?.deliveryState?.postcode === postcode.trim()
+      ? options.deliveryState
+      : undefined;
+  let reusedDeliveryState = Boolean(
+    deliveryState &&
+      options?.allowDeliveryStateReuse !== false &&
+      canReuseAmazonDeliveryState(deliveryState, ownedBrowser, postcode ?? ""),
+  );
+  let usedOriginalDeliverySetup = !reusedDeliveryState;
+  let exactPostcodeVerified = false;
+  let userAgent =
+    (reusedDeliveryState ? deliveryState?.userAgent : null) ??
+    deliveryState?.userAgent ??
+    getRandomUserAgent();
+  let { context, page } = await createAmazonPricePage(
+    ownedBrowser,
+    userAgent,
+    reusedDeliveryState ? deliveryState?.storageState ?? undefined : undefined,
+  );
 
   try {
-    // Hide the "webdriver" flag so Amazon doesn't detect headless automation
-    await page.addInitScript(() => {
-      Object.defineProperty(navigator, "webdriver", {
-        get: () => false,
-      });
-    });
-
     await measureAmazonPriceStage(options, "navigation", () =>
       page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
         waitUntil: "domcontentloaded",
@@ -715,11 +805,47 @@ export async function scrapeAmazonPrice(
       }),
     );
 
+    if (reusedDeliveryState && postcode && deliveryState) {
+      exactPostcodeVerified = await measureAmazonPriceStage(
+        options,
+        "delivery-verification",
+        () => verifyExactAmazonDeliveryPostcode(page, postcode),
+      );
+
+      if (exactPostcodeVerified) {
+        reportAmazonDeliveryStateEvent(options, "reused");
+      } else {
+        resetAmazonDeliveryState(deliveryState, {
+          disable: true,
+          reason: `Seeded Amazon delivery state did not verify postcode ${postcode}.`,
+        });
+        reportAmazonDeliveryStateEvent(options, "rejected");
+        await context.close().catch(() => {});
+
+        reusedDeliveryState = false;
+        usedOriginalDeliverySetup = true;
+        userAgent = getRandomUserAgent();
+        ({ context, page } = await createAmazonPricePage(
+          ownedBrowser,
+          userAgent,
+        ));
+        await measureAmazonPriceStage(
+          options,
+          "delivery-fallback-navigation",
+          () =>
+            page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
+              waitUntil: "domcontentloaded",
+              timeout: 20000,
+            }),
+        );
+      }
+    }
+
     // Set delivery postcode so Amazon shows AU-local prices and availability.
     // If the first attempt fails, retry — a failed postcode causes Amazon to
     // geo-locate the server (often Singapore) and show "out of stock" for AU
     // products that ARE actually available for Australian delivery.
-    if (postcode) {
+    if (postcode && !exactPostcodeVerified) {
       const MAX_POSTCODE_ATTEMPTS = 3;
       let postcodeApplied = false;
 
@@ -760,6 +886,25 @@ export async function scrapeAmazonPrice(
             timeout: 20000,
           }),
         );
+      }
+
+      if (deliveryState) {
+        exactPostcodeVerified = await measureAmazonPriceStage(
+          options,
+          "delivery-verification",
+          () => verifyExactAmazonDeliveryPostcode(page, postcode),
+        );
+        if (!exactPostcodeVerified) {
+          resetAmazonDeliveryState(deliveryState, {
+            disable: true,
+            reason: `Amazon did not verify configured postcode ${postcode}.`,
+          });
+          reportAmazonDeliveryStateEvent(options, "rejected");
+          throw new PriceCheckFailure(
+            PriceCheckFailureCode.TECHNICAL_ERROR,
+            `Amazon did not verify the configured delivery postcode ${postcode}; price and availability were not accepted.`,
+          );
+        }
       }
     }
 
@@ -933,16 +1078,18 @@ export async function scrapeAmazonPrice(
               : (priceChoices.regular ?? priceChoices.deal);
           price = selectedPrice?.price ?? null;
 
-          if (price !== null && !options?.sharedSnapshot) {
-            stockLeft = await measureAmazonPriceStage(
-              options,
-              "stock-extraction",
-              () =>
-                page
-                  .content()
-                  .then((html) => extractAmazonNewOfferStockLeft(load(html)))
-                  .catch(() => null),
-            );
+          if (price !== null) {
+            if (!options?.sharedSnapshot) {
+              stockLeft = await measureAmazonPriceStage(
+                options,
+                "stock-extraction",
+                () =>
+                  page
+                    .content()
+                    .then((html) => extractAmazonNewOfferStockLeft(load(html)))
+                    .catch(() => null),
+              );
+            }
           } else {
             return {
               price: null,
@@ -967,6 +1114,31 @@ export async function scrapeAmazonPrice(
         PriceCheckFailureCode.AMAZON_ASIN_REDIRECT,
         `Amazon redirected ASIN ${normalizedAsin} to ${finalPageAsin} — the original variant appears unavailable.`
       );
+    }
+
+    if (
+      deliveryState &&
+      !deliveryState.disabled &&
+      usedOriginalDeliverySetup &&
+      exactPostcodeVerified &&
+      !variantSwatchSelected &&
+      price !== null
+    ) {
+      try {
+        const storageState = await context.storageState();
+        if (
+          seedAmazonDeliveryState(deliveryState, {
+            browser: ownedBrowser,
+            userAgent,
+            storageState,
+          })
+        ) {
+          reportAmazonDeliveryStateEvent(options, "seeded");
+        }
+      } catch {
+        resetAmazonDeliveryState(deliveryState);
+        reportAmazonDeliveryStateEvent(options, "reset");
+      }
     }
 
     // Diagnostic: log page context when price extraction fails
@@ -1032,6 +1204,8 @@ export async function scrapeAmazonPrice(
 
     return {
       price,
+      rawPrice: selectedPrice?.itemPrice ?? price,
+      shippingPrice: selectedPrice?.shippingFee ?? null,
       stockLeft,
       priceMode: priceTrackingMode,
       priceChoices: {
