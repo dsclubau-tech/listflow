@@ -1,6 +1,7 @@
 import "server-only";
 
 import {
+  PriceCheckProductOutcome as PrismaPriceCheckProductOutcome,
   PriceCheckJobScope,
   PriceCheckJobStatus,
   PriceCheckJobTrigger,
@@ -27,11 +28,16 @@ import {
   runPriceCheck,
   type PriceCheckProgress,
   type PriceCheckResult,
+  type PriceCheckProductCompletion,
 } from "@/lib/price-checker";
 import { resolvePriceCheckOptimizationConfig } from "@/lib/price-check-optimizations";
 import { finalizePriceCheckAutoHoldForJob } from "@/lib/price-check-auto-hold";
 import { isWorkerOnlineForStore } from "@/lib/worker-heartbeat";
 import { getInternalUserId } from "@/lib/store-session";
+import {
+  clampCompletedPriceCheckCount,
+  uniqueCompletedProductIds,
+} from "@/lib/price-check-accounting";
 
 const ACTIVE_JOB_STATUSES: PriceCheckJobStatus[] = [
   PriceCheckJobStatus.QUEUED,
@@ -53,6 +59,14 @@ type PriceCheckJobRecord = {
   pendingReview: number;
   failed: number;
   skipped: number;
+  unchanged: number;
+  fresh: number;
+  unavailable: number;
+  technicalErrors: number;
+  needsVerification: number;
+  listingUpdateFailures: number;
+  retryAttempts: number;
+  classificationAvailable: boolean;
   reason: string | null;
   errorMessage: string | null;
   createdAt: Date;
@@ -74,7 +88,19 @@ type CreateJobInput = {
 
 type PriceCheckCounters = Pick<
   PriceCheckResult,
-  "checked" | "changed" | "pendingReview" | "failed" | "skipped"
+  | "checked"
+  | "changed"
+  | "pendingReview"
+  | "failed"
+  | "skipped"
+  | "unchanged"
+  | "fresh"
+  | "unavailable"
+  | "technicalErrors"
+  | "needsVerification"
+  | "listingUpdateFailures"
+  | "retryAttempts"
+  | "classificationAvailable"
 >;
 
 type JobCheckpoint = {
@@ -127,7 +153,7 @@ function canResumePriceCheckJob(job: PriceCheckJobRecord) {
 }
 
 function uniqueInJobOrder(productIds: string[], productIdSet: Set<string>) {
-  return productIds.filter((productId) => productIdSet.has(productId));
+  return uniqueCompletedProductIds(productIds, productIdSet);
 }
 
 function getBaseCounters(
@@ -140,6 +166,14 @@ function getBaseCounters(
     pendingReview: job.pendingReview,
     failed: job.failed,
     skipped: job.skipped,
+    unchanged: job.unchanged,
+    fresh: job.fresh,
+    unavailable: job.unavailable,
+    technicalErrors: job.technicalErrors,
+    needsVerification: job.needsVerification,
+    listingUpdateFailures: job.listingUpdateFailures,
+    retryAttempts: job.retryAttempts,
+    classificationAvailable: job.classificationAvailable,
   };
 }
 
@@ -156,6 +190,17 @@ function mergeRunProgress(
     pendingReview: baseCounters.pendingReview + progress.pendingReview,
     failed: baseCounters.failed + progress.failed,
     skipped: baseCounters.skipped + progress.skipped,
+    unchanged: baseCounters.unchanged + progress.unchanged,
+    fresh: baseCounters.fresh + progress.fresh,
+    unavailable: baseCounters.unavailable + progress.unavailable,
+    technicalErrors: baseCounters.technicalErrors + progress.technicalErrors,
+    needsVerification:
+      baseCounters.needsVerification + progress.needsVerification,
+    listingUpdateFailures:
+      baseCounters.listingUpdateFailures + progress.listingUpdateFailures,
+    retryAttempts: baseCounters.retryAttempts + progress.retryAttempts,
+    classificationAvailable:
+      baseCounters.classificationAvailable || progress.classificationAvailable,
   };
 }
 
@@ -170,11 +215,28 @@ function mergeRunResult(
     pendingReview: baseCounters.pendingReview + result.pendingReview,
     failed: baseCounters.failed + result.failed,
     skipped: baseCounters.skipped + result.skipped,
+    unchanged: baseCounters.unchanged + result.unchanged,
+    fresh: baseCounters.fresh + result.fresh,
+    unavailable: baseCounters.unavailable + result.unavailable,
+    technicalErrors: baseCounters.technicalErrors + result.technicalErrors,
+    needsVerification:
+      baseCounters.needsVerification + result.needsVerification,
+    listingUpdateFailures:
+      baseCounters.listingUpdateFailures + result.listingUpdateFailures,
+    retryAttempts: baseCounters.retryAttempts + result.retryAttempts,
+    classificationAvailable:
+      baseCounters.classificationAvailable || result.classificationAvailable,
   };
 }
 
 export function serializePriceCheckJob(job: PriceCheckJobRecord) {
   const remaining = getRemainingProductIds(job);
+  const elapsedMs = job.startedAt
+    ? Math.max(
+        0,
+        (job.completedAt ?? new Date()).getTime() - job.startedAt.getTime(),
+      )
+    : null;
 
   return {
     id: job.id,
@@ -187,6 +249,18 @@ export function serializePriceCheckJob(job: PriceCheckJobRecord) {
     pendingReview: job.pendingReview,
     failed: job.failed,
     skipped: job.skipped,
+    unchanged: job.unchanged,
+    fresh: job.fresh,
+    unavailable: job.unavailable,
+    technicalErrors: job.technicalErrors,
+    needsVerification: job.needsVerification,
+    listingUpdateFailures: job.listingUpdateFailures,
+    retryAttempts: job.retryAttempts,
+    classificationAvailable: job.classificationAvailable,
+    secondsPerItem:
+      elapsedMs !== null && job.checked > 0
+        ? Math.round((elapsedMs / 1000 / job.checked) * 100) / 100
+        : null,
     remaining: remaining.length,
     canResume: canResumePriceCheckJob(job),
     reason: job.reason,
@@ -225,7 +299,10 @@ async function resolveJobCheckpoint(job: PriceCheckJobRecord): Promise<JobCheckp
     return {
       productIdsToCheck: job.productIds.filter((productId) => !completed.has(productId)),
       completedProductIds: uniqueInJobOrder(job.productIds, completed),
-      baseCounters: getBaseCounters(job),
+      baseCounters: getBaseCounters(
+        job,
+        uniqueInJobOrder(job.productIds, completed).length,
+      ),
       total,
       inferredFromLastCheck: false,
     };
@@ -333,25 +410,62 @@ async function findRunnablePriceCheckJobs(
 async function markJobProductCompleted(
   jobId: string,
   productId: string,
-  progress: PriceCheckProgress
+  progress: PriceCheckProgress,
+  completion: PriceCheckProductCompletion,
 ) {
-  await prisma.priceCheckJob.updateMany({
-    where: {
-      id: jobId,
-      NOT: {
-        completedProductIds: { has: productId },
+  const checked = clampCompletedPriceCheckCount(progress.checked, progress.total);
+  if (checked !== progress.checked) {
+    logger.error(
+      "price-check/jobs",
+      "Price check progress invariant violated; persisted count was clamped",
+      undefined,
+      { jobId, productId, checked: progress.checked, total: progress.total },
+    );
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.priceCheckJobProductResult.createMany({
+      data: [{
+        jobId,
+        productId,
+        productAsin: completion.productAsin,
+        productTitle: completion.productTitle,
+        outcome: completion.outcome as PrismaPriceCheckProductOutcome,
+        failureCode: completion.failureCode,
+        message: completion.message,
+        listingUpdateFailed: completion.listingUpdateFailed,
+        retryAttempts: completion.retryAttempts,
+        durationMs: completion.durationMs,
+        checkedAt: completion.checkedAt,
+      }],
+      skipDuplicates: true,
+    });
+
+    await tx.priceCheckJob.updateMany({
+      where: {
+        id: jobId,
+        NOT: {
+          completedProductIds: { has: productId },
+        },
       },
-    },
-    data: {
-      total: progress.total,
-      checked: progress.checked,
-      changed: progress.changed,
-      pendingReview: progress.pendingReview,
-      failed: progress.failed,
-      skipped: progress.skipped,
-      reason: progress.reason ?? null,
-      completedProductIds: { push: productId },
-    },
+      data: {
+        checked,
+        changed: progress.changed,
+        pendingReview: progress.pendingReview,
+        failed: progress.failed,
+        skipped: progress.skipped,
+        unchanged: progress.unchanged,
+        fresh: progress.fresh,
+        unavailable: progress.unavailable,
+        technicalErrors: progress.technicalErrors,
+        needsVerification: progress.needsVerification,
+        listingUpdateFailures: progress.listingUpdateFailures,
+        retryAttempts: progress.retryAttempts,
+        classificationAvailable: true,
+        reason: progress.reason ?? null,
+        completedProductIds: { push: productId },
+      },
+    });
   });
 }
 
@@ -417,18 +531,39 @@ async function resolvePriceCheckSelection(storeId: string, productIds: string[])
 }
 
 async function updateJobProgress(jobId: string, progress: PriceCheckResult & { total: number }) {
+  // Product counters are persisted only by the atomic completion checkpoint.
+  // This callback remains for the baseline path and as a completion fallback,
+  // but it must never move progress ahead of completedProductIds.
   await prisma.priceCheckJob.update({
     where: { id: jobId },
     data: {
-      total: progress.total,
-      checked: progress.checked,
-      changed: progress.changed,
-      pendingReview: progress.pendingReview,
-      failed: progress.failed,
-      skipped: progress.skipped,
       reason: progress.reason ?? null,
     },
   });
+}
+
+async function assertAllJobProductsCompleted(jobId: string, expectedTotal: number) {
+  const durable = await prisma.priceCheckJob.findUnique({
+    where: { id: jobId },
+    select: { productIds: true, completedProductIds: true },
+  });
+  if (!durable) throw new Error("Price check job no longer exists.");
+
+  const completed = uniqueCompletedProductIds(
+    durable.productIds,
+    new Set(durable.completedProductIds),
+  ).length;
+  if (completed !== expectedTotal) {
+    logger.error(
+      "price-check/jobs",
+      "Price check completion invariant violated",
+      undefined,
+      { jobId, completed, total: expectedTotal },
+    );
+    throw new Error(
+      `Price check checkpoint incomplete: ${completed}/${expectedTotal} products persisted.`,
+    );
+  }
 }
 
 async function shouldCancelPriceCheckJob(jobId: string) {
@@ -452,18 +587,9 @@ async function markPriceCheckJobCancelled(
     where: { id: jobId },
     data: {
       status: PriceCheckJobStatus.CANCELLED,
-      ...(result
-        ? {
-            checked: result.checked,
-            changed: result.changed,
-            pendingReview: result.pendingReview,
-            failed: result.failed,
-            skipped: result.skipped,
-          }
-        : {}),
       reason: autoHold.errorMessage
         ? `Price check cancelled. Automatic holds could not be queued: ${autoHold.errorMessage}`
-        : "Price check cancelled.",
+        : result?.reason ?? "Price check cancelled.",
       errorMessage: null,
       completedAt: new Date(),
     },
@@ -564,11 +690,12 @@ async function runPriceCheckJobClaimed(jobId: string) {
           job.id,
           mergeRunProgress(checkpoint.baseCounters, checkpoint.total, progress)
         ),
-      onProductComplete: (productId, progress) =>
+      onProductComplete: (productId, progress, completion) =>
         markJobProductCompleted(
           job.id,
           productId,
-          mergeRunProgress(checkpoint.baseCounters, checkpoint.total, progress)
+          mergeRunProgress(checkpoint.baseCounters, checkpoint.total, progress),
+          completion,
         ),
       shouldCancel: () => shouldCancelPriceCheckJob(job.id),
     });
@@ -583,17 +710,12 @@ async function runPriceCheckJobClaimed(jobId: string) {
       return;
     }
 
+    await assertAllJobProductsCompleted(job.id, checkpoint.total);
     const autoHold = await finalizeAutoHoldsSafely(job.id);
     const completedJob = await prisma.priceCheckJob.update({
       where: { id: job.id },
       data: {
         status: PriceCheckJobStatus.COMPLETED,
-        total: checkpoint.total,
-        checked: aggregateResult.checked,
-        changed: aggregateResult.changed,
-        pendingReview: aggregateResult.pendingReview,
-        failed: aggregateResult.failed,
-        skipped: aggregateResult.skipped,
         reason:
           autoHold.errorMessage
             ? `Automatic holds could not be queued: ${autoHold.errorMessage}`
@@ -684,6 +806,14 @@ export async function cancelPriceCheckJob(
       pendingReview: job.pendingReview,
       failed: job.failed,
       skipped: job.skipped,
+      unchanged: job.unchanged,
+      fresh: job.fresh,
+      unavailable: job.unavailable,
+      technicalErrors: job.technicalErrors,
+      needsVerification: job.needsVerification,
+      listingUpdateFailures: job.listingUpdateFailures,
+      retryAttempts: job.retryAttempts,
+      classificationAvailable: job.classificationAvailable,
       reason: "Price check cancelled.",
       cancelled: true,
     });
@@ -700,6 +830,14 @@ export async function cancelPriceCheckJob(
         pendingReview: job.pendingReview,
         failed: job.failed,
         skipped: job.skipped,
+        unchanged: job.unchanged,
+        fresh: job.fresh,
+        unavailable: job.unavailable,
+        technicalErrors: job.technicalErrors,
+        needsVerification: job.needsVerification,
+        listingUpdateFailures: job.listingUpdateFailures,
+        retryAttempts: job.retryAttempts,
+        classificationAvailable: job.classificationAvailable,
         reason: "Price check force-cancelled.",
         cancelled: true,
       });
@@ -713,6 +851,14 @@ export async function cancelPriceCheckJob(
         pendingReview: job.pendingReview,
         failed: job.failed,
         skipped: job.skipped,
+        unchanged: job.unchanged,
+        fresh: job.fresh,
+        unavailable: job.unavailable,
+        technicalErrors: job.technicalErrors,
+        needsVerification: job.needsVerification,
+        listingUpdateFailures: job.listingUpdateFailures,
+        retryAttempts: job.retryAttempts,
+        classificationAvailable: job.classificationAvailable,
         reason: "Price check cancelled.",
         cancelled: true,
       });

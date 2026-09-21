@@ -150,6 +150,25 @@ function formatDateTime(value: string | null) {
   });
 }
 
+function formatPriceCheckBreakdown(job: ActionCenterPriceCheckJob) {
+  if (!job.classificationAvailable) {
+    return `${job.failed} failed; detailed classification unavailable`;
+  }
+  const parts = [
+    `${job.fresh} fresh`,
+    `${job.unavailable} unavailable`,
+    `${job.technicalErrors} technical`,
+    `${job.needsVerification} need verification`,
+    `${job.pendingReview} price reviews`,
+    `${job.listingUpdateFailures} eBay update failures`,
+    `${job.retryAttempts} retries`,
+  ];
+  if (job.secondsPerItem !== null) {
+    parts.push(`${job.secondsPerItem.toFixed(2)} sec/item`);
+  }
+  return parts.join(", ");
+}
+
 function formatDuration(startedAt: string | null, completedAt: string | null) {
   if (!startedAt || !completedAt) {
     return null;
@@ -2368,8 +2387,7 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                             />
                           </div>
                           <div className="mt-1 text-xs text-gray-500">
-                            {job.checked}/{job.total} checked, {job.pendingReview} pending,{" "}
-                            {job.failed} failed
+                            {job.checked}/{job.total} completed, {formatPriceCheckBreakdown(job)}
                             {job.autoHoldQueued > 0
                               ? `, ${job.autoHoldQueued} auto-hold queued`
                               : ""}
@@ -2851,8 +2869,7 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                             </span>
                           </div>
                           <div className="mt-1 text-xs text-gray-500">
-                            {job.checked}/{job.total} checked, {job.pendingReview} pending,{" "}
-                            {job.failed} failed
+                            {job.checked}/{job.total} completed, {formatPriceCheckBreakdown(job)}
                             {job.autoHoldQueued > 0
                               ? `, ${job.autoHoldQueued} auto-hold queued`
                               : ""}
@@ -3031,8 +3048,8 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                             </span>
                           </div>
                           <div className="mt-1 text-xs text-gray-500">
-                            Dismissed {formatDateTime(job.dismissedAt)} - {job.checked}/{job.total} checked,{" "}
-                            {job.pendingReview} pending, {job.failed} failed
+                            Dismissed {formatDateTime(job.dismissedAt)} - {job.checked}/{job.total} completed,{" "}
+                            {formatPriceCheckBreakdown(job)}
                             {job.autoHoldQueued > 0
                               ? `, ${job.autoHoldQueued} auto-hold queued`
                               : ""}

@@ -117,6 +117,15 @@ export interface ActionCenterPriceCheckJob {
   pendingReview: number;
   failed: number;
   skipped: number;
+  unchanged: number;
+  fresh: number;
+  unavailable: number;
+  technicalErrors: number;
+  needsVerification: number;
+  listingUpdateFailures: number;
+  retryAttempts: number;
+  classificationAvailable: boolean;
+  secondsPerItem: number | null;
   remaining: number;
   canResume: boolean;
   reason: string | null;
@@ -497,6 +506,14 @@ async function loadLiveActionCenterData(
         pendingReview: true,
         failed: true,
         skipped: true,
+        unchanged: true,
+        fresh: true,
+        unavailable: true,
+        technicalErrors: true,
+        needsVerification: true,
+        listingUpdateFailures: true,
+        retryAttempts: true,
+        classificationAvailable: true,
         reason: true,
         errorMessage: true,
         createdAt: true,
@@ -622,6 +639,12 @@ async function loadLiveActionCenterData(
 
   const serializedPriceCheckJobs = priceCheckJobs.map((job) => {
     const remaining = Math.max(0, job.total - job.checked);
+    const elapsedMs = job.startedAt
+      ? Math.max(
+          0,
+          (job.completedAt ?? new Date()).getTime() - job.startedAt.getTime(),
+        )
+      : null;
     return {
       ...job,
       status: `${job.status}` as const,
@@ -629,6 +652,10 @@ async function loadLiveActionCenterData(
       trigger: `${job.trigger}`,
       remaining,
       canResume: job.status === PriceCheckJobStatus.CANCELLED && remaining > 0,
+      secondsPerItem:
+        elapsedMs !== null && job.checked > 0
+          ? Math.round((elapsedMs / 1000 / job.checked) * 100) / 100
+          : null,
       createdAt: job.createdAt.toISOString(),
       updatedAt: job.updatedAt.toISOString(),
       startedAt: iso(job.startedAt),

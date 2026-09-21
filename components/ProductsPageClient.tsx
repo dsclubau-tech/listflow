@@ -308,6 +308,15 @@ interface PriceCheckJob {
   pendingReview: number;
   failed: number;
   skipped: number;
+  unchanged: number;
+  fresh: number;
+  unavailable: number;
+  technicalErrors: number;
+  needsVerification: number;
+  listingUpdateFailures: number;
+  retryAttempts: number;
+  classificationAvailable: boolean;
+  secondsPerItem: number | null;
   remaining: number;
   canResume: boolean;
   reason: string | null;
@@ -317,6 +326,25 @@ interface PriceCheckJob {
   startedAt: string | null;
   completedAt: string | null;
   dismissedAt: string | null;
+}
+
+function getPriceCheckBreakdown(job: PriceCheckJob) {
+  if (!job.classificationAvailable) {
+    return `${job.failed} failed. Detailed classification was not recorded for this run.`;
+  }
+  const parts = [
+    `${job.fresh} fresh`,
+    `${job.unavailable} unavailable`,
+    `${job.technicalErrors} technical`,
+    `${job.needsVerification} need verification`,
+    `${job.pendingReview} price reviews`,
+    `${job.listingUpdateFailures} eBay update failures`,
+    `${job.retryAttempts} retries`,
+  ];
+  if (job.secondsPerItem !== null) {
+    parts.push(`${job.secondsPerItem.toFixed(2)} sec/item`);
+  }
+  return parts.join(", ");
 }
 
 function isActivePriceCheckJob(job: PriceCheckJob | null) {
@@ -345,14 +373,14 @@ function getPriceCheckJobSummary(job: PriceCheckJob) {
   }
 
   if (job.status === "CANCELLED") {
-    return `Price check cancelled. Checked ${job.checked} product${job.checked === 1 ? "" : "s"}. ${job.pendingReview} pending review, ${job.failed} failed, ${job.skipped} unchanged.`;
+    return `Price check cancelled. Completed ${job.checked}/${job.total}. ${getPriceCheckBreakdown(job)}`;
   }
 
   if (job.reason) {
     return job.reason;
   }
 
-  return `Checked ${job.checked} product${job.checked === 1 ? "" : "s"}. ${job.pendingReview} pending review, ${job.failed} failed, ${job.skipped} unchanged.`;
+  return `Completed ${job.checked}/${job.total}. ${getPriceCheckBreakdown(job)}`;
 }
 
 function getPriceCheckJobStatusText(job: PriceCheckJob) {
@@ -1800,7 +1828,7 @@ export default function ProductsPageClient({
               <ActionProgressBar
                 label={getPriceCheckJobStatusText(priceCheckJob)}
                 percent={priceCheckProgressPercent}
-                detail={`${priceCheckJob.pendingReview} pending review, ${priceCheckJob.failed} failed, ${priceCheckJob.skipped} unchanged`}
+                detail={getPriceCheckBreakdown(priceCheckJob)}
                 tone={priceCheckJob.status === "CANCELLING" ? "amber" : "blue"}
               />
             ) : (

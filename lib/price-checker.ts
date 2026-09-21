@@ -25,7 +25,11 @@ import {
   type AmazonPriceTrackingMode,
 } from "@/lib/amazon-price-tracking";
 import { getPriceCheckPrerequisiteIssue } from "@/lib/price-check-eligibility";
-import { getPriceCheckFailureCode } from "@/lib/price-check-failures";
+import {
+  getPriceCheckFailureCode,
+  getPriceCheckProductOutcomeForFailure,
+  type PriceCheckProductOutcome,
+} from "@/lib/price-check-failures";
 import { getLowStockResolvedUpdate } from "@/lib/low-stock-products";
 import { shouldAutomaticallyApplyPriceIncrease } from "@/lib/price-change-automation";
 import {
@@ -77,6 +81,14 @@ export interface PriceCheckResult {
   pendingReview: number;
   failed: number;
   skipped: number;
+  unchanged: number;
+  fresh: number;
+  unavailable: number;
+  technicalErrors: number;
+  needsVerification: number;
+  listingUpdateFailures: number;
+  retryAttempts: number;
+  classificationAvailable: boolean;
   reason?: string;
   cancelled?: boolean;
 }
@@ -90,6 +102,19 @@ export type PriceCheckProductFailure = {
   checkedAt: Date;
 };
 
+export type PriceCheckProductCompletion = {
+  productId: string;
+  productAsin: string | null;
+  productTitle: string | null;
+  outcome: PriceCheckProductOutcome;
+  failureCode: PriceCheckFailureCode | null;
+  message: string | null;
+  listingUpdateFailed: boolean;
+  retryAttempts: number;
+  durationMs: number | null;
+  checkedAt: Date | null;
+};
+
 interface RunPriceCheckOptions {
   jobId?: string;
   optimizationConfig?: PriceCheckOptimizationConfig;
@@ -101,7 +126,8 @@ interface RunPriceCheckOptions {
   onProgress?: (progress: PriceCheckProgress) => void | Promise<void>;
   onProductComplete?: (
     productId: string,
-    progress: PriceCheckProgress
+    progress: PriceCheckProgress,
+    completion: PriceCheckProductCompletion,
   ) => void | Promise<void>;
   onProductFailure?: (
     failure: PriceCheckProductFailure,
@@ -357,6 +383,24 @@ function getAmazonStockUpdate(stockLeft: number | null | undefined) {
   return stockLeft === undefined ? {} : { amazonStockLeft: stockLeft };
 }
 
+function emptyPriceCheckResult(): PriceCheckResult {
+  return {
+    checked: 0,
+    changed: 0,
+    pendingReview: 0,
+    failed: 0,
+    skipped: 0,
+    unchanged: 0,
+    fresh: 0,
+    unavailable: 0,
+    technicalErrors: 0,
+    needsVerification: 0,
+    listingUpdateFailures: 0,
+    retryAttempts: 0,
+    classificationAvailable: true,
+  };
+}
+
 export async function runPriceCheck(
   options: RunPriceCheckOptions = {}
 ): Promise<PriceCheckResult> {
@@ -386,14 +430,7 @@ export async function runPriceCheck(
       : undefined;
 
   if (!options.ignoreSchedule && !supplierSettings.priceTrackingEnabled) {
-    return {
-      checked: 0,
-      changed: 0,
-      pendingReview: 0,
-      failed: 0,
-      skipped: 0,
-      reason: "Price tracking is disabled.",
-    };
+    return { ...emptyPriceCheckResult(), reason: "Price tracking is disabled." };
   }
 
   if (!options.ignoreSchedule) {
@@ -401,18 +438,15 @@ export async function runPriceCheck(
 
     if (currentUtcHour !== supplierSettings.priceCheckHour) {
       return {
-        checked: 0,
-        changed: 0,
-        pendingReview: 0,
-        failed: 0,
-        skipped: 0,
+        ...emptyPriceCheckResult(),
         reason: `Current UTC hour ${currentUtcHour} does not match configured hour ${supplierSettings.priceCheckHour}.`,
       };
     }
   }
 
-  const normalizedIds =
-    options.productIds?.map((id) => id.trim()).filter(Boolean) ?? [];
+  const normalizedIds = Array.from(
+    new Set(options.productIds?.map((id) => id.trim()).filter(Boolean) ?? []),
+  );
   const restrictToIds = normalizedIds.length > 0;
 
   const requestedOrder = new Map(normalizedIds.map((id, index) => [id, index]));
@@ -440,17 +474,12 @@ export async function runPriceCheck(
       )
     : productsFromDb;
 
-  if (products.length === 0) {
-    return { checked: 0, changed: 0, pendingReview: 0, failed: 0, skipped: 0 };
+  if (products.length === 0 && !restrictToIds) {
+    return emptyPriceCheckResult();
   }
 
-  const result: PriceCheckResult = {
-    checked: 0,
-    changed: 0,
-    pendingReview: 0,
-    failed: 0,
-    skipped: 0,
-  };
+  const runTotal = restrictToIds ? normalizedIds.length : products.length;
+  const result = emptyPriceCheckResult();
   const measureStage = async <T>(stage: string, operation: () => Promise<T>) => {
     const startedAt = Date.now();
     try {
@@ -467,7 +496,7 @@ export async function runPriceCheck(
 
     try {
       await measureStage("progress-write", () =>
-        Promise.resolve(options.onProgress?.({ ...result, total: products.length })),
+        Promise.resolve(options.onProgress?.({ ...result, total: runTotal })),
       );
     } catch (error) {
       logger.warn("price-checker/run", "Price check progress callback failed", {
@@ -475,7 +504,24 @@ export async function runPriceCheck(
       });
     }
   };
-  const reportProductComplete = async (productId: string) => {
+  const reportProductComplete = async (completion: PriceCheckProductCompletion) => {
+    const productId = completion.productId;
+    result.checked += 1;
+    if (completion.outcome === "FRESH") result.fresh += 1;
+    if (completion.outcome === "UNAVAILABLE") result.unavailable += 1;
+    if (completion.outcome === "TECHNICAL_ERROR") result.technicalErrors += 1;
+    if (completion.outcome === "NEEDS_VERIFICATION") result.needsVerification += 1;
+    if (completion.outcome === "SKIPPED") result.skipped += 1;
+    if (completion.listingUpdateFailed) result.listingUpdateFailures += 1;
+    result.retryAttempts += completion.retryAttempts;
+
+    const startedAt = productStartedAt.get(productId);
+    const completedWithDuration = {
+      ...completion,
+      durationMs:
+        completion.durationMs ??
+        (startedAt === undefined ? null : Date.now() - startedAt),
+    };
     try {
       await reportCompletedProductCallbacks({
         completionIncludesProgress:
@@ -487,8 +533,8 @@ export async function runPriceCheck(
                 Promise.resolve(
                   options.onProductComplete?.(productId, {
                     ...result,
-                    total: products.length,
-                  }),
+                    total: runTotal,
+                  }, completedWithDuration),
                 ),
               )
           : undefined,
@@ -504,7 +550,6 @@ export async function runPriceCheck(
         },
       });
     } finally {
-      const startedAt = productStartedAt.get(productId);
       if (startedAt !== undefined) {
         timing.record("product-total", Date.now() - startedAt);
         productStartedAt.delete(productId);
@@ -570,6 +615,25 @@ export async function runPriceCheck(
 
   await reportProgress();
 
+  if (restrictToIds) {
+    const foundProductIds = new Set(products.map((product) => product.id));
+    for (const productId of normalizedIds) {
+      if (foundProductIds.has(productId)) continue;
+      await reportProductComplete({
+        productId,
+        productAsin: null,
+        productTitle: null,
+        outcome: "SKIPPED",
+        failureCode: null,
+        message: "Product no longer exists or is no longer eligible for checking.",
+        listingUpdateFailed: false,
+        retryAttempts: 0,
+        durationMs: null,
+        checkedAt: null,
+      });
+    }
+  }
+
   let sharedBrowser: Browser | null = null;
   const getSharedBrowser = async () => {
     if (!sharedBrowser || !sharedBrowser.isConnected()) {
@@ -594,6 +658,7 @@ export async function runPriceCheck(
     priceTrackingMode: AmazonPriceTrackingMode,
     variantHints?: VariantSelectionHints | null,
     shouldAbort: () => boolean = () => false,
+    onRetry: () => void = () => {},
   ) => {
     const scrapeWithBrowser = async (allowDeliveryStateReuse: boolean) => {
       const browser = await getSharedBrowser();
@@ -629,6 +694,7 @@ export async function runPriceCheck(
       return await scrapeWithBrowser(true);
     } catch (error) {
       timing.increment("scrape-retries");
+      onRetry();
       await closeSharedBrowser();
 
       if (shouldAbort()) {
@@ -669,14 +735,32 @@ export async function runPriceCheck(
 
   try {
     for (const [index, product] of products.entries()) {
-    if (await checkCancelled()) {
-      return finishCancelled();
-    }
+      if (await checkCancelled()) {
+        return finishCancelled();
+      }
 
-    result.checked += 1;
-    productStartedAt.set(product.id, Date.now());
+      productStartedAt.set(product.id, Date.now());
 
       const checkedAt = new Date();
+      let productRetryAttempts = 0;
+      let listingUpdateFailed = false;
+      const completeProduct = (
+        outcome: PriceCheckProductOutcome,
+        failureCode: PriceCheckFailureCode | null = null,
+        message: string | null = null,
+      ) =>
+        reportProductComplete({
+          productId: product.id,
+          productAsin: product.asin,
+          productTitle: product.fullTitle || product.title,
+          outcome,
+          failureCode,
+          message,
+          listingUpdateFailed,
+          retryAttempts: productRetryAttempts,
+          durationMs: null,
+          checkedAt,
+        });
 
       const prerequisiteIssue = getPriceCheckPrerequisiteIssue(product);
 
@@ -684,8 +768,6 @@ export async function runPriceCheck(
         const skipReason = prerequisiteIssue === "missing-variants"
           ? "No variants found"
           : "Missing Amazon ASIN";
-
-        result.skipped += 1;
 
         await measureStage("database-write", () => prisma.product.update({
           where: { id: product.id },
@@ -702,7 +784,7 @@ export async function runPriceCheck(
           reason: skipReason,
         });
 
-        await reportProductComplete(product.id);
+        await completeProduct("SKIPPED", null, skipReason);
         continue;
       }
 
@@ -737,6 +819,9 @@ export async function runPriceCheck(
                 priceTrackingMode,
                 variantHints,
                 () => scrapeTimedOut,
+                () => {
+                  productRetryAttempts += 1;
+                },
               ),
               PRODUCT_CHECK_TIMEOUT_MS,
               timeoutMessage,
@@ -780,7 +865,12 @@ export async function runPriceCheck(
               }
             );
 
-            await reportProductComplete(product.id);
+            await completeProduct(
+              "NEEDS_VERIFICATION",
+              PriceCheckFailureCode.AMAZON_VARIANT_SELECTION_REQUIRED,
+              scrapeResult.variantSelectionReason ||
+                "Amazon presents product variations, but the saved colour/size could not be selected.",
+            );
             continue;
           }
 
@@ -798,7 +888,11 @@ export async function runPriceCheck(
             requestedPrice: getAmazonPriceTrackingLabel(priceTrackingMode),
           });
 
-          await reportProductComplete(product.id);
+          await completeProduct(
+            "UNAVAILABLE",
+            PriceCheckFailureCode.AMAZON_PRICE_UNAVAILABLE,
+            getAmazonPriceUnavailableMessage(priceTrackingMode),
+          );
           continue;
         }
 
@@ -811,7 +905,7 @@ export async function runPriceCheck(
         const isFirstCheck = product.amazonPrice === null;
 
         if (isFirstCheck) {
-          result.skipped += 1;
+          result.unchanged += 1;
 
           const primaryVariant = product.variants[0];
           const currentAmazonPriceDecimal = toMoneyDecimal(currentAmazonPrice);
@@ -844,7 +938,7 @@ export async function runPriceCheck(
             priceTrackingMode,
           });
 
-          await reportProductComplete(product.id);
+          await completeProduct("FRESH");
           continue;
         }
 
@@ -861,7 +955,11 @@ export async function runPriceCheck(
             asin: product.asin,
           });
 
-          await reportProductComplete(product.id);
+          await completeProduct(
+            "NEEDS_VERIFICATION",
+            PriceCheckFailureCode.MISSING_BASELINE,
+            "Tracked product has no baseline Amazon buy price.",
+          );
           continue;
         }
 
@@ -881,7 +979,7 @@ export async function runPriceCheck(
             hasMoneyChanged(primaryBuyPrice, currentAmazonPrice);
 
           if (!buyPriceMismatch) {
-            result.skipped += 1;
+            result.unchanged += 1;
 
             await measureStage("database-write", () => prisma.product.update({
               where: { id: product.id },
@@ -895,7 +993,7 @@ export async function runPriceCheck(
               },
             }));
 
-            await reportProductComplete(product.id);
+            await completeProduct("FRESH");
             continue;
           }
 
@@ -1029,6 +1127,7 @@ export async function runPriceCheck(
             } else {
               result.pendingReview += 1;
               result.failed += 1;
+              listingUpdateFailed = true;
 
               logger.warn(
                 "price-checker/run",
@@ -1057,7 +1156,7 @@ export async function runPriceCheck(
             );
           }
 
-          await reportProductComplete(product.id);
+          await completeProduct("FRESH");
           continue;
         }
 
@@ -1118,8 +1217,11 @@ export async function runPriceCheck(
         const nextPrimarySellPrice = nextVariants[0]?.nextSellPrice;
 
         if (nextPrimarySellPrice === undefined) {
-          result.skipped += 1;
-          await reportProductComplete(product.id);
+          await completeProduct(
+            "SKIPPED",
+            null,
+            "No primary variant price was available to evaluate.",
+          );
           continue;
         }
 
@@ -1201,6 +1303,7 @@ export async function runPriceCheck(
           } else {
             result.pendingReview += 1;
             result.failed += 1;
+            listingUpdateFailed = true;
 
             logger.warn(
               "price-checker/run",
@@ -1246,9 +1349,16 @@ export async function runPriceCheck(
           asin: product.asin,
           failureCode: code,
         });
+
+        await completeProduct(
+          getPriceCheckProductOutcomeForFailure(code),
+          code,
+          message,
+        );
+        continue;
       }
 
-      await reportProductComplete(product.id);
+      await completeProduct("FRESH");
 
       if (await checkCancelled()) {
         return finishCancelled();

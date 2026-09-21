@@ -35,6 +35,54 @@ function formatDuration(startedAt: Date | null, completedAt: Date | null): strin
   return `${mins}m ${secs}s`;
 }
 
+type PriceCheckBreakdown = {
+  classificationAvailable: boolean;
+  fresh: number;
+  unavailable: number;
+  technicalErrors: number;
+  needsVerification: number;
+  pendingReview: number;
+  listingUpdateFailures: number;
+  retryAttempts: number;
+  checked: number;
+  startedAt: Date | null;
+  completedAt: Date | null;
+  failed: number;
+};
+
+function PriceCheckBreakdownLines({ job }: { job: PriceCheckBreakdown }) {
+  if (!job.classificationAvailable) {
+    return (
+      <span className="block text-xs text-gray-500">
+        {job.failed} failed · Detailed classification was not recorded for this run.
+      </span>
+    );
+  }
+  const elapsedMs =
+    job.startedAt && job.completedAt
+      ? job.completedAt.getTime() - job.startedAt.getTime()
+      : null;
+  const secondsPerItem =
+    elapsedMs !== null && elapsedMs >= 0 && job.checked > 0
+      ? elapsedMs / 1000 / job.checked
+      : null;
+  return (
+    <span className="block text-xs leading-5">
+      <span className="block text-green-700">{job.fresh} fresh</span>
+      <span className="block text-amber-700">{job.unavailable} unavailable</span>
+      <span className="block text-red-600">
+        {job.technicalErrors} technical · {job.needsVerification} need verification
+      </span>
+      <span className="block text-gray-500">
+        {job.pendingReview} price reviews · {job.listingUpdateFailures} eBay update failures · {job.retryAttempts} retries
+      </span>
+      {secondsPerItem !== null && (
+        <span className="block text-gray-500">{secondsPerItem.toFixed(2)} sec/item</span>
+      )}
+    </span>
+  );
+}
+
 function getActionJobLabel(type: string): string {
   switch (type) {
     case "UPLOAD_LISTING":
@@ -181,6 +229,15 @@ export default async function HistoryPage({
       status: j.status,
       errorMessage: j.errorMessage,
       createdAt: j.createdAt,
+      classificationAvailable: false,
+      fresh: 0,
+      unavailable: 0,
+      technicalErrors: 0,
+      needsVerification: 0,
+      pendingReview: 0,
+      listingUpdateFailures: 0,
+      retryAttempts: 0,
+      checked: j.processed,
     })),
     ...priceCheckJobs.map((j) => ({
       id: j.id,
@@ -197,6 +254,15 @@ export default async function HistoryPage({
       total: j.total,
       succeeded: j.checked,
       failed: j.failed,
+      checked: j.checked,
+      classificationAvailable: j.classificationAvailable,
+      fresh: j.fresh,
+      unavailable: j.unavailable,
+      technicalErrors: j.technicalErrors,
+      needsVerification: j.needsVerification,
+      pendingReview: j.pendingReview,
+      listingUpdateFailures: j.listingUpdateFailures,
+      retryAttempts: j.retryAttempts,
       startedAt: j.startedAt,
       completedAt: j.completedAt,
       status: j.status,
@@ -478,11 +544,16 @@ export default async function HistoryPage({
                           <span>{job.total}</span>
                           <span className="text-xs text-gray-400 ml-1">items</span>
                         </div>
-                        {job.failed > 0 && (
+                        {job.failed > 0 &&
+                          job.typeRaw !== "PRICE_CHECK" &&
+                          job.typeRaw !== "AUTO_PRICE_CHECK" && (
                           <span className="text-xs text-red-600 font-medium">
                             {job.failed} failed
                           </span>
                         )}
+                        {job.typeRaw === "PRICE_CHECK" || job.typeRaw === "AUTO_PRICE_CHECK" ? (
+                          <PriceCheckBreakdownLines job={job} />
+                        ) : null}
                       </td>
 
                       {/* Duration */}
@@ -628,11 +699,7 @@ export default async function HistoryPage({
                             {job.changed} changed
                           </span>
                         )}
-                        {job.failed > 0 && (
-                          <span className="text-xs text-red-600 font-medium block">
-                            {job.failed} failed
-                          </span>
-                        )}
+                        <PriceCheckBreakdownLines job={job} />
                       </td>
 
                       {/* Duration */}

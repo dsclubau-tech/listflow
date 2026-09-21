@@ -1679,6 +1679,13 @@ export default function DraftsTable({
         pendingReview?: number;
         failed?: number;
         skipped?: number;
+        fresh?: number;
+        unavailable?: number;
+        technicalErrors?: number;
+        needsVerification?: number;
+        listingUpdateFailures?: number;
+        retryAttempts?: number;
+        classificationAvailable?: boolean;
         reason?: string;
         error?: string;
       };
@@ -1694,8 +1701,14 @@ export default function DraftsTable({
       onToast(
         data.reason
           ? data.reason
-          : `Checked ${data.checked ?? 0} selected product(s). ${data.pendingReview ?? 0} pending review, ${data.failed ?? 0} failed, ${data.skipped ?? 0} unchanged.`,
-        data.failed && data.failed > 0 ? "error" : "success"
+          : data.classificationAvailable
+            ? `Completed ${data.checked ?? 0} selected product(s): ${data.fresh ?? 0} fresh, ${data.unavailable ?? 0} unavailable, ${data.technicalErrors ?? 0} technical errors, ${data.needsVerification ?? 0} need verification, ${data.listingUpdateFailures ?? 0} eBay update failures, ${data.retryAttempts ?? 0} retries.`
+            : `Checked ${data.checked ?? 0} selected product(s). ${data.pendingReview ?? 0} pending review, ${data.failed ?? 0} failed, ${data.skipped ?? 0} unchanged.`,
+        (data.technicalErrors ?? 0) > 0 ||
+          (data.needsVerification ?? 0) > 0 ||
+          (data.listingUpdateFailures ?? 0) > 0
+          ? "error"
+          : "success"
       );
     } catch {
       onToast("Network error while checking selected prices.", "error");
