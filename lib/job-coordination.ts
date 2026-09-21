@@ -336,7 +336,14 @@ export async function withJobLeases<T>(
       input.jobType,
       input.jobId,
       input.worker
-    );
+    ).catch((error) => {
+      logger.error("worker/lease", "Worker failed to renew job resources", error, {
+        storeId: input.storeId,
+        jobType: input.jobType,
+        jobId: input.jobId,
+        workerId: input.worker.workerId,
+      });
+    });
   }, JOB_LEASE_RENEW_MS);
 
   try {

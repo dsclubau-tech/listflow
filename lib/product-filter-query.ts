@@ -11,6 +11,7 @@ import {
   type ProductSortField,
   type ProductSortOrder,
 } from "@/lib/product-sort";
+import { buildProductSearchWhere } from "@/lib/product-search";
 
 const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 export const DEFAULT_PRODUCTS_PAGE_SIZE = 100;
@@ -49,8 +50,10 @@ export interface NormalizedProductsQuery {
   profitMax: number | null;
   quantityMin: number | null;
   quantityMax: number | null;
-  feesMin: number | null;
-  feesMax: number | null;
+  feesPercentMin: number | null;
+  feesPercentMax: number | null;
+  feesFixedMin: number | null;
+  feesFixedMax: number | null;
   promotedAdPercentMin: number | null;
   promotedAdPercentMax: number | null;
   adFeeStatus: string;
@@ -123,13 +126,17 @@ function getNumberParam(params: ProductsSearchParams, key: string) {
 }
 
 function hasActiveAdvancedFilters(params: ProductsSearchParams) {
-  return PRODUCT_ADVANCED_FILTER_IDS.some((filterId) => {
+  return (
+    params.feesMin !== undefined ||
+    params.feesMax !== undefined ||
+    PRODUCT_ADVANCED_FILTER_IDS.some((filterId) => {
     if (
       filterId === "sellPrice" ||
       filterId === "buyPrice" ||
       filterId === "profit" ||
       filterId === "quantity" ||
-      filterId === "fees" ||
+      filterId === "feesPercent" ||
+      filterId === "feesFixed" ||
       filterId === "promotedAdPercent"
     ) {
       return (
@@ -139,7 +146,8 @@ function hasActiveAdvancedFilters(params: ProductsSearchParams) {
     }
 
     return params[filterId] !== undefined;
-  });
+    })
+  );
 }
 
 function getTodayRange() {
@@ -184,8 +192,14 @@ export function normalizeProductsQuery(
     profitMax: getNumberParam(params, "profitMax"),
     quantityMin: getNumberParam(params, "quantityMin"),
     quantityMax: getNumberParam(params, "quantityMax"),
-    feesMin: getNumberParam(params, "feesMin"),
-    feesMax: getNumberParam(params, "feesMax"),
+    // Keep old bookmarked links working. The former ambiguous Fees filter now
+    // means percentage; fixed-dollar fees have their own explicit parameters.
+    feesPercentMin:
+      getNumberParam(params, "feesPercentMin") ?? getNumberParam(params, "feesMin"),
+    feesPercentMax:
+      getNumberParam(params, "feesPercentMax") ?? getNumberParam(params, "feesMax"),
+    feesFixedMin: getNumberParam(params, "feesFixedMin"),
+    feesFixedMax: getNumberParam(params, "feesFixedMax"),
     promotedAdPercentMin: getNumberParam(params, "promotedAdPercentMin"),
     promotedAdPercentMax: getNumberParam(params, "promotedAdPercentMax"),
     adFeeStatus: getSelectParam(params, "adFeeStatus", [
@@ -305,47 +319,7 @@ export function buildProductsWhere(
   }
 
   if (query.searchQuery) {
-    whereClauses.push({
-      OR: [
-        { title: { contains: query.searchQuery, mode: "insensitive" } },
-        { id: { contains: query.searchQuery, mode: "insensitive" } },
-        { asin: { contains: query.searchQuery, mode: "insensitive" } },
-        { ebayItemId: { contains: query.searchQuery, mode: "insensitive" } },
-        { internalNote: { contains: query.searchQuery, mode: "insensitive" } },
-        { itemSpecifics: { path: ["Brand"], string_contains: query.searchQuery } },
-        { itemSpecifics: { path: ["brand"], string_contains: query.searchQuery } },
-        {
-          variants: {
-            some: { id: { contains: query.searchQuery, mode: "insensitive" } },
-          },
-        },
-        {
-          variants: {
-            some: { sku: { contains: query.searchQuery, mode: "insensitive" } },
-          },
-        },
-        {
-          variants: {
-            some: {
-              itemSpecifics: {
-                path: ["Brand"],
-                string_contains: query.searchQuery,
-              },
-            },
-          },
-        },
-        {
-          variants: {
-            some: {
-              itemSpecifics: {
-                path: ["brand"],
-                string_contains: query.searchQuery,
-              },
-            },
-          },
-        },
-      ],
-    });
+    whereClauses.push(buildProductSearchWhere(query.searchQuery));
   }
 
   if (query.buyItemId) {
@@ -452,12 +426,17 @@ export function buildProductsWhere(
     });
   }
 
-  const feesRange = getRangeFilter(query.feesMin, query.feesMax);
-  if (feesRange) {
+  const feesPercentRange = getRangeFilter(
+    query.feesPercentMin,
+    query.feesPercentMax,
+  );
+  const feesFixedRange = getRangeFilter(query.feesFixedMin, query.feesFixedMax);
+  if (feesPercentRange || feesFixedRange) {
     whereClauses.push({
       variants: {
         some: {
-          OR: [{ feesPercent: feesRange }, { feesFixed: feesRange }],
+          ...(feesPercentRange ? { feesPercent: feesPercentRange } : {}),
+          ...(feesFixedRange ? { feesFixed: feesFixedRange } : {}),
         },
       },
     });

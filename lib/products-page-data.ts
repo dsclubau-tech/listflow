@@ -26,6 +26,7 @@ import { prisma } from "@/lib/prisma";
 import type { ProductSelectionSummary } from "@/types/product-selection";
 import type { SerializedProductRow } from "@/types/product-row";
 import { getProductUploadedAt } from "@/lib/product-uploaded-at";
+import { rankProductSearchResults } from "@/lib/product-search";
 
 export { normalizeProductsQuery };
 export type {
@@ -124,13 +125,17 @@ type ProductRowPayload = Prisma.ProductGetPayload<{
 
 const productSortCandidateSelect = {
   id: true,
+  title: true,
+  fullTitle: true,
+  asin: true,
+  ebayItemId: true,
   price: true,
   amazonPrice: true,
   quantitySold: true,
   ebayViewCount: true,
   createdAt: true,
+  updatedAt: true,
   status: true,
-  ebayItemId: true,
   uploadLogs: {
     where: { status: "SUCCESS" },
     orderBy: { createdAt: "desc" },
@@ -142,6 +147,8 @@ const productSortCandidateSelect = {
   variants: {
     orderBy: { createdAt: "asc" },
     select: {
+      id: true,
+      sku: true,
       buyPrice: true,
       sellPrice: true,
       feesPercent: true,
@@ -265,14 +272,17 @@ async function getComputedProductOrderIds(
       )
     : candidates;
 
-  return (query.sortBy
+  const orderedCandidates = query.sortBy
     ? sortProductsByDisplayValue(
         filteredCandidates,
         query.sortBy,
         query.sortOrder
       )
-    : filteredCandidates
-  ).map((product) => product.id);
+    : query.searchQuery
+      ? rankProductSearchResults(filteredCandidates, query.searchQuery)
+      : filteredCandidates;
+
+  return orderedCandidates.map((product) => product.id);
 }
 
 async function getProductRowsByIds(storeId: string, ids: string[]) {
@@ -318,7 +328,7 @@ export async function getCachedProductsSelectionData(
 
   const where = buildProductsWhere(storeId, query);
 
-  if (hasProfitRangeFilter(query) || query.sortBy) {
+  if (hasProfitRangeFilter(query) || query.sortBy || query.searchQuery) {
     const orderedIds = await getComputedProductOrderIds(where, query);
     const products = await getProductSelectionRowsByIds(storeId, orderedIds);
 
@@ -356,7 +366,7 @@ export async function getCachedProductsPageData(
   const where = buildProductsWhere(storeId, query);
   const supplierOptions = [{ id: storeId, name: storeName }];
 
-  if (hasProfitRangeFilter(query) || query.sortBy) {
+  if (hasProfitRangeFilter(query) || query.sortBy || query.searchQuery) {
     // Visible prices and profits can come from variant ranges. Compute the
     // complete filtered order first so sorting remains correct across pages.
     const orderedIds = await getComputedProductOrderIds(where, query);

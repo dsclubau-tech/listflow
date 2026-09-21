@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { serializeEbayActionJob } from "@/lib/ebay-action-jobs";
 import { prisma } from "@/lib/prisma";
 import { getCurrentStoreSession } from "@/lib/store-session";
+import { getEbayActionQueuePositions } from "@/lib/ebay-action-queue";
 
 export async function GET(
   _request: Request,
@@ -27,5 +28,17 @@ export async function GET(
     return NextResponse.json({ error: "Job not found" }, { status: 404 });
   }
 
-  return NextResponse.json({ job: serializeEbayActionJob(job) });
+  const activeJobs = await prisma.ebayActionJob.findMany({
+    where: {
+      storeId: storeSession.storeId,
+      status: { in: ["QUEUED", "RUNNING"] },
+      dismissedAt: null,
+    },
+    select: { id: true, status: true, createdAt: true },
+  });
+  const queuePosition = getEbayActionQueuePositions(activeJobs).get(job.id) ?? null;
+
+  return NextResponse.json({
+    job: { ...serializeEbayActionJob(job), queuePosition },
+  });
 }

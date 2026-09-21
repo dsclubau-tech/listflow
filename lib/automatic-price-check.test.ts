@@ -83,10 +83,12 @@ describe("automatic-price-check configuration", () => {
     const intervalMs = 3600_000;
     const now = new Date("2026-09-04T13:00:00.000Z");
 
-    const dateResult = fixedTarget instanceof Date ? fixedTarget : new Date(now.getTime() + fixedTarget);
+    const dateSchedule: Date | number = fixedTarget as Date | number;
+    const dateResult = dateSchedule instanceof Date ? dateSchedule : new Date(now.getTime() + dateSchedule);
     assert.equal(dateResult.toISOString(), "2026-09-04T14:00:00.000Z");
 
-    const intervalResult = intervalMs instanceof Date ? intervalMs : new Date(now.getTime() + intervalMs);
+    const intervalSchedule: Date | number = intervalMs as Date | number;
+    const intervalResult = intervalSchedule instanceof Date ? intervalSchedule : new Date(now.getTime() + intervalSchedule);
     assert.equal(intervalResult.toISOString(), "2026-09-04T14:00:00.000Z");
   });
 });

@@ -38,6 +38,16 @@ test("chunkInventoryReviseItems splits nine items into three eBay batches", () =
   ]);
 });
 
+for (const size of [200, 250, 500]) {
+  test(`chunkInventoryReviseItems preserves all ${size} items in four-item batches`, () => {
+    const productIds = ids(size);
+    const batches = chunkInventoryReviseItems(productIds);
+    assert.deepEqual(batches.flat(), productIds);
+    assert.equal(batches.length, Math.ceil(size / 4));
+    assert.equal(batches.every((batch) => batch.length >= 1 && batch.length <= 4), true);
+  });
+}
+
 test("shouldRetryInventoryBatchIndividually retries failed multi-item batches only", () => {
   assert.equal(
     shouldRetryInventoryBatchIndividually({ success: false, itemCount: 4 }),

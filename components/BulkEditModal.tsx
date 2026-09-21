@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import ActionProgressBar from "@/components/ActionProgressBar";
 import { PostcodeAutocomplete } from "@/components/PostcodeAutocomplete";
@@ -87,6 +87,8 @@ type BulkEditJob = {
   succeeded: number;
   failed: number;
   errors: BulkEditJobError[];
+  updatedAt?: string;
+  queuePosition?: number | null;
 };
 
 type BulkEditSkipped = {
@@ -100,6 +102,7 @@ interface BulkEditModalProps {
   storeId: string | null;
   selectedProductIds: string[];
   onClose: () => void;
+  onOpen: () => void;
   onToast: (message: string, variant: ToastVariant) => void;
 }
 
@@ -158,6 +161,7 @@ const EMPTY_SUPPORT_DATA_LOADED: SupportDataLoaded = {
   policyTemplates: false,
   descriptionTemplates: false,
 };
+const BULK_EDIT_JOB_STORAGE_PREFIX = "listflow:bulk-edit-job:";
 
 function makeItem(field: BulkEditField): BulkEditItem {
   const numericDefault =
@@ -252,6 +256,7 @@ export default function BulkEditModal({
   storeId,
   selectedProductIds,
   onClose,
+  onOpen,
   onToast,
 }: BulkEditModalProps) {
   const router = useRouter();
@@ -267,8 +272,12 @@ export default function BulkEditModal({
   );
   const [loadingPolicies, setLoadingPolicies] = useState(false);
   const [job, setJob] = useState<BulkEditJob | null>(null);
+  const requestIdRef = useRef<string | null>(null);
   const [skipped, setSkipped] = useState<BulkEditSkipped[]>([]);
   const [terminalNotifiedJobId, setTerminalNotifiedJobId] = useState<string | null>(null);
+  const [workerOnline, setWorkerOnline] = useState<boolean | null>(null);
+  const [pollingInterrupted, setPollingInterrupted] = useState(false);
+  const lastSuccessfulPollRef = useRef(Date.now());
   const selectedStoreId = storeId;
   const selectedCount = selectedProductIds.length;
   const selectedFields = useMemo(
@@ -350,11 +359,11 @@ export default function BulkEditModal({
 
   useEffect(() => {
     if (!open) {
+      requestIdRef.current = null;
       setItems([]);
       setMenuOpen(false);
       setFieldSearch("");
       setSubmitting(false);
-      setJob(null);
       setSkipped([]);
       setTerminalNotifiedJobId(null);
       setPolicies(null);
@@ -364,6 +373,21 @@ export default function BulkEditModal({
       setLoadingPolicies(false);
     }
   }, [open]);
+
+  useEffect(() => {
+    if (!selectedStoreId || job) return;
+    const savedJobId = window.localStorage.getItem(
+      `${BULK_EDIT_JOB_STORAGE_PREFIX}${selectedStoreId}`,
+    );
+    if (!savedJobId) return;
+    void fetch(`/api/products/bulk-edit/jobs/${savedJobId}`, { cache: "no-store" })
+      .then(async (response) => {
+        const data = (await response.json().catch(() => ({}))) as { job?: BulkEditJob };
+        if (response.ok && data.job) setJob(data.job);
+        else window.localStorage.removeItem(`${BULK_EDIT_JOB_STORAGE_PREFIX}${selectedStoreId}`);
+      })
+      .catch(() => setPollingInterrupted(true));
+  }, [job, selectedStoreId]);
 
   useEffect(() => {
     if (!open) {
@@ -502,31 +526,63 @@ export default function BulkEditModal({
     supportDataLoaded,
   ]);
 
+  const polledJobId = job?.id ?? null;
+  const polledJobActive = isActiveJob(job);
+
   useEffect(() => {
-    if (!job || !isActiveJob(job)) {
+    if (!polledJobId || !polledJobActive) {
       return;
     }
 
     let cancelled = false;
-    const jobId = job.id;
+    let polling = false;
+    const jobId = polledJobId;
 
     async function pollJob() {
+      if (polling) return;
+      polling = true;
       try {
-        const response = await fetch(`/api/products/bulk-edit/jobs/${jobId}`, {
-          cache: "no-store",
-        });
+        const [response, workerResponse] = await Promise.all([
+          fetch(`/api/products/bulk-edit/jobs/${jobId}`, {
+            cache: "no-store",
+            signal: AbortSignal.timeout(10_000),
+          }),
+          fetch("/api/worker/status", {
+            cache: "no-store",
+            signal: AbortSignal.timeout(10_000),
+          }),
+        ]);
         const data = (await response.json().catch(() => ({}))) as {
           job?: BulkEditJob;
         };
 
         if (!cancelled && response.ok && data.job) {
           setJob(data.job);
+          lastSuccessfulPollRef.current = Date.now();
+          setPollingInterrupted(false);
+        }
+        const workerData = (await workerResponse.json().catch(() => ({}))) as {
+          workers?: Array<{ online?: boolean; capabilities?: string[] }>;
+        };
+        if (!cancelled && workerResponse.ok) {
+          setWorkerOnline(
+            workerData.workers?.some(
+              (worker) =>
+                worker.online === true &&
+                worker.capabilities?.includes("durable-bulk-edit-v1"),
+            ) === true,
+          );
         }
       } catch {
-        // Keep the visible job state; the next poll may recover.
+        if (!cancelled && Date.now() - lastSuccessfulPollRef.current >= 15_000) {
+          setPollingInterrupted(true);
+        }
+      } finally {
+        polling = false;
       }
     }
 
+    void pollJob();
     const interval = window.setInterval(() => {
       void pollJob();
     }, 2000);
@@ -535,7 +591,7 @@ export default function BulkEditModal({
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [job]);
+  }, [polledJobActive, polledJobId]);
 
   useEffect(() => {
     if (!isTerminalJob(job) || !job || terminalNotifiedJobId === job.id) {
@@ -543,6 +599,9 @@ export default function BulkEditModal({
     }
 
     setTerminalNotifiedJobId(job.id);
+    if (selectedStoreId && job.failed === 0) {
+      window.localStorage.removeItem(`${BULK_EDIT_JOB_STORAGE_PREFIX}${selectedStoreId}`);
+    }
     router.refresh();
     onToast(
       job.failed > 0
@@ -550,10 +609,25 @@ export default function BulkEditModal({
         : `Bulk edit finished for ${job.succeeded} listing${job.succeeded === 1 ? "" : "s"}.`,
       job.failed > 0 ? "error" : "success"
     );
-  }, [job, onToast, router, terminalNotifiedJobId]);
+  }, [job, onToast, router, selectedStoreId, terminalNotifiedJobId]);
 
   if (!open) {
-    return null;
+    if (!job) return null;
+    return (
+      <button
+        type="button"
+        onClick={onOpen}
+        className="fixed bottom-4 right-4 z-40 w-72 rounded-lg border border-blue-200 bg-white p-3 text-left shadow-lg"
+      >
+        <ActionProgressBar
+          label={isActiveJob(job) ? "Bulk edit in progress" : "Bulk edit finished"}
+          percent={getProgressPercent(job)}
+          detail={`${job.processed}/${job.total} processed`}
+          tone={job.failed > 0 ? "red" : isTerminalJob(job) ? "green" : "blue"}
+        />
+        <span className="mt-2 block text-xs font-semibold text-blue-700">View details</span>
+      </button>
+    );
   }
 
   function addField(field: BulkEditField) {
@@ -562,18 +636,21 @@ export default function BulkEditModal({
       return;
     }
 
+    requestIdRef.current = null;
     setItems((current) => [...current, makeItem(field)]);
     setMenuOpen(false);
     setFieldSearch("");
   }
 
   function updateItem(id: string, patch: Partial<BulkEditItem>) {
+    requestIdRef.current = null;
     setItems((current) =>
       current.map((item) => (item.id === id ? { ...item, ...patch } : item))
     );
   }
 
   function removeItem(id: string) {
+    requestIdRef.current = null;
     setItems((current) => current.filter((item) => item.id !== id));
   }
 
@@ -614,6 +691,7 @@ export default function BulkEditModal({
           productIds: selectedProductIds,
           operations,
           reviseEbay: true,
+          requestId: requestIdRef.current ?? (requestIdRef.current = crypto.randomUUID()),
         }),
       });
       const data = (await response.json().catch(() => ({}))) as {
@@ -628,10 +706,32 @@ export default function BulkEditModal({
       }
 
       setJob(data.job);
+      requestIdRef.current = null;
+      if (selectedStoreId) {
+        window.localStorage.setItem(`${BULK_EDIT_JOB_STORAGE_PREFIX}${selectedStoreId}`, data.job.id);
+      }
       setSkipped(data.skipped ?? []);
       onToast(data.message || "Bulk edit queued.", "success");
     } catch (error) {
       onToast(error instanceof Error ? error.message : "Bulk edit failed.", "error");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function retryFailedItems() {
+    if (!job || job.failed === 0) return;
+    setSubmitting(true);
+    try {
+      const response = await fetch(`/api/products/bulk-edit/jobs/${job.id}/retry`, { method: "POST" });
+      const data = (await response.json().catch(() => ({}))) as { job?: BulkEditJob; error?: string };
+      if (!response.ok || !data.job) throw new Error(data.error || "Unable to retry failed items.");
+      setJob(data.job);
+      setTerminalNotifiedJobId(null);
+      lastSuccessfulPollRef.current = Date.now();
+      onToast("Failed listings were queued again.", "success");
+    } catch (error) {
+      onToast(error instanceof Error ? error.message : "Unable to retry failed items.", "error");
     } finally {
       setSubmitting(false);
     }
@@ -835,6 +935,10 @@ export default function BulkEditModal({
       onToast("Bulk edit is still running in the background.", "success");
     }
 
+    if (terminalJob && job?.failed === 0) {
+      setJob(null);
+    }
+
     onClose();
   }
 
@@ -974,6 +1078,24 @@ export default function BulkEditModal({
                 detail={`${job.processed}/${job.total} processed (${job.succeeded} succeeded, ${job.failed} failed)`}
                 tone={job.failed > 0 ? "red" : terminalJob ? "green" : "blue"}
               />
+              {!terminalJob && job.queuePosition && job.queuePosition > 1 && (
+                <div className="mt-2 text-xs text-gray-600">Queue position {job.queuePosition}</div>
+              )}
+              {!terminalJob && workerOnline === false && (
+                <div className="mt-2 text-xs font-medium text-amber-700">
+                  No active worker. The job will resume when a worker reconnects.
+                </div>
+              )}
+              {pollingInterrupted && (
+                <div className="mt-2 text-xs font-medium text-red-600" role="alert">
+                  Live progress is unavailable. The job may still be running; retrying status checks automatically.
+                </div>
+              )}
+              {job.updatedAt && !terminalJob && (
+                <div className="mt-1 text-xs text-gray-500">
+                  Last progress {new Date(job.updatedAt).toLocaleTimeString()}
+                </div>
+              )}
               {job.errors.length > 0 && (
                 <div className="mt-3 max-h-28 overflow-y-auto rounded border border-red-200 bg-white p-2">
                   {job.errors.map((error) => (
@@ -983,6 +1105,16 @@ export default function BulkEditModal({
                     </div>
                   ))}
                 </div>
+              )}
+              {terminalJob && job.failed > 0 && (
+                <button
+                  type="button"
+                  onClick={() => void retryFailedItems()}
+                  disabled={submitting || workerOnline === false}
+                  className="mt-3 rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
+                >
+                  {submitting ? "Queuing retry..." : `Retry ${job.failed} failed`}
+                </button>
               )}
             </div>
           )}

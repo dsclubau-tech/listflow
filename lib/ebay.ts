@@ -316,6 +316,7 @@ async function exchangeOAuthAccessToken(
     : "https://api.sandbox.ebay.com";
 
   const response = await fetch(`${oauthBase}/identity/v1/oauth2/token`, {
+    signal: AbortSignal.timeout(30_000),
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
@@ -1121,6 +1122,7 @@ export async function callEbayAddItem(
   try {
     const storeId = await waitForStoreEbayLimit(storeNumber, "TRADING");
     const response = await fetch(EBAY_API_ENDPOINT, {
+      signal: AbortSignal.timeout(30_000),
       method: "POST",
       headers: {
         "X-EBAY-API-SITEID": "15",
@@ -1285,6 +1287,7 @@ export async function callEbayReviseItem(
   try {
     const storeId = await waitForStoreEbayLimit(storeNumber, "TRADING");
     const response = await fetch(EBAY_API_ENDPOINT, {
+      signal: AbortSignal.timeout(30_000),
       method: "POST",
       headers: {
         "X-EBAY-API-SITEID": "15",
@@ -1366,6 +1369,7 @@ export async function callEbayReviseInventoryStatus(
   try {
     const storeId = await waitForStoreEbayLimit(storeNumber, "TRADING");
     const response = await fetch(EBAY_API_ENDPOINT, {
+      signal: AbortSignal.timeout(30_000),
       method: "POST",
       headers: {
         "X-EBAY-API-SITEID": "15",

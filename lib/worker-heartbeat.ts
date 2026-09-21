@@ -12,6 +12,7 @@ export const WORKER_STALE_AFTER_MS = 60_000;
 export const WORKER_CLEANUP_AFTER_MS = 24 * 60 * 60 * 1000; // 24 hours — hide workers not seen since
 export const WORKER_OFFLINE_MESSAGE =
   "Worker offline. Open Start ListFlow Worker on a trusted PC to run price checks, imports, research batches, or quantity changes.";
+export const DURABLE_BULK_EDIT_CAPABILITY = "durable-bulk-edit-v1";
 
 export type SerializedWorkerStatus = {
   online: boolean;
@@ -22,6 +23,7 @@ export type SerializedWorkerStatus = {
   staleAfterSeconds: number;
   message: string | null;
   currentJobs: SerializedJobLease[];
+  capabilities: string[];
 };
 
 type WorkerHeartbeatInput = {
@@ -31,6 +33,7 @@ type WorkerHeartbeatInput = {
   workerRole: WorkerRole;
   startedAt: Date;
   version?: string | null;
+  capabilities?: string[];
 };
 
 function serializeWorkerStatus(
@@ -40,6 +43,7 @@ function serializeWorkerStatus(
         workerName: string;
         workerRole: string;
         lastSeenAt: Date;
+        capabilities: string[];
       }
     | null,
   currentJobs: SerializedJobLease[] = []
@@ -57,6 +61,7 @@ function serializeWorkerStatus(
     staleAfterSeconds: Math.round(WORKER_STALE_AFTER_MS / 1000),
     message: online ? null : WORKER_OFFLINE_MESSAGE,
     currentJobs,
+    capabilities: heartbeat?.capabilities ?? [],
   };
 }
 
@@ -72,6 +77,7 @@ export function getOfflineWorkerStatus(
     staleAfterSeconds: Math.round(WORKER_STALE_AFTER_MS / 1000),
     message,
     currentJobs: [],
+    capabilities: [],
   };
 }
 
@@ -94,6 +100,7 @@ export async function touchWorkerHeartbeat(input: WorkerHeartbeatInput) {
       startedAt: input.startedAt,
       lastSeenAt: now,
       version: input.version ?? null,
+      capabilities: input.capabilities ?? [],
     },
     update: {
       workerName: input.workerName,
@@ -101,6 +108,7 @@ export async function touchWorkerHeartbeat(input: WorkerHeartbeatInput) {
       status: "ONLINE",
       lastSeenAt: now,
       version: input.version ?? null,
+      capabilities: { set: input.capabilities ?? [] },
     },
   });
 }
@@ -125,6 +133,7 @@ export async function getWorkerStatusesForStore(storeId: string) {
       workerName: true,
       workerRole: true,
       lastSeenAt: true,
+      capabilities: true,
     },
   });
   const leases = await listActiveJobLeasesForStore(storeId);
@@ -160,4 +169,20 @@ export async function assertWorkerOnlineForStore(storeId: string) {
   }
 
   return status;
+}
+
+export async function assertWorkerSupportsDurableBulkEdit(storeId: string) {
+  const workers = await getWorkerStatusesForStore(storeId);
+  const capable = workers.find(
+    (worker) =>
+      worker.online && worker.capabilities.includes(DURABLE_BULK_EDIT_CAPABILITY),
+  );
+  if (!capable) {
+    const error = new Error(
+      "An upgraded ListFlow worker is required for reliable bulk editing. Update and restart the worker, then try again.",
+    );
+    error.name = "WorkerOfflineError";
+    throw error;
+  }
+  return capable;
 }

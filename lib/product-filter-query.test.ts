@@ -21,7 +21,7 @@ test("normalizeProductsQuery parses range and select filters", () => {
     sellPriceMin: "100",
     buyPriceMax: "80",
     quantityMin: "1",
-    feesMax: "13",
+    feesPercentMax: "13.25",
     promotedAdPercentMin: "3",
     adFeeStatus: "promoted",
     inventoryStatus: "on-hold",
@@ -40,7 +40,7 @@ test("normalizeProductsQuery parses range and select filters", () => {
   assert.equal(query.sellPriceMin, 100);
   assert.equal(query.buyPriceMax, 80);
   assert.equal(query.quantityMin, 1);
-  assert.equal(query.feesMax, 13);
+  assert.equal(query.feesPercentMax, 13.25);
   assert.equal(query.promotedAdPercentMin, 3);
   assert.equal(query.adFeeStatus, "promoted");
   assert.equal(query.inventoryStatus, "on-hold");
@@ -80,11 +80,12 @@ test("buildProductsWhere applies search filters", () => {
 
   assert.equal(serialized.includes("charger"), true);
   assert.equal(serialized.includes("title"), true);
+  assert.equal(serialized.includes("fullTitle"), true);
   assert.equal(serialized.includes("asin"), true);
   assert.equal(serialized.includes("ebayItemId"), true);
 });
 
-test("buildProductsWhere applies buy, sell, quantity, and fees filters", () => {
+test("buildProductsWhere applies decimal fee ranges to their matching units", () => {
   const where = buildProductsWhere(
     "store-1",
     normalizeProductsQuery({
@@ -94,8 +95,10 @@ test("buildProductsWhere applies buy, sell, quantity, and fees filters", () => {
       buyPriceMax: "30",
       quantityMin: "1",
       quantityMax: "5",
-      feesMin: "1",
-      feesMax: "13",
+      feesPercentMin: "0.35",
+      feesPercentMax: "13.25",
+      feesFixedMin: "3.50",
+      feesFixedMax: "3.50",
     })
   );
   const serialized = stringify(where);
@@ -106,6 +109,21 @@ test("buildProductsWhere applies buy, sell, quantity, and fees filters", () => {
   assert.equal(serialized.includes("quantity"), true);
   assert.equal(serialized.includes("feesPercent"), true);
   assert.equal(serialized.includes("feesFixed"), true);
+  const variantsClause = (where.AND as Array<Record<string, unknown>>).find(
+    (clause) => "variants" in clause,
+  ) as { variants: { some: Record<string, unknown> } };
+  assert.deepEqual(variantsClause.variants.some, {
+    feesPercent: { gte: 0.35, lte: 13.25 },
+    feesFixed: { gte: 3.5, lte: 3.5 },
+  });
+});
+
+test("legacy fees links map to percentage only and preserve zero", () => {
+  const query = normalizeProductsQuery({ feesMin: "0", feesMax: "0.35" });
+  assert.equal(query.feesPercentMin, 0);
+  assert.equal(query.feesPercentMax, 0.35);
+  assert.equal(query.feesFixedMin, null);
+  assert.equal(query.feesFixedMax, null);
 });
 
 test("buildProductsWhere applies stock and price monitoring filters", () => {

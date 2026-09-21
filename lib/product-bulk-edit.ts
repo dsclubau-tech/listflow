@@ -62,7 +62,7 @@ const COUNTRY_METADATA: Record<
   "United Kingdom": { country: "GB", currency: "GBP", site: "UK" },
 };
 
-function normalizeProductIds(productIds: unknown[]) {
+export function normalizeBulkEditProductIds(productIds: unknown[]) {
   if (!Array.isArray(productIds)) {
     throw new Error("productIds must be an array.");
   }
@@ -403,7 +403,7 @@ function getPolicyPatch(operations: NormalizedBulkEditOperation[]) {
 }
 
 export async function applyBulkProductEdits(input: ApplyBulkProductEditsInput) {
-  const productIds = normalizeProductIds(input.productIds);
+  const productIds = normalizeBulkEditProductIds(input.productIds);
   const operations = normalizeBulkEditOperations(input.operations);
   const hasExactTitleSet =
     productIds.length > 1 &&
@@ -647,4 +647,195 @@ export async function applyBulkProductEdits(input: ApplyBulkProductEditsInput) {
     operationFields: Array.from(new Set(operations.map((operation) => operation.field))),
     skipped,
   };
+}
+
+export async function prepareBulkProductEditJob(input: ApplyBulkProductEditsInput) {
+  const productIds = normalizeBulkEditProductIds(input.productIds);
+  const operations = normalizeBulkEditOperations(input.operations);
+  const hasExactTitleSet =
+    productIds.length > 1 &&
+    operations.some(
+      (operation) =>
+        operation.field === "title" &&
+        operation.mode === "set" &&
+        operation.confirmed !== true,
+    );
+
+  if (hasExactTitleSet) {
+    throw new Error("Confirm exact title replacement before updating multiple products.");
+  }
+
+  const products = await prisma.product.findMany({
+    where: { id: { in: productIds }, storeId: input.storeId },
+    select: {
+      id: true,
+      title: true,
+      status: true,
+      ebayItemId: true,
+      _count: { select: { variants: true } },
+    },
+  });
+  const byId = new Map(products.map((product) => [product.id, product]));
+  const variantOperation = hasVariantOperation(operations);
+  const eligibleProductIds: string[] = [];
+  const skipped: BulkEditSkippedProduct[] = [];
+
+  for (const productId of productIds) {
+    const product = byId.get(productId);
+    let reason: string | null = null;
+    if (!product) reason = "Product was not found.";
+    else if (
+      product.status !== ProductStatus.IMPORTED &&
+      product.status !== ProductStatus.ON_HOLD
+    ) reason = "Product is not imported or on hold.";
+    else if (!product.ebayItemId) reason = "Product has no eBay Item ID.";
+    else if (variantOperation && product._count.variants === 0) {
+      reason = "Product has no variants to update.";
+    }
+
+    if (reason) {
+      skipped.push({ productId, title: product?.title ?? "(missing)", reason });
+    } else {
+      eligibleProductIds.push(productId);
+    }
+  }
+
+  return {
+    productIds: eligibleProductIds,
+    operations,
+    operationFields: Array.from(new Set(operations.map((operation) => operation.field))),
+    skipped,
+  };
+}
+
+export type BulkEditProductSnapshot = {
+  product: {
+    id: string;
+    updatedAt: string;
+    title: string;
+    description: string;
+    itemSpecifics: Prisma.JsonValue;
+    templateId: string | null;
+    shippingPolicyId: string | null;
+    returnPolicyId: string | null;
+    paymentPolicyId: string | null;
+    policyTemplateId: string | null;
+    quantity: number;
+    status: ProductStatus;
+    holdReason: string | null;
+    price: string;
+    errorMessage: string | null;
+  };
+  variants: Array<{
+    id: string;
+    feesPercent: number;
+    feesFixed: number;
+    profitPercent: number;
+    profitFixed: number;
+    roundCents: number | null;
+    quantity: number;
+    sellPrice: string;
+  }>;
+};
+
+export async function captureBulkProductEditSnapshot(
+  storeId: string,
+  productId: string,
+): Promise<BulkEditProductSnapshot> {
+  const product = await prisma.product.findFirstOrThrow({
+    where: { id: productId, storeId },
+    select: {
+      id: true,
+      updatedAt: true,
+      title: true,
+      description: true,
+      itemSpecifics: true,
+      templateId: true,
+      shippingPolicyId: true,
+      returnPolicyId: true,
+      paymentPolicyId: true,
+      policyTemplateId: true,
+      quantity: true,
+      status: true,
+      holdReason: true,
+      price: true,
+      errorMessage: true,
+      variants: {
+        select: {
+          id: true,
+          feesPercent: true,
+          feesFixed: true,
+          profitPercent: true,
+          profitFixed: true,
+          roundCents: true,
+          quantity: true,
+          sellPrice: true,
+        },
+      },
+    },
+  });
+
+  const { variants, ...productFields } = product;
+  return {
+    product: {
+      ...productFields,
+      updatedAt: product.updatedAt.toISOString(),
+      price: product.price.toString(),
+    },
+    variants: variants.map((variant) => ({
+      ...variant,
+      sellPrice: variant.sellPrice.toString(),
+    })),
+  };
+}
+
+export async function restoreBulkProductEditSnapshot(
+  snapshot: BulkEditProductSnapshot,
+  expectedAppliedAt?: Date | null,
+) {
+  await prisma.$transaction(async (tx) => {
+    if (expectedAppliedAt) {
+      const current = await tx.product.findUnique({
+        where: { id: snapshot.product.id },
+        select: { updatedAt: true },
+      });
+      if (!current || current.updatedAt.getTime() !== expectedAppliedAt.getTime()) {
+        throw new Error("Product changed after the bulk edit started; automatic rollback was stopped.");
+      }
+    }
+
+    for (const variant of snapshot.variants) {
+      await tx.variant.update({
+        where: { id: variant.id },
+        data: {
+          feesPercent: variant.feesPercent,
+          feesFixed: variant.feesFixed,
+          profitPercent: variant.profitPercent,
+          profitFixed: variant.profitFixed,
+          roundCents: variant.roundCents,
+          quantity: variant.quantity,
+          sellPrice: new Prisma.Decimal(variant.sellPrice),
+        },
+      });
+    }
+    const product = snapshot.product;
+    await tx.product.update({
+      where: { id: product.id },
+      data: {
+        title: product.title,
+        description: product.description,
+        itemSpecifics: product.itemSpecifics as Prisma.InputJsonValue,
+        templateId: product.templateId,
+        shippingPolicyId: product.shippingPolicyId,
+        returnPolicyId: product.returnPolicyId,
+        paymentPolicyId: product.paymentPolicyId,
+        policyTemplateId: product.policyTemplateId,
+        quantity: product.quantity,
+        status: product.status,
+        holdReason: product.holdReason,
+        price: new Prisma.Decimal(product.price),
+        errorMessage: product.errorMessage,
+      },
+    });
+  });
 }

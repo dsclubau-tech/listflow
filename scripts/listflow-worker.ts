@@ -277,6 +277,7 @@ async function heartbeat(storeIds = heartbeatStoreIds) {
         workerRole,
         startedAt,
         version: process.env.npm_package_version ?? null,
+        capabilities: ["durable-bulk-edit-v1"],
       })
     )
   );

@@ -33,6 +33,7 @@ import {
 } from "@/lib/product-filter-navigation";
 import { getProductSelectionScopeKey } from "@/lib/product-selection";
 import type { ProductSortField, ProductSortOrder } from "@/lib/product-sort";
+import { getProductRangeFilterValidationError } from "@/lib/product-filter-ranges";
 import type { ProductSelectionSummary } from "@/types/product-selection";
 import type { SerializedProductRow } from "@/types/product-row";
 
@@ -105,7 +106,8 @@ const RANGE_FILTER_IDS = new Set<ProductAdvancedFilterId>([
   "buyPrice",
   "profit",
   "quantity",
-  "fees",
+  "feesPercent",
+  "feesFixed",
   "promotedAdPercent",
 ]);
 const STATIC_SELECT_OPTIONS: Partial<
@@ -187,6 +189,13 @@ function getAdvancedFilterDraftFromQueryString(queryString: string) {
   const params = new URLSearchParams(queryString);
   const draft: AdvancedFilterDraft = {};
 
+  if (params.has("feesMin")) {
+    draft.feesPercentMin = params.get("feesMin") ?? "";
+  }
+  if (params.has("feesMax")) {
+    draft.feesPercentMax = params.get("feesMax") ?? "";
+  }
+
   PRODUCT_ADVANCED_FILTERS.forEach((filter) => {
     if (RANGE_FILTER_IDS.has(filter.id)) {
       const keys = getRangeParamKeys(filter.id);
@@ -258,6 +267,8 @@ function applyAdvancedFilterDraftToParams(
   params: URLSearchParams,
   draft: AdvancedFilterDraft
 ) {
+  params.delete("feesMin");
+  params.delete("feesMax");
   PRODUCT_ADVANCED_FILTERS.forEach((filter) => {
     if (RANGE_FILTER_IDS.has(filter.id)) {
       const keys = getRangeParamKeys(filter.id);
@@ -418,6 +429,7 @@ export default function ProductsPageClient({
   const [isSearchSuggestionsOpen, setIsSearchSuggestionsOpen] = useState(false);
   const [isLoadingSearchSuggestions, setIsLoadingSearchSuggestions] =
     useState(false);
+  const [searchSuggestionsError, setSearchSuggestionsError] = useState(false);
   const [activeSearchSuggestionIndex, setActiveSearchSuggestionIndex] =
     useState(-1);
   const [advancedFilterDraft, setAdvancedFilterDraft] = useState<AdvancedFilterDraft>(
@@ -562,7 +574,9 @@ export default function ProductsPageClient({
   }, [pageSize, pathname, router, searchParams]);
 
   useEffect(() => {
-    setSearchDraft(searchQuery);
+    if (document.activeElement !== searchInputRef.current) {
+      setSearchDraft(searchQuery);
+    }
   }, [searchQuery]);
 
   useEffect(() => {
@@ -572,6 +586,7 @@ export default function ProductsPageClient({
       setSearchSuggestions([]);
       setIsSearchSuggestionsOpen(false);
       setIsLoadingSearchSuggestions(false);
+      setSearchSuggestionsError(false);
       setActiveSearchSuggestionIndex(-1);
       return;
     }
@@ -579,6 +594,7 @@ export default function ProductsPageClient({
     const controller = new AbortController();
     const timeout = window.setTimeout(async () => {
       setIsLoadingSearchSuggestions(true);
+      setSearchSuggestionsError(false);
 
       try {
         const response = await fetch(
@@ -602,6 +618,7 @@ export default function ProductsPageClient({
       } catch (error) {
         if (!(error instanceof DOMException && error.name === "AbortError")) {
           setSearchSuggestions([]);
+          setSearchSuggestionsError(true);
         }
       } finally {
         if (!controller.signal.aborted) {
@@ -1062,6 +1079,11 @@ export default function ProductsPageClient({
     ) => {
       const trimmed = (options?.search ?? searchDraft).trim();
       const filtersToApply = options?.advancedDraft ?? advancedFilterDraft;
+      const validationError = getProductRangeFilterValidationError(filtersToApply);
+      if (validationError) {
+        showToast(validationError, "error");
+        return;
+      }
       const params = new URLSearchParams(searchParams.toString());
       params.set("page", "1");
 
@@ -1096,8 +1118,26 @@ export default function ProductsPageClient({
         router.replace(nextUrl);
       }
     },
-    [advancedFilterDraft, pathname, router, searchDraft, searchParams]
+    [advancedFilterDraft, pathname, router, searchDraft, searchParams, showToast]
   );
+
+  useEffect(() => {
+    const query = searchDraft.trim();
+    if ((query.length > 0 && query.length < 2) || query === searchQuery) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      const params = new URLSearchParams(searchParamsString);
+      params.set("page", "1");
+      params.delete("productId");
+      if (query) params.set("q", query);
+      else params.delete("q");
+      router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+    }, query ? 250 : 0);
+
+    return () => window.clearTimeout(timeout);
+  }, [pathname, router, searchDraft, searchParamsString, searchQuery]);
 
   const selectSearchSuggestion = useCallback(
     (suggestion: ProductSearchSuggestion) => {
@@ -1294,6 +1334,10 @@ export default function ProductsPageClient({
 
     if (RANGE_FILTER_IDS.has(filterId)) {
       const keys = getRangeParamKeys(filterId);
+      const filterError = getProductRangeFilterValidationError({
+        [keys.min]: advancedFilterDraft[keys.min] ?? "",
+        [keys.max]: advancedFilterDraft[keys.max] ?? "",
+      });
 
       return (
         <div className="flex items-center gap-2">
@@ -1306,6 +1350,7 @@ export default function ProductsPageClient({
             }
             onKeyDown={handleAdvancedFilterKeyDown}
             placeholder="Min"
+            aria-invalid={Boolean(filterError)}
             className="h-8 w-20 rounded border border-gray-300 px-2 text-xs text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
           />
           <input
@@ -1317,6 +1362,7 @@ export default function ProductsPageClient({
             }
             onKeyDown={handleAdvancedFilterKeyDown}
             placeholder="Max"
+            aria-invalid={Boolean(filterError)}
             className="h-8 w-20 rounded border border-gray-300 px-2 text-xs text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
           />
         </div>
@@ -1361,6 +1407,7 @@ export default function ProductsPageClient({
   const activeAdvancedFilters = PRODUCT_ADVANCED_FILTERS.filter((filter) =>
     isAdvancedFilterActive(filter.id)
   );
+  const rangeFilterValidationError = getProductRangeFilterValidationError(advancedFilterDraft);
   const hasPendingProductQueryChanges =
     searchDraft.trim() !== searchQuery ||
     getAdvancedFilterDraftSignature(advancedFilterDraft) !==
@@ -1968,6 +2015,10 @@ export default function ProductsPageClient({
                     <div className="px-3 py-3 text-sm text-gray-500">
                       Searching products...
                     </div>
+                  ) : searchSuggestionsError ? (
+                    <div className="px-3 py-3 text-sm text-red-600" role="alert">
+                      Search suggestions are temporarily unavailable
+                    </div>
                   ) : searchSuggestions.length > 0 ? (
                     searchSuggestions.map((suggestion, index) => (
                       <button
@@ -2328,11 +2379,12 @@ export default function ProductsPageClient({
           <button
             type="button"
             onClick={() => applyProductSearchAndFilters("push")}
+            disabled={Boolean(rangeFilterValidationError)}
             className={`rounded-md px-3 py-2 text-sm font-semibold transition-colors ${
               hasPendingProductQueryChanges
                 ? "bg-gray-900 text-white hover:bg-gray-700"
                 : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-            }`}
+            } disabled:cursor-not-allowed disabled:opacity-50`}
           >
             Search
           </button>
@@ -2343,6 +2395,11 @@ export default function ProductsPageClient({
           >
             Clear filters
           </button>
+          {rangeFilterValidationError && (
+            <span className="w-full text-xs font-medium text-red-600" role="alert">
+              {rangeFilterValidationError}
+            </span>
+          )}
         </div>
       )}
 
@@ -2374,8 +2431,9 @@ export default function ProductsPageClient({
 
       <BulkEditModal
         open={isBulkEditOpen}
-        storeId={selectionProducts[0]?.storeId ?? null}
+        storeId={supplierOptions[0]?.id ?? null}
         selectedProductIds={selectedProductIds}
+        onOpen={() => setIsBulkEditOpen(true)}
         onClose={() => setIsBulkEditOpen(false)}
         onToast={showToast}
       />

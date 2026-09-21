@@ -287,6 +287,7 @@ model Product {
   uploadLogs   UploadLog[]
   variants     Variant[]
   priceHistory PriceHistory[]
+  bulkEditJobItems BulkEditJobItem[]
 
   @@index([storeId, status])
   @@index([storeId, asin])
@@ -634,14 +635,39 @@ model EbayActionJob {
   startedAt           DateTime?
   completedAt         DateTime?
   dismissedAt         DateTime?
+  requestId           String?
 
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+  bulkEditItems BulkEditJobItem[]
 
+  @@unique([storeId, requestId])
   @@index([userId, status])
   @@index([storeId, status])
   @@index([storeId, createdAt])
   @@index([dismissedAt])
+}
+
+model BulkEditJobItem {
+  id                       String   @id @default(cuid())
+  jobId                    String
+  productId                String
+  status                   String   @default("PENDING")
+  payload                  Json
+  attempts                 Int      @default(0)
+  error                    String?  @db.Text
+  originalProductUpdatedAt DateTime?
+  appliedAt                DateTime?
+  completedAt              DateTime?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  job     EbayActionJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  product Product       @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, productId])
+  @@index([jobId, status])
+  @@index([productId])
 }
 
 model WorkerHeartbeat {
@@ -893,4 +919,3 @@ model ProfitTier {
 
   @@index([supplierSettingsId])
 }
-

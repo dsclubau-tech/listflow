@@ -22,7 +22,8 @@ export const PRODUCT_ADVANCED_FILTERS = [
   { id: "priceMonitoring", label: "Price Monitoring", control: "select", enabled: true },
   { id: "autoOrder", label: "Auto Order", control: "select", enabled: true },
   { id: "veroViolation", label: "Vero Violation", control: "select", enabled: true },
-  { id: "fees", label: "Fees", control: "range", enabled: true },
+  { id: "feesPercent", label: "Fees %", control: "range", enabled: true },
+  { id: "feesFixed", label: "Fixed Fees $", control: "range", enabled: true },
 ] as const satisfies ReadonlyArray<{
   id: string;
   label: string;

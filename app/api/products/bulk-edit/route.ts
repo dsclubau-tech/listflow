@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { EbayActionJobType } from "@/app/generated/prisma/enums";
-import { invalidateJobCaches, invalidateProductCaches } from "@/lib/cache-tags";
+import { invalidateJobCaches } from "@/lib/cache-tags";
 import { createEbayActionJob } from "@/lib/ebay-action-jobs";
 import { createRequestLogger } from "@/lib/logger";
-import { applyBulkProductEdits } from "@/lib/product-bulk-edit";
+import { prepareBulkProductEditJob } from "@/lib/product-bulk-edit";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
-import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
+import { assertWorkerSupportsDurableBulkEdit } from "@/lib/worker-heartbeat";
 
 function getErrorStatus(error: unknown) {
   if (
@@ -36,6 +36,7 @@ export async function POST(request: Request) {
     productIds?: unknown[];
     operations?: unknown;
     reviseEbay?: unknown;
+    requestId?: unknown;
   } | null;
 
   if (!body) {
@@ -49,10 +50,18 @@ export async function POST(request: Request) {
     );
   }
 
-  try {
-    await assertWorkerOnlineForStore(storeSession.storeId);
+  if (
+    typeof body.requestId !== "string" ||
+    body.requestId.trim().length < 8 ||
+    body.requestId.length > 100
+  ) {
+    return NextResponse.json({ error: "A valid bulk-edit request ID is required." }, { status: 400 });
+  }
 
-    const editResult = await applyBulkProductEdits({
+  try {
+    await assertWorkerSupportsDurableBulkEdit(storeSession.storeId);
+
+    const editResult = await prepareBulkProductEditJob({
       storeId: storeSession.storeId,
       productIds: body.productIds ?? [],
       operations: body.operations ?? [],
@@ -79,10 +88,12 @@ export async function POST(request: Request) {
       metadata: {
         kind: "bulk-edit",
         fields: editResult.operationFields,
+        durable: true,
       },
+      requestId: body.requestId.trim(),
+      itemPayload: { operations: editResult.operations },
     });
 
-    invalidateProductCaches(storeSession.storeId);
     invalidateJobCaches(storeSession.storeId);
 
     return NextResponse.json(
@@ -91,7 +102,7 @@ export async function POST(request: Request) {
         ...jobResult,
         message: jobResult.queued
           ? `Queued ${jobResult.job.total} listing(s) for bulk eBay update.`
-          : "Bulk edit saved locally.",
+          : "Bulk edit completed without queued listings.",
       },
       { status: jobResult.queued ? 202 : 200 }
     );
