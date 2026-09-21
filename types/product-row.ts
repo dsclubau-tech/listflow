@@ -28,6 +28,8 @@ export type SerializedUser = Omit<User, "createdAt" | "updatedAt"> & {
 export interface SerializedProductVariantSummary {
   id: string;
   title: string;
+  quantity?: number;
+  status?: "IN_STOCK" | "OUT_OF_STOCK";
   buyPrice: string;
   feesPercent?: number;
   feesFixed?: number;

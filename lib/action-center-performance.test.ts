@@ -48,3 +48,12 @@ test("reading worker assignments does not issue lease cleanup writes", () => {
   assert.match(reader, /jobLease\.findMany/);
   assert.doesNotMatch(reader, /jobLease\.deleteMany/);
 });
+
+test("Action Center hides the worker summary and keeps empty failed checks visible", () => {
+  const client = readFileSync("components/ActionCenterClient.tsx", "utf8");
+
+  assert.doesNotMatch(client, /No worker has checked in yet\./);
+  assert.doesNotMatch(client, /setActiveFilter\(getDefaultFilter/);
+  assert.match(client, />No failed checks\.<\/div>/);
+  assert.match(client, /message="No failed checks\."/);
+});

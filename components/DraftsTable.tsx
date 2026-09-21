@@ -28,6 +28,10 @@ import {
 } from "@/lib/amazon-price-tracking";
 import { getStoreBadgeClass } from "@/lib/store-badge";
 import {
+  getProductListingStatus,
+  type ProductListingStatus,
+} from "@/lib/product-listing-status";
+import {
   getProductDisplaySellPrices,
   type ProductSortField,
   type ProductSortOrder,
@@ -38,6 +42,8 @@ import {
 } from "@/lib/product-selection";
 import type { ProductSelectionSummary } from "@/types/product-selection";
 import type { SerializedProductRow } from "@/types/product-row";
+
+type RemovalAction = "listflow-only" | "end-ebay";
 
 interface DraftsTableProps {
   products: SerializedProductRow[];
@@ -101,6 +107,24 @@ const statusBadgeLabels: Record<string, string> = {
   IMPORTED: "Imported",
   FAILED: "Failed",
   ON_HOLD: "On Hold",
+};
+
+const productListingStatusPresentation: Record<
+  ProductListingStatus,
+  { label: string; className: string }
+> = {
+  "in-stock": {
+    label: "In stock",
+    className: "bg-green-100 text-green-700 ring-1 ring-inset ring-green-200",
+  },
+  "on-hold": {
+    label: "On hold",
+    className: "bg-yellow-100 text-yellow-800 ring-1 ring-inset ring-yellow-200",
+  },
+  "out-of-stock": {
+    label: "Out of stock",
+    className: "bg-blue-100 text-blue-700 ring-1 ring-inset ring-blue-200",
+  },
 };
 
 function getProductHoldReason(product: Pick<SerializedProductRow, "status" | "holdReason" | "priceCheckError" | "amazonStockLeft" | "quantity">) {
@@ -746,6 +770,7 @@ export default function DraftsTable({
     useState<SerializedProductRow | null>(null);
   const [removalProduct, setRemovalProduct] =
     useState<SerializedProductRow | null>(null);
+  const [removalAction, setRemovalAction] = useState<RemovalAction | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
   const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{
@@ -1200,7 +1225,30 @@ export default function DraftsTable({
 
   function openRemovalDialog(product: SerializedProductRow) {
     setContextMenu(null);
+    setRemovalAction(null);
     setRemovalProduct(product);
+  }
+
+  function closeRemovalDialog() {
+    if (deletingId || endingId) {
+      return;
+    }
+
+    setRemovalProduct(null);
+    setRemovalAction(null);
+  }
+
+  async function handleConfirmRemoval() {
+    if (!removalProduct || !removalAction || deletingId || endingId) {
+      return;
+    }
+
+    if (removalAction === "listflow-only") {
+      await handleRemoveFromListflow(removalProduct.id);
+      return;
+    }
+
+    await handleEndListing(removalProduct.id);
   }
 
   async function handleRemoveFromListflow(productId: string) {
@@ -1215,6 +1263,7 @@ export default function DraftsTable({
         setSelectedIds((prev) => prev.filter((id) => id !== productId));
         setExpandedProductId((current) => (current === productId ? null : current));
         setRemovalProduct(null);
+        setRemovalAction(null);
         router.refresh();
       } else {
         onToast(data.error || "Failed to remove product from ListFlow.", "error");
@@ -1238,6 +1287,7 @@ export default function DraftsTable({
         setSelectedIds((prev) => prev.filter((id) => id !== productId));
         setExpandedProductId((current) => (current === productId ? null : current));
         setRemovalProduct(null);
+        setRemovalAction(null);
         router.refresh();
       } else {
         onToast(data.error || "Failed to end listing.", "error");
@@ -2424,6 +2474,15 @@ export default function DraftsTable({
               const promotedAdState = isProductsView
                 ? getPromotedAdState(product)
                 : null;
+              const listingStatus = isProductsView
+                ? getProductListingStatus(product)
+                : null;
+              const statusPresentation = listingStatus
+                ? productListingStatusPresentation[listingStatus]
+                : {
+                    label: statusBadgeLabels[product.status] || product.status,
+                    className: getStatusBadgeClasses(product.status),
+                  };
               const rowToneClass = isExpanded
                 ? "bg-orange-50"
                 : isFailedDraft
@@ -2535,8 +2594,8 @@ export default function DraftsTable({
 
                           {/* Badges Row: Status + Sold + Promoted + Tracking */}
                           <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
-                            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${getStatusBadgeClasses(product.status)}`}>
-                              {statusBadgeLabels[product.status] || product.status}
+                            <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${statusPresentation.className}`}>
+                              {statusPresentation.label}
                             </span>
                             {product.quantitySold > 0 ? (
                               <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-600/20">
@@ -2707,8 +2766,8 @@ export default function DraftsTable({
                                 <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${getStoreBadgeClass(product.store.id, product.store.name)}`}>
                                   {product.store.name}
                                 </span>
-                                <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${getStatusBadgeClasses(product.status)}`}>
-                                  {statusBadgeLabels[product.status] || product.status}
+                                <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${statusPresentation.className}`}>
+                                  {statusPresentation.label}
                                 </span>
                               </div>
                             </div>
@@ -2941,14 +3000,14 @@ export default function DraftsTable({
 
                     <td className="hidden xl:table-cell px-3 py-3">
                       <span
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getStatusBadgeClasses(product.status)}`}
+                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${statusPresentation.className}`}
                         title={
                           product.status === "ON_HOLD"
                             ? getProductHoldReason(product) ?? undefined
                             : undefined
                         }
                       >
-                        {statusBadgeLabels[product.status] || product.status}
+                        {statusPresentation.label}
                       </span>
                       {product.status === "ON_HOLD" && (
                         <span
@@ -3337,18 +3396,20 @@ export default function DraftsTable({
       {removalProduct && (
         <div
           className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 px-4"
-          onClick={() => {
-            if (!deletingId && !endingId) {
-              setRemovalProduct(null);
-            }
-          }}
+          onClick={closeRemovalDialog}
         >
           <div
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="remove-product-title"
             className="w-full max-w-lg rounded-lg bg-white p-5 shadow-xl"
             onClick={(event) => event.stopPropagation()}
           >
             <div className="mb-4">
-              <h2 className="text-base font-semibold text-gray-900">
+              <h2
+                id="remove-product-title"
+                className="text-base font-semibold text-gray-900"
+              >
                 Remove product
               </h2>
               <p className="mt-1 truncate text-sm text-gray-500">
@@ -3358,9 +3419,14 @@ export default function DraftsTable({
             <div className="space-y-3">
               <button
                 type="button"
-                onClick={() => void handleRemoveFromListflow(removalProduct.id)}
+                onClick={() => setRemovalAction("listflow-only")}
                 disabled={Boolean(deletingId || endingId)}
-                className="w-full rounded-md border border-gray-300 px-4 py-3 text-left transition-colors hover:bg-gray-50 disabled:opacity-50"
+                aria-pressed={removalAction === "listflow-only"}
+                className={`w-full rounded-md border px-4 py-3 text-left transition-colors disabled:opacity-50 ${
+                  removalAction === "listflow-only"
+                    ? "border-blue-500 bg-blue-50 ring-2 ring-blue-500/20"
+                    : "border-gray-300 hover:bg-gray-50"
+                }`}
               >
                 <span className="block text-sm font-semibold text-gray-900">
                   Remove from ListFlow only
@@ -3371,9 +3437,14 @@ export default function DraftsTable({
               </button>
               <button
                 type="button"
-                onClick={() => void handleEndListing(removalProduct.id)}
+                onClick={() => setRemovalAction("end-ebay")}
                 disabled={Boolean(deletingId || endingId)}
-                className="w-full rounded-md border border-quaternary bg-quaternary-soft px-4 py-3 text-left transition-colors hover:border-quaternary-hover disabled:opacity-50"
+                aria-pressed={removalAction === "end-ebay"}
+                className={`w-full rounded-md border px-4 py-3 text-left transition-colors disabled:opacity-50 ${
+                  removalAction === "end-ebay"
+                    ? "border-quaternary bg-quaternary-soft ring-2 ring-quaternary/20"
+                    : "border-gray-300 hover:border-quaternary hover:bg-quaternary-soft"
+                }`}
               >
                 <span className="block text-sm font-semibold text-quaternary-hover">
                   End on eBay and remove from ListFlow
@@ -3383,20 +3454,27 @@ export default function DraftsTable({
                 </span>
               </button>
             </div>
-            <div className="mt-4 flex justify-end">
+            <div className="mt-4 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => setRemovalProduct(null)}
+                onClick={closeRemovalDialog}
                 disabled={Boolean(deletingId || endingId)}
                 className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
               >
                 Cancel
               </button>
+              <button
+                type="button"
+                onClick={() => void handleConfirmRemoval()}
+                disabled={!removalAction || Boolean(deletingId || endingId)}
+                className="rounded-md bg-quaternary px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-quaternary-hover disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {deletingId || endingId ? "Removing..." : "Confirm"}
+              </button>
             </div>
           </div>
         </div>
       )}
-
       {notingProduct && (
         <div
           className="fixed inset-0 z-40 flex items-center justify-center bg-black/30 px-4"

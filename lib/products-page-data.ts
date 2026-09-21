@@ -90,6 +90,8 @@ const productRowSelect = {
     select: {
       id: true,
       title: true,
+      quantity: true,
+      status: true,
       buyPrice: true,
       feesPercent: true,
       feesFixed: true,

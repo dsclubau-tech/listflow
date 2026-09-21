@@ -60,6 +60,14 @@ test("normalizeProductsQuery ignores unsupported product sorting", () => {
   assert.equal(query.sortOrder, "asc");
 });
 
+test("normalizeProductsQuery accepts every Products page row option", () => {
+  for (const pageSize of [10, 20, 50, 100, 200]) {
+    assert.equal(normalizeProductsQuery({ pageSize: String(pageSize) }).pageSize, pageSize);
+  }
+
+  assert.equal(normalizeProductsQuery({ pageSize: "25" }).pageSize, 100);
+});
+
 test("buildProductsWhere keeps profit out of Prisma filters", () => {
   const where = buildProductsWhere(
     "store-1",

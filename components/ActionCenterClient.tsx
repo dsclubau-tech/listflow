@@ -173,15 +173,6 @@ function formatDuration(startedAt: string | null, completedAt: string | null) {
   return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
 }
 
-function formatWorkerLastSeen(value: string | null) {
-  if (!value) {
-    return "Never seen";
-  }
-
-  const formatted = formatDateTime(value);
-  return formatted === "-" ? "Unknown" : formatted;
-}
-
 function productHref(product: ActionCenterProductSummary) {
   return `/products?productId=${encodeURIComponent(product.id)}`;
 }
@@ -871,14 +862,6 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
     previousHasActiveJobsRef.current = hasActiveJobs;
   }, [hasActiveJobs, router]);
 
-  useEffect(() => {
-    if (hasFilterContent(activeQueues, data, activeFilter)) {
-      return;
-    }
-
-    setActiveFilter(getDefaultFilter(activeQueues, data));
-  }, [activeFilter, activeQueues, data]);
-
   async function runAction(
     key: string,
     task: () => Promise<string>,
@@ -1393,59 +1376,12 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
 
   return (
     <>
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-4">
+      <div className="mb-6">
         <div>
           <h1 className="text-xl font-semibold text-gray-900">Action Center</h1>
           <p className="mt-1 text-sm text-gray-500">
             Review the listings, checks, stock alerts, and jobs that need attention.
           </p>
-        </div>
-        <div
-          className={`min-w-64 rounded-md border px-3 py-2 text-sm ${
-            data.worker.online
-              ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-              : "border-amber-200 bg-amber-50 text-amber-900"
-          }`}
-        >
-          <div className="font-medium">
-            {data.worker.online ? "Worker online" : "Worker offline"}
-          </div>
-          <div className="mt-0.5 text-xs">
-            {data.workers.filter((worker) => worker.online).length}/
-            {Math.max(data.workers.length, 1)} online
-          </div>
-          <div className="mt-2 space-y-1">
-            {data.workers.length === 0 ? (
-              <div className="text-xs">No worker has checked in yet.</div>
-            ) : (
-              data.workers.slice(0, 4).map((worker) => (
-                <div
-                  key={worker.workerId ?? worker.workerName ?? "worker"}
-                  className="flex flex-wrap items-center justify-between gap-2 text-xs"
-                >
-                  <span className="font-medium">
-                    {worker.workerName ?? worker.workerId ?? "Worker"}
-                    <span className="ml-1 font-normal opacity-70">
-                      ({worker.workerRole === "store-specific"
-                        ? "Store-specific"
-                        : worker.workerRole === "unified"
-                          ? "Unified"
-                          : "Legacy"})
-                    </span>
-                  </span>
-                  <span>
-                    {worker.online ? "Online" : "Stale"} ·{" "}
-                    {formatWorkerLastSeen(worker.lastSeenAt)}
-                    {worker.currentJobs.length > 0
-                      ? ` · ${worker.currentJobs.length} job lease${
-                          worker.currentJobs.length === 1 ? "" : "s"
-                        }`
-                      : ""}
-                  </span>
-                </div>
-              ))
-            )}
-          </div>
         </div>
       </div>
 
@@ -1836,7 +1772,7 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
           {/* ── Mobile Card List (< lg) ── */}
           <div className="lg:hidden divide-y divide-gray-100 p-3 space-y-3">
             {activeQueues.failedChecks.length === 0 ? (
-              <div className="text-center py-6 text-sm text-gray-500">No failed price checks.</div>
+              <div className="text-center py-6 text-sm text-gray-500">No failed checks.</div>
             ) : (
               activeQueues.failedChecks.map((item: FailedCheckActionItem) => {
                 const isSelected = selectedProductIds.includes(item.product.id);
@@ -1931,7 +1867,7 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
             </thead>
             <tbody className="divide-y divide-gray-100">
               {activeQueues.failedChecks.length === 0 ? (
-                <EmptyRow colSpan={5} message="No failed price checks." />
+                <EmptyRow colSpan={5} message="No failed checks." />
               ) : (
                 activeQueues.failedChecks.map((item: FailedCheckActionItem) => {
                   const isSelected = selectedProductIds.includes(item.product.id);

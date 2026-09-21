@@ -13,7 +13,7 @@ import {
 } from "@/lib/product-sort";
 import { buildProductSearchWhere } from "@/lib/product-search";
 
-const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
+const PAGE_SIZE_OPTIONS = [10, 20, 50, 100, 200] as const;
 export const DEFAULT_PRODUCTS_PAGE_SIZE = 100;
 const PRODUCT_FILTERS = [
   "all",
