@@ -331,6 +331,40 @@ function ItemIdCell({ product }: { product: SerializedProductRow }) {
   );
 }
 
+function SoldCountBadge({
+  count,
+  includeLabel = false,
+}: {
+  count: number;
+  includeLabel?: boolean;
+}) {
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 ring-1 ring-blue-600/20"
+      title={`${count} item${count === 1 ? "" : "s"} sold on eBay`}
+    >
+      <svg
+        className="h-3 w-3 text-blue-600"
+        fill="none"
+        viewBox="0 0 24 24"
+        stroke="currentColor"
+        strokeWidth={2}
+        aria-hidden="true"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M6 8h12l1 12H5L6 8Zm3 1V6a3 3 0 0 1 6 0v3"
+        />
+      </svg>
+      <span>
+        {count}
+        {includeLabel ? " sold" : ""}
+      </span>
+    </span>
+  );
+}
+
 function PriceCell({ product }: { product: SerializedProductRow }) {
   const variants = product.variants ?? [];
   const buyPrices = variants
@@ -2597,18 +2631,10 @@ export default function DraftsTable({
                             <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-semibold ${statusPresentation.className}`}>
                               {statusPresentation.label}
                             </span>
-                            {product.quantitySold > 0 ? (
-                              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-600/20">
-                                <svg className="h-3 w-3 text-emerald-600" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.2}>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                                </svg>
-                                <span>{product.quantitySold} sold</span>
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-500 font-medium">
-                                0 sold
-                              </span>
-                            )}
+                            <SoldCountBadge
+                              count={product.quantitySold}
+                              includeLabel
+                            />
                             {isProductsView && (
                               product.ebayViewCount !== null && product.ebayViewCount !== undefined && product.ebayViewCount > 0 ? (
                                 <span
@@ -2670,14 +2696,18 @@ export default function DraftsTable({
                                 </span>
                               )
                             )}
-                            {promotedAdState && (
-                              <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${promotedAdState.badgeClass}`}>
-                                {promotedAdState.label}
-                              </span>
-                            )}
-                            {trackingState && trackingState.label !== "No change" && (
-                              <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${trackingState.badgeClass}`}>
-                                {trackingState.label}
+                            {(promotedAdState || trackingState) && (
+                              <span className="inline-flex flex-col items-start gap-1.5">
+                                {promotedAdState && (
+                                  <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${promotedAdState.badgeClass}`}>
+                                    {promotedAdState.label}
+                                  </span>
+                                )}
+                                {trackingState && (
+                                  <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${trackingState.badgeClass}`}>
+                                    {trackingState.label}
+                                  </span>
+                                )}
                               </span>
                             )}
                           </div>
@@ -2927,32 +2957,7 @@ export default function DraftsTable({
                     {isProductsView && (
                       <>
                         <td className="hidden xl:table-cell px-3 py-3">
-                          {product.quantitySold > 0 ? (
-                            <span
-                              className="inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 ring-1 ring-emerald-600/20"
-                              title={`${product.quantitySold} item${product.quantitySold === 1 ? "" : "s"} sold on eBay`}
-                            >
-                              <svg
-                                className="h-3 w-3 text-emerald-600"
-                                fill="none"
-                                viewBox="0 0 24 24"
-                                stroke="currentColor"
-                                strokeWidth={2.2}
-                                aria-hidden="true"
-                              >
-                                <path
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  d="M5 13l4 4L19 7"
-                                />
-                              </svg>
-                              <span>{product.quantitySold}</span>
-                            </span>
-                          ) : (
-                            <span className="text-xs font-medium text-gray-400">
-                              0
-                            </span>
-                          )}
+                          <SoldCountBadge count={product.quantitySold} />
                         </td>
 
                         <td className="hidden xl:table-cell px-3 py-3">
@@ -3021,10 +3026,10 @@ export default function DraftsTable({
 
                     {isProductsView && (
                       <td className="hidden xl:table-cell px-3 py-3">
-                        <div className="max-w-[13rem]">
+                        <div className="flex max-w-[13rem] flex-col items-start gap-1.5">
                           {promotedAdState && (
                             <span
-                              className={`mb-1.5 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${promotedAdState.badgeClass}`}
+                              className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${promotedAdState.badgeClass}`}
                               title={promotedAdState.detail}
                             >
                               {promotedAdState.label}
@@ -3037,12 +3042,14 @@ export default function DraftsTable({
                               >
                                 {trackingState.label}
                               </span>
-                              <span
-                                className="mt-1 block truncate text-xs text-gray-500"
-                                title={trackingState.detail}
-                              >
-                                {trackingState.detail}
-                              </span>
+                              {trackingState.label !== "No change" && (
+                                <span
+                                  className="block truncate text-xs text-gray-500"
+                                  title={trackingState.detail}
+                                >
+                                  {trackingState.detail}
+                                </span>
+                              )}
                               {trackingState.priceHistoryId && (
                                 <div className="mt-2 flex items-center gap-2">
                                   <button
