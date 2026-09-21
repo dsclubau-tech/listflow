@@ -2,6 +2,7 @@ export const PRICE_CHECK_OPTIMIZATION_NAMES = [
   "progress-write",
   "shared-snapshot",
   "delivery-state",
+  "readiness-waits",
 ] as const;
 
 export type PriceCheckOptimizationName =

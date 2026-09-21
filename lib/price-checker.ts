@@ -711,13 +711,16 @@ export async function runPriceCheck(
       const sharedSnapshot = optimizationConfig.enabled.includes(
         "shared-snapshot",
       );
+      const readinessWaits = optimizationConfig.enabled.includes(
+        "readiness-waits",
+      );
       return scrapeAmazonPrice(
         asin,
         browser,
         supplierSettings.scrapePostcode || undefined,
         priceTrackingMode,
         variantHints,
-        timing.enabled || sharedSnapshot || deliveryState
+        timing.enabled || sharedSnapshot || readinessWaits || deliveryState
           ? {
               ...(timing.enabled
                 ? {
@@ -726,6 +729,7 @@ export async function runPriceCheck(
                   }
                 : {}),
               sharedSnapshot,
+              readinessWaits,
               deliveryState,
               allowDeliveryStateReuse,
               onDeliveryStateEvent: (event) =>

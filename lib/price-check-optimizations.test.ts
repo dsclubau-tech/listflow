@@ -47,6 +47,15 @@ describe("price-check optimization configuration", () => {
     assert.deepEqual(config.enabled, []);
   });
 
+  test("readiness waits stay off by default and can be enabled per allowed store", () => {
+    const config = resolvePriceCheckOptimizationConfig("store-1", {
+      LISTFLOW_PRICE_CHECK_OPTIMIZATIONS: "readiness-waits",
+      LISTFLOW_PRICE_CHECK_OPTIMIZATION_STORE_IDS: "store-1",
+    });
+
+    assert.deepEqual(config.enabled, ["readiness-waits"]);
+  });
+
   test("reports every configured worker store missing from the allowlist", () => {
     assert.deepEqual(
       getMissingPriceCheckOptimizationStoreIds(["store-1", "store-2"], {

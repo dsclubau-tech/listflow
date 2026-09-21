@@ -29,6 +29,13 @@ type ComparisonInput = {
   products: ComparisonProduct[];
 };
 
+const SCRAPER_COMPARISON_FEATURES = [
+  "shared-snapshot",
+  "delivery-state",
+  "readiness-waits",
+] as const;
+type ScraperComparisonFeature = (typeof SCRAPER_COMPARISON_FEATURES)[number];
+
 function readArgument(name: string) {
   const index = process.argv.indexOf(name);
   return index >= 0 ? process.argv[index + 1] : undefined;
@@ -57,6 +64,26 @@ function loadInput(filePath: string): ComparisonInput {
   return input;
 }
 
+function readFeatures(): ScraperComparisonFeature[] {
+  const raw =
+    readArgument("--features") ?? "shared-snapshot,delivery-state";
+  const requested = Array.from(
+    new Set(raw.split(",").map((value) => value.trim()).filter(Boolean)),
+  );
+  const supported = new Set<string>(SCRAPER_COMPARISON_FEATURES);
+  const unknown = requested.filter((feature) => !supported.has(feature));
+  if (unknown.length > 0) {
+    throw new Error(
+      `Unknown comparison feature(s): ${unknown.join(", ")}. Allowed: ${SCRAPER_COMPARISON_FEATURES.join(", ")}.`,
+    );
+  }
+  return requested as ScraperComparisonFeature[];
+}
+
+function isTechnicalFailure(outcome: AmazonPriceComparisonOutcome) {
+  return outcome.kind === "error" && outcome.code === "TECHNICAL_ERROR";
+}
+
 async function captureOutcome(
   operation: () => Promise<ScrapedAmazonPrice>,
 ): Promise<{ outcome: AmazonPriceComparisonOutcome; durationMs: number }> {
@@ -82,14 +109,17 @@ async function main() {
   const inputArgument = readArgument("--input");
   if (!inputArgument) {
     throw new Error(
-      "Usage: npm run price-check:compare -- --input <30-products.json> [--output <report.json>]",
+      "Usage: npm run price-check:compare -- --input <30-products.json> [--features shared-snapshot,delivery-state,readiness-waits] [--output <report.json>]",
     );
   }
 
   const inputPath = path.resolve(inputArgument);
   const outputArgument = readArgument("--output");
+  const features = readFeatures();
   const input = loadInput(inputPath);
-  const deliveryState = createAmazonDeliveryStateSession(input.postcode);
+  const deliveryState = features.includes("delivery-state")
+    ? createAmazonDeliveryStateSession(input.postcode)
+    : undefined;
   const browser = await launchScraperBrowser();
   const deliveryEvents: string[] = [];
   const comparisons = [];
@@ -116,9 +146,10 @@ async function main() {
             mode,
             product.variantHints,
             {
-              sharedSnapshot: true,
+              sharedSnapshot: features.includes("shared-snapshot"),
               deliveryState,
-              allowDeliveryStateReuse: true,
+              allowDeliveryStateReuse: features.includes("delivery-state"),
+              readinessWaits: features.includes("readiness-waits"),
               onDeliveryStateEvent: (event) =>
                 deliveryEvents.push(`${index + 1}:${event}`),
             },
@@ -131,15 +162,22 @@ async function main() {
       const baseline = baselineFirst ? first : second;
       const experiment = baselineFirst ? second : first;
 
+      const match = amazonPriceComparisonOutcomesMatch(
+        baseline.outcome,
+        experiment.outcome,
+      );
+      const matchingTechnicalFailure =
+        match &&
+        isTechnicalFailure(baseline.outcome) &&
+        isTechnicalFailure(experiment.outcome);
       comparisons.push({
         index: index + 1,
         asin: product.asin.toUpperCase(),
         scenario: product.scenario ?? null,
         order: baselineFirst ? "baseline-first" : "experiment-first",
-        match: amazonPriceComparisonOutcomesMatch(
-          baseline.outcome,
-          experiment.outcome,
-        ),
+        match,
+        matchingTechnicalFailure,
+        accuracyPass: match && !matchingTechnicalFailure,
         baseline: {
           durationMs: baseline.durationMs,
           outcome: normalizeAmazonPriceComparisonOutcome(baseline.outcome),
@@ -155,14 +193,25 @@ async function main() {
   }
 
   const mismatches = comparisons.filter((comparison) => !comparison.match);
+  const matchingTechnicalFailures = comparisons.filter(
+    (comparison) => comparison.matchingTechnicalFailure,
+  );
+  const deliveryReuseObserved = deliveryEvents.some((event) =>
+    event.endsWith(":reused"),
+  );
   const report = {
     generatedAt: new Date().toISOString(),
     inputPath,
+    experimentalFeatures: features,
     products: comparisons.length,
     matches: comparisons.length - mismatches.length,
     mismatches: mismatches.length,
-    deliveryStateDisabled: deliveryState.disabled,
-    deliveryStateDisabledReason: deliveryState.disabledReason,
+    accuracyPasses: comparisons.filter((comparison) => comparison.accuracyPass).length,
+    matchingTechnicalFailures: matchingTechnicalFailures.length,
+    deliveryReuseRequired: features.includes("delivery-state"),
+    deliveryReuseObserved,
+    deliveryStateDisabled: deliveryState?.disabled ?? null,
+    deliveryStateDisabledReason: deliveryState?.disabledReason ?? null,
     deliveryEvents,
     comparisons,
   };
@@ -174,7 +223,14 @@ async function main() {
     process.stdout.write(serialized);
   }
 
-  if (mismatches.length > 0) process.exitCode = 2;
+  if (mismatches.length > 0) {
+    process.exitCode = 2;
+  } else if (
+    matchingTechnicalFailures.length > 0 ||
+    (features.includes("delivery-state") && !deliveryReuseObserved)
+  ) {
+    process.exitCode = 3;
+  }
 }
 
 main().catch((error) => {
