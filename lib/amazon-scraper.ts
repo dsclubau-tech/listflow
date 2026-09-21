@@ -37,7 +37,6 @@ import {
   type AmazonDeliveryStateSession,
   type AmazonDeliveryStorageState,
 } from "@/lib/amazon-delivery-state";
-import { waitForAmazonReadinessOrFallback } from "@/lib/amazon-readiness-waits";
 
 export interface ScrapedProduct {
   title: string;
@@ -95,7 +94,6 @@ export type AmazonPriceScrapeOptions = {
   sharedSnapshot?: boolean;
   deliveryState?: AmazonDeliveryStateSession;
   allowDeliveryStateReuse?: boolean;
-  readinessWaits?: boolean;
   onDeliveryStateEvent?: (
     event: "seeded" | "reused" | "rejected" | "reset",
   ) => void;
@@ -416,8 +414,7 @@ function normalizeItemSpecificsForEbay(
  */
 async function setAmazonDeliveryPostcode(
   page: Page,
-  postcode: string,
-  options?: { readinessWaits?: boolean },
+  postcode: string
 ): Promise<boolean> {
   // Strategy 1: Call Amazon's AJAX address-change endpoint directly.
   // This is what the location popup does under the hood — far more reliable
@@ -515,45 +512,16 @@ async function setAmazonDeliveryPostcode(
     const applyBtn = page.locator(
       '#GLUXZipUpdate input[type="submit"], #GLUXZipUpdate .a-button-input, #GLUXZipUpdate .a-button'
     );
-    const applyResponse = options?.readinessWaits
-      ? page
-          .waitForResponse(
-            (response) =>
-              response.request().method() === "POST" &&
-              /delivery|address-change|location/i.test(response.url()),
-            { timeout: 1200 },
-          )
-          .then(() => true)
-          .catch(() => false)
-      : Promise.resolve(false);
     await applyBtn.first().click({ timeout: 5000 });
 
-    await waitForAmazonReadinessOrFallback({
-      enabled: options?.readinessWaits === true,
-      waitForSignal: () => applyResponse,
-      waitFallback: () => page.waitForTimeout(2000),
-    });
+    // Wait for Amazon to process
+    await page.waitForTimeout(2000);
 
     // If a city selection appears, pick the first option
     const cityList = page.locator("#GLUXCityList select, #GLUXCityPopover select");
     if (await cityList.isVisible({ timeout: 2000 }).catch(() => false)) {
-      const cityResponse = options?.readinessWaits
-        ? page
-            .waitForResponse(
-              (response) =>
-                response.request().method() === "POST" &&
-                /delivery|address|location/i.test(response.url()),
-              { timeout: 750 },
-            )
-            .then(() => true)
-            .catch(() => false)
-        : Promise.resolve(false);
       await cityList.first().selectOption({ index: 1 }, { timeout: 5000 }).catch(() => {});
-      await waitForAmazonReadinessOrFallback({
-        enabled: options?.readinessWaits === true,
-        waitForSignal: () => cityResponse,
-        waitFallback: () => page.waitForTimeout(1000),
-      });
+      await page.waitForTimeout(1000);
     }
 
     // Click Done/Continue
@@ -569,27 +537,7 @@ async function setAmazonDeliveryPostcode(
 
     // Ensure page is stable after any reload
     await page.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {});
-    await waitForAmazonReadinessOrFallback({
-      enabled: options?.readinessWaits === true,
-      waitForSignal: () =>
-        page
-          .waitForFunction(
-            (expectedPostcode) => {
-              const deliveryText = [
-                document.querySelector("#glow-ingress-line2"),
-                document.querySelector("#nav-global-location-data-modal-action"),
-              ]
-                .map((element) => element?.textContent ?? "")
-                .join(" ");
-              return deliveryText.includes(String(expectedPostcode));
-            },
-            postcode,
-            { timeout: 750 },
-          )
-          .then(() => true)
-          .catch(() => false),
-      waitFallback: () => page.waitForTimeout(1000),
-    });
+    await page.waitForTimeout(1000);
 
     return true;
   } catch {
@@ -905,9 +853,7 @@ export async function scrapeAmazonPrice(
         const success = await measureAmazonPriceStage(
           options,
           "postcode-setup",
-          () => setAmazonDeliveryPostcode(page, postcode, {
-            readinessWaits: options?.readinessWaits,
-          }),
+          () => setAmazonDeliveryPostcode(page, postcode),
         );
         if (success) {
           postcodeApplied = true;
@@ -1079,13 +1025,9 @@ export async function scrapeAmazonPrice(
     // If price is not available on initial page load, check if Amazon presents variations
     // and attempt to select the exact saved colour/size in safe order
     if (price === null) {
-      const variantResult = await measureAmazonPriceStage(
-        options,
-        "variant-interaction",
-        () => attemptVariantSelection(
-          page,
-          variantSelectionHints ?? null,
-        ),
+      const variantResult = await attemptVariantSelection(
+        page,
+        variantSelectionHints ?? null
       );
 
       if (variantResult.hasVariations) {

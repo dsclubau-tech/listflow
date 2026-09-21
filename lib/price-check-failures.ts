@@ -86,28 +86,6 @@ export function getPriceCheckFailureCode(error: unknown) {
     : PriceCheckFailureCode.TECHNICAL_ERROR;
 }
 
-export type PriceCheckProductOutcome =
-  | "FRESH"
-  | "UNAVAILABLE"
-  | "TECHNICAL_ERROR"
-  | "NEEDS_VERIFICATION"
-  | "SKIPPED";
-
-export function getPriceCheckProductOutcomeForFailure(
-  code: PriceCheckFailureCode,
-): PriceCheckProductOutcome {
-  if (
-    code === PriceCheckFailureCode.AMAZON_OUT_OF_STOCK ||
-    code === PriceCheckFailureCode.AMAZON_PRICE_UNAVAILABLE
-  ) {
-    return "UNAVAILABLE";
-  }
-  if (code === PriceCheckFailureCode.TECHNICAL_ERROR) {
-    return "TECHNICAL_ERROR";
-  }
-  return "NEEDS_VERIFICATION";
-}
-
 export function getAmazonTechnicalPageMessage(input: {
   title: string;
   url: string;

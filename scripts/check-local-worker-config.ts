@@ -6,10 +6,6 @@ import {
   parseLocalWorkerStoreLoginIds,
 } from "../lib/local-worker-config";
 import { configureWorkerDatabaseProfile } from "../lib/worker-database-profile";
-import {
-  getMissingPriceCheckOptimizationStoreIds,
-  resolvePriceCheckOptimizationConfig,
-} from "../lib/price-check-optimizations";
 
 const moduleWithLoad = Module as unknown as {
   _load: (request: string, parent?: unknown, isMain?: boolean) => unknown;
@@ -49,42 +45,9 @@ async function main() {
       throw new Error("Local worker IDs are not unique.");
     }
 
-    const orderedStores = requestedLoginIds.map((loginId) => {
-      const store = stores.find((candidate) => candidate.loginId === loginId);
-      if (!store) {
-        throw new Error(`Configured local worker store is missing: ${loginId}`);
-      }
-      return store;
-    });
-
     console.log(
       `Local worker configuration is valid: ${definitions.length} workers for ${requestedLoginIds.length} stores using the ${profile} database profile.`,
     );
-    console.log("Price-check settings by store:");
-    for (const store of orderedStores) {
-      const config = resolvePriceCheckOptimizationConfig(store.id);
-      console.log(
-        JSON.stringify({
-          storeName: store.name,
-          loginId: store.loginId,
-          storeId: store.id,
-          timingEnabled: config.timingEnabled,
-          requestedOptimizations: config.requested,
-          effectiveOptimizations: config.enabled,
-          storeAllowed: config.storeAllowed,
-          unknownOptimizations: config.unknown,
-        }),
-      );
-    }
-
-    const missingStoreIds = getMissingPriceCheckOptimizationStoreIds(
-      orderedStores.map((store) => store.id),
-    );
-    if (missingStoreIds.length > 0) {
-      console.warn(
-        `WARNING: ${missingStoreIds.length} configured worker store(s) are absent from LISTFLOW_PRICE_CHECK_OPTIMIZATION_STORE_IDS: ${missingStoreIds.join(", ")}`,
-      );
-    }
   } finally {
     await prisma.$disconnect();
   }

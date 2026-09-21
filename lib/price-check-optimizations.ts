@@ -2,7 +2,6 @@ export const PRICE_CHECK_OPTIMIZATION_NAMES = [
   "progress-write",
   "shared-snapshot",
   "delivery-state",
-  "readiness-waits",
 ] as const;
 
 export type PriceCheckOptimizationName =
@@ -81,27 +80,11 @@ export function getPriceCheckOptimizationEnvironmentSummary(
   };
 }
 
-export type TimingBucket = {
+type TimingBucket = {
   count: number;
   totalMs: number;
   maxMs: number;
 };
-
-export type PriceCheckTimingSnapshot = {
-  elapsedMs: number;
-  stages: Record<string, TimingBucket>;
-  counters: Record<string, number>;
-};
-
-export function getMissingPriceCheckOptimizationStoreIds(
-  storeIds: string[],
-  environment: PriceCheckOptimizationEnvironment = process.env,
-) {
-  const allowed = new Set(
-    resolvePriceCheckOptimizationConfig(undefined, environment).allowedStoreIds,
-  );
-  return Array.from(new Set(storeIds)).filter((storeId) => !allowed.has(storeId));
-}
 
 export class PriceCheckTimingRecorder {
   private readonly startedAt = Date.now();
@@ -129,7 +112,7 @@ export class PriceCheckTimingRecorder {
     this.counters.set(counter, (this.counters.get(counter) ?? 0) + amount);
   }
 
-  snapshot(): PriceCheckTimingSnapshot {
+  snapshot() {
     return {
       elapsedMs: Date.now() - this.startedAt,
       stages: Object.fromEntries(

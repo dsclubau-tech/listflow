@@ -1,6 +1,7 @@
 import "dotenv/config";
 
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import Module from "node:module";
 import os from "node:os";
 import path from "node:path";
@@ -13,13 +14,30 @@ import {
   type WorkerRole,
 } from "../lib/worker-routing";
 import { configureWorkerDatabaseProfile } from "../lib/worker-database-profile";
-import {
-  getPriceCheckOptimizationEnvironmentSummary,
-  resolvePriceCheckOptimizationConfig,
-} from "../lib/price-check-optimizations";
-import { getRuntimeRevision } from "../lib/runtime-revision";
+import { getPriceCheckOptimizationEnvironmentSummary } from "../lib/price-check-optimizations";
 
 const workerDatabaseProfile = configureWorkerDatabaseProfile();
+
+function getRuntimeRevision() {
+  const environmentRevision =
+    process.env.LISTFLOW_REVISION?.trim() ||
+    process.env.VERCEL_GIT_COMMIT_SHA?.trim() ||
+    process.env.RAILWAY_GIT_COMMIT_SHA?.trim();
+  if (environmentRevision) return environmentRevision;
+
+  try {
+    return execFileSync(process.platform === "win32" ? "git.exe" : "git", [
+      "rev-parse",
+      "HEAD",
+    ], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return "unknown";
+  }
+}
 
 const moduleWithLoad = Module as unknown as {
   _load: (
@@ -570,12 +588,6 @@ async function main() {
   console.log(
     `Price-check optimization stores: ${priceCheckOptimizations.allowedStoreIds.join(", ") || "none"}`,
   );
-  for (const store of stores) {
-    const effective = resolvePriceCheckOptimizationConfig(store.id);
-    console.log(
-      `Price-check effective for ${store.name} (${store.loginId ?? "no login"}, ${store.id}): ${effective.enabled.join(", ") || "none"}`,
-    );
-  }
   console.log("Waiting for jobs...");
   if (STOCK_REPLENISH_ENABLED) {
     console.log(

@@ -158,14 +158,6 @@ enum PriceCheckJobStatus {
   FAILED
 }
 
-enum PriceCheckProductOutcome {
-  FRESH
-  UNAVAILABLE
-  TECHNICAL_ERROR
-  NEEDS_VERIFICATION
-  SKIPPED
-}
-
 enum PriceCheckJobScope {
   SELECTED
   ALL
@@ -391,17 +383,6 @@ model PriceCheckJob {
   pendingReview       Int                 @default(0)
   failed              Int                 @default(0)
   skipped             Int                 @default(0)
-  unchanged           Int                 @default(0)
-  fresh               Int                 @default(0)
-  unavailable         Int                 @default(0)
-  technicalErrors     Int                 @default(0)
-  needsVerification   Int                 @default(0)
-  listingUpdateFailures Int               @default(0)
-  retryAttempts       Int                 @default(0)
-  classificationAvailable Boolean         @default(false)
-  timingSummary       Json?
-  effectiveSettings   Json?
-  runtimeRevision     String?
   reason              String?             @db.Text
   errorMessage        String?             @db.Text
   createdAt           DateTime            @default(now())
@@ -412,36 +393,13 @@ model PriceCheckJob {
   autoHoldActionJobId String?
   autoHoldQueued      Int                 @default(0)
 
-  user           User                         @relation(fields: [userId], references: [id], onDelete: Cascade)
-  store          Store?                       @relation(fields: [storeId], references: [id], onDelete: Cascade)
-  productResults PriceCheckJobProductResult[]
+  user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  store Store? @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@index([userId, status])
   @@index([storeId, status])
   @@index([createdAt])
   @@index([dismissedAt])
-}
-
-model PriceCheckJobProductResult {
-  id                  String                   @id @default(cuid())
-  jobId               String
-  productId           String
-  productAsin         String?
-  productTitle        String?
-  outcome             PriceCheckProductOutcome
-  failureCode         PriceCheckFailureCode?
-  message             String?                  @db.Text
-  listingUpdateFailed Boolean                  @default(false)
-  retryAttempts       Int                      @default(0)
-  durationMs          Int?
-  checkedAt           DateTime?
-  createdAt           DateTime                 @default(now())
-
-  job PriceCheckJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
-
-  @@unique([jobId, productId])
-  @@index([jobId, outcome])
-  @@index([productId])
 }
 
 model AmazonImportJob {
