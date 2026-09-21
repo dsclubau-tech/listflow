@@ -40,12 +40,14 @@ import {
   PriceCheckTimingRecorder,
   resolvePriceCheckOptimizationConfig,
   type PriceCheckOptimizationConfig,
+  type PriceCheckTimingSnapshot,
 } from "@/lib/price-check-optimizations";
 import { reportCompletedProductCallbacks } from "@/lib/price-check-progress";
 import {
   createAmazonDeliveryStateSession,
   resetAmazonDeliveryState,
 } from "@/lib/amazon-delivery-state";
+import { getRuntimeRevision } from "@/lib/runtime-revision";
 
 const PRICE_TOLERANCE = 0.01;
 const MIN_SAFE_PRODUCT_DELAY_MS = 1000;
@@ -115,6 +117,25 @@ export type PriceCheckProductCompletion = {
   checkedAt: Date | null;
 };
 
+export type PriceCheckEffectiveSettings = {
+  timingEnabled: boolean;
+  requestedOptimizations: string[];
+  enabledOptimizations: string[];
+  allowedStoreIds: string[];
+  storeAllowed: boolean;
+  unknownOptimizations: string[];
+  productDelayMinMs: number;
+  productDelayMaxMs: number;
+  productTimeoutMs: number;
+};
+
+export type PriceCheckRunTimingSummary = PriceCheckTimingSnapshot & {
+  revision: string;
+  outcome: "completed" | "cancelled" | "failed";
+  completed: number;
+  total: number;
+};
+
 interface RunPriceCheckOptions {
   jobId?: string;
   optimizationConfig?: PriceCheckOptimizationConfig;
@@ -131,6 +152,10 @@ interface RunPriceCheckOptions {
   ) => void | Promise<void>;
   onProductFailure?: (
     failure: PriceCheckProductFailure,
+  ) => void | Promise<void>;
+  onTimingSummary?: (
+    summary: PriceCheckRunTimingSummary,
+    settings: PriceCheckEffectiveSettings,
   ) => void | Promise<void>;
   shouldCancel?: () => boolean | Promise<boolean>;
 }
@@ -383,6 +408,22 @@ function getAmazonStockUpdate(stockLeft: number | null | undefined) {
   return stockLeft === undefined ? {} : { amazonStockLeft: stockLeft };
 }
 
+export function getPriceCheckEffectiveSettings(
+  config: PriceCheckOptimizationConfig,
+): PriceCheckEffectiveSettings {
+  return {
+    timingEnabled: config.timingEnabled,
+    requestedOptimizations: [...config.requested],
+    enabledOptimizations: [...config.enabled],
+    allowedStoreIds: [...config.allowedStoreIds],
+    storeAllowed: config.storeAllowed,
+    unknownOptimizations: [...config.unknown],
+    productDelayMinMs: PRODUCT_DELAY_MIN_MS,
+    productDelayMaxMs: PRODUCT_DELAY_MAX_MS,
+    productTimeoutMs: PRODUCT_CHECK_TIMEOUT_MS,
+  };
+}
+
 function emptyPriceCheckResult(): PriceCheckResult {
   return {
     checked: 0,
@@ -408,6 +449,8 @@ export async function runPriceCheck(
     options.optimizationConfig ??
     resolvePriceCheckOptimizationConfig(options.storeId);
   const timing = new PriceCheckTimingRecorder(optimizationConfig.timingEnabled);
+  const effectiveSettings = getPriceCheckEffectiveSettings(optimizationConfig);
+  const runtimeRevision = getRuntimeRevision();
   let runOutcome: "completed" | "cancelled" | "failed" = "completed";
 
   if (optimizationConfig.unknown.length > 0) {
@@ -637,7 +680,9 @@ export async function runPriceCheck(
   let sharedBrowser: Browser | null = null;
   const getSharedBrowser = async () => {
     if (!sharedBrowser || !sharedBrowser.isConnected()) {
-      sharedBrowser = await launchScraperBrowser();
+      sharedBrowser = await measureStage("browser-startup", () =>
+        launchScraperBrowser(),
+      );
     }
     return sharedBrowser;
   };
@@ -695,7 +740,7 @@ export async function runPriceCheck(
     } catch (error) {
       timing.increment("scrape-retries");
       onRetry();
-      await closeSharedBrowser();
+      await measureStage("browser-recovery", closeSharedBrowser);
 
       if (shouldAbort()) {
         throw error;
@@ -1379,14 +1424,33 @@ export async function runPriceCheck(
     await closeSharedBrowser();
     invalidateRunCaches();
     if (timing.enabled) {
+      const timingSummary: PriceCheckRunTimingSummary = {
+        revision: runtimeRevision,
+        outcome: runOutcome,
+        completed: result.checked,
+        total: runTotal,
+        ...timing.snapshot(),
+      };
       logger.info("price-checker/timing", "Price check timing summary", {
         jobId: options.jobId,
         storeId: options.storeId,
-        outcome: runOutcome,
-        optimizations: optimizationConfig.enabled,
+        settings: effectiveSettings,
         result,
-        timing: timing.snapshot(),
+        timing: timingSummary,
       });
+      try {
+        await options.onTimingSummary?.(timingSummary, effectiveSettings);
+      } catch (error) {
+        logger.warn(
+          "price-checker/timing",
+          "Price check timing summary could not be persisted",
+          {
+            jobId: options.jobId,
+            storeId: options.storeId,
+            errorMessage: getErrorMessage(error),
+          },
+        );
+      }
     }
   }
 

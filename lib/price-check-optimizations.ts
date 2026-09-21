@@ -80,11 +80,27 @@ export function getPriceCheckOptimizationEnvironmentSummary(
   };
 }
 
-type TimingBucket = {
+export type TimingBucket = {
   count: number;
   totalMs: number;
   maxMs: number;
 };
+
+export type PriceCheckTimingSnapshot = {
+  elapsedMs: number;
+  stages: Record<string, TimingBucket>;
+  counters: Record<string, number>;
+};
+
+export function getMissingPriceCheckOptimizationStoreIds(
+  storeIds: string[],
+  environment: PriceCheckOptimizationEnvironment = process.env,
+) {
+  const allowed = new Set(
+    resolvePriceCheckOptimizationConfig(undefined, environment).allowedStoreIds,
+  );
+  return Array.from(new Set(storeIds)).filter((storeId) => !allowed.has(storeId));
+}
 
 export class PriceCheckTimingRecorder {
   private readonly startedAt = Date.now();
@@ -112,7 +128,7 @@ export class PriceCheckTimingRecorder {
     this.counters.set(counter, (this.counters.get(counter) ?? 0) + amount);
   }
 
-  snapshot() {
+  snapshot(): PriceCheckTimingSnapshot {
     return {
       elapsedMs: Date.now() - this.startedAt,
       stages: Object.fromEntries(

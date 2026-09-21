@@ -1,7 +1,10 @@
 import "server-only";
 
 import {
+  Prisma,
   PriceCheckProductOutcome as PrismaPriceCheckProductOutcome,
+} from "@/app/generated/prisma/client";
+import {
   PriceCheckJobScope,
   PriceCheckJobStatus,
   PriceCheckJobTrigger,
@@ -29,6 +32,7 @@ import {
   type PriceCheckProgress,
   type PriceCheckResult,
   type PriceCheckProductCompletion,
+  getPriceCheckEffectiveSettings,
 } from "@/lib/price-checker";
 import { resolvePriceCheckOptimizationConfig } from "@/lib/price-check-optimizations";
 import { finalizePriceCheckAutoHoldForJob } from "@/lib/price-check-auto-hold";
@@ -38,6 +42,7 @@ import {
   clampCompletedPriceCheckCount,
   uniqueCompletedProductIds,
 } from "@/lib/price-check-accounting";
+import { getRuntimeRevision } from "@/lib/runtime-revision";
 
 const ACTIVE_JOB_STATUSES: PriceCheckJobStatus[] = [
   PriceCheckJobStatus.QUEUED,
@@ -67,6 +72,9 @@ type PriceCheckJobRecord = {
   listingUpdateFailures: number;
   retryAttempts: number;
   classificationAvailable: boolean;
+  timingSummary: unknown;
+  effectiveSettings: unknown;
+  runtimeRevision: string | null;
   reason: string | null;
   errorMessage: string | null;
   createdAt: Date;
@@ -261,6 +269,9 @@ export function serializePriceCheckJob(job: PriceCheckJobRecord) {
       elapsedMs !== null && job.checked > 0
         ? Math.round((elapsedMs / 1000 / job.checked) * 100) / 100
         : null,
+    timingSummary: job.timingSummary ?? null,
+    effectiveSettings: job.effectiveSettings ?? null,
+    runtimeRevision: job.runtimeRevision,
     remaining: remaining.length,
     canResume: canResumePriceCheckJob(job),
     reason: job.reason,
@@ -650,6 +661,11 @@ async function runPriceCheckJobClaimed(jobId: string) {
     return;
   }
 
+  const optimizationConfig = resolvePriceCheckOptimizationConfig(
+    job.storeId ?? undefined,
+  );
+  const effectiveSettings = getPriceCheckEffectiveSettings(optimizationConfig);
+  const runtimeRevision = getRuntimeRevision();
   const started = await prisma.priceCheckJob.updateMany({
     where: {
       id: job.id,
@@ -661,6 +677,8 @@ async function runPriceCheckJobClaimed(jobId: string) {
       status: PriceCheckJobStatus.RUNNING,
       startedAt: job.startedAt ?? new Date(),
       errorMessage: null,
+      effectiveSettings: effectiveSettings as unknown as Prisma.InputJsonValue,
+      runtimeRevision,
     },
   });
 
@@ -673,9 +691,6 @@ async function runPriceCheckJobClaimed(jobId: string) {
   }
 
   try {
-    const optimizationConfig = resolvePriceCheckOptimizationConfig(
-      job.storeId ?? undefined,
-    );
     const result = await runPriceCheck({
       jobId: job.id,
       storeId: job.storeId ?? undefined,
@@ -697,6 +712,13 @@ async function runPriceCheckJobClaimed(jobId: string) {
           mergeRunProgress(checkpoint.baseCounters, checkpoint.total, progress),
           completion,
         ),
+      onTimingSummary: (summary) =>
+        prisma.priceCheckJob.update({
+          where: { id: job.id },
+          data: {
+            timingSummary: summary as unknown as Prisma.InputJsonValue,
+          },
+        }).then(() => undefined),
       shouldCancel: () => shouldCancelPriceCheckJob(job.id),
     });
     const aggregateResult = mergeRunResult(checkpoint.baseCounters, result);

@@ -399,6 +399,9 @@ model PriceCheckJob {
   listingUpdateFailures Int               @default(0)
   retryAttempts       Int                 @default(0)
   classificationAvailable Boolean         @default(false)
+  timingSummary       Json?
+  effectiveSettings   Json?
+  runtimeRevision     String?
   reason              String?             @db.Text
   errorMessage        String?             @db.Text
   createdAt           DateTime            @default(now())

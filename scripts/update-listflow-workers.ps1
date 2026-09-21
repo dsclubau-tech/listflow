@@ -71,6 +71,7 @@ try {
   Invoke-CheckedCommand "Fast-forwarding stable master" "git.exe" @("merge", "--ff-only", "origin/master")
   Invoke-CheckedCommand "Installing exact dependencies" "npm.cmd" @("ci")
   Invoke-CheckedCommand "Generating Prisma client" "npm.cmd" @("exec", "prisma", "generate")
+  Invoke-CheckedCommand "Applying database migrations" "npm.cmd" @("exec", "prisma", "migrate", "deploy")
 
   $newPlaywrightVersion = Get-PlaywrightVersion
   if (-not $oldPlaywrightVersion -or $oldPlaywrightVersion -ne $newPlaywrightVersion) {

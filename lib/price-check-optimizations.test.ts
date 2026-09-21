@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import {
+  getMissingPriceCheckOptimizationStoreIds,
   PriceCheckTimingRecorder,
   resolvePriceCheckOptimizationConfig,
 } from "./price-check-optimizations";
@@ -44,6 +45,15 @@ describe("price-check optimization configuration", () => {
     });
     assert.equal(config.timingEnabled, true);
     assert.deepEqual(config.enabled, []);
+  });
+
+  test("reports every configured worker store missing from the allowlist", () => {
+    assert.deepEqual(
+      getMissingPriceCheckOptimizationStoreIds(["store-1", "store-2"], {
+        LISTFLOW_PRICE_CHECK_OPTIMIZATION_STORE_IDS: "store-1",
+      }),
+      ["store-2"],
+    );
   });
 });
 

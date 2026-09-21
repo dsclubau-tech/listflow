@@ -1025,9 +1025,13 @@ export async function scrapeAmazonPrice(
     // If price is not available on initial page load, check if Amazon presents variations
     // and attempt to select the exact saved colour/size in safe order
     if (price === null) {
-      const variantResult = await attemptVariantSelection(
-        page,
-        variantSelectionHints ?? null
+      const variantResult = await measureAmazonPriceStage(
+        options,
+        "variant-interaction",
+        () => attemptVariantSelection(
+          page,
+          variantSelectionHints ?? null,
+        ),
       );
 
       if (variantResult.hasVariations) {
