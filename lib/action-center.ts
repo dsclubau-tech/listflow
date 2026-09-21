@@ -3,6 +3,7 @@ import "server-only";
 import {
   EbayActionJobStatus,
   EbayResearchBatchStatus,
+  EbayResearchJobStatus,
   EbayImportJobStatus,
   PriceCheckJobStatus,
   ProductStatus,
@@ -15,10 +16,8 @@ import {
   productsCacheTag,
 } from "@/lib/cache-tags";
 import { prisma } from "@/lib/prisma";
-import { serializeEbayImportJob } from "@/lib/ebay-import-jobs";
-import { getCurrentEbayActionJobs } from "@/lib/ebay-action-jobs";
-import { getCurrentEbayResearchBatches } from "@/lib/ebay-research";
-import { serializePriceCheckJob } from "@/lib/price-check-jobs";
+import { getEbayActionQueuePositions } from "@/lib/ebay-action-queue";
+import { isEbayResearchBatchResumable } from "@/lib/ebay-research-batch-state";
 import {
   calculatePendingReviewMetrics,
   getEffectiveListingQuantity,
@@ -259,7 +258,7 @@ type CachedActionCenterQueues = Pick<ActionCenterData, "queues"> & {
   summary: Omit<ActionCenterData["summary"], "runningJobs">;
 };
 
-type LiveActionCenterData = Pick<ActionCenterData, "worker" | "workers" | "jobs"> & {
+export type LiveActionCenterData = Pick<ActionCenterData, "worker" | "workers" | "jobs"> & {
   runningJobs: number;
 };
 
@@ -473,40 +472,257 @@ async function getCachedActionCenterQueues(
   };
 }
 
-async function getLiveActionCenterData(
+async function loadLiveActionCenterData(
   storeId: string,
 ): Promise<LiveActionCenterData> {
-  const priceCheckJobs = await prisma.priceCheckJob.findMany({
-    where: { storeId },
-    orderBy: { createdAt: "desc" },
-    take: RECENT_JOB_LIMIT,
-  });
-  const ebayImportJobs = await prisma.ebayImportJob.findMany({
-    where: { storeId },
-    orderBy: { createdAt: "desc" },
-    take: RECENT_JOB_LIMIT,
-    include: {
-      store: { select: { name: true } },
-    },
-  });
-  const ebayActionJobs = await getCurrentEbayActionJobs(storeId);
-  const ebayResearchBatches = await getCurrentEbayResearchBatches(storeId);
+  const [
+    priceCheckJobs,
+    ebayImportJobs,
+    activeEbayActionJobs,
+    recentEbayActionJobs,
+    ebayResearchBatches,
+  ] = await prisma.$transaction([
+    prisma.priceCheckJob.findMany({
+      where: { storeId },
+      orderBy: { createdAt: "desc" },
+      take: RECENT_JOB_LIMIT,
+      select: {
+        id: true,
+        status: true,
+        scope: true,
+        trigger: true,
+        total: true,
+        checked: true,
+        changed: true,
+        pendingReview: true,
+        failed: true,
+        skipped: true,
+        reason: true,
+        errorMessage: true,
+        createdAt: true,
+        updatedAt: true,
+        startedAt: true,
+        completedAt: true,
+        dismissedAt: true,
+        autoHoldActionJobId: true,
+        autoHoldQueued: true,
+      },
+    }),
+    prisma.ebayImportJob.findMany({
+      where: { storeId },
+      orderBy: { createdAt: "desc" },
+      take: RECENT_JOB_LIMIT,
+      select: {
+        id: true,
+        storeId: true,
+        status: true,
+        quantity: true,
+        requested: true,
+        processed: true,
+        total: true,
+        created: true,
+        skipped: true,
+        failed: true,
+        rateLimited: true,
+        errorMessage: true,
+        createdAt: true,
+        updatedAt: true,
+        startedAt: true,
+        completedAt: true,
+        pausedAt: true,
+        cancelledAt: true,
+        dismissedAt: true,
+        store: { select: { name: true } },
+      },
+    }),
+    prisma.ebayActionJob.findMany({
+      where: {
+        storeId,
+        dismissedAt: null,
+        status: { in: [...ACTIVE_EBAY_ACTION_STATUSES] },
+      },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      select: {
+        id: true,
+        storeId: true,
+        type: true,
+        status: true,
+        total: true,
+        processed: true,
+        succeeded: true,
+        failed: true,
+        metadata: true,
+        errorMessage: true,
+        createdAt: true,
+        updatedAt: true,
+        startedAt: true,
+        completedAt: true,
+        dismissedAt: true,
+      },
+    }),
+    prisma.ebayActionJob.findMany({
+      where: {
+        storeId,
+        dismissedAt: null,
+        status: { notIn: [...ACTIVE_EBAY_ACTION_STATUSES] },
+      },
+      orderBy: { createdAt: "desc" },
+      take: RECENT_JOB_LIMIT,
+      select: {
+        id: true,
+        storeId: true,
+        type: true,
+        status: true,
+        total: true,
+        processed: true,
+        succeeded: true,
+        failed: true,
+        metadata: true,
+        errorMessage: true,
+        createdAt: true,
+        updatedAt: true,
+        startedAt: true,
+        completedAt: true,
+        dismissedAt: true,
+      },
+    }),
+    prisma.ebayResearchBatch.findMany({
+      where: { storeId },
+      orderBy: { createdAt: "desc" },
+      take: 10,
+      select: {
+        id: true,
+        storeId: true,
+        status: true,
+        total: true,
+        completed: true,
+        failed: true,
+        cooldownUntil: true,
+        createdAt: true,
+        updatedAt: true,
+        startedAt: true,
+        completedAt: true,
+        pausedAt: true,
+        jobs: {
+          orderBy: { createdAt: "asc" },
+          select: {
+            id: true,
+            status: true,
+            query: true,
+            activeCount: true,
+            createdAt: true,
+          },
+        },
+      },
+    }),
+  ]);
   const workers = await getWorkerStatusesForStore(storeId);
   const worker =
     workers.find((item) => item.online) ?? workers[0] ?? getOfflineWorkerStatus();
 
-  const activePriceJobs = priceCheckJobs.filter((job) =>
+  const serializedPriceCheckJobs = priceCheckJobs.map((job) => {
+    const remaining = Math.max(0, job.total - job.checked);
+    return {
+      ...job,
+      status: `${job.status}` as const,
+      scope: `${job.scope}`,
+      trigger: `${job.trigger}`,
+      remaining,
+      canResume: job.status === PriceCheckJobStatus.CANCELLED && remaining > 0,
+      createdAt: job.createdAt.toISOString(),
+      updatedAt: job.updatedAt.toISOString(),
+      startedAt: iso(job.startedAt),
+      completedAt: iso(job.completedAt),
+      dismissedAt: iso(job.dismissedAt),
+    };
+  });
+  const serializedImportJobs = ebayImportJobs.map((job) => {
+    const { store, ...compactJob } = job;
+    const progressTotal = job.total || job.requested || job.quantity;
+    return {
+      ...compactJob,
+      storeName: store.name,
+      progressPercent:
+        progressTotal <= 0
+          ? 0
+          : Math.min(100, Math.round((job.processed / progressTotal) * 100)),
+      canPause:
+        job.status === EbayImportJobStatus.QUEUED ||
+        job.status === EbayImportJobStatus.RUNNING,
+      canResume: job.status === EbayImportJobStatus.PAUSED,
+      canCancel: ACTIVE_IMPORT_JOB_STATUSES.includes(
+        job.status as (typeof ACTIVE_IMPORT_JOB_STATUSES)[number],
+      ),
+      createdAt: job.createdAt.toISOString(),
+      updatedAt: job.updatedAt.toISOString(),
+      startedAt: iso(job.startedAt),
+      completedAt: iso(job.completedAt),
+      pausedAt: iso(job.pausedAt),
+      cancelledAt: iso(job.cancelledAt),
+      dismissedAt: iso(job.dismissedAt),
+    };
+  });
+  const ebayActionJobs = [...activeEbayActionJobs, ...recentEbayActionJobs];
+  const actionQueuePositions = getEbayActionQueuePositions(ebayActionJobs);
+  const serializedActionJobs = ebayActionJobs.map((job) => ({
+    ...job,
+    createdAt: job.createdAt.toISOString(),
+    updatedAt: job.updatedAt.toISOString(),
+    startedAt: iso(job.startedAt),
+    completedAt: iso(job.completedAt),
+    dismissedAt: iso(job.dismissedAt),
+    queuePosition: actionQueuePositions.get(job.id) ?? null,
+  }));
+  const serializedResearchBatches = ebayResearchBatches.map((batch) => {
+    const queuedJobs = batch.jobs.filter(
+      (job) =>
+        job.status === EbayResearchJobStatus.QUEUED ||
+        job.status === EbayResearchJobStatus.PAUSED,
+    );
+    const queuedPositions = new Map(
+      queuedJobs.map((job, index) => [job.id, index + 1]),
+    );
+    return {
+      ...batch,
+      running: batch.jobs.filter(
+        (job) =>
+          job.status === EbayResearchJobStatus.RUNNING ||
+          job.status === EbayResearchJobStatus.PAUSING,
+      ).length,
+      queued: batch.jobs.filter((job) => job.status === EbayResearchJobStatus.QUEUED).length,
+      paused: batch.jobs.filter((job) => job.status === EbayResearchJobStatus.PAUSED).length,
+      canPause:
+        batch.status === EbayResearchBatchStatus.QUEUED ||
+        batch.status === EbayResearchBatchStatus.RUNNING,
+      canResume: isEbayResearchBatchResumable(batch.status),
+      createdAt: batch.createdAt.toISOString(),
+      updatedAt: batch.updatedAt.toISOString(),
+      startedAt: iso(batch.startedAt),
+      completedAt: iso(batch.completedAt),
+      pausedAt: iso(batch.pausedAt),
+      cooldownUntil: iso(batch.cooldownUntil),
+      jobs: batch.jobs.map((job) => ({
+        id: job.id,
+        status: `${job.status}`,
+        query: job.query,
+        activeCount: job.activeCount,
+        queuePosition: queuedPositions.get(job.id) ?? null,
+      })),
+    };
+  });
+
+  const activePriceJobs = serializedPriceCheckJobs.filter((job) =>
     ACTIVE_PRICE_JOB_STATUSES.includes(job.status as (typeof ACTIVE_PRICE_JOB_STATUSES)[number])
   );
-  const activeImportJobs = ebayImportJobs.filter((job) =>
+  const activeImportJobs = serializedImportJobs.filter((job) =>
     ACTIVE_IMPORT_JOB_STATUSES.includes(job.status as (typeof ACTIVE_IMPORT_JOB_STATUSES)[number])
   );
-  const activeResearchBatches = ebayResearchBatches.filter((batch) =>
+  const activeResearchBatches = serializedResearchBatches.filter((batch) =>
     ACTIVE_RESEARCH_BATCH_STATUSES.includes(
       batch.status as (typeof ACTIVE_RESEARCH_BATCH_STATUSES)[number]
     )
   );
-  const activeEbayActionJobs = ebayActionJobs.filter((job) =>
+  const currentEbayActionJobs = serializedActionJobs.filter((job) =>
     ACTIVE_EBAY_ACTION_STATUSES.includes(
       job.status as (typeof ACTIVE_EBAY_ACTION_STATUSES)[number]
     )
@@ -516,20 +732,37 @@ async function getLiveActionCenterData(
     worker,
     workers,
     jobs: {
-      priceChecks: priceCheckJobs.map((job) => serializePriceCheckJob(job)),
-      ebayImports: ebayImportJobs.map((job) => ({
-        ...serializeEbayImportJob(job),
-        storeName: job.store.name,
-      })),
-      ebayResearchBatches,
-      ebayActions: ebayActionJobs,
+      priceChecks: serializedPriceCheckJobs,
+      ebayImports: serializedImportJobs,
+      ebayResearchBatches: serializedResearchBatches,
+      ebayActions: serializedActionJobs,
     },
     runningJobs:
       activePriceJobs.length +
       activeImportJobs.length +
       activeResearchBatches.length +
-      activeEbayActionJobs.length,
+      currentEbayActionJobs.length,
   };
+}
+
+const globalForActionCenter = globalThis as typeof globalThis & {
+  listflowActionCenterLiveRequests?: Map<string, Promise<LiveActionCenterData>>;
+};
+
+export function getLiveActionCenterData(storeId: string): Promise<LiveActionCenterData> {
+  const requests =
+    globalForActionCenter.listflowActionCenterLiveRequests ??
+    (globalForActionCenter.listflowActionCenterLiveRequests = new Map());
+  const existing = requests.get(storeId);
+  if (existing) return existing;
+
+  const request = loadLiveActionCenterData(storeId).finally(() => {
+    if (requests.get(storeId) === request) {
+      requests.delete(storeId);
+    }
+  });
+  requests.set(storeId, request);
+  return request;
 }
 
 export async function getActionCenterData(storeId: string): Promise<ActionCenterData> {

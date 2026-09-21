@@ -483,7 +483,6 @@ export function getEbayMetricsSyncLeaseInput(
 
 export async function listActiveJobLeasesForStore(storeId: string) {
   const now = new Date();
-  await prisma.jobLease.deleteMany({ where: { storeId, expiresAt: { lte: now } } });
   const leases = await prisma.jobLease.findMany({
     where: {
       storeId,
