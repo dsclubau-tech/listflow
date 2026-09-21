@@ -407,10 +407,18 @@ async function processStore(store: {
         () => modules.syncEbaySoldCountsForStore(store.id, worker),
       );
 
-      await modules.completeWorkerSchedule(
-        soldSyncClaim,
-        modules.EBAY_SOLD_COUNT_SYNC_INTERVAL_MS,
-      );
+      if (result.retryAfterMs) {
+        await modules.retryWorkerSchedule(
+          soldSyncClaim,
+          result.retryAfterMs,
+          result.errors.join("; ") || "eBay metrics sync partially failed",
+        );
+      } else {
+        await modules.completeWorkerSchedule(
+          soldSyncClaim,
+          modules.EBAY_SOLD_COUNT_SYNC_INTERVAL_MS,
+        );
+      }
 
       if (result.updatedProducts > 0) {
         return true;

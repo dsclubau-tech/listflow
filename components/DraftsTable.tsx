@@ -2221,9 +2221,9 @@ export default function DraftsTable({
                 <option value="sold-asc">Sold: Low to High (Ascending)</option>
                 <option value="sold-desc">Sold: High to Low (Descending)</option>
               </optgroup>
-              <optgroup label="Views">
-                <option value="views-asc">Views: Low to High (Ascending)</option>
-                <option value="views-desc">Views: High to Low (Descending)</option>
+              <optgroup label="Views (30 days)">
+                <option value="views-asc">Views (30 days): Low to High</option>
+                <option value="views-desc">Views (30 days): High to Low</option>
               </optgroup>
             </select>
           </div>
@@ -2374,7 +2374,7 @@ export default function DraftsTable({
                     onSortChange={onSortChange}
                   />
                   <ProductSortHeader
-                    label="Views"
+                    label="Views (30 days)"
                     field="views"
                     sortBy={sortBy}
                     sortOrder={sortOrder}
@@ -2554,7 +2554,7 @@ export default function DraftsTable({
                               product.ebayViewCount !== null && product.ebayViewCount !== undefined && product.ebayViewCount > 0 ? (
                                 <span
                                   className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 ring-1 ring-blue-600/20"
-                                  title={`${product.ebayViewCount} view${product.ebayViewCount === 1 ? "" : "s"} on eBay`}
+                                  title={`${product.ebayViewCount} view${product.ebayViewCount === 1 ? "" : "s"} on eBay in the last 30 days`}
                                 >
                                   <svg
                                     className="h-3 w-3 text-blue-600"
@@ -2580,7 +2580,11 @@ export default function DraftsTable({
                               ) : (
                                 <span
                                   className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-0.5 text-xs text-gray-500 font-medium"
-                                  title={product.ebayViewCount ? `${product.ebayViewCount} views on eBay` : "0 views on eBay"}
+                                  title={
+                                    product.ebayViewCount === 0
+                                      ? "0 views on eBay in the last 30 days"
+                                      : "Views unavailable or not yet synced"
+                                  }
                                 >
                                   <svg
                                     className="h-3 w-3 text-gray-400"
@@ -2601,7 +2605,9 @@ export default function DraftsTable({
                                       d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"
                                     />
                                   </svg>
-                                  <span>{product.ebayViewCount ?? 0} views</span>
+                                  <span>
+                                    {product.ebayViewCount === 0 ? "0 views" : "— views"}
+                                  </span>
                                 </span>
                               )
                             )}
@@ -2894,7 +2900,7 @@ export default function DraftsTable({
                           {product.ebayViewCount !== null && product.ebayViewCount !== undefined ? (
                             <span
                               className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 ring-1 ring-blue-600/20"
-                              title={`${product.ebayViewCount} view${product.ebayViewCount === 1 ? "" : "s"} on eBay`}
+                              title={`${product.ebayViewCount} view${product.ebayViewCount === 1 ? "" : "s"} on eBay in the last 30 days`}
                             >
                               <svg
                                 className="h-3 w-3 text-blue-600"
@@ -2918,8 +2924,15 @@ export default function DraftsTable({
                               <span>{product.ebayViewCount}</span>
                             </span>
                           ) : (
-                            <span className="text-xs font-medium text-gray-400">
-                              {product.ebayItemId ? "0" : "-"}
+                            <span
+                              className="text-xs font-medium text-gray-400"
+                              title={
+                                product.ebayItemId
+                                  ? "Views unavailable or not yet synced"
+                                  : "No eBay listing"
+                              }
+                            >
+                              {product.ebayItemId ? "—" : "-"}
                             </span>
                           )}
                         </td>

@@ -1592,10 +1592,40 @@ export default function ProductsPageClient({
       const res = await fetch("/api/ebay/sync-views", { method: "POST" });
       const data = await res.json();
       if (res.ok) {
-        showToast(
-          `eBay Views & Sold count synced (${data.updatedProducts ?? 0} updated).`,
-          "success",
-        );
+        const views = data.views as
+          | {
+              status?: string;
+              refreshedProducts?: number;
+              changedProducts?: number;
+              unavailableProducts?: number;
+              error?: string | null;
+            }
+          | undefined;
+        const sold = data.sold as { status?: string; error?: string | null } | undefined;
+        const hasPartialFailure =
+          sold?.status === "failed" ||
+          views?.status === "failed" ||
+          views?.status === "partial";
+        if (views?.status === "authorization-required") {
+          showToast(
+            sold?.status === "success"
+              ? "Sold counts synced, but this store must authorize eBay Analytics before views can update."
+              : "Sold counts failed and this store must authorize eBay Analytics before views can update.",
+            "error",
+          );
+        } else if (hasPartialFailure) {
+          showToast(
+            `eBay sync partially completed. Views refreshed for ${views?.refreshedProducts ?? 0} listings; ${views?.unavailableProducts ?? 0} unavailable.`,
+            "error",
+          );
+        } else if ((data.totalTracked ?? 0) > 0 && (views?.refreshedProducts ?? 0) === 0) {
+          showToast("Sold counts synced, but eBay returned no listing views.", "error");
+        } else {
+          showToast(
+            `eBay sync completed: ${views?.refreshedProducts ?? 0} view counts refreshed, ${data.updatedProducts ?? 0} products changed.`,
+            "success",
+          );
+        }
         router.refresh();
       } else {
         showToast(data.error || "Failed to sync eBay views.", "error");

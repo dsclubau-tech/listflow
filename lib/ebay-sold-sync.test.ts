@@ -26,7 +26,7 @@ test("ebay-sold-sync defines 24-hour cadence and schedule key", async () => {
   assert.equal(EBAY_SOLD_COUNT_SYNC_INTERVAL_MS, 24 * 60 * 60 * 1000);
 });
 
-test("getEbaySoldSyncUpdates identifies products with changed sold counts or view counts", async () => {
+test("getEbaySoldSyncUpdates identifies products with changed sold counts", async () => {
   const { getEbaySoldSyncUpdates } = await import("./ebay-sold-sync");
   const products = [
     { id: "p1", ebayItemId: "111", quantitySold: 0, ebayViewCount: 10 },
@@ -36,20 +36,52 @@ test("getEbaySoldSyncUpdates identifies products with changed sold counts or vie
   ];
 
   const listings = [
-    { itemId: "111", title: "Item 1", quantityAvailable: 2, quantitySold: 3, quantityTotal: 5, viewCount: 10 },
-    { itemId: "222", title: "Item 2", quantityAvailable: 1, quantitySold: 5, quantityTotal: 6, viewCount: 25 },
-    { itemId: "333", title: "Item 3", quantityAvailable: 0, quantitySold: 12, quantityTotal: 12, viewCount: 40 },
-    { itemId: "444", title: "Item 4", quantityAvailable: 5, quantitySold: 2, quantityTotal: 7, viewCount: 75 },
+    { itemId: "111", title: "Item 1", quantityAvailable: 2, quantitySold: 3, quantityTotal: 5 },
+    { itemId: "222", title: "Item 2", quantityAvailable: 1, quantitySold: 5, quantityTotal: 6 },
+    { itemId: "333", title: "Item 3", quantityAvailable: 0, quantitySold: 12, quantityTotal: 12 },
+    { itemId: "444", title: "Item 4", quantityAvailable: 5, quantitySold: 2, quantityTotal: 7 },
   ];
 
   const updates = getEbaySoldSyncUpdates(products, listings);
 
   assert.deepEqual(updates, [
-    { id: "p1", nextQuantitySold: 3, nextViewCount: 10 },
-    { id: "p3", nextQuantitySold: 12, nextViewCount: 40 },
-    { id: "p4", nextQuantitySold: 2, nextViewCount: 75 },
+    { id: "p1", nextQuantitySold: 3 },
+    { id: "p3", nextQuantitySold: 12 },
   ]);
 });
 
+test("getEbayViewSyncUpdates accepts zero and decreasing rolling counts but preserves missing listings", async () => {
+  const { getEbayViewSyncUpdates } = await import("./ebay-sold-sync");
+  const products = [
+    { id: "p1", ebayItemId: "111", quantitySold: 0, ebayViewCount: 10 },
+    { id: "p2", ebayItemId: "222", quantitySold: 0, ebayViewCount: null },
+    { id: "p3", ebayItemId: "333", quantitySold: 0, ebayViewCount: 7 },
+    { id: "p4", ebayItemId: "444", quantitySold: 0, ebayViewCount: 5 },
+  ];
+
+  assert.deepEqual(
+    getEbayViewSyncUpdates(
+      products,
+      new Map([
+        ["111", 3],
+        ["222", 0],
+        ["333", 7],
+      ]),
+    ),
+    [
+      { id: "p1", nextViewCount: 3 },
+      { id: "p2", nextViewCount: 0 },
+    ],
+  );
+});
+
+test("metrics sync lease uses one store-scoped resource for every entry point", async () => {
+  const { getEbayMetricsSyncLeaseInput } = await import("./job-coordination");
+  const worker = { workerId: "w1", workerName: "Worker 1", workerRole: "unified" as const };
+  const first = getEbayMetricsSyncLeaseInput("store-1", "manual-1", worker);
+  const second = getEbayMetricsSyncLeaseInput("store-1", "scheduled-1", worker);
+  assert.deepEqual(first.resources, second.resources);
+  assert.deepEqual(first.conflictWhere, second.conflictWhere);
+});
 
 

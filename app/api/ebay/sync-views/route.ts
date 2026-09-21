@@ -3,6 +3,7 @@ import { auth } from "@/auth";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { syncEbaySoldCountsForStore } from "@/lib/ebay-sold-sync";
 import { createRequestLogger } from "@/lib/logger";
+import { JobConflictError } from "@/lib/job-coordination";
 
 export async function POST(request: Request) {
   const log = createRequestLogger(request);
@@ -41,7 +42,7 @@ export async function POST(request: Request) {
       {
         error: error instanceof Error ? error.message : "Failed to sync eBay views",
       },
-      { status: 500 }
+      { status: error instanceof JobConflictError ? 409 : 500 }
     );
   }
 }

@@ -2,7 +2,7 @@ import "server-only";
 
 import { prisma } from "@/lib/prisma";
 
-export type EbayRateLimitKind = "TRADING" | "BROWSE" | "MEDIA";
+export type EbayRateLimitKind = "TRADING" | "BROWSE" | "MEDIA" | "ANALYTICS";
 
 const DEFAULT_TRADING_INTERVAL_MS = Number(
   process.env.LISTFLOW_EBAY_TRADING_MIN_INTERVAL_MS ?? 2_500
@@ -12,6 +12,9 @@ const DEFAULT_BROWSE_INTERVAL_MS = Number(
 );
 const DEFAULT_MEDIA_INTERVAL_MS = Number(
   process.env.LISTFLOW_EBAY_MEDIA_MIN_INTERVAL_MS ?? 1_000
+);
+const DEFAULT_ANALYTICS_INTERVAL_MS = Number(
+  process.env.LISTFLOW_EBAY_ANALYTICS_MIN_INTERVAL_MS ?? 2_500
 );
 const DEFAULT_BACKOFF_MS = Number(
   process.env.LISTFLOW_EBAY_RATE_LIMIT_BACKOFF_MS ?? 5 * 60_000
@@ -24,6 +27,7 @@ function sleep(ms: number) {
 function intervalFor(kind: EbayRateLimitKind) {
   if (kind === "BROWSE") return DEFAULT_BROWSE_INTERVAL_MS;
   if (kind === "MEDIA") return DEFAULT_MEDIA_INTERVAL_MS;
+  if (kind === "ANALYTICS") return DEFAULT_ANALYTICS_INTERVAL_MS;
   return DEFAULT_TRADING_INTERVAL_MS;
 }
 

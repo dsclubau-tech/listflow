@@ -127,6 +127,7 @@ const productSortCandidateSelect = {
   price: true,
   amazonPrice: true,
   quantitySold: true,
+  ebayViewCount: true,
   createdAt: true,
   status: true,
   ebayItemId: true,

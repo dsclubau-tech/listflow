@@ -26,6 +26,7 @@ const PRICE_CHECK_PRODUCT_PREFIX = "price-check-products:product:";
 const EBAY_GATE_KEY = "ebay-api:gate";
 const EBAY_READ_KEY = "ebay-api-read";
 const EBAY_WRITE_KEY = "ebay-api-write";
+const EBAY_METRICS_SYNC_KEY = "ebay-metrics-sync";
 
 const ACTIVE_PRICE_CHECK_STATUSES: PriceCheckJobStatus[] = [
   PriceCheckJobStatus.QUEUED,
@@ -251,7 +252,11 @@ function buildConflictMessage(conflicts: LeaseRecord[]) {
     return "Another job is already using this resource.";
   }
 
-  if (first.resourceKey === EBAY_READ_KEY || first.resourceKey === EBAY_WRITE_KEY) {
+  if (
+    first.resourceKey === EBAY_READ_KEY ||
+    first.resourceKey === EBAY_WRITE_KEY ||
+    first.resourceKey === EBAY_METRICS_SYNC_KEY
+  ) {
     return `${first.workerName} is running an eBay job for this store. Wait for it to finish before starting another eBay job.`;
   }
 
@@ -449,6 +454,23 @@ export function getEbayWriteLeaseInput(
     },
     details: { label, lane: "eBay write" },
     queuedAt,
+  };
+}
+
+export function getEbayMetricsSyncLeaseInput(
+  storeId: string,
+  jobId: string,
+  worker: WorkerContext,
+): LeaseInput {
+  return {
+    storeId,
+    jobType: "EBAY_METRICS_SYNC",
+    jobId,
+    worker,
+    gateKey: EBAY_GATE_KEY,
+    resources: [EBAY_METRICS_SYNC_KEY],
+    conflictWhere: { resourceKey: EBAY_METRICS_SYNC_KEY },
+    details: { label: "eBay sold and views sync", lane: "eBay metrics" },
   };
 }
 

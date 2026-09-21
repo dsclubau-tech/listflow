@@ -63,7 +63,7 @@ function getProductSortValue(
   }
 
   if (sortBy === "views") {
-    return product.ebayViewCount ?? 0;
+    return product.ebayViewCount ?? null;
   }
 
   if (sortBy === "uploaded") {
