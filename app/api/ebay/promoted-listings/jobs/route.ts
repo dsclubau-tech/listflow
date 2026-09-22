@@ -5,7 +5,11 @@ import {
   ProductStatus,
 } from "@/app/generated/prisma/enums";
 import { invalidateJobCaches } from "@/lib/cache-tags";
-import { createEbayActionJob } from "@/lib/ebay-action-jobs";
+import {
+  createEbayActionJob,
+  findPromotedCampaignDependency,
+  getCurrentEbayActionJobs,
+} from "@/lib/ebay-action-jobs";
 import { createRequestLogger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import {
@@ -49,6 +53,7 @@ export async function POST(request: Request) {
       campaignId?: unknown;
       campaignName?: unknown;
     };
+    requestId?: unknown;
   };
   const productIds = normalizePromotedListingProductIds(body.productIds);
   const operation = body.operation === "REMOVE" ? "REMOVE" : "APPLY";
@@ -73,6 +78,14 @@ export async function POST(request: Request) {
     operation === "APPLY"
       ? normalizePromotedCampaignInput(body.campaign)
       : null;
+  const requestId =
+    typeof body.requestId === "string" && body.requestId.trim().length > 0
+      ? body.requestId.trim().slice(0, 128)
+      : undefined;
+
+  if (body.requestId !== undefined && !requestId) {
+    return NextResponse.json({ error: "A valid request ID is required." }, { status: 400 });
+  }
 
   if (operation === "APPLY" && rate === null) {
     return NextResponse.json(
@@ -111,16 +124,29 @@ export async function POST(request: Request) {
   try {
     await assertWorkerOnlineForStore(storeSession.storeId);
     const userId = await getInternalUserId();
+    const campaignDependencyJobId =
+      operation === "APPLY" && campaign?.mode === "CREATE"
+        ? await findPromotedCampaignDependency(
+            storeSession.storeId,
+            campaign.campaignName,
+          )
+        : null;
     const result = await createEbayActionJob({
       userId,
       storeId: storeSession.storeId,
       type: EbayActionJobType.MANAGE_PROMOTED_ADS,
+      requestId,
       productIds,
       metadata: {
         kind: "promoted-ads",
         operation,
         bidPercentage: rate,
-        campaignMode: operation === "APPLY" ? campaign?.mode ?? null : null,
+        campaignMode:
+          operation === "APPLY"
+            ? campaignDependencyJobId
+              ? "DEPENDENT"
+              : campaign?.mode ?? null
+            : null,
         campaignId:
           operation === "APPLY" && campaign?.mode === "EXISTING"
             ? campaign.campaignId
@@ -129,13 +155,28 @@ export async function POST(request: Request) {
           operation === "APPLY" && campaign?.mode === "CREATE"
             ? campaign.campaignName
             : null,
+        campaignDependencyJobId,
       },
     });
     invalidateJobCaches(storeSession.storeId);
+    let queuedJob:
+      | Awaited<ReturnType<typeof getCurrentEbayActionJobs>>[number]
+      | undefined;
+    try {
+      const queueJobs = await getCurrentEbayActionJobs(storeSession.storeId);
+      queuedJob = queueJobs.find((job) => job.id === result.job.id);
+    } catch (error) {
+      log.warn(
+        "ebay/promoted-listings/jobs",
+        "Promotion job queued but queue position could not be read",
+        { error: error instanceof Error ? error.message : String(error) },
+      );
+    }
 
     return NextResponse.json(
       {
         ...result,
+        job: queuedJob ?? result.job,
         message:
           operation === "REMOVE"
             ? `Queued ${result.job.total} listing(s) to remove from promotion.`
@@ -158,4 +199,28 @@ export async function POST(request: Request) {
       { status: queueError?.status ?? getErrorStatus(error) },
     );
   }
+}
+
+export async function GET() {
+  const session = await auth();
+  const storeSession = await getCurrentStoreSession();
+
+  if (!session?.user || !storeSession) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const jobs = await getCurrentEbayActionJobs(storeSession.storeId);
+  const activePromotions = jobs.filter(
+    (job) =>
+      job.type === EbayActionJobType.MANAGE_PROMOTED_ADS &&
+      (job.status === "QUEUED" || job.status === "RUNNING"),
+  );
+
+  return NextResponse.json(
+    {
+      currentJob: activePromotions[0] ?? null,
+      queuedCount: Math.max(0, activePromotions.length - 1),
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }

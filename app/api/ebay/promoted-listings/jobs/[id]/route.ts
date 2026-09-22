@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { EbayActionJobType } from "@/app/generated/prisma/enums";
-import { serializeEbayActionJob } from "@/lib/ebay-action-jobs";
+import {
+  getCurrentEbayActionJobs,
+  serializeEbayActionJob,
+} from "@/lib/ebay-action-jobs";
 import { prisma } from "@/lib/prisma";
 import { getCurrentStoreSession } from "@/lib/store-session";
 
@@ -29,5 +32,10 @@ export async function GET(
     return NextResponse.json({ error: "Promotion job not found" }, { status: 404 });
   }
 
-  return NextResponse.json({ job: serializeEbayActionJob(job) });
+  const currentJobs = await getCurrentEbayActionJobs(storeSession.storeId);
+  const current = currentJobs.find((candidate) => candidate.id === job.id);
+  return NextResponse.json(
+    { job: current ?? serializeEbayActionJob(job) },
+    { headers: { "Cache-Control": "no-store" } },
+  );
 }

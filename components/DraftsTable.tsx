@@ -67,7 +67,6 @@ interface DraftsTableProps {
   onSyncSelectedEbayAds?: (productIds: string[]) => Promise<void>;
   isEbayAdsSyncing?: boolean;
   onManagePromotionsSelected?: (productIds: string[]) => void;
-  isPromotionJobActive?: boolean;
   onBulkEditSelected?: (productIds: string[]) => void;
   onDraftImported?: (productId: string) => void;
 }
@@ -665,7 +664,6 @@ export default function DraftsTable({
   onSyncSelectedEbayAds,
   isEbayAdsSyncing = false,
   onManagePromotionsSelected,
-  isPromotionJobActive = false,
   onBulkEditSelected,
   onDraftImported,
 }: DraftsTableProps) {
@@ -3611,7 +3609,7 @@ export default function DraftsTable({
                   <button
                     type="button"
                     onClick={() => onManagePromotionsSelected(selectedIds)}
-                    disabled={selectedIds.length === 0 || isPromotionJobActive}
+                    disabled={selectedIds.length === 0}
                     className="flex items-center gap-2 rounded-md border border-violet-200 px-4 py-2 text-sm font-medium text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-60"
                   >
                     Manage Promotions
@@ -3990,7 +3988,7 @@ export default function DraftsTable({
                       onManagePromotionsSelected(selectedIds);
                       setIsMobileActionsOpen(false);
                     }}
-                    disabled={selectedIds.length === 0 || isPromotionJobActive}
+                    disabled={selectedIds.length === 0}
                     className="w-full py-2.5 px-3 rounded-lg border border-violet-200 text-xs font-medium text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-60 flex items-center justify-center gap-1.5"
                   >
                     Manage Promotions

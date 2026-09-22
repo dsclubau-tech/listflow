@@ -618,16 +618,17 @@ export function serializeEbayActionJob(job: EbayActionJobRecord) {
   };
 }
 
-type PromotedAdsJobMetadata = {
+export type PromotedAdsJobMetadata = {
   kind: "promoted-ads";
   operation: "APPLY" | "REMOVE";
   bidPercentage: number | null;
-  campaignMode: "EXISTING" | "CREATE" | null;
+  campaignMode: "EXISTING" | "CREATE" | "DEPENDENT" | null;
   campaignId: string | null;
   campaignName: string | null;
+  campaignDependencyJobId: string | null;
 };
 
-function getPromotedAdsMetadata(job: EbayActionJobRecord): PromotedAdsJobMetadata {
+export function getPromotedAdsMetadata(job: Pick<EbayActionJobRecord, "metadata">): PromotedAdsJobMetadata {
   const record =
     job.metadata && typeof job.metadata === "object" && !Array.isArray(job.metadata)
       ? (job.metadata as Record<string, unknown>)
@@ -645,6 +646,8 @@ function getPromotedAdsMetadata(job: EbayActionJobRecord): PromotedAdsJobMetadat
         ? "CREATE"
         : record.campaignMode === "EXISTING"
           ? "EXISTING"
+          : record.campaignMode === "DEPENDENT"
+            ? "DEPENDENT"
           : null,
     campaignId:
       typeof record.campaignId === "string" && record.campaignId.trim()
@@ -654,7 +657,51 @@ function getPromotedAdsMetadata(job: EbayActionJobRecord): PromotedAdsJobMetadat
       typeof record.campaignName === "string" && record.campaignName.trim()
         ? record.campaignName.trim()
         : null,
+    campaignDependencyJobId:
+      typeof record.campaignDependencyJobId === "string" && record.campaignDependencyJobId.trim()
+        ? record.campaignDependencyJobId.trim()
+        : null,
   };
+}
+
+/**
+ * Find the most recent queued or running campaign-creation job for a name.
+ * A dependent promotion can safely wait for this job to write its campaign ID;
+ * if it never does, the dependent job reports that failure instead of creating
+ * a second campaign.
+ */
+export async function findPromotedCampaignDependency(
+  storeId: string,
+  campaignName: string,
+) {
+  const normalizedName = campaignName.trim().toLocaleLowerCase();
+  if (!normalizedName) return null;
+
+  const jobs = await prisma.ebayActionJob.findMany({
+    where: {
+      storeId,
+      type: EbayActionJobType.MANAGE_PROMOTED_ADS,
+      dismissedAt: null,
+      status: { in: ACTIVE_ACTION_JOB_STATUSES },
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take: 100,
+  });
+
+  for (const candidate of jobs) {
+    const metadata = getPromotedAdsMetadata(candidate);
+    if (
+      metadata.operation === "APPLY" &&
+      (metadata.campaignMode === "CREATE" || metadata.campaignMode === "DEPENDENT") &&
+      metadata.campaignName?.trim().toLocaleLowerCase() === normalizedName
+    ) {
+      return metadata.campaignMode === "DEPENDENT"
+        ? metadata.campaignDependencyJobId ?? candidate.id
+        : candidate.id;
+    }
+  }
+
+  return null;
 }
 
 function promotionFailure(
@@ -855,6 +902,29 @@ async function runPromotedAdsJob(job: EbayActionJobRecord) {
         data: { metadata: nextMetadata },
       });
       job.metadata = updatedJob.metadata;
+    } else if (metadata.campaignMode === "DEPENDENT") {
+      const dependencyId = metadata.campaignDependencyJobId;
+      const dependency = dependencyId
+        ? await prisma.ebayActionJob.findUnique({ where: { id: dependencyId } })
+        : null;
+      const dependencyMetadata = dependency
+        ? getPromotedAdsMetadata(dependency)
+        : null;
+      targetCampaignId = dependencyMetadata?.campaignId ?? null;
+      targetCampaignName = dependencyMetadata?.campaignName ?? targetCampaignName;
+      if (!targetCampaignId) {
+        throw new Error(
+          `The earlier promotion job could not create campaign ${JSON.stringify(
+            metadata.campaignName ?? "",
+          )}; this queued job was not applied.`,
+        );
+      }
+
+      const campaign = await getEbayGeneralCampaign(storeNumber, targetCampaignId);
+      if (!campaign || !campaign.supported || campaign.rateStrategy !== "FIXED") {
+        throw new Error("The dependent eBay campaign is unavailable or is not fixed-rate.");
+      }
+      targetCampaignName = campaign.campaignName;
     } else {
       const campaign = targetCampaignId
         ? await getEbayGeneralCampaign(storeNumber, targetCampaignId)
@@ -2537,7 +2607,7 @@ export async function runNextEbayActionJobForStore(
       status: { in: ACTIVE_ACTION_JOB_STATUSES },
       dismissedAt: null,
     },
-    orderBy: { createdAt: "asc" },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     take: 5,
   });
   const policy = worker ? await getWorkerClaimPolicy(storeId, worker) : null;

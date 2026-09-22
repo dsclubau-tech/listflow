@@ -64,6 +64,32 @@ test("Products and eBay Import clients allow another job to be queued", () => {
   );
 });
 
+test("promoted listings keep the form available and use retry-safe request IDs", () => {
+  const modalSource = readFileSync("components/PromotedListingsModal.tsx", "utf8");
+  const routeSource = readFileSync(
+    "app/api/ebay/promoted-listings/jobs/route.ts",
+    "utf8",
+  );
+
+  assert.match(modalSource, /requestId/);
+  assert.match(modalSource, /setConfirmed\(false\)/);
+  assert.doesNotMatch(modalSource, /const canSubmit =\s*!active/);
+  assert.doesNotMatch(modalSource, /\{!active &&/);
+  assert.match(routeSource, /requestId/);
+  assert.match(routeSource, /export async function GET/);
+  assert.match(routeSource, /queuedCount/);
+});
+
+test("promotion workers select a deterministic FIFO eBay queue", () => {
+  const source = readFileSync("lib/ebay-action-jobs.ts", "utf8");
+  const start = source.indexOf("export async function runNextEbayActionJobForStore");
+  assert.notEqual(start, -1);
+  const end = source.indexOf("\nexport ", start + 1);
+  const workerSource = source.slice(start, end === -1 ? source.length : end);
+  assert.match(workerSource, /orderBy:\s*\[\{ createdAt: "asc" \}, \{ id: "asc" \}\]/);
+  assert.match(source, /\? "DEPENDENT"/);
+});
+
 test("upload job creation locks products and reuses active uploads", () => {
   const actionSource = readFileSync("lib/ebay-action-jobs.ts", "utf8");
   const createSource = exportedFunctionSource(

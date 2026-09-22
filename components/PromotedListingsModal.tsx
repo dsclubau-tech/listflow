@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ActionProgressBar from "@/components/ActionProgressBar";
 import {
   getPromotedListingProfitPreview,
@@ -19,6 +19,8 @@ export type PromotedListingsJob = {
   errors: Array<{ productId: string; title: string; error: string }>;
   errorMessage: string | null;
   metadata?: Record<string, unknown>;
+  createdAt: string;
+  queuePosition: number | null;
 };
 
 type Campaign = {
@@ -38,6 +40,7 @@ type Props = {
   selectedProductIds: string[];
   selectedProducts: PromotedListingProfitProduct[];
   job: PromotedListingsJob | null;
+  queuedCount: number;
   onClose: () => void;
   onJobStarted: (job: PromotedListingsJob) => void;
   onToast: (message: string, variant: "success" | "error") => void;
@@ -45,6 +48,13 @@ type Props = {
 
 function getJobPercent(job: PromotedListingsJob) {
   return job.total > 0 ? Math.round((job.processed / job.total) * 100) : 0;
+}
+
+function getJobDetail(job: PromotedListingsJob) {
+  const metadata = job.metadata ?? {};
+  const operation = metadata.operation === "REMOVE" ? "Remove promotion" : "Promote / change rate";
+  const rate = typeof metadata.bidPercentage === "number" ? ` at ${metadata.bidPercentage}%` : "";
+  return `${operation}${rate} • ${job.total} listing${job.total === 1 ? "" : "s"} • ${job.processed}/${job.total} processed, ${job.succeeded} succeeded, ${job.failed} failed`;
 }
 
 function isActiveJob(job: PromotedListingsJob | null) {
@@ -61,6 +71,7 @@ export default function PromotedListingsModal({
   selectedProductIds,
   selectedProducts,
   job,
+  queuedCount,
   onClose,
   onJobStarted,
   onToast,
@@ -77,6 +88,7 @@ export default function PromotedListingsModal({
   const [isLoadingCampaigns, setIsLoadingCampaigns] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const requestIdRef = useRef<string | null>(null);
   const supportedCampaigns = useMemo(
     () => campaigns.filter((campaign) => campaign.supported),
     [campaigns],
@@ -94,7 +106,7 @@ export default function PromotedListingsModal({
   );
 
   useEffect(() => {
-    if (!open || active) return;
+    if (!open) return;
 
     const controller = new AbortController();
     setIsLoadingCampaigns(true);
@@ -138,7 +150,7 @@ export default function PromotedListingsModal({
       .finally(() => setIsLoadingCampaigns(false));
 
     return () => controller.abort();
-  }, [active, open]);
+  }, [open]);
 
   if (!open) return null;
 
@@ -146,7 +158,6 @@ export default function PromotedListingsModal({
     operation === "REMOVE" ||
     (campaignMode === "EXISTING" ? Boolean(campaignId) : campaignName.trim().length > 0);
   const canSubmit =
-    !active &&
     !isSubmitting &&
     selectedProductIds.length > 0 &&
     !eligibilityError &&
@@ -156,6 +167,12 @@ export default function PromotedListingsModal({
   const submit = async () => {
     if (!canSubmit) return;
     setIsSubmitting(true);
+    const requestId =
+      requestIdRef.current ??
+      (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+    requestIdRef.current = requestId;
 
     try {
       const response = await fetch("/api/ebay/promoted-listings/jobs", {
@@ -163,6 +180,7 @@ export default function PromotedListingsModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           productIds: selectedProductIds,
+          requestId,
           operation,
           bidPercentage: operation === "APPLY" ? rate : undefined,
           campaign:
@@ -184,6 +202,8 @@ export default function PromotedListingsModal({
 
       onJobStarted(data.job);
       onToast(data.message || "Promotion changes queued.", "success");
+      requestIdRef.current = null;
+      setConfirmed(false);
     } catch (error) {
       onToast(
         error instanceof Error ? error.message : "Failed to queue promotion changes.",
@@ -230,7 +250,7 @@ export default function PromotedListingsModal({
                 }
                 percent={getJobPercent(job)}
                 tone={job.failed > 0 || job.status === "FAILED" ? "red" : job.status === "COMPLETED" ? "green" : "blue"}
-                detail={`${job.processed}/${job.total} processed, ${job.succeeded} succeeded, ${job.failed} failed`}
+                detail={getJobDetail(job)}
               />
               {job.errors.length > 0 && (
                 <div className="max-h-32 overflow-y-auto rounded border border-red-200 bg-red-50 p-3 text-xs text-red-700">
@@ -242,15 +262,18 @@ export default function PromotedListingsModal({
                 </div>
               )}
               {active && (
-                <p className="text-xs text-gray-500">
-                  You can close this window or leave Products. The worker will continue this job.
-                </p>
+                <div className="space-y-1 text-xs text-gray-500">
+                  <p>
+                    You can close this window or leave Products. The worker will continue this job.
+                  </p>
+                  {job.queuePosition && <p>Global eBay queue position: {job.queuePosition}</p>}
+                  {queuedCount > 0 && <p>{queuedCount} additional promotion job{queuedCount === 1 ? "" : "s"} waiting.</p>}
+                </div>
               )}
             </div>
           )}
 
-          {!active && (
-            <>
+          <>
               <div className="inline-flex overflow-hidden rounded border border-gray-300">
                 <button
                   type="button"
@@ -499,8 +522,7 @@ export default function PromotedListingsModal({
                   Selected listings will be removed from their current General Promoted Listings campaigns. Their eBay listings will remain active.
                 </div>
               )}
-            </>
-          )}
+          </>
         </div>
 
         <div className="sticky bottom-0 flex items-center justify-end gap-3 border-t border-gray-200 bg-white px-5 py-4">
@@ -511,8 +533,7 @@ export default function PromotedListingsModal({
           >
             {active || job?.status === "COMPLETED" || job?.status === "FAILED" ? "Close" : "Cancel"}
           </button>
-          {!active && (
-            <button
+          <button
               type="button"
               onClick={() => void submit()}
               disabled={!canSubmit}
@@ -524,7 +545,6 @@ export default function PromotedListingsModal({
                   ? "Remove Promotion"
                   : "Apply Promotion"}
             </button>
-          )}
         </div>
       </div>
     </div>

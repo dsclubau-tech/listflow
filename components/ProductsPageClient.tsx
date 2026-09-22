@@ -53,8 +53,6 @@ interface ProductsPageClientProps {
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100, 200] as const;
 const PAGE_SIZE_STORAGE_KEY = "listflow.products.pageSize";
 const PRICE_CHECK_JOB_STORAGE_KEY = "listflow.products.activePriceCheckJobId";
-const PROMOTED_LISTINGS_JOB_STORAGE_KEY =
-  "listflow.products.activePromotedListingsJobId";
 
 type PriceCheckJobStatus =
   | "QUEUED"
@@ -91,6 +89,13 @@ function isActivePromotedListingsJob(job: PromotedListingsJob | null) {
 
 function getPromotedListingsJobSummary(job: PromotedListingsJob) {
   return `${job.succeeded} listing${job.succeeded === 1 ? "" : "s"} updated, ${job.failed} failed.`;
+}
+
+function getPromotedListingsJobDetail(job: PromotedListingsJob) {
+  const metadata = job.metadata ?? {};
+  const operation = metadata.operation === "REMOVE" ? "Remove promotion" : "Promote / change rate";
+  const rate = typeof metadata.bidPercentage === "number" ? ` at ${metadata.bidPercentage}%` : "";
+  return `${operation}${rate} • ${job.total} listing${job.total === 1 ? "" : "s"} • ${job.processed}/${job.total} processed, ${job.succeeded} succeeded, ${job.failed} failed`;
 }
 
 const PRODUCT_FILTER_OPTIONS: Array<{
@@ -417,6 +422,8 @@ export default function ProductsPageClient({
   const [isPromotedListingsOpen, setIsPromotedListingsOpen] = useState(false);
   const [promotedListingsJob, setPromotedListingsJob] =
     useState<PromotedListingsJob | null>(null);
+  const [promotedListingsQueuedCount, setPromotedListingsQueuedCount] =
+    useState(0);
   const [isFilterMenuOpen, setIsFilterMenuOpen] = useState(false);
   const [pendingProductFilter, setPendingProductFilter] =
     useState<ProductQuickFilter | null>(null);
@@ -975,17 +982,7 @@ export default function ProductsPageClient({
     (job: PromotedListingsJob | null, notifyTerminal = false) => {
       setPromotedListingsJob(job);
 
-      if (!job) {
-        window.localStorage.removeItem(PROMOTED_LISTINGS_JOB_STORAGE_KEY);
-        return;
-      }
-
-      if (isActivePromotedListingsJob(job)) {
-        window.localStorage.setItem(PROMOTED_LISTINGS_JOB_STORAGE_KEY, job.id);
-        return;
-      }
-
-      window.localStorage.removeItem(PROMOTED_LISTINGS_JOB_STORAGE_KEY);
+      if (!job) return;
       if (!notifyTerminal || notifiedPromotionJobIds.current.has(job.id)) {
         return;
       }
@@ -1016,47 +1013,50 @@ export default function ProductsPageClient({
     return data.job ?? null;
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function restorePromotedListingsJob() {
-      const jobId = window.localStorage.getItem(
-        PROMOTED_LISTINGS_JOB_STORAGE_KEY,
-      );
-      if (!jobId) return;
-
-      try {
-        const job = await fetchPromotedListingsJob(jobId);
-        if (!cancelled) applyPromotedListingsJob(job, true);
-      } catch {
-        if (!cancelled) {
-          window.localStorage.removeItem(PROMOTED_LISTINGS_JOB_STORAGE_KEY);
-        }
-      }
-    }
-
-    void restorePromotedListingsJob();
-    return () => {
-      cancelled = true;
+  const fetchPromotedListingsQueue = useCallback(async () => {
+    const response = await fetch("/api/ebay/promoted-listings/jobs", {
+      cache: "no-store",
+    });
+    const data = (await response.json().catch(() => ({}))) as {
+      currentJob?: PromotedListingsJob | null;
+      queuedCount?: number;
+      error?: string;
     };
-  }, [applyPromotedListingsJob, fetchPromotedListingsJob]);
+    if (!response.ok) throw new Error(data.error || "Failed to load promotion queue.");
+    return {
+      currentJob: data.currentJob ?? null,
+      queuedCount: Math.max(0, Number(data.queuedCount) || 0),
+    };
+  }, []);
 
   useEffect(() => {
-    const activeJob = promotedListingsJob;
-    if (!activeJob || !isActivePromotedListingsJob(activeJob)) return;
-
     let cancelled = false;
-    const jobId = activeJob.id;
+    const trackedJobId = promotedListingsJob?.id;
+    const trackedJobStatus = promotedListingsJob?.status;
+    const jobId = trackedJobId && (trackedJobStatus === "QUEUED" || trackedJobStatus === "RUNNING")
+      ? trackedJobId
+      : null;
 
     async function pollPromotedListingsJob() {
       try {
-        const job = await fetchPromotedListingsJob(jobId);
-        if (!cancelled) applyPromotedListingsJob(job, true);
+        const [queue, job] = await Promise.all([
+          fetchPromotedListingsQueue(),
+          jobId ? fetchPromotedListingsJob(jobId) : Promise.resolve(null),
+        ]);
+        if (cancelled) return;
+        setPromotedListingsQueuedCount(queue.queuedCount);
+        if (job && !isActivePromotedListingsJob(job)) {
+          applyPromotedListingsJob(job, true);
+        }
+        if (queue.currentJob) {
+          applyPromotedListingsJob(queue.currentJob);
+        }
       } catch {
         // Keep the current state visible; a later poll can recover.
       }
     }
 
+    void pollPromotedListingsJob();
     const interval = window.setInterval(() => {
       void pollPromotedListingsJob();
     }, 2000);
@@ -1065,7 +1065,13 @@ export default function ProductsPageClient({
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [applyPromotedListingsJob, fetchPromotedListingsJob, promotedListingsJob]);
+  }, [
+    applyPromotedListingsJob,
+    fetchPromotedListingsJob,
+    fetchPromotedListingsQueue,
+    promotedListingsJob?.id,
+    promotedListingsJob?.status,
+  ]);
 
   const applyProductSearchAndFilters = useCallback(
     (
@@ -1772,13 +1778,21 @@ export default function ProductsPageClient({
 
   const openPromotedListings = (productIds: string[]) => {
     setSelectedProductIds(productIds);
-    if (
-      promotedListingsJob &&
-      !isActivePromotedListingsJob(promotedListingsJob)
-    ) {
-      setPromotedListingsJob(null);
-    }
     setIsPromotedListingsOpen(true);
+  };
+
+  const handlePromotedListingsJobStarted = (job: PromotedListingsJob) => {
+    if (!promotedListingsJob || !isActivePromotedListingsJob(promotedListingsJob)) {
+      applyPromotedListingsJob(job);
+    }
+    void fetchPromotedListingsQueue()
+      .then((queue) => {
+        setPromotedListingsQueuedCount(queue.queuedCount);
+        if (queue.currentJob) applyPromotedListingsJob(queue.currentJob);
+      })
+      .catch(() => {
+        // The submitted job remains visible; polling will reconcile the queue.
+      });
   };
 
   return (
@@ -1888,7 +1902,7 @@ export default function ProductsPageClient({
                         : "Promotion job failed"
                 }
                 percent={promotionProgressPercent}
-                detail={`${promotedListingsJob.processed}/${promotedListingsJob.total} processed, ${promotedListingsJob.succeeded} succeeded, ${promotedListingsJob.failed} failed`}
+                detail={getPromotedListingsJobDetail(promotedListingsJob)}
                 tone={
                   promotedListingsJob.failed > 0 ||
                   promotedListingsJob.status === "FAILED"
@@ -1898,6 +1912,16 @@ export default function ProductsPageClient({
                       : "green"
                 }
               />
+              {promotedListingsQueuedCount > 0 && (
+                <p className="mt-1 text-xs text-gray-600">
+                  {promotedListingsQueuedCount} additional promotion job{promotedListingsQueuedCount === 1 ? "" : "s"} waiting in the eBay queue.
+                </p>
+              )}
+              {promotedListingsJob.queuePosition && (
+                <p className="mt-1 text-xs text-gray-600">
+                  Global eBay queue position {promotedListingsJob.queuePosition}.
+                </p>
+              )}
             </div>
             <button
               ref={filterMenuButtonRef}
@@ -2422,7 +2446,6 @@ export default function ProductsPageClient({
         onSyncSelectedEbayAds={handleSyncEbayAds}
         isEbayAdsSyncing={isSyncingEbayAds}
         onManagePromotionsSelected={openPromotedListings}
-        isPromotionJobActive={isPromotionJobActive}
         onBulkEditSelected={(ids) => {
           setSelectedProductIds(ids);
           setIsBulkEditOpen(true);
@@ -2443,8 +2466,9 @@ export default function ProductsPageClient({
         selectedProductIds={selectedProductIds}
         selectedProducts={selectedProducts}
         job={promotedListingsJob}
+        queuedCount={promotedListingsQueuedCount}
         onClose={() => setIsPromotedListingsOpen(false)}
-        onJobStarted={(job) => applyPromotedListingsJob(job)}
+        onJobStarted={handlePromotedListingsJobStarted}
         onToast={showToast}
       />
 
