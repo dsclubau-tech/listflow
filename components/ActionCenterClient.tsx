@@ -61,6 +61,17 @@ type ActionCenterFilter =
   | "onHold"
   | "jobs";
 type JobPanelFilter = "current" | "start" | "recent" | "dismissed";
+type OnHoldTypeFilter = "all" | "automatic" | "manual" | "other";
+const ON_HOLD_PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const;
+const ON_HOLD_TYPE_OPTIONS: Array<{
+  value: OnHoldTypeFilter;
+  label: string;
+}> = [
+  { value: "all", label: "All hold reasons" },
+  { value: "automatic", label: "Automatic holds" },
+  { value: "manual", label: "Manual holds" },
+  { value: "other", label: "Other holds" },
+];
 const FILTER_OPTIONS: Array<{
   id: ActionCenterFilter;
   label: string;
@@ -656,10 +667,67 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
   const [jobPanelFilter, setJobPanelFilter] =
     useState<JobPanelFilter>("current");
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [onHoldQuery, setOnHoldQuery] = useState("");
+  const [onHoldTypeFilter, setOnHoldTypeFilter] =
+    useState<OnHoldTypeFilter>("all");
+  const [onHoldPageSize, setOnHoldPageSize] = useState(10);
+  const [onHoldPage, setOnHoldPage] = useState(1);
+  const [onHoldPageDraft, setOnHoldPageDraft] = useState("1");
   const activeJobAssignments = useMemo(
     () => buildActiveJobAssignmentIndex(data.workers),
     [data.workers],
   );
+
+  const filteredOnHoldItems = useMemo(() => {
+    const query = onHoldQuery.trim().toLowerCase();
+
+    return activeQueues.onHold.filter((item) => {
+      const reason = item.reason.trim().toLowerCase();
+      const isAutomatic = reason.startsWith("automatic hold");
+      const isManual = reason === "put on hold manually.";
+      const matchesType =
+        onHoldTypeFilter === "all" ||
+        (onHoldTypeFilter === "automatic" && isAutomatic) ||
+        (onHoldTypeFilter === "manual" && isManual) ||
+        (onHoldTypeFilter === "other" && !isAutomatic && !isManual);
+
+      if (!matchesType) {
+        return false;
+      }
+
+      if (!query) {
+        return true;
+      }
+
+      return [
+        item.product.title,
+        item.product.asin,
+        item.product.ebayItemId,
+        item.reason,
+      ].some((value) => value?.toLowerCase().includes(query));
+    });
+  }, [activeQueues.onHold, onHoldQuery, onHoldTypeFilter]);
+  const onHoldTotalPages = Math.max(
+    1,
+    Math.ceil(filteredOnHoldItems.length / onHoldPageSize),
+  );
+  const safeOnHoldPage = Math.min(onHoldPage, onHoldTotalPages);
+  const onHoldPageStart = (safeOnHoldPage - 1) * onHoldPageSize;
+  const visibleOnHoldItems = useMemo(
+    () =>
+      filteredOnHoldItems.slice(
+        onHoldPageStart,
+        onHoldPageStart + onHoldPageSize,
+      ),
+    [filteredOnHoldItems, onHoldPageSize, onHoldPageStart],
+  );
+
+  useEffect(() => {
+    if (onHoldPage !== safeOnHoldPage) {
+      setOnHoldPage(safeOnHoldPage);
+    }
+    setOnHoldPageDraft(String(safeOnHoldPage));
+  }, [onHoldPage, safeOnHoldPage]);
 
   const visibleProductIds = useMemo(() => {
     if (activeFilter === "pendingReviews") {
@@ -672,10 +740,10 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
       return activeQueues.lowStock.map((item) => item.product.id);
     }
     if (activeFilter === "onHold") {
-      return activeQueues.onHold.map((item) => item.product.id);
+      return visibleOnHoldItems.map((item) => item.product.id);
     }
     return [];
-  }, [activeFilter, activeQueues]);
+  }, [activeFilter, activeQueues, visibleOnHoldItems]);
 
   const selectedInActiveTab = useMemo(() => {
     const visibleSet = new Set(visibleProductIds);
@@ -706,6 +774,19 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
 
   const clearSelection = () => {
     setSelectedProductIds([]);
+  };
+
+  const navigateOnHoldPage = (page: number) => {
+    const nextPage = Math.min(Math.max(1, page), onHoldTotalPages);
+    setOnHoldPage(nextPage);
+    setOnHoldPageDraft(String(nextPage));
+    clearSelection();
+  };
+
+  const submitOnHoldPageJump = (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const parsed = Number.parseInt(onHoldPageDraft, 10);
+    navigateOnHoldPage(Number.isFinite(parsed) ? parsed : safeOnHoldPage);
   };
 
   const activePriceJobs = useMemo(
@@ -1102,7 +1183,7 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
     const productIds =
       explicitProductIds && explicitProductIds.length > 0
         ? explicitProductIds
-        : activeQueues.onHold.map((item) => item.product.id);
+        : visibleOnHoldItems.map((item) => item.product.id);
 
     if (productIds.length === 0) {
       showToast("No products selected to resume.", "error");
@@ -2104,7 +2185,6 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
             count={adjustedSummary.onHold}
             selectedCount={selectedInActiveTab.length}
             onClearSelection={clearSelection}
-            viewAllHref="/products?filter=failed-on-hold"
           >
             <ActionButton
               onClick={() =>
@@ -2113,7 +2193,7 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                 )
               }
               disabled={
-                activeQueues.onHold.length === 0 ||
+                visibleOnHoldItems.length === 0 ||
                 runningAction === "bulk-resume"
               }
               tone="primary"
@@ -2122,7 +2202,7 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                 ? "Resuming..."
                 : selectedInActiveTab.length > 0
                   ? `Resume selected (${selectedInActiveTab.length})`
-                  : `Resume visible (${activeQueues.onHold.length})`}
+                  : `Resume visible (${visibleOnHoldItems.length})`}
             </ActionButton>
             <ActionButton
               onClick={() =>
@@ -2131,7 +2211,7 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                 )
               }
               disabled={
-                activeQueues.onHold.length === 0 ||
+                visibleOnHoldItems.length === 0 ||
                 runningAction === "bulk-end"
               }
               tone="danger"
@@ -2140,16 +2220,76 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                 ? "Ending..."
                 : selectedInActiveTab.length > 0
                   ? `End selected (${selectedInActiveTab.length})`
-                  : `End visible (${activeQueues.onHold.length})`}
+                  : `End visible (${visibleOnHoldItems.length})`}
             </ActionButton>
           </SectionHeader>
 
+          <div className="flex flex-wrap items-center gap-3 border-b border-gray-200 bg-gray-50/60 px-4 py-3">
+            <label className="min-w-56 flex-1 sm:max-w-md">
+              <span className="sr-only">Filter on-hold products</span>
+              <input
+                type="search"
+                value={onHoldQuery}
+                onChange={(event) => {
+                  setOnHoldQuery(event.target.value);
+                  setOnHoldPage(1);
+                  setOnHoldPageDraft("1");
+                  clearSelection();
+                }}
+                placeholder="Filter by product, ASIN, item ID, or reason"
+                className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm placeholder:text-gray-400 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+              />
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-600">
+              Filter
+              <select
+                value={onHoldTypeFilter}
+                onChange={(event) => {
+                  setOnHoldTypeFilter(event.target.value as OnHoldTypeFilter);
+                  setOnHoldPage(1);
+                  setOnHoldPageDraft("1");
+                  clearSelection();
+                }}
+                className="rounded-md border border-gray-300 bg-white px-2.5 py-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+              >
+                {ON_HOLD_TYPE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-2 text-sm text-gray-600">
+              Rows
+              <select
+                value={onHoldPageSize}
+                onChange={(event) => {
+                  setOnHoldPageSize(Number(event.target.value));
+                  setOnHoldPage(1);
+                  setOnHoldPageDraft("1");
+                  clearSelection();
+                }}
+                className="rounded-md border border-gray-300 bg-white px-2.5 py-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+              >
+                {ON_HOLD_PAGE_SIZE_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
           {/* ── Mobile Card List (< lg) ── */}
           <div className="lg:hidden divide-y divide-gray-100 p-3 space-y-3">
-            {activeQueues.onHold.length === 0 ? (
-              <div className="text-center py-6 text-sm text-gray-500">No on-hold products.</div>
+            {visibleOnHoldItems.length === 0 ? (
+              <div className="text-center py-6 text-sm text-gray-500">
+                {activeQueues.onHold.length === 0
+                  ? "No on-hold products."
+                  : "No on-hold products match this filter."}
+              </div>
             ) : (
-              activeQueues.onHold.map((item: OnHoldActionItem) => {
+              visibleOnHoldItems.map((item: OnHoldActionItem) => {
                 const isSelected = selectedProductIds.includes(item.product.id);
                 return (
                   <div
@@ -2235,10 +2375,17 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {activeQueues.onHold.length === 0 ? (
-                <EmptyRow colSpan={5} message="No on-hold products." />
+              {visibleOnHoldItems.length === 0 ? (
+                <EmptyRow
+                  colSpan={5}
+                  message={
+                    activeQueues.onHold.length === 0
+                      ? "No on-hold products."
+                      : "No on-hold products match this filter."
+                  }
+                />
               ) : (
-                activeQueues.onHold.map((item: OnHoldActionItem) => {
+                visibleOnHoldItems.map((item: OnHoldActionItem) => {
                   const isSelected = selectedProductIds.includes(item.product.id);
                   return (
                     <tr
@@ -2288,6 +2435,62 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
               )}
             </tbody>
           </table>
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-200 bg-gray-50/60 px-4 py-3 text-sm text-gray-600">
+            <span>
+              {filteredOnHoldItems.length === 0
+                ? "0 results"
+                : `${onHoldPageStart + 1}-${Math.min(
+                    onHoldPageStart + visibleOnHoldItems.length,
+                    filteredOnHoldItems.length,
+                  )} of ${filteredOnHoldItems.length}`}
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => navigateOnHoldPage(safeOnHoldPage - 1)}
+                disabled={safeOnHoldPage <= 1}
+                className="rounded-md border border-gray-300 bg-white px-3 py-1.5 font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Previous
+              </button>
+              <span className="px-2 text-gray-500">
+                Page {safeOnHoldPage} of {onHoldTotalPages}
+              </span>
+              <form
+                onSubmit={submitOnHoldPageJump}
+                className="flex items-center gap-2"
+              >
+                <label htmlFor="on-hold-page-jump" className="text-gray-500">
+                  Go to
+                </label>
+                <input
+                  id="on-hold-page-jump"
+                  type="number"
+                  min={1}
+                  max={onHoldTotalPages}
+                  value={onHoldPageDraft}
+                  onChange={(event) => setOnHoldPageDraft(event.target.value)}
+                  className="h-9 w-20 rounded-md border border-gray-300 bg-white px-2 text-sm text-gray-900 shadow-sm focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+                  aria-label="Go to on-hold page"
+                />
+                <button
+                  type="submit"
+                  disabled={onHoldTotalPages <= 1}
+                  className="rounded-md border border-gray-300 bg-white px-3 py-1.5 font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Go
+                </button>
+              </form>
+              <button
+                type="button"
+                onClick={() => navigateOnHoldPage(safeOnHoldPage + 1)}
+                disabled={safeOnHoldPage >= onHoldTotalPages}
+                className="rounded-md border border-gray-300 bg-white px-3 py-1.5 font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Next
+              </button>
+            </div>
           </div>
         </section>
         )}

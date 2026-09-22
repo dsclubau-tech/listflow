@@ -383,7 +383,6 @@ async function getCachedActionCenterQueues(
   const onHoldProducts = await prisma.product.findMany({
     where: onHoldWhere,
     orderBy: { updatedAt: "desc" },
-    take: QUEUE_LIMIT,
     select: {
       id: true,
       title: true,
