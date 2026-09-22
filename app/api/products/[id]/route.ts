@@ -8,7 +8,7 @@ import { sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
 import { resolveProductPolicySelection } from "@/lib/policy-defaults";
 import { invalidateProductCaches } from "@/lib/cache-tags";
 import { isValidAsin, normalizeAsin } from "@/lib/price-check-eligibility";
-import { ProductStatus } from "@/app/generated/prisma/enums";
+import { ProductHoldOrigin, ProductStatus } from "@/app/generated/prisma/enums";
 import { applyEbayLocationMetadata } from "@/lib/ebay-location";
 import { isAmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
 import {
@@ -215,12 +215,20 @@ export async function PATCH(
     ) {
       data.status = ProductStatus.ON_HOLD;
       data.holdReason = "Listing quantity was set to 0.";
+      data.holdOrigin = ProductHoldOrigin.MANUAL;
+      data.holdGeneration = { increment: 1 };
+      data.holdSavedQuantity =
+        product.holdSavedQuantity ?? Math.max(0, product.quantity);
     } else if (
       numericQuantity > 0 &&
       product.status === ProductStatus.ON_HOLD
     ) {
       data.status = ProductStatus.IMPORTED;
       data.holdReason = null;
+      data.holdOrigin = null;
+      data.holdSavedQuantity = null;
+      data.holdSavedVariantQuantities = null;
+      data.holdSourceJobId = null;
     }
   }
 

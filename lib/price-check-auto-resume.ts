@@ -5,6 +5,8 @@ import {
   EbayActionJobStatus,
   EbayActionJobType,
   ProductStatus,
+  AmazonAvailability,
+  ProductHoldOrigin,
 } from "@/app/generated/prisma/enums";
 import type { Prisma } from "@/app/generated/prisma/client";
 import { invalidateJobCaches } from "@/lib/cache-tags";
@@ -61,6 +63,25 @@ async function resolveCandidateIds(
       lastPriceCheck: { gte: input.checkedSince },
       OR: [
         {
+          holdOrigin: {
+            in: [
+              ProductHoldOrigin.PRICE_CHECK_OUT_OF_STOCK,
+              ProductHoldOrigin.PRICE_CHECK_PRICE_UNAVAILABLE,
+              ProductHoldOrigin.PRICE_CHECK_IDENTITY,
+            ],
+          },
+          amazonAvailability: AmazonAvailability.IN_STOCK,
+          holdSavedQuantity: { gt: 0 },
+          amazonPrice: { gt: 0 },
+        },
+        {
+          holdOrigin: ProductHoldOrigin.LOW_STOCK,
+          amazonAvailability: AmazonAvailability.IN_STOCK,
+          amazonStockLeft: { gt: LOW_STOCK_THRESHOLD },
+          holdSavedQuantity: { gt: 0 },
+          amazonPrice: { gt: 0 },
+        },
+        {
           amazonPriceTrackingMode: AmazonPriceTrackingMode.DEAL,
           holdReason: DEAL_PRICE_UNAVAILABLE_AUTO_HOLD_REASON,
         },
@@ -91,9 +112,25 @@ async function resolveCandidateIds(
       priceCheckError: true,
       priceCheckFailureCode: true,
       amazonStockLeft: true,
+      amazonAvailability: true,
+      holdOrigin: true,
+      holdSavedQuantity: true,
+      amazonPriceObservations: {
+        orderBy: { observedAt: "desc" },
+        take: 1,
+        select: {
+          identityOutcome: true,
+          buyBoxOutcome: true,
+        },
+      },
     },
   });
-  const candidateIds = selectPriceCheckAutoResumeProductIds({ products });
+  const candidates = products.map((product) => ({
+    ...product,
+    identityOutcome: product.amazonPriceObservations[0]?.identityOutcome ?? null,
+    buyBoxOutcome: product.amazonPriceObservations[0]?.buyBoxOutcome ?? null,
+  }));
+  const candidateIds = selectPriceCheckAutoResumeProductIds({ products: candidates });
 
   if (candidateIds.length === 0) {
     return [];
@@ -113,7 +150,7 @@ async function resolveCandidateIds(
   });
 
   return selectPriceCheckAutoResumeProductIds({
-    products,
+    products: candidates,
     coveredProductIds: laterOrActiveActions.flatMap((job) => job.productIds),
   });
 }

@@ -36,7 +36,7 @@ export function isResolvedLowStockHoldReason(reason: string | null | undefined) 
 }
 
 export function getLowStockResolvedUpdate(
-  product: { status: string; holdReason?: string | null },
+  product: { status: string; holdReason?: string | null; holdOrigin?: string | null },
   stockLeft: number | null | undefined
 ) {
   if (
@@ -46,6 +46,15 @@ export function getLowStockResolvedUpdate(
     return {};
   }
 
+  // New structured low-stock holds require an affirmative count above the
+  // threshold. Legacy rows without holdOrigin retain the old null-count
+  // compatibility until they are reconciled.
+  if (
+    product.holdOrigin === "LOW_STOCK" &&
+    (typeof stockLeft !== "number" || stockLeft <= LOW_STOCK_THRESHOLD)
+  ) {
+    return {};
+  }
   if (!isAmazonStockHealthy(stockLeft)) {
     return {};
   }

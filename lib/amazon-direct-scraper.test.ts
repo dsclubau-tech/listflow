@@ -44,6 +44,7 @@ const originalFetch = globalThis.fetch;
 function amazonProductHtml(input: {
   title?: string;
   buyboxPrice?: string | null;
+  buyboxMessage?: string | null;
   dealPrice?: string | null;
   regularPrice?: string | null;
   pageWidePrice?: string | null;
@@ -71,6 +72,8 @@ function amazonProductHtml(input: {
             : ""
         }
       </div>`
+    : input.buyboxMessage
+    ? `<div id="buybox"><span>${input.buyboxMessage}</span></div>`
     : "";
   const pageWide = input.pageWidePrice
     ? `<section class="recommendation"><span class="a-price"><span class="a-offscreen">${input.pageWidePrice}</span></span></section>`
@@ -1085,6 +1088,28 @@ test("scrapeAmazonProductDirect fails when only page-wide prices exist after pos
       );
       return true;
     }
+  );
+});
+
+test("scrapeAmazonProductDirect treats See All Buying Options as unavailable", async (t) => {
+  const { AmazonDirectScrapeError, scrapeAmazonProductDirect } =
+    await loadAmazonDirectScraper();
+
+  installFetchMock(t, [
+    { body: amazonProductHtml({ buyboxMessage: "See All Buying Options" }) },
+    { body: '{"isValidAddress":0}' },
+    { body: '{"isValidAddress":0}' },
+    { body: amazonProductHtml({ buyboxMessage: "See All Buying Options", postcode: "2217" }) },
+    { body: amazonProductHtml({ buyboxMessage: "See All Buying Options", postcode: "2217" }) },
+  ]);
+
+  await assert.rejects(
+    scrapeAmazonProductDirect("https://www.amazon.com.au/dp/B0TEST1234", { postcode: "2217" }),
+    (error) => {
+      assert.equal(error instanceof AmazonDirectScrapeError, true);
+      assert.equal((error as { code: string }).code, "AMAZON_BUYBOX_UNAVAILABLE");
+      return true;
+    },
   );
 });
 

@@ -64,6 +64,7 @@ const productRowSelect = {
   amazonPrice: true,
   amazonPriceTrackingMode: true,
   amazonStockLeft: true,
+  amazonAvailability: true,
   promotedAdPercent: true,
   promotedAdStatus: true,
   promotedAdCampaignId: true,
@@ -74,6 +75,9 @@ const productRowSelect = {
   priceCheckError: true,
   priceCheckFailureCode: true,
   holdReason: true,
+  holdOrigin: true,
+  holdGeneration: true,
+  holdSavedQuantity: true,
   internalNote: true,
   storeId: true,
   createdById: true,
@@ -113,6 +117,18 @@ const productRowSelect = {
     where: { appliedAt: null },
     orderBy: { createdAt: "desc" },
     take: 1,
+  },
+  amazonPriceObservations: {
+    orderBy: { observedAt: "desc" },
+    take: 1,
+    select: {
+      requestedAsin: true,
+      selectedAsin: true,
+      identityOutcome: true,
+      buyBoxOutcome: true,
+      acceptedPriceSource: true,
+      observedAt: true,
+    },
   },
   _count: {
     select: {
@@ -244,6 +260,12 @@ function serializeProducts(products: ProductRowPayload[]): SerializedProductRow[
         appliedAt: entry.appliedAt?.toISOString() ?? null,
         createdAt: entry.createdAt.toISOString(),
       })),
+      amazonVerification: product.amazonPriceObservations[0]
+        ? {
+            ...product.amazonPriceObservations[0],
+            observedAt: product.amazonPriceObservations[0].observedAt.toISOString(),
+          }
+        : null,
       store: product.store,
       createdBy: product.createdBy,
     }) as unknown as SerializedProductRow;

@@ -77,6 +77,11 @@ import {
   isRecoveredPriceCheckAutoHold,
 } from "@/lib/price-check-failures";
 import { isLowStockHoldJobMetadata } from "@/lib/low-stock-products";
+import {
+  captureHoldQuantities,
+  getProductHoldOrigin,
+} from "@/lib/product-hold-state";
+import { recordListingOperation } from "@/lib/listing-operations";
 import { hasRevisableEbayListing } from "@/lib/ebay-listing-state";
 import {
   canonicalizePackageItemSpecifics,
@@ -1538,6 +1543,25 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       };
     }
 
+    // Preserve the restoration quantity before the remote zero-quantity write.
+    // Repeated holds keep the first snapshot rather than overwriting it with 0.
+    const saved = captureHoldQuantities({
+      currentQuantity: product.quantity,
+      existingSavedQuantity: product.holdSavedQuantity,
+      existingSavedVariants: product.holdSavedVariantQuantities,
+      variants: product.variants,
+    });
+    if (product.holdSavedQuantity === null || product.holdSavedQuantity === undefined) {
+      await prisma.product.update({
+        where: { id: product.id },
+        data: {
+          holdSavedQuantity: saved.savedQuantity,
+          holdSavedVariantQuantities: saved.savedVariants,
+          holdSourceJobId: job.id,
+        },
+      });
+    }
+
     const storeNumber = await getStoreNumber(product.storeId);
     const result = await callEbayReviseItem(
       buildReviseQuantityXML(product.ebayItemId, 0),
@@ -1545,6 +1569,13 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
     );
 
     if (!result.success) {
+      await recordListingOperation({
+        jobId: job.id,
+        productId,
+        storeId: job.storeId,
+        stage: "FAILED",
+        error: result.errorMessage || "Unknown eBay API error",
+      }).catch(() => undefined);
       return {
         ok: false,
         failure: {
@@ -1556,9 +1587,10 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
     }
 
     let holdReason = "Put on hold manually.";
+    const automaticLowStockHold = isLowStockHoldJobMetadata(job.metadata);
     if (automaticPriceCheckHold) {
       holdReason = getPriceCheckAutoHoldReason(product.priceCheckError);
-    } else if (isLowStockHoldJobMetadata(job.metadata)) {
+    } else if (automaticLowStockHold) {
       holdReason =
         product.amazonStockLeft !== null
           ? `Low Amazon stock (${product.amazonStockLeft} left).`
@@ -1572,17 +1604,42 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       holdReason = `Low Amazon stock (${product.amazonStockLeft} left).`;
     }
 
-    await prisma.product.update({
-      where: { id: product.id },
-      data: {
-        status: ProductStatus.ON_HOLD,
-        quantity: 0,
-        holdReason,
-        ...(automaticPriceCheckHold
-          ? {}
-          : { priceCheckError: null, priceCheckFailureCode: null }),
-      },
+    const holdOrigin = getProductHoldOrigin({
+      automaticPriceCheck: automaticPriceCheckHold,
+      lowStock: automaticLowStockHold ||
+        (!automaticPriceCheckHold && product.amazonStockLeft !== null && product.amazonStockLeft <= 3),
+      failureCode: product.priceCheckFailureCode,
+      existing: product.holdOrigin,
     });
+
+    await prisma.$transaction(async (tx) => {
+      await tx.product.update({
+        where: { id: product.id },
+        data: {
+          status: ProductStatus.ON_HOLD,
+          quantity: 0,
+          holdReason,
+          holdOrigin,
+          holdGeneration: { increment: 1 },
+          holdSavedQuantity: saved.savedQuantity,
+          holdSavedVariantQuantities: saved.savedVariants,
+          holdSourceJobId: job.id,
+          ...(automaticPriceCheckHold
+            ? {}
+            : { priceCheckError: null, priceCheckFailureCode: null }),
+        },
+      });
+    });
+    await recordListingOperation({
+      jobId: job.id,
+      productId,
+      storeId: job.storeId,
+      stage: "COMPLETED",
+      holdGeneration: product.holdGeneration + 1,
+      targetQuantities: { product: 0 },
+      preparedPayload: { kind: "hold", origin: holdOrigin },
+      confirmed: true,
+    }).catch(() => undefined);
     return { ok: true, failure: null };
   }
 
@@ -1610,13 +1667,35 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
     }
 
     const storeNumber = await getStoreNumber(product.storeId);
-    const restoreQty = Math.max(1, product.quantity);
+    const automaticResumeQuantity =
+      product.holdSavedQuantity !== null && product.holdSavedQuantity !== undefined
+        ? product.holdSavedQuantity
+        : null;
+    if (automaticPriceCheckResume && (!automaticResumeQuantity || automaticResumeQuantity <= 0)) {
+      return {
+        ok: false,
+        failure: {
+          productId,
+          title: product.title,
+          error: "Automatic recovery is missing a verified saved quantity; review is required.",
+        },
+      };
+    }
+    const restoreQty = Math.max(1, automaticResumeQuantity ?? product.quantity);
     const result = await callEbayReviseItem(
       buildReviseQuantityXML(product.ebayItemId, restoreQty),
       storeNumber
     );
 
     if (!result.success) {
+      await recordListingOperation({
+        jobId: job.id,
+        productId,
+        storeId: job.storeId,
+        stage: "FAILED",
+        targetQuantities: { product: restoreQty },
+        error: result.errorMessage || "Unknown eBay API error",
+      }).catch(() => undefined);
       return {
         ok: false,
         failure: {
@@ -1627,13 +1706,42 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       };
     }
 
-    await prisma.product.update({
-      where: { id: product.id },
-      data: {
-        status: ProductStatus.IMPORTED,
-        holdReason: null,
-      },
+    await prisma.$transaction(async (tx) => {
+      await tx.product.update({
+        where: { id: product.id },
+        data: {
+          status: ProductStatus.IMPORTED,
+          quantity: automaticResumeQuantity ?? Math.max(1, product.quantity),
+          holdReason: null,
+          holdOrigin: null,
+          holdSavedQuantity: null,
+          holdSavedVariantQuantities: Prisma.JsonNull,
+          holdSourceJobId: null,
+        },
+      });
+      if (automaticResumeQuantity !== null) {
+        const savedVariants = Array.isArray(product.holdSavedVariantQuantities)
+          ? product.holdSavedVariantQuantities
+          : [];
+        for (const savedVariant of savedVariants) {
+          if (!savedVariant || typeof savedVariant !== "object" || !("variantId" in savedVariant)) continue;
+          const variantId = String(savedVariant.variantId);
+          const quantity = Math.max(0, Math.floor(Number("quantity" in savedVariant ? savedVariant.quantity : 0) || 0));
+          if (product.variants.some((variant) => variant.id === variantId)) {
+            await tx.variant.update({ where: { id: variantId }, data: { quantity } });
+          }
+        }
+      }
     });
+    await recordListingOperation({
+      jobId: job.id,
+      productId,
+      storeId: job.storeId,
+      stage: "COMPLETED",
+      targetQuantities: { product: restoreQty },
+      preparedPayload: { kind: "resume", automatic: automaticPriceCheckResume },
+      confirmed: true,
+    }).catch(() => undefined);
     return { ok: true, failure: null };
   }
 
@@ -2187,6 +2295,9 @@ async function runBulkInventoryReviseJob(
           failure: null,
         });
       } catch (error) {
+        if (error instanceof JobConflictError) {
+          throw error;
+        }
         const message = error instanceof Error ? error.message : "Internal error";
         logger.error("ebay-action/jobs", "Bulk inventory local update failed", error, {
           jobId: job.id,
@@ -2359,7 +2470,9 @@ async function runEbayActionJobClaimed(jobId: string, worker?: WorkerContext) {
 
     for (const productId of remaining) {
       try {
+        await assertEbayActionLeaseOwned(job, worker);
         const result = await processProduct(job, productId);
+        await assertEbayActionLeaseOwned(job, worker);
         await markProgress(job, productId, result.ok, result.failure);
       } catch (error) {
         const message = error instanceof Error ? error.message : "Internal error";

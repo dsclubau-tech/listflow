@@ -124,9 +124,13 @@ const productListingStatusPresentation: Record<
     label: "Out of stock",
     className: "bg-blue-100 text-blue-700 ring-1 ring-inset ring-blue-200",
   },
+  unavailable: {
+    label: "Unavailable",
+    className: "bg-blue-100 text-blue-700 ring-1 ring-inset ring-blue-200",
+  },
 };
 
-function getProductHoldReason(product: Pick<SerializedProductRow, "status" | "holdReason" | "priceCheckError" | "amazonStockLeft" | "quantity">) {
+function getProductHoldReason(product: Pick<SerializedProductRow, "status" | "holdReason" | "priceCheckError" | "amazonStockLeft" | "quantity" | "holdOrigin">) {
   if (product.status !== "ON_HOLD") {
     return null;
   }
@@ -136,7 +140,30 @@ function getProductHoldReason(product: Pick<SerializedProductRow, "status" | "ho
   }
   const priceCheckError = product.priceCheckError?.trim();
   if (priceCheckError) {
+    const verification = (product as typeof product & {
+      amazonVerification?: {
+        requestedAsin?: string | null;
+        selectedAsin?: string | null;
+        identityOutcome?: string | null;
+        buyBoxOutcome?: string | null;
+      } | null;
+    }).amazonVerification;
+    if (verification?.identityOutcome === "MISMATCH") {
+      return `Different ASIN: expected ${verification.requestedAsin ?? "unknown"}, detected ${verification.selectedAsin ?? "unknown"}.`;
+    }
+    if (verification?.buyBoxOutcome === "UNAVAILABLE") {
+      return "Unavailable: normal Amazon Buy Box is missing.";
+    }
     return `Automatic hold after failed price check: ${priceCheckError}`;
+  }
+  if (product.holdOrigin === "UNKNOWN") {
+    return "Hold needs review: the original hold source could not be verified.";
+  }
+  if (product.holdOrigin?.startsWith("PRICE_CHECK_")) {
+    return "Automatic price-check hold; waiting for verified recovery.";
+  }
+  if (product.holdOrigin === "LOW_STOCK") {
+    return "Low Amazon stock; waiting for verified replenishment.";
   }
   if (product.quantity <= 0) {
     return "Listing quantity was set to 0.";

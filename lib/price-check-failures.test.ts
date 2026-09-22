@@ -23,6 +23,7 @@ import {
 test("only confirmed product failures are eligible for automatic hold", () => {
   assert.equal(isAutoHoldPriceCheckFailureCode(PriceCheckFailureCode.AMAZON_OUT_OF_STOCK), true);
   assert.equal(isAutoHoldPriceCheckFailureCode(PriceCheckFailureCode.AMAZON_PRICE_UNAVAILABLE), true);
+  assert.equal(isAutoHoldPriceCheckFailureCode(PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE), true);
   assert.equal(isAutoHoldPriceCheckFailureCode(PriceCheckFailureCode.AMAZON_ASIN_REDIRECT), true);
   assert.equal(isAutoHoldPriceCheckFailureCode(PriceCheckFailureCode.MISSING_BASELINE), true);
   assert.equal(isAutoHoldPriceCheckFailureCode(PriceCheckFailureCode.UNSAFE_PRICE_CHANGE), true);
@@ -110,6 +111,33 @@ test("does not verify the wrong Amazon product or a non-Amazon URL", () => {
   );
 });
 
+test("a conflicting product-scoped ASIN overrides a matching URL", () => {
+  assert.equal(
+    isVerifiedAmazonProductPage({
+      expectedAsin: "B0G64ZJ5MQ",
+      url: "https://www.amazon.com.au/dp/B0G64ZJ5MQ?th=1",
+      pageAsins: ["B0DOMESTIC1"],
+    }),
+    false,
+  );
+  assert.equal(
+    isVerifiedAmazonProductPage({
+      expectedAsin: "B0G64ZJ5MQ",
+      url: "https://www.amazon.com.au/dp/B0G64ZJ5MQ?th=1",
+      pageAsins: ["B0G64ZJ5MQ"],
+    }),
+    true,
+  );
+  assert.equal(
+    isVerifiedAmazonProductPage({
+      expectedAsin: "B0G64ZJ5MQ",
+      url: "https://www.amazon.com.au/dp/B0G64ZJ5MQ?th=1",
+      pageAsins: ["B0G64ZJ5MQ", "B0DOMESTIC1"],
+    }),
+    false,
+  );
+});
+
 test("automatic hold metadata is identified without affecting manual holds", () => {
   assert.equal(isPriceCheckAutoHoldMetadata({ kind: "price-check-auto-hold" }), true);
   assert.equal(isPriceCheckAutoHoldMetadata({}), false);
@@ -139,11 +167,18 @@ test("automatic hold candidates require a current product failure and are dedupe
       priceCheckError: null,
       priceCheckFailureCode: null,
     },
+    {
+      id: "mandatory-buybox",
+      status: "IMPORTED",
+      ebayItemId: "999",
+      priceCheckError: "Buy Box unavailable",
+      priceCheckFailureCode: PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE,
+    },
   ];
 
   assert.deepEqual(
     selectPriceCheckAutoHoldProductIds({ enabled: true, products }),
-    ["eligible"],
+    ["eligible", "mandatory-buybox"],
   );
   assert.deepEqual(
     selectPriceCheckAutoHoldProductIds({
@@ -151,11 +186,11 @@ test("automatic hold candidates require a current product failure and are dedupe
       products,
       coveredProductIds: ["eligible"],
     }),
-    [],
+    ["mandatory-buybox"],
   );
   assert.deepEqual(
     selectPriceCheckAutoHoldProductIds({ enabled: false, products }),
-    [],
+    ["mandatory-buybox"],
   );
 });
 
@@ -195,6 +230,8 @@ test("automatic resume candidates only include recovered false deal-price holds"
     priceCheckError: null,
     priceCheckFailureCode: null,
     amazonStockLeft: 1,
+    identityOutcome: "MATCH",
+    buyBoxOutcome: "AVAILABLE",
   };
   const products = [
     recovered,
@@ -235,6 +272,8 @@ test("automatic resume candidates include resolved low-stock holds but exclude u
     priceCheckError: null,
     priceCheckFailureCode: null,
     amazonStockLeft: null,
+    identityOutcome: "MATCH",
+    buyBoxOutcome: "AVAILABLE",
   };
   const products = [
     recoveredStock,
@@ -276,6 +315,8 @@ test("automatic resume candidates include recovered regular-price holds", () => 
     priceCheckError: null,
     priceCheckFailureCode: null,
     amazonStockLeft: null,
+    identityOutcome: "MATCH",
+    buyBoxOutcome: "AVAILABLE",
   };
   const products = [
     recoveredRegular,

@@ -545,7 +545,7 @@ test("extractLocalizedBuyboxPriceChoices extracts distinct Regular and Prime pri
   assert.equal(choices.deal?.label, "Prime member price");
 });
 
-test("extractLocalizedBuyboxPriceChoices falls back to currency sweep when all standard selectors miss", () => {
+test("extractLocalizedBuyboxPriceChoices rejects page-wide prices when Buy Box selectors miss", () => {
   const $ = load(`
     <main id="dp">
       <div id="centerCol">
@@ -558,11 +558,8 @@ test("extractLocalizedBuyboxPriceChoices falls back to currency sweep when all s
 
   const choices = extractLocalizedBuyboxPriceChoices($, "B0TESTFALL1");
 
-  assert.ok(choices.regular !== null);
-  assert.equal(choices.regular?.price, 84.5);
-  assert.equal(choices.regular?.selector, "fallback:currency-sweep");
-  assert.equal(choices.regular?.mode, "REGULAR");
-  assert.equal(choices.regular?.priceSource, "localized_buybox");
+  assert.equal(choices.regular, null);
+  assert.equal(choices.deal, null);
 });
 
 test("extractLocalizedBuyboxPriceChoices fallback ignores prices in recommendation/video-card widgets outside buybox", () => {
@@ -583,7 +580,7 @@ test("extractLocalizedBuyboxPriceChoices fallback ignores prices in recommendati
   assert.equal(choices.deal, null);
 });
 
-test("extractLocalizedBuyboxPriceChoices fallback ignores coupon and basis prices inside buybox", () => {
+test("extractLocalizedBuyboxPriceChoices rejects coupon and basis prices without a Buy Box", () => {
   const $ = load(`
     <main id="dp">
       <div id="centerCol">
@@ -602,9 +599,8 @@ test("extractLocalizedBuyboxPriceChoices fallback ignores coupon and basis price
 
   const choices = extractLocalizedBuyboxPriceChoices($, "B0TESTFALL3");
 
-  assert.ok(choices.regular !== null);
-  assert.equal(choices.regular?.price, 67.8);
-  assert.equal(choices.regular?.selector, "fallback:currency-sweep");
+  assert.equal(choices.regular, null);
+  assert.equal(choices.deal, null);
 });
 
 test("extractLocalizedBuyboxPriceChoices prefers standard selectors when available and does not trigger fallback", () => {

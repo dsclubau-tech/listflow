@@ -3,6 +3,7 @@ import { Prisma } from "@/app/generated/prisma/client";
 import {
   PriceCheckFailureCode,
   ProductStatus,
+  AmazonAvailability,
 } from "@/app/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import {
@@ -25,9 +26,15 @@ import {
   type AmazonPriceTrackingMode,
 } from "@/lib/amazon-price-tracking";
 import { getPriceCheckPrerequisiteIssue } from "@/lib/price-check-eligibility";
-import { getPriceCheckFailureCode } from "@/lib/price-check-failures";
+import {
+  getPriceCheckFailureCode,
+  PriceCheckFailure,
+} from "@/lib/price-check-failures";
 import { getLowStockResolvedUpdate } from "@/lib/low-stock-products";
-import { shouldAutomaticallyApplyPriceIncrease } from "@/lib/price-change-automation";
+import {
+  canAutomaticallyApplyTrackedPriceChange,
+  shouldAutomaticallyApplyPriceChange,
+} from "@/lib/price-change-automation";
 import {
   extractVariantSelectionHints,
   type VariantSelectionHints,
@@ -278,6 +285,7 @@ async function automaticallyApplyPriceIncrease(input: {
         data: {
           ebayRevised: false,
           errorMessage,
+          status: "FAILED",
         },
       });
 
@@ -326,6 +334,7 @@ async function automaticallyApplyPriceIncrease(input: {
         appliedAt: input.checkedAt,
         ebayRevised: true,
         errorMessage: null,
+        status: "APPLIED",
       },
     });
   }));
@@ -355,6 +364,27 @@ function getErrorMessage(error: unknown) {
 
 function getAmazonStockUpdate(stockLeft: number | null | undefined) {
   return stockLeft === undefined ? {} : { amazonStockLeft: stockLeft };
+}
+
+function getAmazonAvailabilityUpdate(input: {
+  price: number | null;
+  stockLeft: number | null | undefined;
+  failureCode?: PriceCheckFailureCode | null;
+  buyBoxOutcome?: "AVAILABLE" | "UNAVAILABLE" | "UNKNOWN";
+  identityOutcome?: "MATCH" | "MISMATCH" | "UNKNOWN";
+}) {
+  if (input.failureCode === PriceCheckFailureCode.AMAZON_OUT_OF_STOCK || input.stockLeft === 0) {
+    return { amazonAvailability: AmazonAvailability.OUT_OF_STOCK };
+  }
+  if (
+    input.price !== null &&
+    input.failureCode === null &&
+    input.buyBoxOutcome !== "UNAVAILABLE" &&
+    input.identityOutcome !== "MISMATCH"
+  ) {
+    return { amazonAvailability: AmazonAvailability.IN_STOCK };
+  }
+  return { amazonAvailability: AmazonAvailability.UNKNOWN };
 }
 
 export async function runPriceCheck(
@@ -519,6 +549,10 @@ export async function runPriceCheck(
           lastPriceCheck: input.checkedAt,
           priceCheckError: input.message,
           priceCheckFailureCode: input.code,
+          amazonAvailability:
+            input.code === PriceCheckFailureCode.AMAZON_OUT_OF_STOCK
+              ? AmazonAvailability.OUT_OF_STOCK
+              : AmazonAvailability.UNKNOWN,
         },
       }),
     );
@@ -753,6 +787,65 @@ export async function runPriceCheck(
           scrapedAmazonStockLeft = scrapeResult.stockLeft;
         }
 
+        let observationId: string | null = null;
+        const observationFailureCode =
+          scrapeResult?.buyBoxOutcome === "UNAVAILABLE"
+            ? PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE
+            : scrapeResult?.variantSelectionFailed
+              ? PriceCheckFailureCode.AMAZON_VARIANT_SELECTION_REQUIRED
+              : null;
+        const amazonAvailabilityUpdate = getAmazonAvailabilityUpdate({
+          price: currentAmazonPrice,
+          stockLeft: scrapedAmazonStockLeft,
+          failureCode: observationFailureCode,
+          buyBoxOutcome: scrapeResult?.buyBoxOutcome,
+          identityOutcome: scrapeResult?.identityOutcome,
+        });
+        if (options.storeId) {
+          try {
+            const observation = await prisma.amazonPriceObservation.create({
+              data: {
+                productId: product.id,
+                storeId: options.storeId,
+                requestedAsin: product.asin,
+                selectedAsin: scrapeResult?.detectedAsin ?? null,
+                identityOutcome: scrapeResult?.identityOutcome ?? "UNKNOWN",
+                buyBoxOutcome: scrapeResult?.buyBoxOutcome ?? "UNKNOWN",
+                acceptedPriceSource: scrapeResult?.acceptedPriceSource ?? null,
+                availability: amazonAvailabilityUpdate.amazonAvailability,
+                stockLeft: scrapedAmazonStockLeft ?? null,
+                eligibleOffer:
+                  currentAmazonPrice !== null &&
+                  scrapeResult?.buyBoxOutcome !== "UNAVAILABLE" &&
+                  scrapeResult?.identityOutcome !== "MISMATCH",
+                price: currentAmazonPrice === null ? null : toMoneyDecimal(currentAmazonPrice),
+                regularPrice: scrapeResult?.priceChoices?.regular == null
+                  ? null
+                  : toMoneyDecimal(scrapeResult.priceChoices.regular),
+                dealPrice: scrapeResult?.priceChoices?.deal == null
+                  ? null
+                  : toMoneyDecimal(scrapeResult.priceChoices.deal),
+                priceMode: priceTrackingMode,
+                failureCode: observationFailureCode,
+                message:
+                  observationFailureCode === PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE
+                    ? "The normal Amazon Buy Box is unavailable."
+                    : scrapeResult?.variantSelectionReason ?? null,
+                isSuccessful:
+                  currentAmazonPrice !== null &&
+                  scrapeResult?.buyBoxOutcome !== "UNAVAILABLE" &&
+                  scrapeResult?.identityOutcome !== "MISMATCH",
+              },
+            });
+            observationId = observation.id;
+          } catch (error) {
+            logger.warn("price-checker/run", "Could not persist Amazon observation", {
+              productId: product.id,
+              errorMessage: getErrorMessage(error),
+            });
+          }
+        }
+
         const amazonStockUpdate = getAmazonStockUpdate(scrapedAmazonStockLeft);
         const lowStockResolvedUpdate = getLowStockResolvedUpdate(
           product,
@@ -822,6 +915,8 @@ export async function runPriceCheck(
               data: {
                 amazonPrice: currentAmazonPriceDecimal,
                 ...amazonStockUpdate,
+                ...amazonAvailabilityUpdate,
+                ...(observationId ? { holdLastObservationId: observationId } : {}),
                 ...lowStockResolvedUpdate,
                 lastPriceCheck: checkedAt,
                 priceCheckError: null,
@@ -888,6 +983,8 @@ export async function runPriceCheck(
               data: {
                 amazonPrice: toMoneyDecimal(currentAmazonPrice),
                 ...amazonStockUpdate,
+                ...amazonAvailabilityUpdate,
+                ...(observationId ? { holdLastObservationId: observationId } : {}),
                 ...lowStockResolvedUpdate,
                 lastPriceCheck: checkedAt,
                 priceCheckError: null,
@@ -967,6 +1064,8 @@ export async function runPriceCheck(
               data: {
                 amazonPrice: toMoneyDecimal(currentAmazonPrice),
                 ...amazonStockUpdate,
+                ...amazonAvailabilityUpdate,
+                ...(observationId ? { holdLastObservationId: observationId } : {}),
                 ...lowStockResolvedUpdate,
                 lastPriceCheck: checkedAt,
                 priceCheckError: null,
@@ -999,7 +1098,8 @@ export async function runPriceCheck(
 
           if (
             mismatchPrimarySellPrice !== undefined &&
-            shouldAutomaticallyApplyPriceIncrease(
+            canAutomaticallyApplyTrackedPriceChange(product) &&
+            shouldAutomaticallyApplyPriceChange(
               primaryBuyPrice,
               currentAmazonPrice,
             )
@@ -1016,7 +1116,7 @@ export async function runPriceCheck(
             if (automaticApplication.success) {
               logger.info(
                 "price-checker/run",
-                "BuyPrice increase applied automatically",
+                "BuyPrice change applied automatically",
                 {
                   productId: product.id,
                   asin: product.asin,
@@ -1141,6 +1241,8 @@ export async function runPriceCheck(
             data: {
               amazonPrice: toMoneyDecimal(currentAmazonPrice),
               ...amazonStockUpdate,
+              ...amazonAvailabilityUpdate,
+              ...(observationId ? { holdLastObservationId: observationId } : {}),
               ...lowStockResolvedUpdate,
               lastPriceCheck: checkedAt,
               priceCheckError: null,
@@ -1170,7 +1272,8 @@ export async function runPriceCheck(
         result.changed += 1;
 
         if (
-          shouldAutomaticallyApplyPriceIncrease(
+          canAutomaticallyApplyTrackedPriceChange(product) &&
+          shouldAutomaticallyApplyPriceChange(
             previousAmazonPrice,
             currentAmazonPrice,
           )
@@ -1186,7 +1289,7 @@ export async function runPriceCheck(
           if (automaticApplication.success) {
             logger.info(
               "price-checker/run",
-              "Tracked price increase applied automatically",
+              "Tracked price change applied automatically",
               {
                 productId: product.id,
                 asin: product.asin,
@@ -1233,6 +1336,39 @@ export async function runPriceCheck(
         const rawMessage = getErrorMessage(error);
         const message = getBrowserLaunchUserMessage(error) ?? rawMessage;
         const code = getPriceCheckFailureCode(error);
+
+        if (options.storeId) {
+          try {
+            await prisma.amazonPriceObservation.create({
+              data: {
+                productId: product.id,
+                storeId: options.storeId,
+                requestedAsin: product.asin,
+                selectedAsin:
+                  error instanceof PriceCheckFailure ? error.detectedAsin : null,
+                identityOutcome:
+                  code === PriceCheckFailureCode.AMAZON_ASIN_REDIRECT
+                    ? "MISMATCH"
+                    : "UNKNOWN",
+                buyBoxOutcome:
+                  code === PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE
+                    ? "UNAVAILABLE"
+                    : "UNKNOWN",
+                availability: AmazonAvailability.UNKNOWN,
+                eligibleOffer: false,
+                priceMode: priceTrackingMode,
+                failureCode: code,
+                message,
+                isSuccessful: false,
+              },
+            });
+          } catch (observationError) {
+            logger.warn("price-checker/run", "Could not persist failed Amazon observation", {
+              productId: product.id,
+              errorMessage: getErrorMessage(observationError),
+            });
+          }
+        }
 
         await recordProductFailure({
           productId: product.id,

@@ -1725,6 +1725,17 @@ export async function scrapeAmazonProductDirect(
       ? localizedProduct.itemSpecifics
       : product.itemSpecifics;
   product.variantName = localizedProduct.variantName ?? product.variantName;
+  if (
+    localizedProduct.asin &&
+    product.asin &&
+    localizedProduct.asin.trim().toUpperCase() !== product.asin.trim().toUpperCase()
+  ) {
+    throw new AmazonDirectScrapeError(
+      `Amazon returned ASIN ${localizedProduct.asin} instead of the requested ASIN ${product.asin}.`,
+      422,
+      "AMAZON_ASIN_REDIRECT",
+    );
+  }
   product.asin = localizedProduct.asin || product.asin;
   product.brand = localizedProduct.brand || product.brand;
 
@@ -1737,8 +1748,9 @@ export async function scrapeAmazonProductDirect(
   }
 
   const priceStartedAt = Date.now();
+  const $ = load(localizedHtml);
   let priceChoices = extractLocalizedBuyboxPriceChoices(
-    load(localizedHtml),
+    $,
     product.asin
   );
   const hasExplicitMode = options.priceTrackingMode !== undefined;
@@ -1909,6 +1921,19 @@ export async function scrapeAmazonProductDirect(
 
   product.priceChoices = toScrapedPriceChoices(priceChoices);
 
+  const buyboxRegion = $("#buybox, #desktop_buybox, #buybox_feature_div").first();
+  const buyboxText = normalizeText(buyboxRegion.text());
+  const clearlyUnavailable =
+    $("#buybox-see-all-buying-choices, #buybox-see-all-buying-choices-announce").length > 0 ||
+    /see all buying options|currently unavailable|temporarily out of stock/i.test(buyboxText);
+  // Static HTML imports do not always include the dynamically rendered
+  // purchase button. Only an explicit unavailable/alternate-offer state can
+  // invalidate the scoped Buy Box here; browser checks enforce the control.
+  if (clearlyUnavailable) {
+    buyboxPrice = null;
+    renderedFallbackPrice = null;
+  }
+
   if (!buyboxPrice && renderedFallbackPrice === null) {
     if (options.allowMetadataOnly) {
       return product;
@@ -1917,7 +1942,7 @@ export async function scrapeAmazonProductDirect(
     throw new AmazonDirectScrapeError(
       "Amazon product was found, but ListFlow could not read the selected variant buybox price after checking delivery location. No draft was created.",
       422,
-      "AMAZON_BUYBOX_PRICE_MISSING"
+      clearlyUnavailable ? "AMAZON_BUYBOX_UNAVAILABLE" : "AMAZON_BUYBOX_PRICE_MISSING"
     );
   }
 

@@ -176,57 +176,6 @@ export async function POST(request: Request) {
       const reviewedAt = new Date();
       const historyIds = historyItems.map((item) => item.id);
 
-      await prisma.$transaction(async (tx) => {
-        await Promise.all(
-          variantsToUpdate.map((variant) => {
-            const history = historyByVariantId.get(variant.id)!;
-
-            return tx.variant.update({
-              where: { id: variant.id },
-              data: {
-                buyPrice: history.newPrice,
-                sellPrice: history.newSellPrice,
-              },
-            });
-          })
-        );
-
-        await tx.product.update({
-          where: { id: product.id },
-          data: {
-            price: primaryHistory!.newSellPrice,
-            priceCheckError: null,
-            priceCheckFailureCode: null,
-          },
-        });
-
-        await tx.priceHistory.updateMany({
-          where: {
-            id: { in: historyIds },
-            appliedAt: null,
-          },
-          data: {
-            appliedAt: reviewedAt,
-            ebayRevised: false,
-            errorMessage: null,
-          },
-        });
-
-        if (obsoleteHistoryIds.length > 0) {
-          await tx.priceHistory.updateMany({
-            where: {
-              id: { in: obsoleteHistoryIds },
-              appliedAt: null,
-            },
-            data: {
-              appliedAt: reviewedAt,
-              ebayRevised: false,
-              errorMessage: null,
-            },
-          });
-        }
-      });
-
       // Revise eBay listing
       let reviseResult: Awaited<ReturnType<typeof reviseProductPrice>>;
 
@@ -255,6 +204,7 @@ export async function POST(request: Request) {
             data: {
               ebayRevised: false,
               errorMessage,
+              status: "FAILED",
             },
           });
 
@@ -275,13 +225,46 @@ export async function POST(request: Request) {
 
       // Mark as successfully revised
       await prisma.$transaction(async (tx) => {
+        await Promise.all(
+          variantsToUpdate.map((variant) => {
+            const history = historyByVariantId.get(variant.id)!;
+            return tx.variant.update({
+              where: { id: variant.id },
+              data: { buyPrice: history.newPrice, sellPrice: history.newSellPrice },
+            });
+          }),
+        );
+
+        await tx.product.update({
+          where: { id: product.id },
+          data: {
+            price: primaryHistory!.newSellPrice,
+            priceCheckError: null,
+            priceCheckFailureCode: null,
+          },
+        });
+
         await tx.priceHistory.updateMany({
-          where: { id: { in: historyIds } },
+          where: { id: { in: historyIds }, appliedAt: null },
           data: {
             ebayRevised: true,
             errorMessage: null,
+            appliedAt: reviewedAt,
+            status: "APPLIED",
           },
         });
+
+        if (obsoleteHistoryIds.length > 0) {
+          await tx.priceHistory.updateMany({
+            where: { id: { in: obsoleteHistoryIds }, appliedAt: null },
+            data: {
+              appliedAt: reviewedAt,
+              ebayRevised: false,
+              errorMessage: null,
+              status: "SUPERSEDED",
+            },
+          });
+        }
 
         await tx.product.update({
           where: { id: product.id },

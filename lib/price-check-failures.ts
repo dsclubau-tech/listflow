@@ -1,8 +1,9 @@
-import { PriceCheckFailureCode } from "@/app/generated/prisma/enums";
+import { AmazonAvailability, PriceCheckFailureCode, ProductHoldOrigin } from "@/app/generated/prisma/enums";
 import { getAmazonPriceUnavailableMessage } from "@/lib/amazon-price-tracking";
 import {
   isAmazonStockHealthy,
   isResolvedLowStockHoldReason,
+  LOW_STOCK_THRESHOLD,
 } from "@/lib/low-stock-products";
 
 export const PRICE_CHECK_AUTO_HOLD_REASON_PREFIX =
@@ -26,6 +27,7 @@ export const REGULAR_PRICE_UNAVAILABLE_AUTO_HOLD_REASON =
 export const AUTO_HOLD_PRICE_CHECK_FAILURE_CODES = [
   PriceCheckFailureCode.AMAZON_OUT_OF_STOCK,
   PriceCheckFailureCode.AMAZON_PRICE_UNAVAILABLE,
+  PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE,
   PriceCheckFailureCode.AMAZON_ASIN_REDIRECT,
   PriceCheckFailureCode.MISSING_BASELINE,
   PriceCheckFailureCode.UNSAFE_PRICE_CHANGE,
@@ -66,11 +68,13 @@ function amazonUrlContainsAsin(url: string, asin: string) {
 
 export class PriceCheckFailure extends Error {
   readonly code: PriceCheckFailureCode;
+  readonly detectedAsin: string | null;
 
-  constructor(code: PriceCheckFailureCode, message: string) {
+  constructor(code: PriceCheckFailureCode, message: string, detectedAsin?: string | null) {
     super(message);
     this.name = "PriceCheckFailure";
     this.code = code;
+    this.detectedAsin = detectedAsin?.trim().toUpperCase() || null;
   }
 }
 
@@ -108,6 +112,16 @@ export function isVerifiedAmazonProductPage(input: {
 
   if (!expectedAsin) {
     return false;
+  }
+
+  // Product-scoped identifiers are authoritative. A canonical URL can still
+  // contain the requested ASIN after Amazon has rendered a different child
+  // variation, so it must never override a conflicting selected-product id.
+  const observedPageAsins = (input.pageAsins ?? [])
+    .map((asin) => asin?.trim().toUpperCase())
+    .filter((asin): asin is string => Boolean(asin));
+  if (observedPageAsins.length > 0) {
+    return observedPageAsins.every((asin) => asin === expectedAsin);
   }
 
   if (
@@ -167,10 +181,6 @@ export function selectPriceCheckAutoHoldProductIds(input: {
   products: AutoHoldCandidate[];
   coveredProductIds?: Iterable<string>;
 }) {
-  if (!input.enabled) {
-    return [];
-  }
-
   const covered = new Set(input.coveredProductIds ?? []);
 
   return input.products
@@ -180,6 +190,9 @@ export function selectPriceCheckAutoHoldProductIds(input: {
         Boolean(product.ebayItemId) &&
         Boolean(product.priceCheckError) &&
         isAutoHoldPriceCheckFailureCode(product.priceCheckFailureCode) &&
+        (input.enabled ||
+          product.priceCheckFailureCode === PriceCheckFailureCode.AMAZON_ASIN_REDIRECT ||
+          product.priceCheckFailureCode === PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE) &&
         !covered.has(product.id),
     )
     .map((product) => product.id);
@@ -195,6 +208,11 @@ type AutoResumeCandidate = {
   priceCheckError: string | null;
   priceCheckFailureCode: PriceCheckFailureCode | null;
   amazonStockLeft?: number | null;
+  amazonAvailability?: AmazonAvailability | string | null;
+  holdOrigin?: ProductHoldOrigin | string | null;
+  holdSavedQuantity?: number | null;
+  identityOutcome?: string | null;
+  buyBoxOutcome?: string | null;
 };
 
 function hasValidRecoveredPrice(value: unknown) {
@@ -207,25 +225,65 @@ function hasValidRecoveredPrice(value: unknown) {
   return Number.isFinite(numericValue) && numericValue > 0;
 }
 
+function hasFreshVerifiedBuyBox(product: AutoResumeCandidate) {
+  return product.identityOutcome === "MATCH" && product.buyBoxOutcome === "AVAILABLE";
+}
+
 export function isRecoveredDealPriceAutoHold(product: AutoResumeCandidate) {
+  if (product.holdOrigin) {
+    return (
+      [
+        ProductHoldOrigin.PRICE_CHECK_PRICE_UNAVAILABLE,
+        ProductHoldOrigin.PRICE_CHECK_OUT_OF_STOCK,
+        ProductHoldOrigin.PRICE_CHECK_IDENTITY,
+      ].map(String).includes(String(product.holdOrigin)) &&
+      product.amazonAvailability === AmazonAvailability.IN_STOCK &&
+      hasValidRecoveredPrice(product.amazonPrice) &&
+      product.holdSavedQuantity !== null &&
+      product.holdSavedQuantity !== undefined &&
+      product.holdSavedQuantity > 0 &&
+      hasFreshVerifiedBuyBox(product) &&
+      !product.priceCheckError &&
+      !product.priceCheckFailureCode
+    );
+  }
   return (
     product.status === "ON_HOLD" &&
     Boolean(product.ebayItemId) &&
     product.amazonPriceTrackingMode === "DEAL" &&
     hasValidRecoveredPrice(product.amazonPrice) &&
     product.holdReason === DEAL_PRICE_UNAVAILABLE_AUTO_HOLD_REASON &&
+    hasFreshVerifiedBuyBox(product) &&
     !product.priceCheckError &&
     !product.priceCheckFailureCode
   );
 }
 
 export function isRecoveredRegularPriceAutoHold(product: AutoResumeCandidate) {
+  if (product.holdOrigin) {
+    return (
+      [
+        ProductHoldOrigin.PRICE_CHECK_PRICE_UNAVAILABLE,
+        ProductHoldOrigin.PRICE_CHECK_OUT_OF_STOCK,
+        ProductHoldOrigin.PRICE_CHECK_IDENTITY,
+      ].map(String).includes(String(product.holdOrigin)) &&
+      product.amazonAvailability === AmazonAvailability.IN_STOCK &&
+      hasValidRecoveredPrice(product.amazonPrice) &&
+      product.holdSavedQuantity !== null &&
+      product.holdSavedQuantity !== undefined &&
+      product.holdSavedQuantity > 0 &&
+      hasFreshVerifiedBuyBox(product) &&
+      !product.priceCheckError &&
+      !product.priceCheckFailureCode
+    );
+  }
   return (
     product.status === "ON_HOLD" &&
     Boolean(product.ebayItemId) &&
     product.amazonPriceTrackingMode === "REGULAR" &&
     hasValidRecoveredPrice(product.amazonPrice) &&
     product.holdReason === REGULAR_PRICE_UNAVAILABLE_AUTO_HOLD_REASON &&
+    hasFreshVerifiedBuyBox(product) &&
     !product.priceCheckError &&
     !product.priceCheckFailureCode &&
     isAmazonStockHealthy(product.amazonStockLeft)
@@ -233,10 +291,26 @@ export function isRecoveredRegularPriceAutoHold(product: AutoResumeCandidate) {
 }
 
 export function isRecoveredLowStockAutoHold(product: AutoResumeCandidate) {
+  if (product.holdOrigin) {
+    return (
+      product.holdOrigin === ProductHoldOrigin.LOW_STOCK &&
+      product.amazonAvailability === AmazonAvailability.IN_STOCK &&
+      typeof product.amazonStockLeft === "number" &&
+      product.amazonStockLeft > LOW_STOCK_THRESHOLD &&
+      hasValidRecoveredPrice(product.amazonPrice) &&
+      product.holdSavedQuantity !== null &&
+      product.holdSavedQuantity !== undefined &&
+      product.holdSavedQuantity > 0 &&
+      hasFreshVerifiedBuyBox(product) &&
+      !product.priceCheckError &&
+      !product.priceCheckFailureCode
+    );
+  }
   return (
     product.status === "ON_HOLD" &&
     Boolean(product.ebayItemId) &&
     isResolvedLowStockHoldReason(product.holdReason) &&
+    hasFreshVerifiedBuyBox(product) &&
     isAmazonStockHealthy(product.amazonStockLeft) &&
     !product.priceCheckError &&
     !product.priceCheckFailureCode

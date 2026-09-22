@@ -259,9 +259,6 @@ function parseContainerBuyboxPrice($: CheerioAPI, container: any): number | null
 }
 
 const BUYBOX_FALLBACK_REGION_SELECTORS = [
-  "#centerCol",
-  "#ppd",
-  "#dp",
   "#apex_desktop",
   "#corePrice_feature_div",
   "#buybox",

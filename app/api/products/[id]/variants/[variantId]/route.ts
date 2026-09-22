@@ -4,7 +4,8 @@ import { normalizeVariantPayload, serializeVariant } from "@/lib/variants";
 import { NextResponse } from "next/server";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { invalidateProductCaches } from "@/lib/cache-tags";
-import { ProductStatus, VariantStatus } from "@/app/generated/prisma/enums";
+import { ProductHoldOrigin, ProductStatus, VariantStatus } from "@/app/generated/prisma/enums";
+import { Prisma } from "@/app/generated/prisma/client";
 
 async function findVariant(productId: string, variantId: string, storeId: string) {
   return prisma.variant.findFirst({
@@ -60,6 +61,8 @@ export async function PATCH(
         where: { id: productId, storeId: storeSession.storeId },
         select: {
           status: true,
+          quantity: true,
+          holdSavedQuantity: true,
           _count: { select: { variants: true } },
         },
       });
@@ -85,6 +88,19 @@ export async function PATCH(
           data: {
             quantity: data.quantity,
             status: finalProductStatus,
+            ...(data.quantity === 0
+              ? {
+                  holdOrigin: ProductHoldOrigin.MANUAL,
+                  holdGeneration: { increment: 1 },
+                  holdSavedQuantity:
+                    parent.holdSavedQuantity ?? Math.max(0, parent.quantity),
+                }
+              : {
+                  holdOrigin: null,
+                  holdSavedQuantity: null,
+                  holdSavedVariantQuantities: Prisma.JsonNull,
+                  holdSourceJobId: null,
+                }),
             ...(holdReasonUpdate !== undefined ? { holdReason: holdReasonUpdate } : {}),
           },
         });

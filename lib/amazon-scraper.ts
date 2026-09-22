@@ -87,6 +87,38 @@ export interface ScrapedAmazonPrice {
   variantSelectionReason?: string;
   detectedAsin?: string | null;
   asinRedirected?: boolean;
+  identityOutcome?: "MATCH" | "MISMATCH" | "UNKNOWN";
+  buyBoxOutcome?: "AVAILABLE" | "UNAVAILABLE" | "UNKNOWN";
+  postcodeVerified?: boolean;
+  acceptedPriceSource?: string | null;
+}
+
+async function getNormalBuyBoxOutcome(page: Page): Promise<"AVAILABLE" | "UNAVAILABLE" | "UNKNOWN"> {
+  return page.evaluate(() => {
+    const roots = [
+      document.querySelector("#buybox"),
+      document.querySelector("#desktop_buybox"),
+      document.querySelector("#buybox_feature_div"),
+      document.querySelector("#corePrice_feature_div"),
+      document.querySelector("#addToCart"),
+    ].filter((root): root is Element => Boolean(root));
+    if (roots.length === 0) return "UNKNOWN";
+    const text = roots.map((root) => root.textContent ?? "").join(" ").toLowerCase();
+    if (/see all buying options|currently unavailable|temporarily out of stock/.test(text)) {
+      return "UNAVAILABLE";
+    }
+    const purchaseControl = roots.some((root) =>
+      Boolean(root.querySelector(
+        '#add-to-cart-button, #buy-now-button, input[name="submit.add-to-cart"], input[name="submit.buy-now"], [aria-label*="Add to Cart" i], [aria-label*="Buy Now" i]',
+      )),
+    );
+    const price = roots.some((root) =>
+      Boolean(root.querySelector(
+        '.priceToPay .a-offscreen, .apexPriceToPay .a-offscreen, .a-price:not(.a-text-price) .a-offscreen, #price_inside_buybox',
+      )),
+    );
+    return purchaseControl && price ? "AVAILABLE" : "UNAVAILABLE";
+  }).catch(() => "UNKNOWN" as const);
 }
 
 export type AmazonPriceScrapeOptions = {
@@ -549,13 +581,13 @@ async function extractAmazonPriceFromPage(
   page: Page
 ): Promise<number | null> {
   const selectors = [
-    "#priceblock_ourprice",
-    ".a-price .a-offscreen",
-    "#aod-offer .a-price .a-offscreen",
-    "#aod-offer-list .a-price .a-offscreen",
-    "#aod-price-0 .a-offscreen",
-    "#price_inside_buybox",
-    'span.a-price[data-a-color="price"] .a-offscreen',
+    "#corePrice_feature_div .a-price:not(.a-text-price) .a-offscreen",
+    "#corePriceDisplay_desktop_feature_div .a-price:not(.a-text-price) .a-offscreen",
+    "#apex_desktop .a-price:not(.a-text-price) .a-offscreen",
+    "#buybox .a-price:not(.a-text-price) .a-offscreen",
+    "#desktop_buybox .a-price:not(.a-text-price) .a-offscreen",
+    "#buybox #price_inside_buybox",
+    "#desktop_buybox #price_inside_buybox",
   ];
 
   for (const selector of selectors) {
@@ -688,14 +720,33 @@ async function captureAmazonPriceSnapshot(page: Page, asin: string) {
 async function extractPageAsin(page: Page): Promise<string | null> {
   return page
     .evaluate(() => {
+      const roots = [
+        document.querySelector("#buybox"),
+        document.querySelector("#desktop_buybox"),
+        document.querySelector("#addToCart"),
+        document.querySelector("#buybox_feature_div"),
+      ].filter((root): root is Element => Boolean(root));
+      const scopedSelectors = [
+        'input[name="ASIN"]',
+        'input[name="asin"]',
+        "[data-asin]",
+      ];
+      for (const root of roots) {
+        for (const selector of scopedSelectors) {
+          const element = root.querySelector<HTMLElement>(selector);
+          const value =
+            (element as HTMLInputElement | null)?.value ??
+            element?.getAttribute("data-asin") ??
+            null;
+          if (value?.trim()) return value.trim().toUpperCase();
+        }
+      }
+
       const fromInput =
         (document.querySelector("#ASIN") as HTMLInputElement)?.value ??
         (document.querySelector('input[name="ASIN"]') as HTMLInputElement)?.value ??
         null;
-      if (fromInput) return fromInput.trim().toUpperCase();
-
-      const dataAsin = document.querySelector<HTMLElement>("[data-asin]")?.dataset.asin;
-      if (dataAsin) return dataAsin.trim().toUpperCase();
+      if (fromInput?.trim()) return fromInput.trim().toUpperCase();
 
       const canonical = document.querySelector<HTMLLinkElement>("link[rel='canonical']")?.href;
       const canonicalMatch = canonical?.match(/\/dp\/([A-Z0-9]{10})/i);
@@ -704,61 +755,6 @@ async function extractPageAsin(page: Page): Promise<string | null> {
       return null;
     })
     .catch(() => null);
-}
-
-async function extractAmazonBuyingOptionsPrice(
-  page: Page,
-  normalizedAsin: string,
-  options: { allowOfferListingPage?: boolean; offerListingTimeoutMs?: number } = {}
-): Promise<number | null> {
-  const directOfferPrice = await extractAmazonPriceFromPage(page);
-  if (directOfferPrice !== null) {
-    return directOfferPrice;
-  }
-
-  const buyingOptionsSelectors = [
-    "#buybox-see-all-buying-choices input",
-    "#buybox-see-all-buying-choices button",
-    "#buybox-see-all-buying-choices a",
-    "#buybox-see-all-buying-choices-announce",
-    "input[aria-labelledby*='buybox-see-all-buying']",
-    "button[aria-labelledby*='buybox-see-all-buying']",
-    "a[href*='/gp/offer-listing/']",
-  ];
-
-  for (const selector of buyingOptionsSelectors) {
-    const trigger = page.locator(selector).first();
-    const count = await trigger.count().catch(() => 0);
-
-    if (count === 0) {
-      continue;
-    }
-
-    await trigger.click({ timeout: 5000 }).catch(() => {});
-    await page
-      .waitForSelector("#aod-container, #aod-offer, #aod-offer-list", {
-        timeout: 8000,
-      })
-      .catch(() => {});
-
-    const offerPrice = await extractAmazonPriceFromPage(page);
-    if (offerPrice !== null) {
-      return offerPrice;
-    }
-  }
-
-  if (options.allowOfferListingPage === false) {
-    return null;
-  }
-
-  await page
-    .goto(`https://www.amazon.com.au/gp/offer-listing/${normalizedAsin}`, {
-      waitUntil: "domcontentloaded",
-      timeout: options.offerListingTimeoutMs ?? 20000,
-    })
-    .catch(() => null);
-
-  return extractAmazonPriceFromPage(page);
 }
 
 export async function scrapeAmazonPrice(
@@ -932,7 +928,8 @@ export async function scrapeAmazonPrice(
     ) {
       throw new PriceCheckFailure(
         PriceCheckFailureCode.AMAZON_ASIN_REDIRECT,
-        `Amazon redirected ASIN ${normalizedAsin} to ${pageAsinBeforeVariants} — the original variant appears unavailable.`
+        `Amazon redirected ASIN ${normalizedAsin} to ${pageAsinBeforeVariants} — the original variant appears unavailable.`,
+        pageAsinBeforeVariants,
       );
     }
 
@@ -1109,10 +1106,29 @@ export async function scrapeAmazonPrice(
     // redirected us to a different variant without explicit variant selection,
     // we must NOT return the wrong price.
     const finalPageAsin = await extractPageAsin(page);
-    if (!variantSwatchSelected && finalPageAsin && finalPageAsin !== normalizedAsin) {
+    if (finalPageAsin && finalPageAsin !== normalizedAsin) {
       throw new PriceCheckFailure(
         PriceCheckFailureCode.AMAZON_ASIN_REDIRECT,
-        `Amazon redirected ASIN ${normalizedAsin} to ${finalPageAsin} — the original variant appears unavailable.`
+        `Amazon redirected ASIN ${normalizedAsin} to ${finalPageAsin} — the original variant appears unavailable.`,
+        finalPageAsin,
+      );
+    }
+    if (!finalPageAsin) {
+      throw new PriceCheckFailure(
+        PriceCheckFailureCode.TECHNICAL_ERROR,
+        `Amazon did not expose a verifiable selected ASIN for ${normalizedAsin}.`,
+      );
+    }
+
+    const observedBuyBoxOutcome = await getNormalBuyBoxOutcome(page);
+    const buyBoxOutcome =
+      price !== null && observedBuyBoxOutcome !== "UNAVAILABLE"
+        ? "AVAILABLE"
+        : observedBuyBoxOutcome;
+    if (price !== null && observedBuyBoxOutcome === "UNAVAILABLE") {
+      throw new PriceCheckFailure(
+        PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE,
+        `The normal Amazon Buy Box is unavailable for ASIN ${normalizedAsin}.`,
       );
     }
 
@@ -1180,6 +1196,13 @@ export async function scrapeAmazonPrice(
         bodyText: bodySnippet,
       });
 
+      if (!technicalPageMessage && buyBoxOutcome === "UNAVAILABLE" && productPageConfirmed) {
+        throw new PriceCheckFailure(
+          PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE,
+          `The normal Amazon Buy Box is unavailable for ASIN ${normalizedAsin}.`,
+        );
+      }
+
       if (technicalPageMessage || !productPageConfirmed) {
         throw new PriceCheckFailure(
           PriceCheckFailureCode.TECHNICAL_ERROR,
@@ -1214,6 +1237,14 @@ export async function scrapeAmazonPrice(
       },
       detectedAsin: finalPageAsin,
       asinRedirected: false,
+      identityOutcome: finalPageAsin
+        ? finalPageAsin === normalizedAsin
+          ? "MATCH"
+          : "MISMATCH"
+        : "UNKNOWN",
+      buyBoxOutcome,
+      postcodeVerified: exactPostcodeVerified,
+      acceptedPriceSource: selectedPrice?.selector ?? null,
     };
   } finally {
     await context.close().catch(() => {});
@@ -1542,18 +1573,15 @@ export async function scrapeAmazonProduct(
 
     await page
       .waitForSelector(
-        "#corePrice_feature_div, .a-price, #priceblock_ourprice, #apex_desktop, #buybox-see-all-buying-choices",
+        "#corePrice_feature_div, #corePriceDisplay_desktop_feature_div, #apex_desktop, #buybox, #desktop_buybox",
         { timeout: 5000 }
       )
       .catch(() => {});
 
     let price = await extractAmazonPriceFromPage(page);
 
-    if (price === null && /^[A-Z0-9]{10}$/.test(normalizedAsin)) {
-      price = await extractAmazonBuyingOptionsPrice(page, normalizedAsin, {
-        allowOfferListingPage: false,
-      });
-    }
+    // A missing normal Buy Box is a product state. Do not click through to
+    // alternate offers or scrape an offer-listing page as a fallback.
 
     if (price === null && postcode) {
       const success = await setAmazonDeliveryPostcode(page, postcode);
@@ -1564,17 +1592,13 @@ export async function scrapeAmazonProduct(
         });
         await page
           .waitForSelector(
-            "#corePrice_feature_div, .a-price, #priceblock_ourprice, #apex_desktop, #buybox-see-all-buying-choices",
+            "#corePrice_feature_div, #corePriceDisplay_desktop_feature_div, #apex_desktop, #buybox, #desktop_buybox",
             { timeout: 5000 }
           )
           .catch(() => {});
         price = await extractAmazonPriceFromPage(page);
 
-        if (price === null && /^[A-Z0-9]{10}$/.test(normalizedAsin)) {
-          price = await extractAmazonBuyingOptionsPrice(page, normalizedAsin, {
-            allowOfferListingPage: false,
-          });
-        }
+        // Keep the retry scoped to the normal product Buy Box as well.
       }
     }
 

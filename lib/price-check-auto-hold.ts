@@ -87,7 +87,7 @@ async function resolveCandidateIds(
 ) {
   const enabled = await getAutoHoldEnabled(tx, input.storeId);
 
-  if (!enabled || (!input.all && input.productIds.length === 0)) {
+  if (!input.all && input.productIds.length === 0) {
     return [];
   }
 

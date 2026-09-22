@@ -1,9 +1,11 @@
-export type ProductListingStatus = "in-stock" | "on-hold" | "out-of-stock";
+export type ProductListingStatus = "in-stock" | "on-hold" | "out-of-stock" | "unavailable";
 
 interface ProductListingStatusInput {
   status: string;
   quantity: number;
   amazonStockLeft?: number | null;
+  amazonAvailability?: "IN_STOCK" | "OUT_OF_STOCK" | "UNKNOWN" | string | null;
+  priceCheckFailureCode?: string | null;
   variants?: Array<{
     quantity?: number;
     status?: string;
@@ -15,6 +17,14 @@ export function getProductListingStatus(
 ): ProductListingStatus {
   if (product.status === "ON_HOLD") {
     return "on-hold";
+  }
+
+  if (
+    product.amazonAvailability === "UNKNOWN" &&
+    (product.priceCheckFailureCode === "AMAZON_BUYBOX_UNAVAILABLE" ||
+      product.priceCheckFailureCode === "AMAZON_ASIN_REDIRECT")
+  ) {
+    return "unavailable";
   }
 
   if (

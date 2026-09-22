@@ -188,57 +188,6 @@ export async function POST(request: Request) {
   const reviewedAt = new Date();
   const historyIds = historyItems.map((item) => item.id);
 
-  await prisma.$transaction(async (tx) => {
-    await Promise.all(
-      variantsToUpdate.map((variant) => {
-        const history = historyByVariantId.get(variant.id)!;
-
-        return tx.variant.update({
-          where: { id: variant.id },
-          data: {
-            buyPrice: history.newPrice,
-            sellPrice: history.newSellPrice,
-          },
-        });
-      })
-    );
-
-    await tx.product.update({
-      where: { id: product.id },
-      data: {
-        price: primaryHistory!.newSellPrice,
-        priceCheckError: null,
-        priceCheckFailureCode: null,
-      },
-    });
-
-    await tx.priceHistory.updateMany({
-      where: {
-        id: { in: historyIds },
-        appliedAt: null,
-      },
-      data: {
-        appliedAt: reviewedAt,
-        ebayRevised: false,
-        errorMessage: null,
-      },
-    });
-
-    await tx.priceHistory.updateMany({
-      where: {
-        productId: product.id,
-        id: { notIn: historyIds },
-        appliedAt: null,
-        product: { storeId: storeSession.storeId },
-      },
-      data: {
-        appliedAt: reviewedAt,
-        ebayRevised: false,
-        errorMessage: null,
-      },
-    });
-  });
-
   let reviseResult: Awaited<ReturnType<typeof reviseProductPrice>>;
 
   try {
@@ -266,6 +215,7 @@ export async function POST(request: Request) {
         data: {
           ebayRevised: false,
           errorMessage,
+          status: "FAILED",
         },
       });
 
@@ -290,8 +240,8 @@ export async function POST(request: Request) {
 
     return NextResponse.json(
       {
-        error: `Local prices were applied, but eBay revise failed: ${errorMessage}`,
-        applied: historyIds.length,
+        error: `eBay revise failed; local prices were left unchanged: ${errorMessage}`,
+        applied: 0,
         ebayRevised: false,
       },
       { status: 502 }
@@ -299,11 +249,47 @@ export async function POST(request: Request) {
   }
 
   await prisma.$transaction(async (tx) => {
+    await Promise.all(
+      variantsToUpdate.map((variant) => {
+        const history = historyByVariantId.get(variant.id)!;
+        return tx.variant.update({
+          where: { id: variant.id },
+          data: { buyPrice: history.newPrice, sellPrice: history.newSellPrice },
+        });
+      }),
+    );
+
+    await tx.product.update({
+      where: { id: product.id },
+      data: {
+        price: primaryHistory!.newSellPrice,
+        priceCheckError: null,
+        priceCheckFailureCode: null,
+      },
+    });
+
     await tx.priceHistory.updateMany({
-      where: { id: { in: historyIds } },
+      where: { id: { in: historyIds }, appliedAt: null },
       data: {
         ebayRevised: true,
         errorMessage: null,
+        appliedAt: reviewedAt,
+        status: "APPLIED",
+      },
+    });
+
+    await tx.priceHistory.updateMany({
+      where: {
+        productId: product.id,
+        id: { notIn: historyIds },
+        appliedAt: null,
+        product: { storeId: storeSession.storeId },
+      },
+      data: {
+        appliedAt: reviewedAt,
+        ebayRevised: false,
+        errorMessage: null,
+        status: "SUPERSEDED",
       },
     });
 

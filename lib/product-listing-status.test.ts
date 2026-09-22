@@ -27,6 +27,18 @@ test("zero supplier stock is out of stock", () => {
   );
 });
 
+test("unknown supplier verification is unavailable even with local quantity", () => {
+  assert.equal(
+    getProductListingStatus({
+      status: "IMPORTED",
+      quantity: 5,
+      amazonAvailability: "UNKNOWN",
+      priceCheckFailureCode: "AMAZON_BUYBOX_UNAVAILABLE",
+    }),
+    "unavailable",
+  );
+});
+
 test("a product is in stock when at least one variant is available", () => {
   assert.equal(
     getProductListingStatus({

@@ -70,6 +70,8 @@ model Store {
   appLogs                 AppLog[]
   ebayListingAsins        EbayListingAsin[]
   favoriteResearchQueries FavoriteResearchQuery[]
+  amazonPriceObservations AmazonPriceObservation[]
+  listingOperations       ListingOperation[]
 
   @@index([ownerUserId])
 }
@@ -137,11 +139,46 @@ enum AmazonImportJobKind {
 enum PriceCheckFailureCode {
   AMAZON_OUT_OF_STOCK
   AMAZON_PRICE_UNAVAILABLE
+  AMAZON_BUYBOX_UNAVAILABLE
   AMAZON_ASIN_REDIRECT
   AMAZON_VARIANT_SELECTION_REQUIRED
   MISSING_BASELINE
   UNSAFE_PRICE_CHANGE
   TECHNICAL_ERROR
+}
+
+enum ProductHoldOrigin {
+  MANUAL
+  PRICE_CHECK_OUT_OF_STOCK
+  PRICE_CHECK_PRICE_UNAVAILABLE
+  PRICE_CHECK_IDENTITY
+  PRICE_CHECK_UNSAFE_PRICE
+  LOW_STOCK
+  UNKNOWN
+}
+
+enum AmazonAvailability {
+  IN_STOCK
+  OUT_OF_STOCK
+  UNKNOWN
+}
+
+enum PriceHistoryStatus {
+  PENDING
+  APPLIED
+  FAILED
+  SUPERSEDED
+  DISMISSED
+}
+
+enum ListingOperationStage {
+  PREPARED
+  PRICE_SYNC
+  QUANTITY_SYNC
+  RECONCILIATION
+  COMPLETED
+  FAILED
+  SUPERSEDED
 }
 
 enum PriceCheckJobTrigger {
@@ -261,6 +298,7 @@ model Product {
   amazonPrice             Decimal?                @db.Decimal(10, 2)
   amazonPriceTrackingMode AmazonPriceTrackingMode @default(REGULAR)
   amazonStockLeft         Int?
+  amazonAvailability      AmazonAvailability     @default(UNKNOWN)
   promotedAdPercent       Float                   @default(0)
   promotedAdStatus        PromotedAdStatus        @default(UNKNOWN)
   promotedAdCampaignId    String?
@@ -271,6 +309,12 @@ model Product {
   priceCheckError         String?                 @db.Text
   priceCheckFailureCode   PriceCheckFailureCode?
   holdReason              String?                 @db.Text
+  holdOrigin              ProductHoldOrigin?
+  holdGeneration          Int                     @default(0)
+  holdSavedQuantity       Int?
+  holdSavedVariantQuantities Json?
+  holdSourceJobId         String?
+  holdLastObservationId   String?
   internalNote            String?                 @db.Text
   shippingPolicyId        String?
   returnPolicyId          String?
@@ -288,6 +332,8 @@ model Product {
   variants     Variant[]
   priceHistory PriceHistory[]
   bulkEditJobItems BulkEditJobItem[]
+  amazonPriceObservations AmazonPriceObservation[]
+  listingOperations ListingOperation[]
 
   @@index([storeId, status])
   @@index([storeId, asin])
@@ -357,6 +403,7 @@ model PriceHistory {
   errorMessage            String?                 @db.Text
   source                  PriceCheckSource        @default(LIVE)
   amazonPriceTrackingMode AmazonPriceTrackingMode @default(REGULAR)
+  status                  PriceHistoryStatus      @default(PENDING)
   appliedAt               DateTime?
   createdAt               DateTime                @default(now())
 
@@ -366,6 +413,66 @@ model PriceHistory {
   @@index([productId])
   @@index([variantId])
   @@index([createdAt])
+}
+
+model AmazonPriceObservation {
+  id                    String             @id @default(cuid())
+  productId             String
+  storeId               String
+  requestedAsin         String?
+  selectedAsin          String?
+  identityOutcome       String?
+  buyBoxOutcome         String?
+  acceptedPriceSource   String?
+  availability          AmazonAvailability @default(UNKNOWN)
+  stockLeft             Int?
+  verifiedPostcode      String?
+  postcodeVerified      Boolean            @default(false)
+  eligibleOffer         Boolean            @default(false)
+  seller                String?
+  price                 Decimal?           @db.Decimal(10, 2)
+  regularPrice          Decimal?           @db.Decimal(10, 2)
+  dealPrice             Decimal?           @db.Decimal(10, 2)
+  priceMode             AmazonPriceTrackingMode?
+  failureCode           PriceCheckFailureCode?
+  message               String?            @db.Text
+  observedAt            DateTime           @default(now())
+  isSuccessful          Boolean            @default(false)
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([productId, observedAt])
+  @@index([storeId, observedAt])
+  @@index([storeId, availability])
+}
+
+model ListingOperation {
+  id                  String               @id @default(cuid())
+  productId           String
+  storeId             String
+  jobId               String?
+  requestKey          String               @unique
+  stage               ListingOperationStage @default(PREPARED)
+  holdGeneration      Int?
+  expectedProductUpdatedAt DateTime?
+  targetPrices        Json                 @default("{}")
+  targetQuantities    Json                 @default("{}")
+  preparedPayload     Json                 @default("{}")
+  attempts            Int                  @default(0)
+  lastError           String?              @db.Text
+  nextAttemptAt       DateTime?
+  ebayConfirmedAt     DateTime?
+  completedAt         DateTime?
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@index([storeId, stage, nextAttemptAt])
+  @@index([productId, createdAt])
+  @@index([jobId])
 }
 
 model PriceCheckJob {
