@@ -51,7 +51,8 @@ export interface AutomaticPriceCheckSummary {
 }
 
 /**
- * Start automatic 8-hour price checks for all active stores (or a single store).
+ * Start automatic price checks at the four configured daily times for all
+ * active stores (or a single store).
  * The first automatic run begins immediately upon pressing Start.
  */
 export async function startAutomaticPriceCheck(options: {

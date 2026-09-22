@@ -345,7 +345,7 @@ async function processStore(store: {
     return true;
   }
 
-  // Automatic Amazon price check (8-hour cadence)
+  // Automatic Amazon price check (four configured daily times)
   const autoCheckClaim = await modules.tryClaimWorkerSchedule({
     storeId: store.id,
     taskKey: modules.AUTOMATIC_PRICE_CHECK_TASK_KEY,

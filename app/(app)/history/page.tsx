@@ -9,6 +9,7 @@ import {
   UPLOAD_HISTORY_PAGE_SIZE,
 } from "@/lib/upload-history-pagination";
 import { getStoreBadgeClass } from "@/lib/store-badge";
+import { AUTOMATIC_PRICE_CHECK_TIMES } from "@/lib/automatic-price-check-schedule";
 
 function formatDate(date: Date): string {
   const d = new Date(date);
@@ -206,6 +207,9 @@ export default async function HistoryPage({
   ]
     .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
     .slice(pagination.skip, pagination.skip + UPLOAD_HISTORY_PAGE_SIZE);
+  const automaticCheckTimes = AUTOMATIC_PRICE_CHECK_TIMES.map(
+    (time) => time.label,
+  ).join(", ");
 
   return (
     <div className="w-full">
@@ -555,7 +559,7 @@ export default async function HistoryPage({
                 />
               </svg>
               <p className="text-gray-500 text-sm">
-                No automatic price checks logged yet. Automatic price checks run 3x daily (4:10 AM, 12:00 PM, 8:00 PM) when enabled in Settings.
+                No automatic price checks logged yet. Automatic price checks run 4x daily ({automaticCheckTimes}) when enabled in Settings.
               </p>
             </div>
           ) : (
@@ -610,7 +614,7 @@ export default async function HistoryPage({
 
                       {/* User */}
                       <td className="px-4 py-3 text-sm text-gray-500">
-                        Auto Schedule (3x Daily)
+                        Auto Schedule (4x Daily)
                       </td>
 
                       {/* Counts / Progress */}

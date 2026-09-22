@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { calculateSellPrice } from "@/lib/variant-pricing";
 import { PostcodeAutocomplete } from "@/components/PostcodeAutocomplete";
+import { AUTOMATIC_PRICE_CHECK_TIMES } from "@/lib/automatic-price-check-schedule";
 
 interface SupplierSettingsData {
   id: string;
@@ -62,7 +63,7 @@ const weightUnits = ["Kg", "Lb", "Oz", "G"];
 
 interface AutoCheckSummary {
   enabled: boolean;
-  intervalHours: number;
+  scheduledTimes: string[];
   stores: {
     storeId: string;
     storeName: string;
@@ -115,6 +116,10 @@ export default function SupplierSettingsTab() {
   // Automatic price check state
   const [autoCheckStatus, setAutoCheckStatus] = useState<AutoCheckSummary | null>(null);
   const [autoCheckLoading, setAutoCheckLoading] = useState(false);
+  const automaticCheckTimes = (
+    autoCheckStatus?.scheduledTimes ??
+    AUTOMATIC_PRICE_CHECK_TIMES.map((time) => time.label)
+  ).join(", ");
 
   // Sidebar
   const [selectedStore, setSelectedStore] = useState("1");
@@ -165,7 +170,7 @@ export default function SupplierSettingsTab() {
       if (res.ok) {
         const data = await res.json();
         setAutoCheckStatus(data);
-        setToast("Automatic 8-hour price checks started for all active stores.");
+        setToast("Automatic 4-times-daily price checks started for all active stores.");
       } else {
         const err = await res.json();
         setToast(`Error: ${err.error || "Failed to start automatic checks"}`);
@@ -1033,7 +1038,7 @@ export default function SupplierSettingsTab() {
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="text-sm font-semibold text-gray-900">
-                          Automatic Daily Full Price Checks (3x Daily)
+                          Automatic Daily Full Price Checks (4x Daily)
                         </span>
                         <span
                           className={`rounded-full px-2 py-0.5 text-xs font-medium ${
@@ -1042,11 +1047,11 @@ export default function SupplierSettingsTab() {
                               : "bg-gray-100 text-gray-600 border border-gray-200"
                           }`}
                         >
-                          {autoCheckStatus?.enabled ? "Active (4:10 AM, 12:00 PM, 8:00 PM)" : "Stopped"}
+                          {autoCheckStatus?.enabled ? `Active (${automaticCheckTimes})` : "Stopped"}
                         </span>
                       </div>
                       <p className="mt-1 text-xs leading-5 text-gray-500 max-w-xl">
-                        Runs a complete Amazon price check for all active stores 3 times daily at 4:10 AM, 12:00 PM, and 8:00 PM using your local workers.
+                        Runs a complete Amazon price check for all active stores 4 times daily at {automaticCheckTimes} using your local workers.
                         Manual price checks retain priority. Automatic jobs are logged in Job History.
                       </p>
                     </div>

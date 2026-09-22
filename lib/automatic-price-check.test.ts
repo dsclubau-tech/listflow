@@ -7,14 +7,15 @@ import {
 import { PriceCheckFailureCode } from "@/app/generated/prisma/enums";
 
 describe("automatic-price-check configuration", () => {
-  test("configures 3 fixed daily check times (4:10 AM, 12:00 PM, 8:00 PM)", async () => {
+  test("configures 4 fixed daily check times (4:10 AM, 12:00 PM, 4:00 PM, 9:00 PM)", async () => {
     const { AUTOMATIC_PRICE_CHECK_TIMES, AUTOMATIC_PRICE_CHECK_TASK_KEY, getNextScheduledCheckTime } =
       await import("./automatic-price-check-schedule");
     assert.equal(AUTOMATIC_PRICE_CHECK_TASK_KEY, "automatic-price-check");
-    assert.equal(AUTOMATIC_PRICE_CHECK_TIMES.length, 3);
+    assert.equal(AUTOMATIC_PRICE_CHECK_TIMES.length, 4);
     assert.deepEqual(AUTOMATIC_PRICE_CHECK_TIMES[0], { hour: 4, minute: 10, label: "4:10 AM" });
     assert.deepEqual(AUTOMATIC_PRICE_CHECK_TIMES[1], { hour: 12, minute: 0, label: "12:00 PM" });
-    assert.deepEqual(AUTOMATIC_PRICE_CHECK_TIMES[2], { hour: 20, minute: 0, label: "8:00 PM" });
+    assert.deepEqual(AUTOMATIC_PRICE_CHECK_TIMES[2], { hour: 16, minute: 0, label: "4:00 PM" });
+    assert.deepEqual(AUTOMATIC_PRICE_CHECK_TIMES[3], { hour: 21, minute: 0, label: "9:00 PM" });
 
     // Test time progression:
     // 1:00 AM -> next is 4:10 AM today
@@ -31,19 +32,26 @@ describe("automatic-price-check configuration", () => {
     assert.equal(nextFrom5am.getMinutes(), 0);
     assert.equal(nextFrom5am.getDate(), 1);
 
-    // 1:00 PM -> next is 8:00 PM today
+    // 1:00 PM -> next is 4:00 PM today
     const at1pm = new Date(2026, 8, 1, 13, 0, 0);
     const nextFrom1pm = getNextScheduledCheckTime(at1pm);
-    assert.equal(nextFrom1pm.getHours(), 20);
+    assert.equal(nextFrom1pm.getHours(), 16);
     assert.equal(nextFrom1pm.getMinutes(), 0);
     assert.equal(nextFrom1pm.getDate(), 1);
 
-    // 9:00 PM -> next is 4:10 AM tomorrow
-    const at9pm = new Date(2026, 8, 1, 21, 0, 0);
-    const nextFrom9pm = getNextScheduledCheckTime(at9pm);
-    assert.equal(nextFrom9pm.getHours(), 4);
-    assert.equal(nextFrom9pm.getMinutes(), 10);
-    assert.equal(nextFrom9pm.getDate(), 2);
+    // 5:00 PM -> next is 9:00 PM today
+    const at5pm = new Date(2026, 8, 1, 17, 0, 0);
+    const nextFrom5pm = getNextScheduledCheckTime(at5pm);
+    assert.equal(nextFrom5pm.getHours(), 21);
+    assert.equal(nextFrom5pm.getMinutes(), 0);
+    assert.equal(nextFrom5pm.getDate(), 1);
+
+    // 10:00 PM -> next is 4:10 AM tomorrow
+    const at10pm = new Date(2026, 8, 1, 22, 0, 0);
+    const nextFrom10pm = getNextScheduledCheckTime(at10pm);
+    assert.equal(nextFrom10pm.getHours(), 4);
+    assert.equal(nextFrom10pm.getMinutes(), 10);
+    assert.equal(nextFrom10pm.getDate(), 2);
   });
 
   test("AMAZON_VARIANT_SELECTION_REQUIRED is NOT an auto-hold failure code", () => {

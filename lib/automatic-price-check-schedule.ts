@@ -1,10 +1,11 @@
 export const AUTOMATIC_PRICE_CHECK_TASK_KEY = "automatic-price-check";
 
-// Fixed daily check times: 4:10 AM, 12:00 PM, 8:00 PM
+// Fixed daily check times: 4:10 AM, 12:00 PM, 4:00 PM, 9:00 PM
 export const AUTOMATIC_PRICE_CHECK_TIMES = [
   { hour: 4, minute: 10, label: "4:10 AM" },
   { hour: 12, minute: 0, label: "12:00 PM" },
-  { hour: 20, minute: 0, label: "8:00 PM" },
+  { hour: 16, minute: 0, label: "4:00 PM" },
+  { hour: 21, minute: 0, label: "9:00 PM" },
 ] as const;
 
 export function getNextScheduledCheckTime(from = new Date()): Date {
