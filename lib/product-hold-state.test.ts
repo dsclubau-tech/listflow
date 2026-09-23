@@ -5,7 +5,24 @@ import {
   canAutomaticallyRecoverHold,
   captureHoldQuantities,
   getProductHoldOrigin,
+  getHeldProductTrackingState,
 } from "./product-hold-state";
+
+test("a successful price check cannot hide a legacy hold's missing restore quantity", () => {
+  const state = getHeldProductTrackingState({
+    status: "ON_HOLD",
+    holdOrigin: "PRICE_CHECK_PRICE_UNAVAILABLE",
+    holdSavedQuantity: null,
+  });
+  assert.equal(state?.label, "Hold needs review");
+  assert.match(state?.detail ?? "", /quantity/i);
+  assert.equal(getHeldProductTrackingState({ status: "IMPORTED" }), null);
+});
+
+test("manual holds stay explicit even without a quantity snapshot", () => {
+  const state = getHeldProductTrackingState({ status: "ON_HOLD", holdOrigin: "MANUAL" });
+  assert.equal(state?.label, "Held manually");
+});
 
 test("hold origin is derived from the failure, not the rendered reason", () => {
   assert.equal(
@@ -17,6 +34,12 @@ test("hold origin is derived from the failure, not the rendered reason", () => {
     ProductHoldOrigin.PRICE_CHECK_IDENTITY,
   );
   assert.equal(getProductHoldOrigin({}), ProductHoldOrigin.MANUAL);
+  assert.equal(getProductHoldOrigin({ existing: ProductHoldOrigin.PRICE_CHECK_OUT_OF_STOCK }), ProductHoldOrigin.MANUAL);
+  assert.equal(getProductHoldOrigin({
+    automaticPriceCheck: true,
+    existing: ProductHoldOrigin.MANUAL,
+    failureCode: PriceCheckFailureCode.AMAZON_OUT_OF_STOCK,
+  }), ProductHoldOrigin.MANUAL);
 });
 
 test("hold snapshots preserve the pre-hold quantity across repeated holds", () => {

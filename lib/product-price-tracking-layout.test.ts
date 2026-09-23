@@ -13,7 +13,7 @@ test("product promotion and price tracking badges are stacked without checked ti
     source,
     /\{\(promotedAdState \|\| trackingState\) && \([\s\S]*?inline-flex flex-col items-start gap-1\.5/,
   );
-  assert.match(source, /trackingState\.label !== "No change" && \(/);
+  assert.match(source, /trackingState\.label !== "Price unchanged" && \(/);
   assert.doesNotMatch(
     source,
     /className="mt-1 block truncate text-xs text-gray-500"/,

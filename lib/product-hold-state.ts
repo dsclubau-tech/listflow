@@ -6,12 +6,43 @@ export type SavedVariantQuantity = {
   quantity: number;
 };
 
+export function getHeldProductTrackingState(product: {
+  status: string;
+  holdOrigin?: string | null;
+  holdSavedQuantity?: number | null;
+}) {
+  if (product.status !== "ON_HOLD") return null;
+  if (product.holdOrigin === "MANUAL") {
+    return {
+      label: "Held manually",
+      detail: "A successful price check does not release a manual hold.",
+    };
+  }
+  if (!product.holdSavedQuantity || product.holdSavedQuantity <= 0) {
+    return {
+      label: "Hold needs review",
+      detail: "Original listing quantity is missing. Confirm the quantity to restore before this hold can be cleared.",
+    };
+  }
+  if (!product.holdOrigin || product.holdOrigin === "UNKNOWN" || product.holdOrigin === "PRICE_CHECK_UNSAFE_PRICE") {
+    return {
+      label: "Hold needs review",
+      detail: "This hold requires review before stock can be restored.",
+    };
+  }
+  return {
+    label: "Awaiting recovery",
+    detail: "This listing remains held until recovery checks pass and eBay confirms the restored stock.",
+  };
+}
+
 export function getProductHoldOrigin(input: {
   automaticPriceCheck?: boolean;
   lowStock?: boolean;
   failureCode?: PriceCheckFailureCode | string | null;
   existing?: ProductHoldOrigin | string | null;
 }): ProductHoldOrigin {
+  if (input.existing === ProductHoldOrigin.MANUAL) return ProductHoldOrigin.MANUAL;
   if (input.automaticPriceCheck) {
     switch (input.failureCode) {
       case PriceCheckFailureCode.AMAZON_OUT_OF_STOCK:
@@ -30,9 +61,6 @@ export function getProductHoldOrigin(input: {
   }
 
   if (input.lowStock) return ProductHoldOrigin.LOW_STOCK;
-  if (input.existing && Object.values(ProductHoldOrigin).includes(input.existing as ProductHoldOrigin)) {
-    return input.existing as ProductHoldOrigin;
-  }
   return ProductHoldOrigin.MANUAL;
 }
 

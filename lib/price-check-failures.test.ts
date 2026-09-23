@@ -232,6 +232,9 @@ test("automatic resume candidates only include recovered false deal-price holds"
     amazonStockLeft: 1,
     identityOutcome: "MATCH",
     buyBoxOutcome: "AVAILABLE",
+    postcodeVerified: true,
+    holdSavedQuantity: 5,
+    amazonAvailability: "IN_STOCK",
   };
   const products = [
     recovered,
@@ -271,14 +274,18 @@ test("automatic resume candidates include resolved low-stock holds but exclude u
     holdReason: "Low Amazon stock resolved — product is back in stock on Amazon.",
     priceCheckError: null,
     priceCheckFailureCode: null,
-    amazonStockLeft: null,
+    amazonStockLeft: 4,
     identityOutcome: "MATCH",
     buyBoxOutcome: "AVAILABLE",
+    postcodeVerified: true,
+    holdSavedQuantity: 5,
+    amazonAvailability: "IN_STOCK",
   };
   const products = [
     recoveredStock,
     { ...recoveredStock, id: "healthy-count", amazonStockLeft: 8 },
     { ...recoveredStock, id: "still-low", amazonStockLeft: 3 },
+    { ...recoveredStock, id: "unknown-count", amazonStockLeft: null },
     { ...recoveredStock, id: "manual", holdReason: "Put on hold manually." },
     {
       ...recoveredStock,
@@ -317,6 +324,9 @@ test("automatic resume candidates include recovered regular-price holds", () => 
     amazonStockLeft: null,
     identityOutcome: "MATCH",
     buyBoxOutcome: "AVAILABLE",
+    postcodeVerified: true,
+    holdSavedQuantity: 5,
+    amazonAvailability: "IN_STOCK",
   };
   const products = [
     recoveredRegular,

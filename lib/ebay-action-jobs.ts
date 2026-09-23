@@ -77,6 +77,7 @@ import {
   isRecoveredPriceCheckAutoHold,
 } from "@/lib/price-check-failures";
 import { isLowStockHoldJobMetadata } from "@/lib/low-stock-products";
+import { getPriceCheckRecoveryEvidence, priceCheckRecoveryRelations } from "@/lib/price-check-recovery-evidence";
 import {
   captureHoldQuantities,
   getProductHoldOrigin,
@@ -1210,6 +1211,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       variants: {
         orderBy: { createdAt: "asc" },
       },
+      ...(automaticPriceCheckResume ? priceCheckRecoveryRelations : {}),
     },
   });
 
@@ -1646,7 +1648,10 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
   if (job.type === EbayActionJobType.RESUME) {
     if (
       automaticPriceCheckResume &&
-      !isRecoveredPriceCheckAutoHold(product)
+      !isRecoveredPriceCheckAutoHold({
+        ...product,
+        ...getPriceCheckRecoveryEvidence(product),
+      })
     ) {
       return { ok: true, failure: null };
     }

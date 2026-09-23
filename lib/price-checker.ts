@@ -811,6 +811,10 @@ export async function runPriceCheck(
                 selectedAsin: scrapeResult?.detectedAsin ?? null,
                 identityOutcome: scrapeResult?.identityOutcome ?? "UNKNOWN",
                 buyBoxOutcome: scrapeResult?.buyBoxOutcome ?? "UNKNOWN",
+                postcodeVerified: scrapeResult?.postcodeVerified === true,
+                verifiedPostcode: scrapeResult?.postcodeVerified
+                  ? supplierSettings.scrapePostcode
+                  : null,
                 acceptedPriceSource: scrapeResult?.acceptedPriceSource ?? null,
                 availability: amazonAvailabilityUpdate.amazonAvailability,
                 stockLeft: scrapedAmazonStockLeft ?? null,

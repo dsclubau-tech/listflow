@@ -12,6 +12,7 @@ import type { Prisma } from "@/app/generated/prisma/client";
 import { invalidateJobCaches } from "@/lib/cache-tags";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
+import { getPriceCheckRecoveryEvidence, priceCheckRecoveryRelations } from "@/lib/price-check-recovery-evidence";
 import {
   DEAL_PRICE_UNAVAILABLE_AUTO_HOLD_REASON,
   REGULAR_PRICE_UNAVAILABLE_AUTO_HOLD_REASON,
@@ -115,20 +116,12 @@ async function resolveCandidateIds(
       amazonAvailability: true,
       holdOrigin: true,
       holdSavedQuantity: true,
-      amazonPriceObservations: {
-        orderBy: { observedAt: "desc" },
-        take: 1,
-        select: {
-          identityOutcome: true,
-          buyBoxOutcome: true,
-        },
-      },
+      ...priceCheckRecoveryRelations,
     },
   });
   const candidates = products.map((product) => ({
     ...product,
-    identityOutcome: product.amazonPriceObservations[0]?.identityOutcome ?? null,
-    buyBoxOutcome: product.amazonPriceObservations[0]?.buyBoxOutcome ?? null,
+    ...getPriceCheckRecoveryEvidence(product),
   }));
   const candidateIds = selectPriceCheckAutoResumeProductIds({ products: candidates });
 

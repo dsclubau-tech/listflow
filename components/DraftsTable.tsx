@@ -27,6 +27,7 @@ import {
   normalizeAmazonPriceTrackingMode,
 } from "@/lib/amazon-price-tracking";
 import { getStoreBadgeClass } from "@/lib/store-badge";
+import { getHeldProductTrackingState } from "@/lib/product-hold-state";
 import {
   getProductListingStatus,
   type ProductListingStatus,
@@ -594,9 +595,18 @@ function getPriceTrackingState(product: SerializedProductRow) {
     };
   }
 
+  const heldState = getHeldProductTrackingState(product);
+  if (heldState) {
+    return {
+      ...heldState,
+      badgeClass: "bg-amber-100 text-amber-800",
+      priceHistoryId: null,
+    };
+  }
+
   if (product.lastPriceCheck) {
     return {
-      label: "No change",
+      label: "Price unchanged",
       badgeClass: "bg-emerald-100 text-emerald-700",
       priceHistoryId: null,
       detail: `Checked ${formatDateTime(product.lastPriceCheck) ?? "recently"}`,
@@ -3040,12 +3050,11 @@ export default function DraftsTable({
                         {statusPresentation.label}
                       </span>
                       {product.status === "ON_HOLD" && (
-                        <span
-                          className="mt-1 block max-w-[12rem] truncate text-xs text-amber-700 font-normal"
-                          title={getProductHoldReason(product) ?? undefined}
-                        >
-                          {getProductHoldReason(product)}
-                        </span>
+                        <details className="mt-1 max-w-[12rem] text-xs text-amber-700" onClick={(event) => event.stopPropagation()}>
+                          <summary className="cursor-pointer">Hold details</summary>
+                          <p className="mt-1 whitespace-normal break-words">{getProductHoldReason(product)}</p>
+                          <p className="mt-1 whitespace-normal break-words">{getHeldProductTrackingState(product)?.detail}</p>
+                        </details>
                       )}
                     </td>
 
@@ -3067,9 +3076,9 @@ export default function DraftsTable({
                               >
                                 {trackingState.label}
                               </span>
-                              {trackingState.label !== "No change" && (
+                              {trackingState.label !== "Price unchanged" && (
                                 <span
-                                  className="block truncate text-xs text-gray-500"
+                                  className="block whitespace-normal break-words text-xs text-gray-500"
                                   title={trackingState.detail}
                                 >
                                   {trackingState.detail}

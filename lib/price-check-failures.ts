@@ -213,6 +213,8 @@ type AutoResumeCandidate = {
   holdSavedQuantity?: number | null;
   identityOutcome?: string | null;
   buyBoxOutcome?: string | null;
+  postcodeVerified?: boolean;
+  hasUnappliedPriceChange?: boolean;
 };
 
 function hasValidRecoveredPrice(value: unknown) {
@@ -226,7 +228,7 @@ function hasValidRecoveredPrice(value: unknown) {
 }
 
 function hasFreshVerifiedBuyBox(product: AutoResumeCandidate) {
-  return product.identityOutcome === "MATCH" && product.buyBoxOutcome === "AVAILABLE";
+  return product.identityOutcome === "MATCH" && product.buyBoxOutcome === "AVAILABLE" && product.postcodeVerified === true;
 }
 
 export function isRecoveredDealPriceAutoHold(product: AutoResumeCandidate) {
@@ -311,13 +313,23 @@ export function isRecoveredLowStockAutoHold(product: AutoResumeCandidate) {
     Boolean(product.ebayItemId) &&
     isResolvedLowStockHoldReason(product.holdReason) &&
     hasFreshVerifiedBuyBox(product) &&
-    isAmazonStockHealthy(product.amazonStockLeft) &&
+    typeof product.amazonStockLeft === "number" &&
+    product.amazonStockLeft > LOW_STOCK_THRESHOLD &&
     !product.priceCheckError &&
     !product.priceCheckFailureCode
   );
 }
 
 export function isRecoveredPriceCheckAutoHold(product: AutoResumeCandidate) {
+  if (
+    product.status !== "ON_HOLD" ||
+    product.amazonAvailability !== AmazonAvailability.IN_STOCK ||
+    !product.ebayItemId ||
+    !product.holdSavedQuantity || product.holdSavedQuantity <= 0 ||
+    product.hasUnappliedPriceChange
+  ) {
+    return false;
+  }
   return (
     isRecoveredDealPriceAutoHold(product) ||
     isRecoveredRegularPriceAutoHold(product) ||

@@ -909,23 +909,24 @@ export async function scrapeAmazonPrice(
         );
       }
 
-      if (deliveryState) {
-        exactPostcodeVerified = await measureAmazonPriceStage(
-          options,
-          "delivery-verification",
-          () => verifyExactAmazonDeliveryPostcode(page, postcode),
-        );
-        if (!exactPostcodeVerified) {
+      // Verification is mandatory even when delivery-state reuse is disabled.
+      exactPostcodeVerified = await measureAmazonPriceStage(
+        options,
+        "delivery-verification",
+        () => verifyExactAmazonDeliveryPostcode(page, postcode),
+      );
+      if (!exactPostcodeVerified) {
+        if (deliveryState) {
           resetAmazonDeliveryState(deliveryState, {
             disable: true,
             reason: `Amazon did not verify configured postcode ${postcode}.`,
           });
           reportAmazonDeliveryStateEvent(options, "rejected");
-          throw new PriceCheckFailure(
-            PriceCheckFailureCode.TECHNICAL_ERROR,
-            `Amazon did not verify the configured delivery postcode ${postcode}; price and availability were not accepted.`,
-          );
         }
+        throw new PriceCheckFailure(
+          PriceCheckFailureCode.TECHNICAL_ERROR,
+          `Amazon did not verify the configured delivery postcode ${postcode}; price and availability were not accepted.`,
+        );
       }
     }
 
