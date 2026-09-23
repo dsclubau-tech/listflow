@@ -93,7 +93,7 @@ type UploadJob = {
 };
 
 function isActiveUploadJob(job: UploadJob) {
-  return job.status === "QUEUED" || job.status === "RUNNING";
+  return job.status === "QUEUED" || job.status === "RUNNING" || job.status === "CANCELLING";
 }
 
 function getUploadJobPercent(job: UploadJob) {
@@ -2212,7 +2212,8 @@ export default function DraftsTable({
           {activeUploadJobs.map((job) => {
             const indeterminate = job.total === 1 && job.processed === 0;
             const statusLabel =
-              job.status === "QUEUED" ? "Queued for eBay" : "Uploading to eBay";
+              job.status === "CANCELLING" ? "Cancelling - finishing current upload" :
+                job.status === "QUEUED" ? "Queued for eBay" : "Uploading to eBay";
             const queueDetail =
               job.status === "QUEUED" && job.queuePosition
                 ? `Queue position ${job.queuePosition}. `

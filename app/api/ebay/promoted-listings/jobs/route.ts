@@ -213,7 +213,7 @@ export async function GET() {
   const activePromotions = jobs.filter(
     (job) =>
       job.type === EbayActionJobType.MANAGE_PROMOTED_ADS &&
-      (job.status === "QUEUED" || job.status === "RUNNING"),
+      (job.status === "QUEUED" || job.status === "RUNNING" || job.status === "CANCELLING"),
   );
 
   return NextResponse.json(

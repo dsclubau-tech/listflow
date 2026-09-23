@@ -28,6 +28,7 @@ import {
 const ACTIVE_ACTION_STATUSES = [
   EbayActionJobStatus.QUEUED,
   EbayActionJobStatus.RUNNING,
+  EbayActionJobStatus.CANCELLING,
 ];
 
 type TransactionClient = Prisma.TransactionClient;

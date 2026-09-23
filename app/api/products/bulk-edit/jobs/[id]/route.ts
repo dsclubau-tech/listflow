@@ -31,7 +31,7 @@ export async function GET(
   const activeJobs = await prisma.ebayActionJob.findMany({
     where: {
       storeId: storeSession.storeId,
-      status: { in: ["QUEUED", "RUNNING"] },
+      status: { in: ["QUEUED", "RUNNING", "CANCELLING"] },
       dismissedAt: null,
     },
     select: { id: true, status: true, createdAt: true },

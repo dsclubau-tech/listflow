@@ -55,6 +55,7 @@ const ACTIVE_RESEARCH_BATCH_STATUSES = [
 const ACTIVE_EBAY_ACTION_STATUSES = [
   EbayActionJobStatus.QUEUED,
   EbayActionJobStatus.RUNNING,
+  EbayActionJobStatus.CANCELLING,
 ] as const;
 
 function money(value: Prisma.Decimal | number | null | undefined) {

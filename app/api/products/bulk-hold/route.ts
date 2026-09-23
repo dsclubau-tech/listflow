@@ -49,7 +49,7 @@ export async function POST(request: Request) {
       )).find(
         (job) =>
           job.type === EbayActionJobType.HOLD &&
-          (job.status === "QUEUED" || job.status === "RUNNING") &&
+          (job.status === "QUEUED" || job.status === "RUNNING" || job.status === "CANCELLING") &&
           isLowStockHoldJobMetadata(job.metadata)
       );
 

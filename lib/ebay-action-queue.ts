@@ -1,4 +1,4 @@
-export const ACTIVE_EBAY_ACTION_QUEUE_STATUSES = new Set(["QUEUED", "RUNNING"]);
+export const ACTIVE_EBAY_ACTION_QUEUE_STATUSES = new Set(["QUEUED", "RUNNING", "CANCELLING"]);
 
 function hasMetadataKind(metadata: unknown, kind: string) {
   return Boolean(
@@ -43,6 +43,14 @@ export function getEbayActionStatusLabel(input: {
 
   if (input.status === "RUNNING") {
     return "Running";
+  }
+
+  if (input.status === "CANCELLING") {
+    return "Cancelling - finishing current operation";
+  }
+
+  if (input.status === "CANCELLED") {
+    return "Cancelled";
   }
 
   return input.status;

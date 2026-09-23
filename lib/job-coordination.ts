@@ -49,6 +49,7 @@ const ACTIVE_RESEARCH_BATCH_STATUSES: EbayResearchBatchStatus[] = [
 const ACTIVE_ACTION_STATUSES: EbayActionJobStatus[] = [
   EbayActionJobStatus.QUEUED,
   EbayActionJobStatus.RUNNING,
+  EbayActionJobStatus.CANCELLING,
 ];
 
 type TransactionClient = Prisma.TransactionClient;

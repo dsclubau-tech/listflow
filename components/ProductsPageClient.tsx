@@ -84,11 +84,11 @@ type ProductSearchSuggestion = {
 };
 
 function isActivePromotedListingsJob(job: PromotedListingsJob | null) {
-  return job?.status === "QUEUED" || job?.status === "RUNNING";
+  return job?.status === "QUEUED" || job?.status === "RUNNING" || job?.status === "CANCELLING";
 }
 
 function getPromotedListingsJobSummary(job: PromotedListingsJob) {
-  return `${job.succeeded} listing${job.succeeded === 1 ? "" : "s"} updated, ${job.failed} failed.`;
+  return `${job.status === "CANCELLED" ? "Promotion job cancelled. " : ""}${job.succeeded} listing${job.succeeded === 1 ? "" : "s"} updated, ${job.failed} failed.`;
 }
 
 function getPromotedListingsJobDetail(job: PromotedListingsJob) {
@@ -1037,7 +1037,7 @@ export default function ProductsPageClient({
     let cancelled = false;
     const trackedJobId = promotedListingsJob?.id;
     const trackedJobStatus = promotedListingsJob?.status;
-    const jobId = trackedJobId && (trackedJobStatus === "QUEUED" || trackedJobStatus === "RUNNING")
+    const jobId = trackedJobId && (trackedJobStatus === "QUEUED" || trackedJobStatus === "RUNNING" || trackedJobStatus === "CANCELLING")
       ? trackedJobId
       : null;
 
@@ -1907,6 +1907,10 @@ export default function ProductsPageClient({
                     ? "Promotion changes queued - waiting for worker"
                     : promotedListingsJob.status === "RUNNING"
                       ? "Updating eBay promoted listings"
+                      : promotedListingsJob.status === "CANCELLING"
+                        ? "Cancelling - finishing current operation"
+                        : promotedListingsJob.status === "CANCELLED"
+                          ? "Promotion job cancelled"
                       : promotedListingsJob.status === "COMPLETED"
                         ? "Promotion job complete"
                         : "Promotion job failed"

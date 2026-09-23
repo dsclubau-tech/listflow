@@ -251,6 +251,8 @@ enum EbayResearchBatchStatus {
 enum EbayActionJobStatus {
   QUEUED
   RUNNING
+  CANCELLING
+  CANCELLED
   COMPLETED
   FAILED
 }

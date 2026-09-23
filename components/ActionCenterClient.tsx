@@ -43,7 +43,7 @@ const ACTIVE_IMPORT_JOB_STATUSES = new Set([
   "PAUSED",
   "CANCELLING",
 ]);
-const ACTIVE_ACTION_JOB_STATUSES = new Set(["QUEUED", "RUNNING"]);
+const ACTIVE_ACTION_JOB_STATUSES = new Set(["QUEUED", "RUNNING", "CANCELLING"]);
 const CURRENT_RESEARCH_BATCH_STATUSES = new Set([
   "QUEUED",
   "RUNNING",
@@ -1334,6 +1334,28 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
         `/api/ebay-import/jobs/${job.id}/resume`
       );
       return "eBay import resumed.";
+    });
+  }
+
+  function cancelActionJob(job: ActionCenterEbayActionJob) {
+    void runAction(`cancel-action-job:${job.id}`, async () => {
+      const result = await postJson<{ job: { id: string; status: ActionCenterEbayActionJob["status"] } }>(
+        `/api/ebay-action/jobs/${job.id}/cancel`,
+      );
+      setData((current) => ({
+        ...current,
+        jobs: {
+          ...current.jobs,
+          ebayActions: current.jobs.ebayActions.map((item) =>
+            item.id === job.id ? { ...item, status: result.job.status } : item,
+          ),
+        },
+      }));
+      return result.job.status === "CANCELLED"
+        ? "Job cancelled. Completed changes remain applied."
+        : result.job.status === "CANCELLING"
+          ? "Cancellation requested. The current operation will finish before the job stops."
+          : "Job already finished.";
     });
   }
 
@@ -2819,12 +2841,26 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                             />
                           </div>
                         </div>
-                        <Link
-                          href="/products"
-                          className="text-xs font-medium text-gray-600 hover:text-gray-900"
-                        >
-                          Products
-                        </Link>
+                        <div className="flex items-center gap-2">
+                          <ActionButton
+                            onClick={() => cancelActionJob(job)}
+                            disabled={
+                              job.status === "CANCELLING" ||
+                              runningAction === `cancel-action-job:${job.id}`
+                            }
+                            tone="danger"
+                          >
+                            {job.status === "CANCELLING" || runningAction === `cancel-action-job:${job.id}`
+                              ? "Cancelling..."
+                              : "Cancel"}
+                          </ActionButton>
+                          <Link
+                            href="/products"
+                            className="text-xs font-medium text-gray-600 hover:text-gray-900"
+                          >
+                            Products
+                          </Link>
+                        </div>
                       </div>
                     ))}
                     {currentResearchBatches.map((batch) => (

@@ -21,6 +21,7 @@ const SUPPLIER_NAME = "Amazon AU";
 const ACTIVE_HOLD_STATUSES = [
   EbayActionJobStatus.QUEUED,
   EbayActionJobStatus.RUNNING,
+  EbayActionJobStatus.CANCELLING,
 ];
 
 type TransactionClient = Prisma.TransactionClient;

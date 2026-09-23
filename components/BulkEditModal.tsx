@@ -81,7 +81,7 @@ type BulkEditJobError = {
 type BulkEditJob = {
   id: string;
   type: string;
-  status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
+  status: "QUEUED" | "RUNNING" | "CANCELLING" | "CANCELLED" | "COMPLETED" | "FAILED";
   total: number;
   processed: number;
   succeeded: number;
@@ -194,11 +194,11 @@ function fieldLabel(field: BulkEditField) {
 }
 
 function isActiveJob(job: BulkEditJob | null) {
-  return job?.status === "QUEUED" || job?.status === "RUNNING";
+  return job?.status === "QUEUED" || job?.status === "RUNNING" || job?.status === "CANCELLING";
 }
 
 function isTerminalJob(job: BulkEditJob | null) {
-  return job?.status === "COMPLETED" || job?.status === "FAILED";
+  return job?.status === "COMPLETED" || job?.status === "FAILED" || job?.status === "CANCELLED";
 }
 
 function getProgressPercent(job: BulkEditJob | null) {
@@ -604,7 +604,9 @@ export default function BulkEditModal({
     }
     router.refresh();
     onToast(
-      job.failed > 0
+      job.status === "CANCELLED"
+        ? `Bulk edit cancelled. ${job.succeeded} listing${job.succeeded === 1 ? "" : "s"} updated.`
+        : job.failed > 0
         ? `Bulk edit finished with ${job.failed} failed listing${job.failed === 1 ? "" : "s"}.`
         : `Bulk edit finished for ${job.succeeded} listing${job.succeeded === 1 ? "" : "s"}.`,
       job.failed > 0 ? "error" : "success"
@@ -620,7 +622,7 @@ export default function BulkEditModal({
         className="fixed bottom-4 right-4 z-40 w-72 rounded-lg border border-blue-200 bg-white p-3 text-left shadow-lg"
       >
         <ActionProgressBar
-          label={isActiveJob(job) ? "Bulk edit in progress" : "Bulk edit finished"}
+          label={job.status === "CANCELLED" ? "Bulk edit cancelled" : job.status === "CANCELLING" ? "Cancelling bulk edit" : isActiveJob(job) ? "Bulk edit in progress" : "Bulk edit finished"}
           percent={getProgressPercent(job)}
           detail={`${job.processed}/${job.total} processed`}
           tone={job.failed > 0 ? "red" : isTerminalJob(job) ? "green" : "blue"}
@@ -1068,7 +1070,11 @@ export default function BulkEditModal({
             <div className="mt-4 rounded-md border border-gray-200 bg-gray-50 p-3">
               <ActionProgressBar
                 label={
-                  terminalJob
+                  job.status === "CANCELLED"
+                    ? "Bulk edit cancelled"
+                    : job.status === "CANCELLING"
+                      ? "Cancelling - finishing current operation"
+                    : terminalJob
                     ? job.failed > 0
                       ? "Bulk edit completed with errors"
                       : "Bulk edit complete"
@@ -1106,7 +1112,7 @@ export default function BulkEditModal({
                   ))}
                 </div>
               )}
-              {terminalJob && job.failed > 0 && (
+              {terminalJob && job.status !== "CANCELLED" && job.failed > 0 && (
                 <button
                   type="button"
                   onClick={() => void retryFailedItems()}

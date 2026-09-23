@@ -11,7 +11,7 @@ import { normalizePromotedAdRate } from "@/lib/promoted-listings";
 export type PromotedListingsJob = {
   id: string;
   type: string;
-  status: "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED";
+  status: "QUEUED" | "RUNNING" | "CANCELLING" | "CANCELLED" | "COMPLETED" | "FAILED";
   total: number;
   processed: number;
   succeeded: number;
@@ -58,7 +58,7 @@ function getJobDetail(job: PromotedListingsJob) {
 }
 
 function isActiveJob(job: PromotedListingsJob | null) {
-  return job?.status === "QUEUED" || job?.status === "RUNNING";
+  return job?.status === "QUEUED" || job?.status === "RUNNING" || job?.status === "CANCELLING";
 }
 
 function formatAud(value: number) {
@@ -244,6 +244,10 @@ export default function PromotedListingsModal({
                     ? "Queued - waiting for the store worker"
                     : job.status === "RUNNING"
                       ? "Updating eBay promoted listings"
+                      : job.status === "CANCELLING"
+                        ? "Cancelling - finishing current operation"
+                        : job.status === "CANCELLED"
+                          ? "Promotion job cancelled"
                       : job.status === "COMPLETED"
                         ? "Promotion job complete"
                         : "Promotion job failed"
@@ -531,7 +535,7 @@ export default function PromotedListingsModal({
             onClick={onClose}
             className="rounded border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
           >
-            {active || job?.status === "COMPLETED" || job?.status === "FAILED" ? "Close" : "Cancel"}
+            {job ? "Close" : "Cancel"}
           </button>
           <button
               type="button"

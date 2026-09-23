@@ -51,6 +51,10 @@ import {
   shouldRetryInventoryBatchIndividually,
 } from "@/lib/ebay-action-job-helpers";
 import { getEbayActionQueuePositions } from "@/lib/ebay-action-queue";
+import {
+  finishEbayActionCancellation,
+  isEbayActionCancellationRequested,
+} from "@/lib/ebay-action-cancellation";
 import { policyIdsMatch, resolveProductPolicySelection } from "@/lib/policy-defaults";
 import { prisma } from "@/lib/prisma";
 import { invalidateJobCaches, invalidateProductCaches } from "@/lib/cache-tags";
@@ -95,6 +99,7 @@ import {
 const ACTIVE_ACTION_JOB_STATUSES: EbayActionJobStatus[] = [
   EbayActionJobStatus.QUEUED,
   EbayActionJobStatus.RUNNING,
+  EbayActionJobStatus.CANCELLING,
 ];
 
 type ProductFailure = {
@@ -688,7 +693,7 @@ export async function findPromotedCampaignDependency(
       storeId,
       type: EbayActionJobType.MANAGE_PROMOTED_ADS,
       dismissedAt: null,
-      status: { in: ACTIVE_ACTION_JOB_STATUSES },
+      status: { in: [EbayActionJobStatus.QUEUED, EbayActionJobStatus.RUNNING] },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: 100,
@@ -767,6 +772,13 @@ async function failPromotionProducts(
 async function runPromotedAdsJob(job: EbayActionJobRecord) {
   const completed = new Set(job.completedProductIds);
   const remainingIds = job.productIds.filter((id) => !completed.has(id));
+  for (const productIds of chunkInventoryReviseItems(remainingIds, 20)) {
+    if (await isEbayActionCancellationRequested(job.id)) return;
+    await runPromotedAdsBatch(job, productIds);
+  }
+}
+
+async function runPromotedAdsBatch(job: EbayActionJobRecord, remainingIds: string[]) {
   const products = await prisma.product.findMany({
     where: { id: { in: remainingIds }, storeId: job.storeId },
     select: { id: true, title: true, ebayItemId: true, status: true },
@@ -811,6 +823,8 @@ async function runPromotedAdsJob(job: EbayActionJobRecord) {
     const storeNumber = await getStoreNumber(job.storeId);
     const eligibility = await getEbayPromotedListingsEligibility(storeNumber);
 
+    if (await isEbayActionCancellationRequested(job.id)) return;
+
     if (!eligibility.eligible) {
       throw new Error(
         eligibility.reason
@@ -823,6 +837,8 @@ async function runPromotedAdsJob(job: EbayActionJobRecord) {
       storeNumber,
       eligibleProducts.map((product) => String(product.ebayItemId)),
     );
+
+    if (await isEbayActionCancellationRequested(job.id)) return;
 
     if (metadata.operation === "REMOVE") {
       const grouped = new Map<string, typeof eligibleProducts>();
@@ -843,6 +859,7 @@ async function runPromotedAdsJob(job: EbayActionJobRecord) {
       }
 
       for (const [campaignId, campaignProducts] of grouped) {
+        if (await isEbayActionCancellationRequested(job.id)) return;
         try {
           const results = await deleteEbayPromotedAds(
             storeNumber,
@@ -888,7 +905,7 @@ async function runPromotedAdsJob(job: EbayActionJobRecord) {
     let targetCampaignId = metadata.campaignId;
     let targetCampaignName = metadata.campaignName;
 
-    if (metadata.campaignMode === "CREATE") {
+    if (metadata.campaignMode === "CREATE" && !targetCampaignId) {
       if (!targetCampaignName) {
         throw new Error("Campaign name is required.");
       }
@@ -944,6 +961,8 @@ async function runPromotedAdsJob(job: EbayActionJobRecord) {
     if (!targetCampaignId || !targetCampaignName) {
       throw new Error("A valid eBay campaign is required.");
     }
+
+    if (await isEbayActionCancellationRequested(job.id)) return;
 
     const createProducts: typeof eligibleProducts = [];
     const updateProducts: typeof eligibleProducts = [];
@@ -1008,6 +1027,10 @@ async function runPromotedAdsJob(job: EbayActionJobRecord) {
       }
     }
 
+    if (await isEbayActionCancellationRequested(job.id)) return;
+
+    // Once a move starts, finish this bounded batch (including any rollback)
+    // before honoring cancellation so listings are not left between campaigns.
     const movedProducts = new Map<
       string,
       { product: (typeof eligibleProducts)[number]; current: EbayPromotedListingSyncRecord }
@@ -1140,6 +1163,7 @@ async function runPromotedAdsJob(job: EbayActionJobRecord) {
       }
     }
   } catch (error) {
+    if (await isEbayActionCancellationRequested(job.id)) return;
     const unfinished = eligibleProducts.filter(
       (product) => !job.completedProductIds.includes(product.id),
     );
@@ -2230,6 +2254,10 @@ async function runBulkInventoryReviseJob(
   const preBatchProgressUpdates: ProgressUpdate[] = [];
 
   for (const productId of remainingIds) {
+    if (!requestedProductIds && await isEbayActionCancellationRequested(job.id)) {
+      await markProgressBatch(job, preBatchProgressUpdates);
+      return;
+    }
     const product = productById.get(productId);
 
     if (!product) {
@@ -2312,6 +2340,9 @@ async function runBulkInventoryReviseJob(
   const storeNumber = await getStoreNumber(job.storeId);
 
   for (const batch of chunkInventoryReviseItems(batchItems)) {
+    // Durable items have already applied local edits. Finish that prepared
+    // batch before stopping; its caller checks cancellation before preparation.
+    if (!requestedProductIds && await isEbayActionCancellationRequested(job.id)) return;
     await processInventoryReviseBatch(job, batch, storeNumber, worker);
   }
 }
@@ -2367,6 +2398,7 @@ async function runDurableBulkInventoryReviseJob(
 
   const remainingIds = job.productIds.filter((id) => !completed.has(id));
   for (const idBatch of chunkInventoryReviseItems(remainingIds)) {
+    if (await isEbayActionCancellationRequested(job.id)) return;
     const prepared: PreparedDurableBulkEditItem[] = [];
     for (const productId of idBatch) {
       await assertEbayActionLeaseOwned(job, worker);
@@ -2417,14 +2449,22 @@ async function runEbayActionJobClaimed(jobId: string, worker?: WorkerContext) {
     return;
   }
 
-  await prisma.ebayActionJob.update({
-    where: { id: job.id },
+  const claimed = await prisma.ebayActionJob.updateMany({
+    where: {
+      id: job.id,
+      status: { in: [EbayActionJobStatus.QUEUED, EbayActionJobStatus.RUNNING] },
+    },
     data: {
       status: EbayActionJobStatus.RUNNING,
       startedAt: job.startedAt ?? new Date(),
       errorMessage: null,
     },
   });
+  if (claimed.count === 0) {
+    await finishEbayActionCancellation(job.id);
+    invalidateJobCaches(job.storeId);
+    return;
+  }
   Object.assign(job, { status: EbayActionJobStatus.RUNNING });
 
   if (job.type === EbayActionJobType.MANAGE_PROMOTED_ADS) {
@@ -2438,6 +2478,7 @@ async function runEbayActionJobClaimed(jobId: string, worker?: WorkerContext) {
     const completed = new Set(job.completedProductIds);
     const remaining = job.productIds.filter((productId) => !completed.has(productId));
     for (const productId of remaining) {
+      if (await isEbayActionCancellationRequested(job.id)) break;
       await assertEbayActionLeaseOwned(job, worker);
       const result = await processDurableBulkEditProduct(job, productId);
       await assertEbayActionLeaseOwned(job, worker);
@@ -2453,6 +2494,7 @@ async function runEbayActionJobClaimed(jobId: string, worker?: WorkerContext) {
     const remaining = job.productIds.filter((productId) => !completed.has(productId));
 
     for (const productId of remaining) {
+      if (await isEbayActionCancellationRequested(job.id)) break;
       try {
         await assertEbayActionLeaseOwned(job, worker);
         const result = await processProduct(job, productId);
@@ -2478,8 +2520,8 @@ async function runEbayActionJobClaimed(jobId: string, worker?: WorkerContext) {
       ? EbayActionJobStatus.FAILED
       : EbayActionJobStatus.COMPLETED;
 
-  await prisma.ebayActionJob.update({
-    where: { id: job.id },
+  await prisma.ebayActionJob.updateMany({
+    where: { id: job.id, status: EbayActionJobStatus.RUNNING },
     data: {
       status: finalStatus,
       completedAt: new Date(),
@@ -2489,6 +2531,8 @@ async function runEbayActionJobClaimed(jobId: string, worker?: WorkerContext) {
           : null,
     },
   });
+
+  await finishEbayActionCancellation(job.id);
 
   invalidateProductCaches(job.storeId);
   invalidateJobCaches(job.storeId);

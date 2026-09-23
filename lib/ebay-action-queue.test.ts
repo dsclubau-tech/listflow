@@ -84,3 +84,16 @@ test("automatic recovered price checks have a distinct resume label", () => {
     "Resume listings",
   );
 });
+
+test("cancelling jobs hold their queue position until the worker acknowledges cancellation", () => {
+  const positions = getEbayActionQueuePositions([
+    { id: "cancelled", status: "CANCELLED", createdAt: "2026-09-23T10:00:00Z" },
+    { id: "cancelling", status: "CANCELLING", createdAt: "2026-09-23T10:00:01Z" },
+    { id: "queued", status: "QUEUED", createdAt: "2026-09-23T10:00:02Z" },
+  ]);
+  assert.equal(positions.has("cancelled"), false);
+  assert.equal(positions.get("cancelling"), 1);
+  assert.equal(positions.get("queued"), 2);
+  assert.equal(getEbayActionStatusLabel({ status: "CANCELLING" }), "Cancelling - finishing current operation");
+  assert.equal(getEbayActionStatusLabel({ status: "CANCELLED" }), "Cancelled");
+});
