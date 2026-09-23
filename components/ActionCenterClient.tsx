@@ -1560,7 +1560,7 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
               count={adjustedSummary.pendingReviews}
               selectedCount={selectedInActiveTab.length}
               onClearSelection={clearSelection}
-              viewAllHref="/products?filter=needs-changing-price"
+              viewAllHref="/products?priceMonitoring=needs-changing-price"
             >
               <ActionButton
                 onClick={() =>

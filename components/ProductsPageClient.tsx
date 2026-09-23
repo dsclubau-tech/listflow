@@ -103,7 +103,6 @@ const PRODUCT_FILTER_OPTIONS: Array<{
   label: string;
 }> = [
   { value: "all", label: "All" },
-  { value: "needs-changing-price", label: "Needs changing price" },
   { value: "failed-on-hold", label: "Failed / On hold" },
 ];
 const RANGE_FILTER_IDS = new Set<ProductAdvancedFilterId>([
@@ -129,7 +128,7 @@ const STATIC_SELECT_OPTIONS: Partial<
     { value: "no-stock-data", label: "No stock data" },
   ],
   priceMonitoring: [
-    { value: "needs-changing-price", label: "Needs changing price" },
+    { value: "needs-changing-price", label: "Pending price review" },
     { value: "check-failed", label: "Check failed" },
     { value: "not-checked", label: "Not checked" },
     { value: "checked", label: "Checked" },
@@ -479,7 +478,7 @@ export default function ProductsPageClient({
     hasAdvancedFilters
       ? "filtered listings"
       : productFilter === "needs-changing-price"
-      ? "listings needing price changes"
+      ? "listings pending price review"
       : productFilter === "failed-on-hold"
         ? "failed / on hold listings"
         : searchQuery
