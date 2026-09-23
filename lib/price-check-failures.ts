@@ -241,9 +241,6 @@ export function isRecoveredDealPriceAutoHold(product: AutoResumeCandidate) {
       ].map(String).includes(String(product.holdOrigin)) &&
       product.amazonAvailability === AmazonAvailability.IN_STOCK &&
       hasValidRecoveredPrice(product.amazonPrice) &&
-      product.holdSavedQuantity !== null &&
-      product.holdSavedQuantity !== undefined &&
-      product.holdSavedQuantity > 0 &&
       hasFreshVerifiedBuyBox(product) &&
       !product.priceCheckError &&
       !product.priceCheckFailureCode
@@ -271,9 +268,6 @@ export function isRecoveredRegularPriceAutoHold(product: AutoResumeCandidate) {
       ].map(String).includes(String(product.holdOrigin)) &&
       product.amazonAvailability === AmazonAvailability.IN_STOCK &&
       hasValidRecoveredPrice(product.amazonPrice) &&
-      product.holdSavedQuantity !== null &&
-      product.holdSavedQuantity !== undefined &&
-      product.holdSavedQuantity > 0 &&
       hasFreshVerifiedBuyBox(product) &&
       !product.priceCheckError &&
       !product.priceCheckFailureCode
@@ -300,9 +294,6 @@ export function isRecoveredLowStockAutoHold(product: AutoResumeCandidate) {
       typeof product.amazonStockLeft === "number" &&
       product.amazonStockLeft > LOW_STOCK_THRESHOLD &&
       hasValidRecoveredPrice(product.amazonPrice) &&
-      product.holdSavedQuantity !== null &&
-      product.holdSavedQuantity !== undefined &&
-      product.holdSavedQuantity > 0 &&
       hasFreshVerifiedBuyBox(product) &&
       !product.priceCheckError &&
       !product.priceCheckFailureCode
@@ -325,7 +316,6 @@ export function isRecoveredPriceCheckAutoHold(product: AutoResumeCandidate) {
     product.status !== "ON_HOLD" ||
     product.amazonAvailability !== AmazonAvailability.IN_STOCK ||
     !product.ebayItemId ||
-    !product.holdSavedQuantity || product.holdSavedQuantity <= 0 ||
     product.hasUnappliedPriceChange
   ) {
     return false;

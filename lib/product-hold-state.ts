@@ -18,12 +18,6 @@ export function getHeldProductTrackingState(product: {
       detail: "A successful price check does not release a manual hold.",
     };
   }
-  if (!product.holdSavedQuantity || product.holdSavedQuantity <= 0) {
-    return {
-      label: "Hold needs review",
-      detail: "Original listing quantity is missing. Confirm the quantity to restore before this hold can be cleared.",
-    };
-  }
   if (!product.holdOrigin || product.holdOrigin === "UNKNOWN" || product.holdOrigin === "PRICE_CHECK_UNSAFE_PRICE") {
     return {
       label: "Hold needs review",
@@ -32,7 +26,7 @@ export function getHeldProductTrackingState(product: {
   }
   return {
     label: "Awaiting recovery",
-    detail: "This listing remains held until recovery checks pass and eBay confirms the restored stock.",
+    detail: "This listing remains held until recovery checks pass and eBay confirms restoration to quantity 1.",
   };
 }
 
@@ -106,7 +100,6 @@ export function canAutomaticallyRecoverHold(input: {
   identityVerified?: boolean;
 }) {
   if (input.origin === ProductHoldOrigin.MANUAL || input.origin === ProductHoldOrigin.UNKNOWN) return false;
-  if (input.savedQuantity === null || input.savedQuantity === undefined || input.savedQuantity <= 0) return false;
   if (!input.hasVerifiedPrice) return false;
   if (input.identityVerified === false) return false;
   if (input.availability === "OUT_OF_STOCK" || input.availability === "UNKNOWN") return false;

@@ -72,14 +72,12 @@ async function resolveCandidateIds(
             ],
           },
           amazonAvailability: AmazonAvailability.IN_STOCK,
-          holdSavedQuantity: { gt: 0 },
           amazonPrice: { gt: 0 },
         },
         {
           holdOrigin: ProductHoldOrigin.LOW_STOCK,
           amazonAvailability: AmazonAvailability.IN_STOCK,
           amazonStockLeft: { gt: LOW_STOCK_THRESHOLD },
-          holdSavedQuantity: { gt: 0 },
           amazonPrice: { gt: 0 },
         },
         {

@@ -39,11 +39,29 @@ test("pending or failed price updates block restoration until confirmed", () => 
   assert.equal(isRecoveredPriceCheckAutoHold(candidate), false);
 });
 
-test("recovered availability never guesses missing quantities or overrides manual holds", () => {
+test("default restoration allows missing snapshots but never overrides manual holds", () => {
   const candidate = { ...heldProduct, ...getPriceCheckRecoveryEvidence(evidence) };
-  assert.equal(isRecoveredPriceCheckAutoHold({ ...candidate, holdSavedQuantity: null }), false);
+  assert.equal(isRecoveredPriceCheckAutoHold({ ...candidate, holdSavedQuantity: null }), true);
   assert.equal(isRecoveredPriceCheckAutoHold({ ...candidate, holdOrigin: "MANUAL" }), false);
+  assert.equal(isRecoveredPriceCheckAutoHold({ ...candidate, holdOrigin: "UNKNOWN" }), false);
   assert.equal(isRecoveredPriceCheckAutoHold({ ...candidate, status: "IMPORTED" }), false);
+});
+
+test("all eligible automatic hold types recover without requiring a saved quantity", () => {
+  const candidate = { ...heldProduct, ...getPriceCheckRecoveryEvidence(evidence) };
+  for (const holdSavedQuantity of [undefined, null, 0, 1, 5, 20]) {
+    for (const amazonPriceTrackingMode of ["REGULAR", "DEAL"]) {
+      for (const holdOrigin of ["PRICE_CHECK_OUT_OF_STOCK", "PRICE_CHECK_PRICE_UNAVAILABLE", "PRICE_CHECK_IDENTITY", "LOW_STOCK"]) {
+        const product = { ...candidate, holdSavedQuantity, amazonPriceTrackingMode, holdOrigin, amazonStockLeft: 4 };
+        assert.equal(isRecoveredPriceCheckAutoHold(product), true);
+        assert.equal(isRecoveredPriceCheckAutoHold({ ...product, hasUnappliedPriceChange: true }), false);
+        assert.equal(isRecoveredPriceCheckAutoHold({ ...product, postcodeVerified: false }), false);
+        if (holdOrigin === "LOW_STOCK") {
+          assert.equal(isRecoveredPriceCheckAutoHold({ ...product, amazonStockLeft: 3 }), false);
+        }
+      }
+    }
+  }
 });
 
 test("missing or inconclusive observations cannot restore stock", () => {

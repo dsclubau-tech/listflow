@@ -1672,21 +1672,9 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
     }
 
     const storeNumber = await getStoreNumber(product.storeId);
-    const automaticResumeQuantity =
-      product.holdSavedQuantity !== null && product.holdSavedQuantity !== undefined
-        ? product.holdSavedQuantity
-        : null;
-    if (automaticPriceCheckResume && (!automaticResumeQuantity || automaticResumeQuantity <= 0)) {
-      return {
-        ok: false,
-        failure: {
-          productId,
-          title: product.title,
-          error: "Automatic recovery is missing a verified saved quantity; review is required.",
-        },
-      };
-    }
-    const restoreQty = Math.max(1, automaticResumeQuantity ?? product.quantity);
+    // Manual and automatic restores always start at one, regardless of the
+    // pre-hold snapshot. Older holds do not need a quantity snapshot to recover.
+    const restoreQty = 1;
     const result = await callEbayReviseItem(
       buildReviseQuantityXML(product.ebayItemId, restoreQty),
       storeNumber
@@ -1716,7 +1704,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
         where: { id: product.id },
         data: {
           status: ProductStatus.IMPORTED,
-          quantity: automaticResumeQuantity ?? Math.max(1, product.quantity),
+          quantity: restoreQty,
           holdReason: null,
           holdOrigin: null,
           holdSavedQuantity: null,
@@ -1724,19 +1712,10 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
           holdSourceJobId: null,
         },
       });
-      if (automaticResumeQuantity !== null) {
-        const savedVariants = Array.isArray(product.holdSavedVariantQuantities)
-          ? product.holdSavedVariantQuantities
-          : [];
-        for (const savedVariant of savedVariants) {
-          if (!savedVariant || typeof savedVariant !== "object" || !("variantId" in savedVariant)) continue;
-          const variantId = String(savedVariant.variantId);
-          const quantity = Math.max(0, Math.floor(Number("quantity" in savedVariant ? savedVariant.quantity : 0) || 0));
-          if (product.variants.some((variant) => variant.id === variantId)) {
-            await tx.variant.update({ where: { id: variantId }, data: { quantity } });
-          }
-        }
-      }
+      await tx.variant.updateMany({
+        where: { productId: product.id },
+        data: { quantity: restoreQty },
+      });
     });
     await recordListingOperation({
       jobId: job.id,

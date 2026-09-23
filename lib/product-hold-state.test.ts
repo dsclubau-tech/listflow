@@ -8,14 +8,14 @@ import {
   getHeldProductTrackingState,
 } from "./product-hold-state";
 
-test("a successful price check cannot hide a legacy hold's missing restore quantity", () => {
+test("legacy automatic holds can await recovery to quantity one without a snapshot", () => {
   const state = getHeldProductTrackingState({
     status: "ON_HOLD",
     holdOrigin: "PRICE_CHECK_PRICE_UNAVAILABLE",
     holdSavedQuantity: null,
   });
-  assert.equal(state?.label, "Hold needs review");
-  assert.match(state?.detail ?? "", /quantity/i);
+  assert.equal(state?.label, "Awaiting recovery");
+  assert.match(state?.detail ?? "", /quantity 1/);
   assert.equal(getHeldProductTrackingState({ status: "IMPORTED" }), null);
 });
 
@@ -84,4 +84,20 @@ test("automatic recovery requires affirmative availability and low-stock evidenc
     }),
     true,
   );
+});
+
+test("restore eligibility does not depend on the previous quantity", () => {
+  for (const savedQuantity of [undefined, null, 0, 1, 5, 20]) {
+    const candidate = {
+      origin: ProductHoldOrigin.PRICE_CHECK_OUT_OF_STOCK,
+      availability: "IN_STOCK" as const,
+      hasVerifiedPrice: true,
+      identityVerified: true,
+      savedQuantity,
+    };
+    assert.equal(canAutomaticallyRecoverHold(candidate), true);
+    for (const origin of [ProductHoldOrigin.MANUAL, ProductHoldOrigin.UNKNOWN]) {
+      assert.equal(canAutomaticallyRecoverHold({ ...candidate, origin }), false);
+    }
+  }
 });
