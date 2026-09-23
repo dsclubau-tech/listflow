@@ -744,6 +744,10 @@ test("parseAmazonPostcodeResponse accepts JSON and text success shapes", () => {
     true
   );
   assert.equal(parseAmazonPostcodeResponse('{"isValidAddress":0}', "2217"), false);
+  assert.equal(
+    parseAmazonPostcodeResponse('{"isValidAddress":0,"zipCode":"2217"}', "2217"),
+    false,
+  );
 });
 
 test("extractAmazonPostcodeToken reads hidden and scripted csrf tokens", () => {

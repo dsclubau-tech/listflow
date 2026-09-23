@@ -1,5 +1,9 @@
-import type { Browser, BrowserContext, Page } from "playwright-core";
+import type { Browser, Page } from "playwright-core";
 import { load } from "cheerio";
+import {
+  extractAmazonPostcodeToken,
+  parseAmazonPostcodeResponse,
+} from "@/lib/amazon-direct-parse";
 import { extractLocalizedBuyboxPriceChoices } from "@/lib/amazon-buybox-price";
 import { parseAmazonShippingFeeFromText } from "@/lib/amazon-shipping";
 import { extractAmazonNewOfferStockLeft } from "@/lib/amazon-stock";
@@ -441,18 +445,29 @@ function normalizeItemSpecificsForEbay(
  * 1. Amazon auto-shows the popup (common for non-AU IPs)
  * 2. We need to click the "Deliver to" link to open it
  *
- * Non-blocking: returns true on success, false if the interaction
- * failed. The scraper will still work without it.
+ * Returns true when Amazon accepts the postcode change or the page already
+ * shows the exact postcode. Callers verify the visible location after reload.
  */
 async function setAmazonDeliveryPostcode(
   page: Page,
   postcode: string
 ): Promise<boolean> {
+  if (
+    hasExactAmazonDeliveryPostcode(
+      await getAmazonDeliveryLocationText(page),
+      postcode,
+    )
+  ) {
+    return true;
+  }
+
   // Strategy 1: Call Amazon's AJAX address-change endpoint directly.
   // This is what the location popup does under the hood — far more reliable
   // than trying to click through the popup UI which changes frequently.
   try {
-    const ajaxResult = await page.evaluate(async (pc: string) => {
+    const html = await page.content();
+    const token = extractAmazonPostcodeToken(load(html), html);
+    const ajaxResult = await page.evaluate(async ({ pc, csrfToken }) => {
       const formData = new URLSearchParams({
         locationType: "LOCATION_INPUT",
         zipCode: pc,
@@ -461,6 +476,9 @@ async function setAmazonDeliveryPostcode(
         pageType: "Detail",
         actionSource: "glow",
       });
+      if (csrfToken) {
+        formData.set("anti-csrftoken-a2z", csrfToken);
+      }
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
@@ -472,6 +490,11 @@ async function setAmazonDeliveryPostcode(
             method: "POST",
             headers: {
               "Content-Type": "application/x-www-form-urlencoded",
+              Accept: "application/json, text/javascript, */*; q=0.01",
+              "X-Requested-With": "XMLHttpRequest",
+              ...(csrfToken
+                ? { "anti-csrftoken-a2z": csrfToken }
+                : {}),
             },
             body: formData.toString(),
             signal: controller.signal,
@@ -482,12 +505,7 @@ async function setAmazonDeliveryPostcode(
           return { success: false, reason: `HTTP ${response.status}` };
         }
 
-        const text = await response.text();
-        // Amazon returns JSON — a successful response contains "isValidAddress":1
-        const isValid =
-          text.includes('"isValidAddress":1') ||
-          text.includes('"isValidAddress": 1');
-        return { success: isValid, reason: isValid ? "ok" : "invalid address response" };
+        return { success: true, responseText: await response.text() };
       } catch (fetchError) {
         return {
           success: false,
@@ -496,14 +514,21 @@ async function setAmazonDeliveryPostcode(
       } finally {
         clearTimeout(timeoutId);
       }
-    }, postcode);
+    }, { pc: postcode, csrfToken: token });
 
-    if (ajaxResult.success) {
+    if (
+      ajaxResult.success &&
+      "responseText" in ajaxResult &&
+      typeof ajaxResult.responseText === "string" &&
+      parseAmazonPostcodeResponse(ajaxResult.responseText, postcode)
+    ) {
       return true;
     }
 
     console.warn(
-      `[setAmazonDeliveryPostcode] AJAX method failed: ${ajaxResult.reason}. Trying popup fallback.`
+      `[setAmazonDeliveryPostcode] AJAX method failed: ${
+        "reason" in ajaxResult ? ajaxResult.reason : "invalid address response"
+      }. Trying popup fallback.`
     );
   } catch {
     console.warn(

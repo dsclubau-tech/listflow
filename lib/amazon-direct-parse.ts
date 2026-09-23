@@ -164,6 +164,12 @@ export function parseAmazonPostcodeResponse(
 
   try {
     const parsed = JSON.parse(trimmed) as Record<string, unknown>;
+    if (
+      Object.prototype.hasOwnProperty.call(parsed, "isValidAddress") &&
+      ![1, "1", "true", true].includes(parsed.isValidAddress as string | number | boolean)
+    ) {
+      return false;
+    }
     const flattened = JSON.stringify(parsed);
     return (
       parsed.isValidAddress === 1 ||
@@ -177,6 +183,9 @@ export function parseAmazonPostcodeResponse(
       flattened.includes(normalizedPostcode)
     );
   } catch {
+    if (/"isValidAddress"\s*:\s*(?:0|false|"0"|"false")/i.test(responseText)) {
+      return false;
+    }
     return (
       /"isValidAddress"\s*:\s*(?:1|true|"1"|"true")/i.test(responseText) ||
       /"isDefault"\s*:\s*(?:1|true|"1"|"true")/i.test(responseText) ||
