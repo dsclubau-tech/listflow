@@ -113,8 +113,11 @@ test("all durable queues apply worker claim policy", () => {
   }
 });
 
-test("interactive Amazon imports run before background worker queues", () => {
+test("manual product checks run before imports, and imports before background actions", () => {
   const source = readFileSync("scripts/listflow-worker.ts", "utf8");
+  const manualCheckIndex = source.indexOf(
+    "runNextManualPriceCheckItemForStore(store.id, worker)",
+  );
   const amazonImportIndex = source.indexOf(
     "runNextAmazonImportJobForStore(store.id, worker)",
   );
@@ -122,8 +125,10 @@ test("interactive Amazon imports run before background worker queues", () => {
     "runNextEbayActionJobForStore(store.id, worker)",
   );
 
+  assert.ok(manualCheckIndex >= 0);
   assert.ok(amazonImportIndex >= 0);
   assert.ok(ebayActionIndex >= 0);
+  assert.ok(manualCheckIndex < amazonImportIndex);
   assert.ok(amazonImportIndex < ebayActionIndex);
 });
 

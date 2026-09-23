@@ -42,6 +42,8 @@ model Store {
   ebayStoreId String?
   isActive    Boolean  @default(true)
   autoCheckEnabled   Boolean   @default(false)
+  priceCheckItemSchedulerEnabled Boolean @default(false)
+  priceCheckScheduleState PriceCheckScheduleState?
   autoCheckStartedBy String?
   autoCheckStartedAt DateTime?
   ownerUserId        String?
@@ -499,6 +501,8 @@ model PriceCheckJob {
   dismissedAt         DateTime?
   autoHoldActionJobId String?
   autoHoldQueued      Int                 @default(0)
+  schedulerVersion    Int                 @default(1)
+  items               PriceCheckJobItem[]
 
   user  User   @relation(fields: [userId], references: [id], onDelete: Cascade)
   store Store? @relation(fields: [storeId], references: [id], onDelete: Cascade)
@@ -507,6 +511,50 @@ model PriceCheckJob {
   @@index([storeId, status])
   @@index([createdAt])
   @@index([dismissedAt])
+}
+
+model PriceCheckJobItem {
+  id             String   @id @default(cuid())
+  jobId          String
+  storeId        String
+  productId      String
+  position       Int
+  status         String   @default("PENDING")
+  workerId       String?
+  workerName     String?
+  claimToken     String?
+  leaseExpiresAt DateTime?
+  nextAttemptAt  DateTime @default(now())
+  attempts       Int      @default(0)
+  remoteWriteStarted Boolean @default(false)
+  checked        Int      @default(0)
+  changed        Int      @default(0)
+  pendingReview  Int      @default(0)
+  failed         Int      @default(0)
+  skipped        Int      @default(0)
+  errorMessage   String?  @db.Text
+  startedAt      DateTime?
+  completedAt    DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  job PriceCheckJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, productId])
+  @@index([storeId, status, nextAttemptAt])
+  @@index([jobId, status])
+  @@index([leaseExpiresAt])
+}
+
+model PriceCheckScheduleState {
+  storeId      String   @id
+  manualStreak Int      @default(0)
+  consecutivePostcodeFailures Int @default(0)
+  amazonBlockedUntil DateTime?
+  amazonCooldownSeconds Int @default(0)
+  updatedAt    DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 }
 
 model AmazonImportJob {
@@ -788,6 +836,7 @@ model WorkerHeartbeat {
   lastSeenAt   DateTime @default(now())
   startedAt    DateTime @default(now())
   version      String?
+  revision     String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

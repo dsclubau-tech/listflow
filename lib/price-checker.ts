@@ -114,6 +114,10 @@ interface RunPriceCheckOptions {
     failure: PriceCheckProductFailure,
   ) => void | Promise<void>;
   shouldCancel?: () => boolean | Promise<boolean>;
+  assertOwnership?: () => Promise<void>;
+  beforeExternalWrite?: () => Promise<void>;
+  withExternalWrite?: (write: () => Promise<Awaited<ReturnType<typeof reviseProductPrice>>>) =>
+    Promise<Awaited<ReturnType<typeof reviseProductPrice>>>;
 }
 
 type ProductRecord = NonNullable<Awaited<ReturnType<typeof prisma.product.findFirst>>>;
@@ -246,11 +250,17 @@ async function automaticallyApplyPriceIncrease(input: {
   nextPrimarySellPrice: number;
   checkedAt: Date;
   recordTiming?: (stage: string, durationMs: number) => void;
+  assertOwnership?: () => Promise<void>;
+  beforeExternalWrite?: () => Promise<void>;
+  withExternalWrite?: RunPriceCheckOptions["withExternalWrite"];
 }) {
   let reviseResult: Awaited<ReturnType<typeof reviseProductPrice>>;
   const measure = async <T>(stage: string, operation: () => Promise<T>) => {
     const startedAt = Date.now();
     try {
+      if (stage === "database-write" || stage === "ebay-update") {
+        await input.assertOwnership?.();
+      }
       return await operation();
     } finally {
       input.recordTiming?.(stage, Date.now() - startedAt);
@@ -258,12 +268,28 @@ async function automaticallyApplyPriceIncrease(input: {
   };
 
   try {
-    reviseResult = await measure("ebay-update", () =>
-      reviseProductPrice(
-        input.product,
-        input.nextPrimarySellPrice,
-      ),
-    );
+    reviseResult = await measure("ebay-update", async () => {
+      const write = async () => {
+        const current = await prisma.product.findUnique({
+          where: { id: input.product.id },
+          include: { variants: true },
+        });
+        const currentVariants = new Map(current?.variants.map((variant) => [variant.id, variant]));
+        if (!current || current.status !== input.product.status ||
+            Number(current.price) !== Number(input.product.price) ||
+            input.variants.some((variant) => {
+              const actual = currentVariants.get(variant.id);
+              return !actual || Number(actual.buyPrice) !== variant.previousBuyPrice ||
+                Number(actual.sellPrice) !== variant.previousSellPrice;
+            })) {
+          throw new Error("Listing changed while the price check was running; review before updating eBay.");
+        }
+        await input.assertOwnership?.();
+        await input.beforeExternalWrite?.();
+        return reviseProductPrice(input.product, input.nextPrimarySellPrice);
+      };
+      return input.withExternalWrite ? input.withExternalWrite(write) : write();
+    });
   } catch (error) {
     reviseResult = {
       success: false,
@@ -484,6 +510,7 @@ export async function runPriceCheck(
   const measureStage = async <T>(stage: string, operation: () => Promise<T>) => {
     const startedAt = Date.now();
     try {
+      if (stage === "database-write") await options.assertOwnership?.();
       return await operation();
     } finally {
       timing.record(stage, Date.now() - startedAt);
@@ -803,6 +830,7 @@ export async function runPriceCheck(
         });
         if (options.storeId) {
           try {
+            await options.assertOwnership?.();
             const observation = await prisma.amazonPriceObservation.create({
               data: {
                 productId: product.id,
@@ -1114,6 +1142,9 @@ export async function runPriceCheck(
                 variants: mismatchVariants,
                 nextPrimarySellPrice: mismatchPrimarySellPrice,
                 checkedAt,
+                assertOwnership: options.assertOwnership,
+                beforeExternalWrite: options.beforeExternalWrite,
+                withExternalWrite: options.withExternalWrite,
                 recordTiming: (stage, durationMs) => timing.record(stage, durationMs),
               });
 
@@ -1287,6 +1318,9 @@ export async function runPriceCheck(
             variants: nextVariants,
             nextPrimarySellPrice,
             checkedAt,
+            assertOwnership: options.assertOwnership,
+            beforeExternalWrite: options.beforeExternalWrite,
+            withExternalWrite: options.withExternalWrite,
             recordTiming: (stage, durationMs) => timing.record(stage, durationMs),
           });
 
@@ -1343,6 +1377,7 @@ export async function runPriceCheck(
 
         if (options.storeId) {
           try {
+            await options.assertOwnership?.();
             await prisma.amazonPriceObservation.create({
               data: {
                 productId: product.id,

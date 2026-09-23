@@ -2561,14 +2561,20 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                             >
                               {job.status === "CANCELLED" ? "PAUSED" : job.status}
                             </span>
-                            <JobWorkerAssignment
-                              assignment={getActiveJobAssignment(
-                                activeJobAssignments,
-                                "PRICE_CHECK",
-                                job.id,
-                              )}
-                              status={job.status}
-                            />
+                            {job.schedulerVersion === 2 ? (
+                              <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
+                                {job.assignedWorkerNames?.length
+                                  ? `Worker: ${job.assignedWorkerNames.join(", ")}`
+                                  : job.waitReason ?? "Waiting for an available worker"}
+                              </span>
+                            ) : (
+                              <JobWorkerAssignment
+                                assignment={getActiveJobAssignment(
+                                  activeJobAssignments, "PRICE_CHECK", job.id,
+                                )}
+                                status={job.status}
+                              />
+                            )}
                           </div>
                           <div className="mt-1 text-xs text-gray-500">
                             {job.checked}/{job.total} checked, {job.pendingReview} pending,{" "}
@@ -2577,7 +2583,35 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                               ? `, ${job.autoHoldQueued} auto-hold queued`
                               : ""}
                             {isResumablePriceJob(job) ? `, ${job.remaining} remaining` : ""}
+                            {job.schedulerVersion === 2 && job.retryWaitingItems
+                              ? `, ${job.retryWaitingItems} waiting to retry` : ""}
+                            {job.schedulerVersion === 2
+                              ? `, ${job.pendingItems ?? 0} queued, ${job.runningItems ?? 0} running` : ""}
                           </div>
+                          {job.schedulerVersion === 2 && job.lastProgressAt && (
+                            <div className="mt-1 text-xs text-gray-500">
+                              Last progress: {new Date(job.lastProgressAt).toLocaleString()}
+                            </div>
+                          )}
+                          {job.schedulerVersion === 2 && job.workerActivities?.length ? (
+                            <div className="mt-1 text-xs text-gray-500">
+                              {job.workerActivities.map((worker) =>
+                                `${worker.name}: ${worker.activity}`).join(" · ")}
+                            </div>
+                          ) : null}
+                          {job.failedItems?.length ? (
+                            <details className="mt-1 text-xs text-red-700">
+                              <summary className="cursor-pointer">Item errors ({job.failedItems.length} shown)</summary>
+                              <ul className="mt-1 space-y-1">
+                                {job.failedItems.map((item) => (
+                                  <li key={item.productId}>
+                                    <Link href={`/products?productId=${encodeURIComponent(item.productId)}`}>View product</Link>
+                                    {": "}{item.errorMessage ?? "Price check failed."}
+                                  </li>
+                                ))}
+                              </ul>
+                            </details>
+                          ) : null}
                           <div className="mt-2 max-w-sm">
                             <ActionProgressBar
                               label="Price check progress"

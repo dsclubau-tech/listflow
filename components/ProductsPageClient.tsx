@@ -321,6 +321,9 @@ interface PriceCheckJob {
   startedAt: string | null;
   completedAt: string | null;
   dismissedAt: string | null;
+  waitReason?: string | null;
+  assignedWorkerNames?: string[];
+  workerActivities?: Array<{ name: string; activity: string }>;
 }
 
 function isActivePriceCheckJob(job: PriceCheckJob | null) {
@@ -361,11 +364,13 @@ function getPriceCheckJobSummary(job: PriceCheckJob) {
 
 function getPriceCheckJobStatusText(job: PriceCheckJob) {
   if (job.status === "QUEUED") {
-    return `Price check queued for ${job.total} product${job.total === 1 ? "" : "s"}.`;
+    return job.waitReason ?? `Price check queued for ${job.total} product${job.total === 1 ? "" : "s"}.`;
   }
 
   if (job.status === "RUNNING") {
-    return `Checking prices ${job.checked}/${job.total}...`;
+    return job.assignedWorkerNames?.length
+      ? `Checking prices ${job.checked}/${job.total} — ${job.assignedWorkerNames.join(", ")}`
+      : `Checking prices ${job.checked}/${job.total}...`;
   }
 
   if (job.status === "CANCELLING") {
@@ -1819,6 +1824,12 @@ export default function ProductsPageClient({
             ) : (
               <span className="font-medium">{getPriceCheckJobStatusText(priceCheckJob)}</span>
             )}
+            {isActivePriceCheckJob(priceCheckJob) && priceCheckJob.workerActivities?.length ? (
+              <div className="mt-1 text-xs">
+                {priceCheckJob.workerActivities.map((worker) =>
+                  `${worker.name}: ${worker.activity}`).join(" · ")}
+              </div>
+            ) : null}
           </div>
           <div className="flex items-center gap-3">
             {isActivePriceCheckJob(priceCheckJob) && (

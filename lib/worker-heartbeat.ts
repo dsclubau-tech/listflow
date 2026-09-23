@@ -24,6 +24,8 @@ export type SerializedWorkerStatus = {
   message: string | null;
   currentJobs: SerializedJobLease[];
   capabilities: string[];
+  revision: string | null;
+  startedAt: string | null;
 };
 
 type WorkerHeartbeatInput = {
@@ -33,6 +35,7 @@ type WorkerHeartbeatInput = {
   workerRole: WorkerRole;
   startedAt: Date;
   version?: string | null;
+  revision?: string | null;
   capabilities?: string[];
 };
 
@@ -44,6 +47,8 @@ function serializeWorkerStatus(
         workerRole: string;
         lastSeenAt: Date;
         capabilities: string[];
+        revision: string | null;
+        startedAt: Date;
       }
     | null,
   currentJobs: SerializedJobLease[] = []
@@ -62,6 +67,8 @@ function serializeWorkerStatus(
     message: online ? null : WORKER_OFFLINE_MESSAGE,
     currentJobs,
     capabilities: heartbeat?.capabilities ?? [],
+    revision: heartbeat?.revision ?? null,
+    startedAt: heartbeat?.startedAt.toISOString() ?? null,
   };
 }
 
@@ -78,6 +85,8 @@ export function getOfflineWorkerStatus(
     message,
     currentJobs: [],
     capabilities: [],
+    revision: null,
+    startedAt: null,
   };
 }
 
@@ -100,14 +109,17 @@ export async function touchWorkerHeartbeat(input: WorkerHeartbeatInput) {
       startedAt: input.startedAt,
       lastSeenAt: now,
       version: input.version ?? null,
+      revision: input.revision ?? null,
       capabilities: input.capabilities ?? [],
     },
     update: {
       workerName: input.workerName,
       workerRole: input.workerRole,
       status: "ONLINE",
+      startedAt: input.startedAt,
       lastSeenAt: now,
       version: input.version ?? null,
+      revision: input.revision ?? null,
       capabilities: { set: input.capabilities ?? [] },
     },
   });
@@ -134,6 +146,8 @@ export async function getWorkerStatusesForStore(storeId: string) {
       workerRole: true,
       lastSeenAt: true,
       capabilities: true,
+      revision: true,
+      startedAt: true,
     },
   });
   const leases = await listActiveJobLeasesForStore(storeId);

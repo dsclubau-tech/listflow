@@ -16,6 +16,7 @@ import {
   productsCacheTag,
 } from "@/lib/cache-tags";
 import { prisma } from "@/lib/prisma";
+import { getPriceCheckItemDiagnostics } from "@/lib/price-check-item-scheduler";
 import { getEbayActionQueuePositions } from "@/lib/ebay-action-queue";
 import { isEbayResearchBatchResumable } from "@/lib/ebay-research-batch-state";
 import {
@@ -128,6 +129,15 @@ export interface ActionCenterPriceCheckJob {
   dismissedAt: string | null;
   autoHoldActionJobId: string | null;
   autoHoldQueued: number;
+  schedulerVersion?: number;
+  pendingItems?: number;
+  runningItems?: number;
+  retryWaitingItems?: number;
+  assignedWorkerNames?: string[];
+  workerActivities?: Array<{ name: string; activity: string }>;
+  lastProgressAt?: string | null;
+  waitReason?: string | null;
+  failedItems?: Array<{ productId: string; errorMessage: string | null }>;
 }
 
 export interface ActionCenterEbayImportJob {
@@ -505,6 +515,7 @@ async function loadLiveActionCenterData(
         dismissedAt: true,
         autoHoldActionJobId: true,
         autoHoldQueued: true,
+        schedulerVersion: true,
       },
     }),
     prisma.ebayImportJob.findMany({
@@ -619,7 +630,7 @@ async function loadLiveActionCenterData(
   const worker =
     workers.find((item) => item.online) ?? workers[0] ?? getOfflineWorkerStatus();
 
-  const serializedPriceCheckJobs = priceCheckJobs.map((job) => {
+  const serializedPriceCheckJobs = await Promise.all(priceCheckJobs.map(async (job) => {
     const remaining = Math.max(0, job.total - job.checked);
     return {
       ...job,
@@ -633,8 +644,12 @@ async function loadLiveActionCenterData(
       startedAt: iso(job.startedAt),
       completedAt: iso(job.completedAt),
       dismissedAt: iso(job.dismissedAt),
+      ...(job.schedulerVersion === 2 &&
+        (job.status === PriceCheckJobStatus.QUEUED ||
+         job.status === PriceCheckJobStatus.RUNNING || job.failed > 0)
+        ? await getPriceCheckItemDiagnostics(storeId, job.id) : {}),
     };
-  });
+  }));
   const serializedImportJobs = ebayImportJobs.map((job) => {
     const { store, ...compactJob } = job;
     const progressTotal = job.total || job.requested || job.quantity;

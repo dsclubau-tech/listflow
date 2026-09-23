@@ -85,6 +85,7 @@ let workerName = process.env.LISTFLOW_WORKER_NAME || "";
 let workerId = process.env.LISTFLOW_WORKER_ID || "";
 let workerRole: WorkerRole = "legacy";
 const startedAt = new Date();
+const workerRevision = getRuntimeRevision();
 let stopping = false;
 let heartbeatStoreIds: string[] = [];
 let localGuardPath: string | null = null;
@@ -131,6 +132,8 @@ async function loadWorkerModules() {
     runNextEbayActionJobForStore: ebayActionJobs.runNextEbayActionJobForStore,
     runEbayResearchQueueForStore: ebayResearch.runEbayResearchQueueForStore,
     runNextPriceCheckJobForStore: priceCheckJobs.runNextPriceCheckJobForStore,
+    runNextManualPriceCheckItemForStore:
+      priceCheckJobs.runNextManualPriceCheckItemForStore,
     runStockReplenishmentForStore: stockReplenishment.runStockReplenishmentForStore,
     runAutomaticPriceCheckForStore:
       automaticPriceCheck.runAutomaticPriceCheckForStore,
@@ -277,7 +280,8 @@ async function heartbeat(storeIds = heartbeatStoreIds) {
         workerRole,
         startedAt,
         version: process.env.npm_package_version ?? null,
-        capabilities: ["durable-bulk-edit-v1"],
+        revision: workerRevision,
+        capabilities: ["durable-bulk-edit-v1", "price-check-items-v2"],
       })
     )
   );
@@ -331,6 +335,12 @@ async function processStore(store: {
       );
       return false;
     }
+  }
+
+  // Let a short manual check use either free worker, even while an automatic
+  // store scan is still processing other products.
+  if (await modules.runNextManualPriceCheckItemForStore(store.id, worker)) {
+    return true;
   }
 
   if (await modules.runNextAmazonImportJobForStore(store.id, worker)) {
@@ -515,8 +525,8 @@ async function main() {
     const dbUser = dbUserRes[0]?.current_user || "unknown";
     console.log(`Database connected user: ${dbUser}`);
     modules.logger.info("worker/db", `Connected to database as ${dbUser}`, { dbUser });
-  } catch (err: any) {
-    console.warn(`Could not verify current database user: ${err?.message || err}`);
+  } catch (err: unknown) {
+    console.warn(`Could not verify current database user: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   const stores = await getActiveStores();
@@ -576,7 +586,7 @@ async function main() {
   console.log(`Worker role: ${workerRole}`);
   console.log(`Amazon retry target: ${amazonRetryTarget}`);
   console.log(`Database profile: ${workerDatabaseProfile}`);
-  const runtimeRevision = getRuntimeRevision();
+  const runtimeRevision = workerRevision;
   const priceCheckOptimizations = getPriceCheckOptimizationEnvironmentSummary();
   console.log(`Revision: ${runtimeRevision}`);
   console.log(

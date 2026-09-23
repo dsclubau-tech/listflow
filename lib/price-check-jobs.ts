@@ -32,6 +32,7 @@ import { resolvePriceCheckOptimizationConfig } from "@/lib/price-check-optimizat
 import { finalizePriceCheckAutoHoldForJob } from "@/lib/price-check-auto-hold";
 import { isWorkerOnlineForStore } from "@/lib/worker-heartbeat";
 import { getInternalUserId } from "@/lib/store-session";
+import { runNextPriceCheckItemForStore, itemSchedulerEnabled, cancelItemScheduledJob, getPriceCheckItemDiagnostics } from "@/lib/price-check-item-scheduler";
 
 const ACTIVE_JOB_STATUSES: PriceCheckJobStatus[] = [
   PriceCheckJobStatus.QUEUED,
@@ -62,6 +63,7 @@ type PriceCheckJobRecord = {
   dismissedAt: Date | null;
   autoHoldActionJobId: string | null;
   autoHoldQueued: number;
+  schedulerVersion: number;
 };
 
 type CreateJobInput = {
@@ -181,6 +183,7 @@ export function serializePriceCheckJob(job: PriceCheckJobRecord) {
     status: job.status,
     scope: job.scope,
     trigger: job.trigger ?? PriceCheckJobTrigger.MANUAL,
+    schedulerVersion: job.schedulerVersion,
     total: job.total,
     checked: job.checked,
     changed: job.changed,
@@ -305,6 +308,7 @@ async function findNextRunnablePriceCheckJob(storeId: string) {
   return prisma.priceCheckJob.findFirst({
     where: {
       storeId,
+      schedulerVersion: 1,
       status: { in: [...ACTIVE_JOB_STATUSES] },
       dismissedAt: null,
     },
@@ -319,6 +323,7 @@ async function findRunnablePriceCheckJobs(
   const jobs = await prisma.priceCheckJob.findMany({
     where: {
       storeId,
+      schedulerVersion: 1,
       status: { in: [...ACTIVE_JOB_STATUSES] },
       dismissedAt: null,
     },
@@ -638,12 +643,14 @@ async function runPriceCheckJobClaimed(jobId: string) {
 }
 
 export async function runPriceCheckJob(jobId: string, worker?: WorkerContext) {
+  const job = await prisma.priceCheckJob.findUnique({ where: { id: jobId } });
+  if (job?.schedulerVersion === 2) {
+    throw new Error("Item-scheduled price checks must be claimed one product at a time.");
+  }
   if (!worker) {
     await runPriceCheckJobClaimed(jobId);
     return;
   }
-
-  const job = await prisma.priceCheckJob.findUnique({ where: { id: jobId } });
 
   if (!job || !ACTIVE_JOB_STATUSES.includes(job.status)) {
     return;
@@ -673,6 +680,14 @@ export async function cancelPriceCheckJob(
   }
 
   const forceCancel = options?.force === true;
+
+  if (job.schedulerVersion === 2 &&
+      (job.status === PriceCheckJobStatus.QUEUED ||
+       job.status === PriceCheckJobStatus.RUNNING ||
+       job.status === PriceCheckJobStatus.CANCELLING)) {
+    const updated = await cancelItemScheduledJob(job.id, forceCancel);
+    return updated ? serializePriceCheckJob(updated) : null;
+  }
 
   if (
     job.status === PriceCheckJobStatus.QUEUED ||
@@ -766,6 +781,7 @@ export async function createPriceCheckJob(input: CreateJobInput) {
     userId = await getInternalUserId();
   }
 
+  const schedulerVersion = await itemSchedulerEnabled(input.storeId) ? 2 : 1;
   const job = await prisma.priceCheckJob.create({
     data: {
       userId,
@@ -780,6 +796,12 @@ export async function createPriceCheckJob(input: CreateJobInput) {
       total: eligibleProductIds.length,
       reason,
       completedAt,
+      schedulerVersion,
+      ...(schedulerVersion === 2 ? {
+        items: { create: eligibleProductIds.map((productId, position) => ({
+          storeId: input.storeId, productId, position,
+        })) },
+      } : {}),
     },
   });
 
@@ -847,6 +869,7 @@ export async function resumePriceCheckJob(
     };
   }
 
+  const schedulerVersion = await itemSchedulerEnabled(storeId) ? 2 : 1;
   const resumedJob = await prisma.priceCheckJob.create({
     data: {
       userId,
@@ -856,6 +879,13 @@ export async function resumePriceCheckJob(
       productIds: eligibleProductIds,
       total: eligibleProductIds.length,
       reason: `Resumed from cancelled price check ${sourceJob.id}.`,
+      trigger: sourceJob.trigger,
+      schedulerVersion,
+      ...(schedulerVersion === 2 ? {
+        items: { create: eligibleProductIds.map((productId, position) => ({
+          storeId, productId, position,
+        })) },
+      } : {}),
     },
   });
 
@@ -869,8 +899,11 @@ export async function resumePriceCheckJob(
 
 export async function getCurrentPriceCheckJob(storeId: string) {
   const job = await findActivePriceCheckJob(storeId);
-
-  return job ? serializePriceCheckJob(job) : null;
+  if (!job) return null;
+  return {
+    ...serializePriceCheckJob(job),
+    ...(job.schedulerVersion === 2 ? await getPriceCheckItemDiagnostics(storeId, job.id) : {}),
+  };
 }
 
 export async function getPriceCheckJobForStore(jobId: string, storeId: string) {
@@ -882,13 +915,20 @@ export async function getPriceCheckJobForStore(jobId: string, storeId: string) {
     },
   });
 
-  return job ? serializePriceCheckJob(job) : null;
+  if (!job) return null;
+  return {
+    ...serializePriceCheckJob(job),
+    ...(job.schedulerVersion === 2 ? await getPriceCheckItemDiagnostics(storeId, job.id) : {}),
+  };
 }
 
 export async function runNextPriceCheckJobForStore(
   storeId: string,
   worker?: WorkerContext
 ) {
+  if (worker && await runNextPriceCheckItemForStore(storeId, worker)) {
+    return true;
+  }
   const jobs = worker
     ? await findRunnablePriceCheckJobs(storeId, worker)
     : await findNextRunnablePriceCheckJob(storeId).then((job) => (job ? [job] : []));
@@ -907,6 +947,13 @@ export async function runNextPriceCheckJobForStore(
   }
 
   return false;
+}
+
+export async function runNextManualPriceCheckItemForStore(
+  storeId: string,
+  worker: WorkerContext,
+) {
+  return runNextPriceCheckItemForStore(storeId, worker, true);
 }
 
 export async function dismissPriceCheckJob(jobId: string, storeId: string) {

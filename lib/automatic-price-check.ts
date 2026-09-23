@@ -328,7 +328,9 @@ export async function runAutomaticPriceCheckForStore(
   });
 
   // Run the price check job
-  await runPriceCheckJob(job.id, worker);
+  if (job.schedulerVersion !== 2) {
+    await runPriceCheckJob(job.id, worker);
+  }
 
   return {
     skipped: false,
