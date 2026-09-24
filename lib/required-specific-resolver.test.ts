@@ -2,6 +2,58 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveRequiredItemSpecifics } from "@/lib/required-specific-resolver";
 
+test("FREE_TEXT Brand and Model preserve actual values absent from eBay suggestions", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "Drew&cole Cleverchef Multicooker",
+    itemSpecifics: { Brand: "DREW & COLE", Model: "SW-007DB" },
+    requiredItemSpecifics: [
+      { name: "Brand", inputType: "FREE_TEXT", values: ["Anne Cole", "Cole & Mason"] },
+      { name: "Model", inputType: "FREE_TEXT", values: ["SW-100"] },
+    ],
+  });
+  assert.equal(result.itemSpecifics.Brand, "DREW & COLE");
+  assert.equal(result.itemSpecifics.Model, "SW-007DB");
+  assert.deepEqual(result.addedItemSpecifics, {});
+  assert.deepEqual(result.missingItemSpecifics, []);
+});
+
+test("FREE_TEXT inference uses scraped identifiers without fuzzy remapping", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "Drew&cole Cleverchef Multicooker",
+    itemSpecifics: { "Brand Name": "DREW & COLE", "Model Number": "SW-007DB" },
+    requiredItemSpecifics: [
+      { name: "Brand", inputType: "FREE_TEXT", values: ["Anne Cole", "Cole & Mason"] },
+      { name: "Model", inputType: "FREE_TEXT", values: ["SW-100"] },
+    ],
+  });
+  assert.equal(result.itemSpecifics.Brand, "DREW & COLE");
+  assert.equal(result.itemSpecifics.Model, "SW-007DB");
+  assert.deepEqual(result.missingItemSpecifics, []);
+});
+
+test("selection-only brand matching does not replace Drew & Cole with another Cole brand", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "Drew&cole Cleverchef Multicooker",
+    itemSpecifics: { Brand: "DREW & COLE" },
+    requiredItemSpecifics: [
+      { name: "Brand", inputType: "SELECTION_ONLY", values: ["Anne Cole", "Cole & Mason"] },
+    ],
+  });
+  assert.equal(result.itemSpecifics.Brand, "DREW & COLE");
+  assert.deepEqual(result.missingItemSpecifics, ["Brand"]);
+});
+
+test("FREE_TEXT suggestions still help infer a missing field from the title", () => {
+  const result = resolveRequiredItemSpecifics({
+    title: "Wireless Mini Lavalier Microphone",
+    requiredItemSpecifics: [
+      { name: "Form Factor", inputType: "FREE_TEXT", values: ["Condenser Microphone", "Lavalier/Lapel"] },
+    ],
+  });
+  assert.equal(result.itemSpecifics["Form Factor"], "Lavalier/Lapel");
+  assert.deepEqual(result.missingItemSpecifics, []);
+});
+
 test("resolveRequiredItemSpecifics autofills Brand, Type, and neutral Size", () => {
   const result = resolveRequiredItemSpecifics({
     title: "4Pcs Memory Foam Wedge Pillow Set Post Surgery",
@@ -677,4 +729,3 @@ test("resolveRequiredItemSpecifics marks Processor as missing when no data match
   assert.equal(result.itemSpecifics.Processor, undefined);
   assert.deepEqual(result.missingItemSpecifics, ["Processor"]);
 });
-

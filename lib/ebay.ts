@@ -8,6 +8,12 @@
  */
 
 import { XMLParser } from "fast-xml-parser";
+import {
+  filterEbayCategorySuggestions,
+  getSmallKitchenApplianceType,
+  selectSmallKitchenApplianceCategories,
+  type EbayCategorySuggestion,
+} from "@/lib/ebay-category-selection";
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
 import {
@@ -1680,11 +1686,49 @@ export function clearEbayBusinessPoliciesCache(storeNumber?: 1 | 2 | 3) {
  * category_tree_id 15 = eBay Australia.
  * Returns up to 5 suggestions. Never throws — returns an empty array on failure.
  */
+const smallKitchenCategoryCache = new Map<number, { expiresAt: number; categories: EbayCategorySuggestion[] }>();
+
+async function getSmallKitchenCategories(storeNumber: 1 | 2 | 3): Promise<EbayCategorySuggestion[]> {
+  const cached = smallKitchenCategoryCache.get(storeNumber);
+  if (cached && cached.expiresAt > Date.now()) return cached.categories;
+  const accessToken = await getOAuthAccessToken(storeNumber);
+  const storeId = await waitForStoreEbayLimit(storeNumber, "BROWSE");
+  // eBay AU tree 15: Small Kitchen Appliances. Resolve leaf IDs from the live
+  // tree, since title search can match a brand to an entirely unrelated domain.
+  const response = await fetch(`${EBAY_API_BASE_URL}/commerce/taxonomy/v1/category_tree/15/get_category_subtree?category_id=20667`, {
+    headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (response.status === 429) await recordStoreEbayBackoff(storeId, "BROWSE", "HTTP 429");
+  if (!response.ok) throw new Error(`Kitchen category lookup returned HTTP ${response.status}`);
+  type CategoryNode = {
+    category: { categoryId: string; categoryName: string };
+    leafCategoryTreeNode?: boolean;
+    childCategoryTreeNodes?: CategoryNode[];
+  };
+  const data = await response.json() as { categorySubtreeNode: CategoryNode };
+  const categories: EbayCategorySuggestion[] = [];
+  function collectLeaves(node: CategoryNode, ancestors: string[]) {
+    const path = [...ancestors, node.category.categoryName];
+    if (node.leafCategoryTreeNode) {
+      categories.push({ categoryId: node.category.categoryId, categoryName: path.join(" > ") });
+    }
+    for (const child of node.childCategoryTreeNodes ?? []) collectLeaves(child, path);
+  }
+  collectLeaves(data.categorySubtreeNode, ["Home Appliances"]);
+  if (categories.length) smallKitchenCategoryCache.set(storeNumber, { expiresAt: Date.now() + 6 * 60 * 60 * 1000, categories });
+  return categories;
+}
+
 export async function getEbaySuggestedCategories(
   title: string,
-  storeNumber: 1 | 2 | 3
+  storeNumber: 1 | 2 | 3,
+  sourceCategory?: string | null,
 ): Promise<Array<{ categoryId: string; categoryName: string }>> {
   try {
+    if (getSmallKitchenApplianceType(title, sourceCategory)) {
+      return selectSmallKitchenApplianceCategories(title, await getSmallKitchenCategories(storeNumber), sourceCategory);
+    }
     // Truncate long titles at a word boundary (max 80 chars)
     let query = title.trim();
     if (query.length > 80) {
@@ -1814,7 +1858,7 @@ export async function getEbaySuggestedCategories(
       topCategory: mapped[0]?.categoryName,
     });
 
-    return mapped;
+    return filterEbayCategorySuggestions(mapped, sourceCategory);
   } catch (err) {
     logger.error("ebay/getEbaySuggestedCategories", "Failed to get suggested categories", err, {
       storeNumber,

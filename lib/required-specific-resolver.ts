@@ -137,6 +137,9 @@ function isAllowedSpecificValue(
     return false;
   }
 
+  // Taxonomy values are suggestions for FREE_TEXT aspects, not a closed list.
+  if (required.inputType === "FREE_TEXT") return true;
+
   if (!required.values || required.values.length === 0) {
     return true;
   }
@@ -724,7 +727,9 @@ export function resolveRequiredItemSpecifics(
     // Try to map existing invalid value to allowed values
     let mappedValue: string | null = null;
     if (hasValue && existingValue && required.values && required.values.length > 0) {
-      mappedValue = matchAllowedSpecificValue(existingValue, required.values);
+      mappedValue = matchAllowedSpecificValue(existingValue, required.values, {
+        brand: normalizeName(required.name) === "brand" || normalizeName(required.name) === "compatible brand",
+      });
     }
 
     if (mappedValue) {
@@ -738,7 +743,15 @@ export function resolveRequiredItemSpecifics(
     }
 
     // Run full inference
-    const inferred = inferRequiredSpecific(input, specifics, required);
+    let inferred = inferRequiredSpecific(input, specifics,
+      required.inputType === "FREE_TEXT" ? { ...required, values: undefined } : required,
+    );
+    // Suggested values still help identify missing fields from the title. Use
+    // them only after trying the actual source data without remapping it.
+    if (required.inputType === "FREE_TEXT" &&
+      (!inferred.value || inferred.source === "ebay_allowed_default")) {
+      inferred = inferRequiredSpecific(input, specifics, required);
+    }
     if (inferred.value) {
       upsertSpecific(specifics, addedItemSpecifics, required.name, inferred.value);
     }

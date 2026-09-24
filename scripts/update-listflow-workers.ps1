@@ -58,8 +58,7 @@ try {
   $oldCommit = (& git.exe rev-parse HEAD | Out-String).Trim()
   $newCommit = (& git.exe rev-parse origin/master | Out-String).Trim()
   if ($oldCommit -eq $newCommit) {
-    Write-Host "ListFlow is already up to date. Workers were left unchanged."
-    exit 0
+    Write-Host "ListFlow files are up to date. Restarting workers so they load the current code."
   }
 
   Invoke-CheckedCommand "Validating the current six-worker configuration" "npm.cmd" @("run", "workers:local:check")
@@ -82,8 +81,8 @@ try {
   Write-Host ""
   Write-Host "==> Starting all six local workers" -ForegroundColor Cyan
   Start-Process -FilePath (Join-Path $PSScriptRoot "start-all-listflow-workers.cmd") `
-    -WorkingDirectory $repoRoot -WindowStyle Normal
-  Write-Host "Update complete. The six-worker controller is opening."
+    -WorkingDirectory $repoRoot -WindowStyle Hidden
+  Write-Host "Update complete. The six-worker controller is running in the background."
 } catch {
   Write-Host ""
   Write-Host "Update failed: $($_.Exception.Message)" -ForegroundColor Red

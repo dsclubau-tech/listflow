@@ -21,6 +21,7 @@ import {
 import { prisma } from "@/lib/prisma";
 import { scrapeAmazonPackageItemSpecificsDirect } from "@/lib/amazon-direct-scraper";
 import { fillMissingPackageDimensionItemSpecifics } from "@/lib/amazon-package-dimensions";
+import { hasMismatchedApplianceCategory } from "@/lib/ebay-category-selection";
 import {
   canonicalizePackageItemSpecifics,
   compareEbayPackageDimensions,
@@ -338,6 +339,20 @@ export async function uploadProductToEbay(input: {
           success: false,
           error: "Product is already listed on eBay but is missing the eBay item ID.",
         },
+      };
+    }
+
+    if (hasMismatchedApplianceCategory(product.fullTitle || product.title, product.categoryName)) {
+      const errorMessage = "This appliance has an unrelated eBay category. Edit the product and use Suggest Category before retrying.";
+      await prisma.product.update({
+        where: { id: product.id },
+        data: { status: ProductStatus.FAILED, errorMessage },
+      });
+      return {
+        ok: false,
+        status: 422,
+        productTitle: product.title,
+        body: { success: false, error: errorMessage },
       };
     }
 

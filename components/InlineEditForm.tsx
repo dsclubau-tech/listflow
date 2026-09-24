@@ -2917,7 +2917,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                         </span>
                       )}
                     </div>
-                    {allowedValues.length > 0 ? (
+                    {allowedValues.length > 0 && requiredSpecific?.inputType !== "FREE_TEXT" ? (
                       <select
                         value={spec.value}
                         onChange={(e) => updateSpecific(index, "value", e.target.value)}
