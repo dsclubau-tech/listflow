@@ -5,6 +5,22 @@ $logsDir = Join-Path $repoRoot "logs"
 $supervisorLockPath = Join-Path $logsDir "local-workers.supervisor.lock"
 $supervisorStopPath = Join-Path $logsDir "local-workers.stop"
 
+function Read-LockProcessId([string]$LockPath) {
+  try {
+    $contents = Get-Content -LiteralPath $LockPath -Raw -ErrorAction Stop
+  } catch [System.Management.Automation.ItemNotFoundException] {
+    # A worker can remove its lock after enumeration or Test-Path, before we
+    # read it. That is a normal part of graceful shutdown, not a stop failure.
+    return 0
+  }
+
+  $lockProcessId = 0
+  if (-not [string]::IsNullOrWhiteSpace($contents)) {
+    [void][int]::TryParse($contents.Trim(), [ref]$lockProcessId)
+  }
+  return $lockProcessId
+}
+
 function Test-ProcessAlive([int]$ProcessId) {
   return $null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
 }
@@ -32,8 +48,7 @@ function Get-LiveLockProcesses {
   $live = @()
   $lockFiles = Get-ChildItem -LiteralPath $logsDir -Filter "local-*.worker.lock" -File
   foreach ($lockFile in $lockFiles) {
-    $processId = 0
-    [void][int]::TryParse((Get-Content -LiteralPath $lockFile.FullName -Raw).Trim(), [ref]$processId)
+    $processId = Read-LockProcessId $lockFile.FullName
     if ($processId -gt 0 -and (Test-ListFlowProcess $processId "listflow-worker.ts")) {
       $live += [pscustomobject]@{ ProcessId = $processId; LockFile = $lockFile }
     } else {
@@ -67,8 +82,7 @@ while ($true) {
   $supervisorAlive = $false
 
   if (Test-Path -LiteralPath $supervisorLockPath) {
-    $supervisorPid = 0
-    [void][int]::TryParse((Get-Content -LiteralPath $supervisorLockPath -Raw).Trim(), [ref]$supervisorPid)
+    $supervisorPid = Read-LockProcessId $supervisorLockPath
     $supervisorAlive = $supervisorPid -gt 0 -and (Test-ListFlowProcess $supervisorPid "listflow-local-workers.ts")
     if (-not $supervisorAlive) {
       Remove-Item -LiteralPath $supervisorLockPath -Force -ErrorAction SilentlyContinue

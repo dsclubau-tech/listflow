@@ -47,6 +47,54 @@ test("Stop All requests graceful exits instead of terminating processes", () => 
   assert.doesNotMatch(source, /Stop-Process|taskkill/i);
 });
 
+test("Stop All tolerates disappearing worker and supervisor locks while waiting for another worker", {
+  skip: process.platform !== "win32",
+}, () => {
+  const root = mkdtempSync(path.join(tmpdir(), "listflow stop race "));
+  mkdirSync(path.join(root, "scripts"));
+  mkdirSync(path.join(root, "logs"));
+  copyFileSync("scripts/stop-listflow-workers.ps1", path.join(root, "scripts", "stop.ps1"));
+  writeFileSync(path.join(root, "logs", "local-store-1-a.worker.lock"), "111");
+  writeFileSync(path.join(root, "logs", "local-store-1-b.worker.lock"), "222");
+  writeFileSync(path.join(root, "logs", "local-workers.supervisor.lock"), "333");
+  // All process checks are simulated. Only temporary fixture files are removed.
+  writeFileSync(path.join(root, "simulate.ps1"), `
+$ErrorActionPreference = "Stop"
+$script:workerChecks = 0
+function Get-Content {
+  [CmdletBinding()]
+  param([string]$LiteralPath, [switch]$Raw)
+  if ($LiteralPath.EndsWith("local-store-1-b.worker.lock") -or $LiteralPath.EndsWith("local-workers.supervisor.lock")) {
+    Remove-Item -LiteralPath $LiteralPath -Force
+  }
+  Microsoft.PowerShell.Management\\Get-Content @PSBoundParameters
+}
+function Get-Process {
+  [CmdletBinding()]
+  param([int]$Id)
+  if ($Id -eq 111) {
+    $script:workerChecks++
+    if ($script:workerChecks -le 2) { [pscustomobject]@{ Id = $Id } }
+  }
+}
+function Get-CimInstance {
+  [CmdletBinding()]
+  param([string]$ClassName, [string]$Filter)
+  [pscustomobject]@{ CommandLine = "node scripts/listflow-worker.ts" }
+}
+function Start-Sleep { param([int]$Seconds) }
+& (Join-Path $PSScriptRoot "scripts/stop.ps1")
+`);
+  const result = spawnSync("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", path.join(root, "simulate.ps1")], {
+    cwd: root, encoding: "utf8", timeout: 10_000, windowsHide: true,
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /Waiting for 1 worker process/);
+  assert.match(result.stdout, /All local ListFlow workers stopped/);
+  assert.equal(result.stderr, "");
+});
+
 test("the supervisor launches peer-mode store-specific replicas", () => {
   const source = readFileSync("scripts/listflow-local-workers.ts", "utf8");
   assert.match(source, /LISTFLOW_WORKER_ROLE: "store-specific"/);
