@@ -4,6 +4,7 @@ import fs from "fs";
 import path from "path";
 import { randomUUID } from "crypto";
 import type { Prisma } from "@/app/generated/prisma/client";
+import { createDatabaseLogWriter } from "@/lib/database-log-writer";
 import {
   buildFingerprint,
   mergeTags,
@@ -136,6 +137,16 @@ function buildLogEntry(options: WriteLogOptions): LogEntry {
   };
 }
 
+const databaseLogWriter = createDatabaseLogWriter({
+  onError(error) {
+    const message = error instanceof Error ? error.message : String(error);
+    process.stderr.write(`[LOGGER DB ERROR] ${message}; database logging paused for 30 seconds, local logging continues.\n`);
+  },
+});
+
+export const pauseDatabaseLogging = () => databaseLogWriter.pause();
+export const resumeDatabaseLogging = () => databaseLogWriter.resume();
+
 async function persistEntryToDatabase(entry: LogEntry): Promise<void> {
   if (process.env.LISTFLOW_DISABLE_DB_LOGS === "true") {
     return;
@@ -148,7 +159,7 @@ async function persistEntryToDatabase(entry: LogEntry): Promise<void> {
     return;
   }
 
-  try {
+  await databaseLogWriter.write(async () => {
     const { prisma } = await import("@/lib/prisma");
     const metadata = sanitizeForLog({
       data: entry.data,
@@ -191,10 +202,7 @@ async function persistEntryToDatabase(entry: LogEntry): Promise<void> {
         metadata,
       },
     });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`[LOGGER DB ERROR] ${message}\n`);
-  }
+  });
 }
 
 function persistEntry(entry: LogEntry): void {

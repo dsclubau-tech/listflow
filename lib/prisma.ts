@@ -74,6 +74,18 @@ function createPrismaClient() {
   return new PrismaClient({ adapter });
 }
 
+export function getDatabaseConnectionDiagnostics() {
+  const url = new URL(getDatabaseConnectionString());
+  return {
+    connectionMode: url.hostname.endsWith(".pooler.supabase.com")
+      ? (url.port === "6543" ? "transaction-pooler" : "session-pooler")
+      : "direct",
+    poolMax: parsePoolMax(),
+    connectionTimeoutMs: parseConnectionTimeout(),
+    idleTimeoutMs: parseIdleTimeout(),
+  };
+}
+
 export const prisma = reuseOrCreateClient(
   globalForPrisma.prisma,
   createPrismaClient

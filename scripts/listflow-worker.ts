@@ -14,6 +14,7 @@ import {
   type WorkerRole,
 } from "../lib/worker-routing";
 import { configureWorkerDatabaseProfile } from "../lib/worker-database-profile";
+import { createSingleFlightTask, WorkerDatabaseRecovery } from "../lib/worker-database-recovery";
 import { getPriceCheckOptimizationEnvironmentSummary } from "../lib/price-check-optimizations";
 
 const workerDatabaseProfile = configureWorkerDatabaseProfile();
@@ -91,6 +92,8 @@ let heartbeatStoreIds: string[] = [];
 let localGuardPath: string | null = null;
 const loggedOnlineStoreIds = new Set<string>();
 let roundRobinStartIndex = 0;
+let heartbeatsPaused = false;
+const databaseRecovery = new WorkerDatabaseRecovery();
 
 async function loadWorkerModules() {
   const [
@@ -125,6 +128,7 @@ async function loadWorkerModules() {
 
   return {
     prisma: prismaModule.prisma,
+    getDatabaseConnectionDiagnostics: prismaModule.getDatabaseConnectionDiagnostics,
     getOrRefreshEntitlement: aaEntitlement.getOrRefreshEntitlement,
     runNextAmazonImportJobForStore:
       amazonImportJobs.runNextAmazonImportJobForStore,
@@ -147,6 +151,8 @@ async function loadWorkerModules() {
       ebaySoldSync.EBAY_SOLD_COUNT_SYNC_INTERVAL_MS,
     touchWorkerHeartbeat: workerHeartbeat.touchWorkerHeartbeat,
     heartbeatIntervalMs: workerHeartbeat.WORKER_HEARTBEAT_INTERVAL_MS,
+    pauseDatabaseLogging: loggerModule.pauseDatabaseLogging,
+    resumeDatabaseLogging: loggerModule.resumeDatabaseLogging,
     tryClaimWorkerSchedule: workerSchedule.tryClaimWorkerSchedule,
     withWorkerScheduleClaim: workerSchedule.withWorkerScheduleClaim,
     completeWorkerSchedule: workerSchedule.completeWorkerSchedule,
@@ -270,9 +276,9 @@ async function getActiveStores() {
   });
 }
 
-async function heartbeat(storeIds = heartbeatStoreIds) {
-  await Promise.all(
-    storeIds.map((storeId) =>
+const sendHeartbeat = createSingleFlightTask(async () => {
+  const results = await Promise.allSettled(
+    heartbeatStoreIds.map((storeId) =>
       modules.touchWorkerHeartbeat({
         storeId,
         workerId,
@@ -285,6 +291,30 @@ async function heartbeat(storeIds = heartbeatStoreIds) {
       })
     )
   );
+  const failure = results.find((result) => result.status === "rejected");
+  if (failure?.status === "rejected") throw failure.reason;
+});
+
+async function heartbeat() {
+  if (!heartbeatsPaused) await sendHeartbeat();
+}
+
+async function recoverDatabaseConnection() {
+  heartbeatsPaused = true;
+  console.error(`[${new Date().toISOString()}] Rebuilding database connection pool after repeated connection failures. No store task is running.`);
+  try {
+    // Drain the one outstanding heartbeat and log write before disposing the
+    // pool. Prisma creates a fresh pool on the next request.
+    await Promise.all([
+      sendHeartbeat().catch(() => undefined),
+      modules.pauseDatabaseLogging(),
+    ]);
+    await modules.prisma.$disconnect();
+    databaseRecovery.recordSuccess();
+  } finally {
+    modules.resumeDatabaseLogging();
+    heartbeatsPaused = false;
+  }
 }
 
 async function processStore(store: {
@@ -517,6 +547,7 @@ async function main() {
   }
 
   modules = await loadWorkerModules();
+  console.log(`Database connection settings: ${JSON.stringify(modules.getDatabaseConnectionDiagnostics())}`);
 
   try {
     const dbUserRes = await modules.prisma.$queryRawUnsafe<Array<{ current_user: string }>>(
@@ -744,7 +775,7 @@ async function main() {
           // Keep this store's heartbeat fresh before processing its jobs.
           // Without this, a long job for the previous store could let this
           // store's heartbeat go stale and block new job submissions.
-          await heartbeat([store.id]).catch(() => undefined);
+          await heartbeat().catch(() => undefined);
           const storeWork = await processStore(store);
           if (storeWork) {
             completedJobsSinceMetrics += 1;
@@ -755,12 +786,16 @@ async function main() {
         if (!didWork && !stopping && !hasWorkerStopRequest()) {
           await sleep(IDLE_SLEEP_MS);
         }
+        databaseRecovery.recordSuccess();
       } catch (error) {
         if (stopping) {
           break;
         }
 
         const message = getErrorMessage(error);
+        if (databaseRecovery.recordFailure(error)) {
+          await recoverDatabaseConnection();
+        }
         console.error(`Worker loop failed; retrying in ${ERROR_SLEEP_MS}ms:`, message);
         modules.logger.warn("worker/loop", "Worker loop failed; retrying", {
           error: message,

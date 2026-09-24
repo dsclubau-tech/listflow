@@ -33,6 +33,10 @@ test("getEbayActionQueuePositions orders active eBay actions FIFO", () => {
 
 test("getEbayActionStatusLabel shows queued actions as waiting, not failed", () => {
   assert.equal(
+    getEbayActionStatusLabel({ status: "QUEUED", queuePosition: 1 }),
+    "Queued - waiting for an available worker",
+  );
+  assert.equal(
     getEbayActionStatusLabel({ status: "QUEUED", queuePosition: 2 }),
     "Queued - waiting for earlier eBay action",
   );

@@ -38,7 +38,9 @@ export function getEbayActionStatusLabel(input: {
   queuePosition?: number | null;
 }) {
   if (input.status === "QUEUED") {
-    return "Queued - waiting for earlier eBay action";
+    return (input.queuePosition ?? 1) > 1
+      ? "Queued - waiting for earlier eBay action"
+      : "Queued - waiting for an available worker";
   }
 
   if (input.status === "RUNNING") {
