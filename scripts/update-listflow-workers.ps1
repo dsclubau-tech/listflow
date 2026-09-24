@@ -82,7 +82,9 @@ try {
   Write-Host "==> Starting all six local workers" -ForegroundColor Cyan
   Start-Process -FilePath (Join-Path $PSScriptRoot "start-all-listflow-workers.cmd") `
     -WorkingDirectory $repoRoot -WindowStyle Hidden
-  Write-Host "Update complete. The six-worker controller is running in the background."
+  Write-Host "Update complete. Worker startup was requested in the background."
+  Write-Host "Check ListFlow worker status. No controller window will appear."
+  Write-Host "Start All may report already running if you click it again."
 } catch {
   Write-Host ""
   Write-Host "Update failed: $($_.Exception.Message)" -ForegroundColor Red

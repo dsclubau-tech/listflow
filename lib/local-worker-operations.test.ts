@@ -1,6 +1,27 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, copyFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
+
+test("Start All displays a supervisor startup failure instead of transferring out of the launcher", {
+  skip: process.platform !== "win32",
+}, () => {
+  // Use a fake npm batch file: no real worker or database is started.
+  const root = mkdtempSync(path.join(tmpdir(), "listflow launcher "));
+  mkdirSync(path.join(root, "scripts"));
+  copyFileSync("scripts/start-all-listflow-workers.cmd", path.join(root, "scripts", "start.cmd"));
+  writeFileSync(path.join(root, "npm.cmd"), "@echo off\r\necho TEST_STARTUP_FAILURE\r\nexit /b 7\r\n");
+  const result = spawnSync("cmd.exe", ["/d", "/c", "scripts\\start.cmd"], {
+    cwd: root, encoding: "utf8", input: "\r\n", timeout: 10_000, windowsHide: true,
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.status, 7);
+  assert.match(result.stdout, /TEST_STARTUP_FAILURE/);
+  assert.match(result.stdout, /supervisor stopped with exit code 7/);
+  assert.match(result.stdout, /workers are running in the background/);
+});
 
 test("the stable updater refuses unsafe Git states before stopping workers", () => {
   const source = readFileSync("scripts/update-listflow-workers.ps1", "utf8");
