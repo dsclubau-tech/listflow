@@ -10,6 +10,7 @@ import {
 } from "@/app/generated/prisma/enums";
 import type { Prisma } from "@/app/generated/prisma/client";
 import { cacheLife, cacheTag } from "next/cache";
+import { measureServerOperation } from "@/lib/perf-debug";
 import {
   actionCenterCacheTag,
   LISTFLOW_FRESH_CACHE_LIFE,
@@ -302,12 +303,52 @@ async function getCachedActionCenterQueues(
     productsCacheTag(storeId),
   );
 
-  const pendingGroups = await prisma.priceHistory.groupBy({
-    by: ["productId"],
-    where: { appliedAt: null, product: { storeId } },
-    _count: { _all: true },
-    _max: { createdAt: true },
-  });
+  const failedWhere = {
+    status: ProductStatus.IMPORTED,
+    storeId,
+    asin: { not: null },
+    variants: { some: {} },
+    priceCheckError: { not: null },
+  } satisfies Prisma.ProductWhereInput;
+  const lowStockWhere = getLowStockProductWhere(storeId);
+  const onHoldWhere = {
+    status: ProductStatus.ON_HOLD,
+    storeId,
+  } satisfies Prisma.ProductWhereInput;
+  const [pendingGroups, failedProducts, failedChecksCount, lowStockProducts, lowStockCount, onHoldProducts] =
+    await Promise.all([
+      prisma.priceHistory.groupBy({
+        by: ["productId"],
+        where: { appliedAt: null, product: { storeId } },
+        _count: { _all: true },
+        _max: { createdAt: true },
+      }),
+      prisma.product.findMany({
+        where: failedWhere,
+        orderBy: [{ lastPriceCheck: "desc" }, { title: "asc" }],
+        take: QUEUE_LIMIT,
+        select: {
+          id: true, title: true, asin: true, ebayItemId: true,
+          priceCheckError: true, priceCheckFailureCode: true, lastPriceCheck: true,
+        },
+      }),
+      prisma.product.count({ where: failedWhere }),
+      prisma.product.findMany({
+        where: lowStockWhere,
+        orderBy: [{ amazonStockLeft: "asc" }, { title: "asc" }],
+        take: QUEUE_LIMIT,
+        select: { id: true, title: true, asin: true, ebayItemId: true, amazonStockLeft: true },
+      }),
+      prisma.product.count({ where: lowStockWhere }),
+      prisma.product.findMany({
+        where: onHoldWhere,
+        orderBy: { updatedAt: "desc" },
+        select: {
+          id: true, title: true, asin: true, ebayItemId: true, status: true,
+          quantity: true, amazonStockLeft: true, priceCheckError: true, holdReason: true,
+        },
+      }),
+    ]);
   const sortedPendingGroups = pendingGroups
     .filter((group) => group._max.createdAt)
     .sort(
@@ -351,62 +392,7 @@ async function getCachedActionCenterQueues(
           },
         })
       : [];
-  const failedWhere = {
-    status: ProductStatus.IMPORTED,
-    storeId,
-    asin: { not: null },
-    variants: { some: {} },
-    priceCheckError: { not: null },
-  } satisfies Prisma.ProductWhereInput;
-  const failedProducts = await prisma.product.findMany({
-    where: failedWhere,
-    orderBy: [{ lastPriceCheck: "desc" }, { title: "asc" }],
-    take: QUEUE_LIMIT,
-    select: {
-      id: true,
-      title: true,
-      asin: true,
-      ebayItemId: true,
-      priceCheckError: true,
-      priceCheckFailureCode: true,
-      lastPriceCheck: true,
-    },
-  });
-  const failedChecksCount = await prisma.product.count({ where: failedWhere });
-  const lowStockWhere = getLowStockProductWhere(storeId);
-  const lowStockProducts = await prisma.product.findMany({
-    where: lowStockWhere,
-    orderBy: [{ amazonStockLeft: "asc" }, { title: "asc" }],
-    take: QUEUE_LIMIT,
-    select: {
-      id: true,
-      title: true,
-      asin: true,
-      ebayItemId: true,
-      amazonStockLeft: true,
-    },
-  });
-  const lowStockCount = await prisma.product.count({ where: lowStockWhere });
-  const onHoldWhere = {
-    status: ProductStatus.ON_HOLD,
-    storeId,
-  } satisfies Prisma.ProductWhereInput;
-  const onHoldProducts = await prisma.product.findMany({
-    where: onHoldWhere,
-    orderBy: { updatedAt: "desc" },
-    select: {
-      id: true,
-      title: true,
-      asin: true,
-      ebayItemId: true,
-      status: true,
-      quantity: true,
-      amazonStockLeft: true,
-      priceCheckError: true,
-      holdReason: true,
-    },
-  });
-  const onHoldCount = await prisma.product.count({ where: onHoldWhere });
+  const onHoldCount = onHoldProducts.length;
 
   const visiblePendingByProduct = new Map<string, typeof visiblePendingHistory>();
 
@@ -781,19 +767,19 @@ export function getLiveActionCenterData(storeId: string): Promise<LiveActionCent
 }
 
 export async function getActionCenterData(storeId: string): Promise<ActionCenterData> {
-  const cached = await getCachedActionCenterQueues(storeId);
-  let live: LiveActionCenterData;
-
-  try {
-    live = await getLiveActionCenterData(storeId);
-  } catch (error) {
+  const livePromise = measureServerOperation("page.actionCenterLive", () =>
+    getLiveActionCenterData(storeId)
+  ).catch((error): LiveActionCenterData => {
     const message =
       error instanceof Error && error.message.includes("max clients")
         ? "Live job status is temporarily unavailable because the database pool is busy."
         : undefined;
-
-    live = emptyLiveActionCenterData(message);
-  }
+    return emptyLiveActionCenterData(message);
+  });
+  const [cached, live] = await Promise.all([
+    measureServerOperation("page.actionCenterQueues", () => getCachedActionCenterQueues(storeId)),
+    livePromise,
+  ]);
 
   return {
     worker: live.worker,
