@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getCurrentStoreSession } from "@/lib/store-session";
+import { getRenderCurrentStoreSession } from "@/lib/render-store-session";
 import RailwayUsageClient from "@/components/RailwayUsageClient";
 
 export const metadata = {
@@ -8,7 +8,7 @@ export const metadata = {
 };
 
 export default async function RailwayPage() {
-  const storeSession = await getCurrentStoreSession();
+  const storeSession = await getRenderCurrentStoreSession();
 
   if (!storeSession) {
     return null;

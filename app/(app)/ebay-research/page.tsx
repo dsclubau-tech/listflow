@@ -11,10 +11,10 @@ import {
 } from "@/lib/favorite-research-queries";
 import { logger } from "@/lib/logger";
 import { getSafeResearchLoadErrorMessage } from "@/lib/page-load-errors";
-import { getCurrentStoreSession } from "@/lib/store-session";
+import { getRenderCurrentStoreSession } from "@/lib/render-store-session";
 
 export default async function EbayResearchPage() {
-  const storeSession = await getCurrentStoreSession();
+  const storeSession = await getRenderCurrentStoreSession();
 
   if (!storeSession) {
     return null;

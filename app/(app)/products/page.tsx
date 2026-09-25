@@ -5,8 +5,9 @@ import {
   normalizeProductsQuery,
   type SearchParamValue,
 } from "@/lib/products-page-data";
-import { getCurrentStoreSession } from "@/lib/store-session";
+import { getRenderCurrentStoreSession } from "@/lib/render-store-session";
 import { logger } from "@/lib/logger";
+import { measureServerOperation } from "@/lib/perf-debug";
 import { redirect } from "next/navigation";
 
 export default async function ProductsPage({
@@ -15,7 +16,7 @@ export default async function ProductsPage({
   searchParams?: Promise<Record<string, SearchParamValue>>;
 }) {
   const params = (await searchParams) ?? {};
-  const storeSession = await getCurrentStoreSession();
+  const storeSession = await getRenderCurrentStoreSession();
 
   if (!storeSession) {
     return null;
@@ -24,10 +25,12 @@ export default async function ProductsPage({
   let data: Awaited<ReturnType<typeof getCachedProductsPageData>> | null = null;
 
   try {
-    data = await getCachedProductsPageData(
-      storeSession.storeId,
-      storeSession.storeName,
-      normalizeProductsQuery(params),
+    data = await measureServerOperation("page.productsData", () =>
+      getCachedProductsPageData(
+        storeSession.storeId,
+        storeSession.storeName,
+        normalizeProductsQuery(params),
+      )
     );
   } catch (error) {
     logger.error(

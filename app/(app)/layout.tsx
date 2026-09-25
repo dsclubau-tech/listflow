@@ -2,13 +2,15 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import SidebarLayout from "@/components/SidebarLayout";
 import {
-  getCurrentStoreSession,
-  getUserStoresWithRanking,
   type StoreOption,
 } from "@/lib/store-session";
-import { createClient } from "@/lib/supabase/server";
-import { getOrRefreshEntitlement } from "@/lib/aa-entitlement";
-import { auth } from "@/auth";
+import {
+  getRenderCurrentStoreSession,
+  getRenderEntitlement,
+  getRenderLegacySession,
+  getRenderStores,
+  getRenderSupabaseUserId,
+} from "@/lib/render-store-session";
 import { prisma } from "@/lib/prisma";
 import {
   verifyStoreUnlockToken,
@@ -23,13 +25,7 @@ export default async function DashboardLayout({
   // 1. Check Supabase auth
   let aaUserId: string | null = null;
   try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (user?.id) {
-      aaUserId = user.id;
-    }
+    aaUserId = await getRenderSupabaseUserId();
   } catch {
     // Fall through to session check
   }
@@ -39,13 +35,13 @@ export default async function DashboardLayout({
   let userStores: StoreOption[] = [];
 
   if (aaUserId) {
-    const entitlement = await getOrRefreshEntitlement(aaUserId);
+    const entitlement = await getRenderEntitlement(aaUserId);
 
     if (entitlement.status !== "ACTIVE" || entitlement.allowedStores <= 0) {
       redirect("/subscription-required");
     }
 
-    const { stores, allowedStores } = await getUserStoresWithRanking(aaUserId);
+    const { stores, allowedStores } = await getRenderStores(aaUserId);
     userStores = stores
       .filter((s) => s.isEntitled)
       .map((s) => ({
@@ -65,10 +61,10 @@ export default async function DashboardLayout({
   }
 
   // 3. Resolve active store session
-  const storeSession = await getCurrentStoreSession();
+  const storeSession = await getRenderCurrentStoreSession();
 
   if (!storeSession) {
-    const legacySession = await auth();
+    const legacySession = await getRenderLegacySession();
     const legacyStoreId = legacySession?.user?.storeId;
     if (legacyStoreId) {
       const store = await prisma.store.findUnique({
@@ -89,7 +85,7 @@ export default async function DashboardLayout({
 
   // If userStores not populated yet (e.g. legacy session), resolve via ownerUserId
   if (userStores.length === 0 && storeSession.ownerUserId) {
-    const { stores } = await getUserStoresWithRanking(storeSession.ownerUserId);
+    const { stores } = await getRenderStores(storeSession.ownerUserId);
     userStores = stores
       .filter((s) => s.isEntitled)
       .map((s) => ({
@@ -102,13 +98,16 @@ export default async function DashboardLayout({
       }));
   }
 
-  const currentStore = await prisma.store.findUnique({
-    where: { id: storeSession.storeId },
-    select: {
-      password: true,
-      profileLockEnabled: true,
-    },
-  });
+  const selectedStore = userStores.find((store) => store.id === storeSession.storeId);
+  const currentStore = selectedStore
+    ? null
+    : await prisma.store.findUnique({
+        where: { id: storeSession.storeId },
+        select: { password: true, profileLockEnabled: true },
+      });
+  const currentStoreHasPassword = selectedStore?.hasPassword ?? Boolean(currentStore?.password);
+  const currentStoreProfileLockEnabled =
+    selectedStore?.profileLockEnabled ?? currentStore?.profileLockEnabled ?? true;
 
   if (userStores.length === 0) {
     userStores = [
@@ -117,8 +116,8 @@ export default async function DashboardLayout({
         name: storeSession.storeName,
         loginId: storeSession.storeLoginId,
         rank: 1,
-        hasPassword: Boolean(currentStore?.password),
-        profileLockEnabled: currentStore?.profileLockEnabled ?? true,
+        hasPassword: currentStoreHasPassword,
+        profileLockEnabled: currentStoreProfileLockEnabled,
       },
     ];
   }
@@ -127,8 +126,8 @@ export default async function DashboardLayout({
   const cookieStore = await cookies();
   const unlockToken = cookieStore.get(PROFILE_UNLOCK_COOKIE_NAME)?.value;
   const isProfileLocked = Boolean(
-    currentStore?.password &&
-      currentStore?.profileLockEnabled !== false &&
+    currentStoreHasPassword &&
+    currentStoreProfileLockEnabled !== false &&
       !verifyStoreUnlockToken(storeSession.storeId, unlockToken)
   );
 

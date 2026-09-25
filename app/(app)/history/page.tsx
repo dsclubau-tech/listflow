@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import ClearHistoryButton from "@/components/ClearHistoryButton";
-import { getCurrentStoreSession } from "@/lib/store-session";
+import { getRenderCurrentStoreSession } from "@/lib/render-store-session";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 import {
@@ -66,7 +66,7 @@ export default async function HistoryPage({
 }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
-  const storeSession = await getCurrentStoreSession();
+  const storeSession = await getRenderCurrentStoreSession();
 
   if (!storeSession) {
     return null;

@@ -3,10 +3,10 @@ import ActionCenterClient from "@/components/ActionCenterClient";
 import PageLoadErrorState from "@/components/PageLoadErrorState";
 import { getActionCenterData } from "@/lib/action-center";
 import { logger } from "@/lib/logger";
-import { getCurrentStoreSession } from "@/lib/store-session";
+import { getRenderCurrentStoreSession } from "@/lib/render-store-session";
 
 export default async function ActionCenterPage() {
-  const storeSession = await getCurrentStoreSession();
+  const storeSession = await getRenderCurrentStoreSession();
 
   if (!storeSession) {
     return null;

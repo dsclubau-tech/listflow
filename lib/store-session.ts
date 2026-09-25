@@ -6,6 +6,7 @@ import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { createClient } from "@/lib/supabase/server";
 import { getOrRefreshEntitlement } from "@/lib/aa-entitlement";
+import { measureServerOperation } from "@/lib/perf-debug";
 
 const INTERNAL_USER_EMAIL = "store-session@listflow.local";
 const INTERNAL_USER_NAME = "Store Session";
@@ -37,16 +38,38 @@ export type StoreOption = {
   profileLockEnabled?: boolean;
 };
 
+export async function getSupabaseUserId(): Promise<string | null> {
+  return measureServerOperation("auth.supabaseUser", async () => {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    return user?.id ?? null;
+  });
+}
+
+export async function getLegacySession() {
+  return measureServerOperation("auth.legacySession", () => auth());
+}
+
+export type StoreSessionReaders = {
+  getSupabaseUserId: typeof getSupabaseUserId;
+  getLegacySession: typeof getLegacySession;
+  getEntitlement: (userId: string) => ReturnType<typeof getOrRefreshEntitlement>;
+  getStores: (userId: string) => ReturnType<typeof getUserStoresWithRanking>;
+};
+
 /**
  * Returns all active stores for a customer with 1-based rank by createdAt ASC
  * and whether each store is within the customer's allowedStores limit.
  */
-export async function getUserStoresWithRanking(userId: string): Promise<{
+export async function getUserStoresWithRanking(
+  userId: string,
+  getEntitlement: StoreSessionReaders["getEntitlement"] = getOrRefreshEntitlement,
+): Promise<{
   stores: StoreWithRanking[];
   allowedStores: number;
   entitlementStatus: string;
 }> {
-  const stores = await prisma.store.findMany({
+  const stores = await measureServerOperation("store.rankQuery", () => prisma.store.findMany({
     where: { ownerUserId: userId, isActive: true },
     orderBy: { createdAt: "asc" },
     select: {
@@ -57,9 +80,9 @@ export async function getUserStoresWithRanking(userId: string): Promise<{
       password: true,
       profileLockEnabled: true,
     },
-  });
+  }));
 
-  const entitlement = await getOrRefreshEntitlement(userId);
+  const entitlement = await getEntitlement(userId);
   const allowedStores = entitlement.status === "ACTIVE" ? entitlement.allowedStores : 0;
 
   const storesWithRanking: StoreWithRanking[] = stores.map((store, index) => {
@@ -90,17 +113,16 @@ export async function getUserStoresWithRanking(userId: string): Promise<{
  * 3. Enforces per-store ranking (createdAt ASC, rank <= allowedStores).
  * 4. Selects active store from cookie if entitled, else defaults to rank 1 store.
  */
-export async function getCurrentStoreSession(): Promise<CurrentStoreSession | null> {
+export async function getCurrentStoreSessionWithReaders(
+  readers: StoreSessionReaders,
+): Promise<CurrentStoreSession | null> {
   // 1. Try Supabase Auth user first
   try {
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
+    const userId = await readers.getSupabaseUserId();
 
-    if (user?.id) {
+    if (userId) {
       const { stores, allowedStores, entitlementStatus } =
-        await getUserStoresWithRanking(user.id);
+        await readers.getStores(userId);
 
       if (entitlementStatus !== "ACTIVE" || allowedStores <= 0 || stores.length === 0) {
         return null;
@@ -124,7 +146,7 @@ export async function getCurrentStoreSession(): Promise<CurrentStoreSession | nu
         storeId: selected.id,
         storeName: selected.name,
         storeLoginId: selected.loginId || selected.id,
-        ownerUserId: user.id,
+        ownerUserId: userId,
       };
     }
   } catch {
@@ -132,7 +154,7 @@ export async function getCurrentStoreSession(): Promise<CurrentStoreSession | nu
   }
 
   // 2. Fallback to legacy NextAuth session if available
-  const session = await auth();
+  const session = await readers.getLegacySession();
   const storeId = session?.user?.storeId;
 
   if (!storeId) {
@@ -155,7 +177,7 @@ export async function getCurrentStoreSession(): Promise<CurrentStoreSession | nu
 
   // If store is linked to an AA owner, enforce entitlement and honor active store cookie
   if (store.ownerUserId) {
-    const entitlement = await getOrRefreshEntitlement(store.ownerUserId);
+    const entitlement = await readers.getEntitlement(store.ownerUserId);
     if (entitlement.status !== "ACTIVE" || entitlement.allowedStores <= 0) {
       return null;
     }
@@ -163,7 +185,7 @@ export async function getCurrentStoreSession(): Promise<CurrentStoreSession | nu
     const cookieStore = await cookies();
     const activeStoreId = cookieStore.get("listflow_active_store_id")?.value;
     if (activeStoreId && activeStoreId !== storeId) {
-      const { stores } = await getUserStoresWithRanking(store.ownerUserId);
+      const { stores } = await readers.getStores(store.ownerUserId);
       const selected = stores.find((s) => s.id === activeStoreId && s.isEntitled);
       if (selected) {
         return {
@@ -186,6 +208,15 @@ export async function getCurrentStoreSession(): Promise<CurrentStoreSession | nu
       storeId,
     ownerUserId: store.ownerUserId ?? undefined,
   };
+}
+
+export async function getCurrentStoreSession(): Promise<CurrentStoreSession | null> {
+  return getCurrentStoreSessionWithReaders({
+    getSupabaseUserId,
+    getLegacySession,
+    getEntitlement: getOrRefreshEntitlement,
+    getStores: getUserStoresWithRanking,
+  });
 }
 
 export async function getInternalUserId() {
