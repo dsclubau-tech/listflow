@@ -27,9 +27,20 @@ async function usable(page: Page, route: Route) {
   }
 }
 
-async function measure(page: Page, route: Route, navigate: () => Promise<unknown>) {
+async function measure(
+  page: Page,
+  route: Route,
+  navigate: () => Promise<unknown>,
+  fullDocument: boolean,
+) {
   let requests = 0;
   let failures = 0;
+  const previousScriptBytes = await page.evaluate(() =>
+    performance.getEntriesByType("resource").reduce((sum, entry) =>
+      sum + ((entry as PerformanceResourceTiming).initiatorType === "script"
+        ? (entry as PerformanceResourceTiming).transferSize
+        : 0), 0)
+  );
   const onRequest = () => { requests += 1; };
   const onFailure = () => { failures += 1; };
   page.on("request", onRequest);
@@ -43,13 +54,19 @@ async function measure(page: Page, route: Route, navigate: () => Promise<unknown
     const scripts = performance.getEntriesByType("resource")
       .filter((entry) => (entry as PerformanceResourceTiming).initiatorType === "script") as PerformanceResourceTiming[];
     return {
-      documentResponseMs: navigation ? Math.round(navigation.responseStart - navigation.startTime) : null,
+      documentResponseMs: fullDocument && navigation
+        ? Math.round(navigation.responseStart - navigation.startTime)
+        : null,
       scriptTransferBytes: scripts.reduce((sum, script) => sum + script.transferSize, 0),
     };
   });
   page.off("request", onRequest);
   page.off("requestfailed", onFailure);
-  return { route, usableMs, requests, failures, ...browser };
+  return {
+    route, usableMs, requests, failures,
+    ...browser,
+    scriptTransferBytes: Math.max(0, browser.scriptTransferBytes - previousScriptBytes),
+  };
 }
 
 const browser = await chromium.launch();
@@ -71,7 +88,7 @@ try {
     for (let run = 0; run < 5; run += 1) {
       const context = await browser.newContext({ storageState });
       const page = await context.newPage();
-      cold.push(await measure(page, route, () => page.goto(`${baseURL}${route}`)));
+      cold.push(await measure(page, route, () => page.goto(`${baseURL}${route}`), true));
       await context.close();
     }
   }
@@ -83,8 +100,11 @@ try {
   const navigation = [];
   for (let run = 0; run < 10; run += 1) {
     for (const route of ["/action-center", "/settings", "/products"] as const) {
-      navigation.push(await measure(page, route, () =>
-        page.locator(`a[href="${route}"]:visible`).first().click()
+      navigation.push(await measure(
+        page,
+        route,
+        () => page.locator(`a[href="${route}"]:visible`).first().click(),
+        false,
       ));
     }
   }
