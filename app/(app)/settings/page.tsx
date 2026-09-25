@@ -1,13 +1,16 @@
 "use client";
 
 import { useState } from "react";
-import SupplierSettingsTab from "@/components/settings/SupplierSettingsTab";
-import TemplatesTab from "@/components/settings/TemplatesTab";
-import KeywordsTab from "@/components/settings/KeywordsTab";
-import DangerZoneTab from "@/components/settings/DangerZoneTab";
-import SecurityTab from "@/components/settings/SecurityTab";
-import DiagnosticsTab from "@/components/settings/DiagnosticsTab";
+import dynamic from "next/dynamic";
 import StoreProfileTab from "@/components/settings/StoreProfileTab";
+
+const loadingTab = () => <div role="status">Loading settings...</div>;
+const SupplierSettingsTab = dynamic(() => import("@/components/settings/SupplierSettingsTab"), { loading: loadingTab });
+const TemplatesTab = dynamic(() => import("@/components/settings/TemplatesTab"), { loading: loadingTab });
+const KeywordsTab = dynamic(() => import("@/components/settings/KeywordsTab"), { loading: loadingTab });
+const SecurityTab = dynamic(() => import("@/components/settings/SecurityTab"), { loading: loadingTab });
+const DiagnosticsTab = dynamic(() => import("@/components/settings/DiagnosticsTab"), { loading: loadingTab });
+const DangerZoneTab = dynamic(() => import("@/components/settings/DangerZoneTab"), { loading: loadingTab });
 
 const tabs = [
   "Store Profile",
