@@ -11,6 +11,7 @@
     "test:products": "tsx --test lib/product-filter-query.test.ts lib/product-profit.test.ts",
     "test:upload": "tsx --test lib/amazon-direct-scraper.test.ts lib/amazon-buybox-price.test.ts lib/draft-products-state.test.ts lib/ebay-required-specifics.test.ts lib/ebay-upload-reconciliation.test.ts lib/item-specifics.test.ts lib/product-duplicate.test.ts lib/required-specific-resolver.test.ts",
     "test:e2e": "playwright test",
+    "perf:pages": "tsx scripts/measure-page-loading.ts",
     "lint": "eslint",
     "worker": "tsx scripts/listflow-worker.ts",
     "worker:store": "tsx scripts/listflow-worker.ts",
