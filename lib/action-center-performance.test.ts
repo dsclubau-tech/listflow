@@ -2,13 +2,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-test("active Action Center jobs use bounded live polling instead of full route refreshes", () => {
+test("Action Center uses shared adaptive live polling instead of full route refreshes", () => {
   const client = readFileSync("components/ActionCenterClient.tsx", "utf8");
+  const polling = readFileSync("hooks/useAdaptivePolling.ts", "utf8");
 
   assert.match(client, /fetch\("\/api\/action-center\/live"/);
-  assert.match(client, /requestInFlight/);
-  assert.match(client, /ACTIVE_JOB_LIVE_TIMEOUT_MS/);
-  assert.match(client, /document\.visibilityState === "hidden"/);
+  assert.match(client, /useAdaptivePolling/);
+  assert.match(polling, /inFlight/);
+  assert.match(polling, /REQUEST_TIMEOUT_MS/);
+  assert.match(polling, /document\.visibilityState === "hidden"/);
   assert.doesNotMatch(
     client,
     /window\.setInterval\(\(\) => \{\s*router\.refresh\(\)/,

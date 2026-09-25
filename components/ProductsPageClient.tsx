@@ -11,15 +11,14 @@ import {
   useTransition,
 } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import dynamic from "next/dynamic";
 import Image from "next/image";
 import ActionProgressBar from "@/components/ActionProgressBar";
-import BulkEditModal from "@/components/BulkEditModal";
 import DraftsTable from "@/components/DraftsTable";
-import PromotedListingsModal, {
-  type PromotedListingsJob,
-} from "@/components/PromotedListingsModal";
+import type { PromotedListingsJob } from "@/components/PromotedListingsModal";
 import Toast from "@/components/Toast";
 import { useToast } from "@/hooks/useToast";
+import { useAdaptivePolling } from "@/hooks/useAdaptivePolling";
 import { getSelectedPriceCheckSummary } from "@/lib/price-check-eligibility";
 import {
   getProductAdvancedFilter,
@@ -53,6 +52,12 @@ interface ProductsPageClientProps {
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100, 200] as const;
 const PAGE_SIZE_STORAGE_KEY = "listflow.products.pageSize";
 const PRICE_CHECK_JOB_STORAGE_KEY = "listflow.products.activePriceCheckJobId";
+const BulkEditModal = dynamic(() => import("@/components/BulkEditModal"), {
+  loading: () => <div role="status">Loading bulk editor...</div>,
+});
+const PromotedListingsModal = dynamic(() => import("@/components/PromotedListingsModal"), {
+  loading: () => <div role="status">Loading promotions...</div>,
+});
 
 type PriceCheckJobStatus =
   | "QUEUED"
@@ -423,7 +428,9 @@ export default function ProductsPageClient({
   const [isLoadingAllSelection, setIsLoadingAllSelection] = useState(false);
   const [isCopyingTitles, setIsCopyingTitles] = useState(false);
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
+  const [hasOpenedBulkEdit, setHasOpenedBulkEdit] = useState(false);
   const [isPromotedListingsOpen, setIsPromotedListingsOpen] = useState(false);
+  const [hasOpenedPromotions, setHasOpenedPromotions] = useState(false);
   const [promotedListingsJob, setPromotedListingsJob] =
     useState<PromotedListingsJob | null>(null);
   const [promotedListingsQueuedCount, setPromotedListingsQueuedCount] =
@@ -449,6 +456,7 @@ export default function ProductsPageClient({
   const [pageJumpDraft, setPageJumpDraft] = useState(String(page));
   const notifiedTerminalJobIds = useRef<Set<string>>(new Set());
   const notifiedPromotionJobIds = useRef<Set<string>>(new Set());
+  const refreshPriceCheckRef = useRef<() => void>(() => {});
   const failedSelectionScopeRef = useRef<string | null>(null);
   const selectionLoadRequestIdRef = useRef(0);
   const searchContainerRef = useRef<HTMLDivElement | null>(null);
@@ -782,9 +790,10 @@ export default function ProductsPageClient({
     [handleTerminalPriceCheckJob, storePriceCheckJob]
   );
 
-  const fetchPriceCheckJob = useCallback(async (jobId: string) => {
+  const fetchPriceCheckJob = useCallback(async (jobId: string, signal?: AbortSignal) => {
     const response = await fetch(`/api/price-check/jobs/${jobId}`, {
       cache: "no-store",
+      signal,
     });
 
     if (response.status === 404) {
@@ -803,9 +812,10 @@ export default function ProductsPageClient({
     return data.job ?? null;
   }, []);
 
-  const fetchCurrentPriceCheckJob = useCallback(async () => {
+  const fetchCurrentPriceCheckJob = useCallback(async (signal?: AbortSignal) => {
     const response = await fetch("/api/price-check/jobs/current", {
       cache: "no-store",
+      signal,
     });
     const data = (await response.json().catch(() => ({}))) as {
       job?: PriceCheckJob | null;
@@ -848,6 +858,7 @@ export default function ProductsPageClient({
         }
 
         applyPriceCheckJob(data.job, true);
+        refreshPriceCheckRef.current();
 
         if (data.job.status === "CANCELLING") {
           showToast("Stopping after current product...", "success");
@@ -895,6 +906,7 @@ export default function ProductsPageClient({
       }
 
       applyPriceCheckJob(data.job, true);
+      refreshPriceCheckRef.current();
 
       if (data.reused) {
         showToast("Price check is queued.", "success");
@@ -952,35 +964,20 @@ export default function ProductsPageClient({
     };
   }, [applyPriceCheckJob, fetchCurrentPriceCheckJob, fetchPriceCheckJob]);
 
-  useEffect(() => {
-    if (!priceCheckJob || !isActivePriceCheckJob(priceCheckJob)) {
-      return;
-    }
-
-    let cancelled = false;
-    const jobId = priceCheckJob.id;
-
-    async function pollPriceCheckJob() {
-      try {
-        const job = await fetchPriceCheckJob(jobId);
-
-        if (!cancelled) {
-          applyPriceCheckJob(job, true);
-        }
-      } catch {
-        // Keep the current banner visible; the next poll may succeed.
-      }
-    }
-
-    const interval = window.setInterval(() => {
-      void pollPriceCheckJob();
-    }, 2000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [applyPriceCheckJob, fetchPriceCheckJob, priceCheckJob]);
+  const activePriceCheckJobId = isActivePriceCheckJob(priceCheckJob)
+    ? priceCheckJob!.id
+    : null;
+  const refreshPriceCheckNow = useAdaptivePolling({
+    resourceKey: `price-check:${activePriceCheckJobId ?? "idle"}`,
+    active: Boolean(activePriceCheckJobId),
+    poll: async (signal) => {
+      const job = activePriceCheckJobId
+        ? await fetchPriceCheckJob(activePriceCheckJobId, signal)
+        : await fetchCurrentPriceCheckJob(signal);
+      if (!signal.aborted && job) applyPriceCheckJob(job, true);
+    },
+  });
+  refreshPriceCheckRef.current = refreshPriceCheckNow;
 
   const applyPromotedListingsJob = useCallback(
     (job: PromotedListingsJob | null, notifyTerminal = false) => {
@@ -1001,9 +998,10 @@ export default function ProductsPageClient({
     [router, showToast],
   );
 
-  const fetchPromotedListingsJob = useCallback(async (jobId: string) => {
+  const fetchPromotedListingsJob = useCallback(async (jobId: string, signal?: AbortSignal) => {
     const response = await fetch(`/api/ebay/promoted-listings/jobs/${jobId}`, {
       cache: "no-store",
+      signal,
     });
     if (response.status === 404) return null;
 
@@ -1017,9 +1015,10 @@ export default function ProductsPageClient({
     return data.job ?? null;
   }, []);
 
-  const fetchPromotedListingsQueue = useCallback(async () => {
+  const fetchPromotedListingsQueue = useCallback(async (signal?: AbortSignal) => {
     const response = await fetch("/api/ebay/promoted-listings/jobs", {
       cache: "no-store",
+      signal,
     });
     const data = (await response.json().catch(() => ({}))) as {
       currentJob?: PromotedListingsJob | null;
@@ -1033,49 +1032,28 @@ export default function ProductsPageClient({
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    const trackedJobId = promotedListingsJob?.id;
-    const trackedJobStatus = promotedListingsJob?.status;
-    const jobId = trackedJobId && (trackedJobStatus === "QUEUED" || trackedJobStatus === "RUNNING" || trackedJobStatus === "CANCELLING")
-      ? trackedJobId
-      : null;
-
-    async function pollPromotedListingsJob() {
-      try {
-        const [queue, job] = await Promise.all([
-          fetchPromotedListingsQueue(),
-          jobId ? fetchPromotedListingsJob(jobId) : Promise.resolve(null),
-        ]);
-        if (cancelled) return;
-        setPromotedListingsQueuedCount(queue.queuedCount);
-        if (job && !isActivePromotedListingsJob(job)) {
-          applyPromotedListingsJob(job, true);
-        }
-        if (queue.currentJob) {
-          applyPromotedListingsJob(queue.currentJob);
-        }
-      } catch {
-        // Keep the current state visible; a later poll can recover.
+  const trackedPromotionJobId = isActivePromotedListingsJob(promotedListingsJob)
+    ? promotedListingsJob!.id
+    : null;
+  const refreshPromotionsNow = useAdaptivePolling({
+    resourceKey: `promotions:${trackedPromotionJobId ?? "idle"}`,
+    active: Boolean(trackedPromotionJobId || promotedListingsQueuedCount > 0),
+    immediateOnMount: true,
+    poll: async (signal) => {
+      const [queue, trackedJob] = await Promise.all([
+        fetchPromotedListingsQueue(signal),
+        trackedPromotionJobId
+          ? fetchPromotedListingsJob(trackedPromotionJobId, signal)
+          : Promise.resolve(null),
+      ]);
+      if (signal.aborted) return;
+      setPromotedListingsQueuedCount(queue.queuedCount);
+      if (trackedJob && !isActivePromotedListingsJob(trackedJob)) {
+        applyPromotedListingsJob(trackedJob, true);
       }
-    }
-
-    void pollPromotedListingsJob();
-    const interval = window.setInterval(() => {
-      void pollPromotedListingsJob();
-    }, 2000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [
-    applyPromotedListingsJob,
-    fetchPromotedListingsJob,
-    fetchPromotedListingsQueue,
-    promotedListingsJob?.id,
-    promotedListingsJob?.status,
-  ]);
+      if (queue.currentJob) applyPromotedListingsJob(queue.currentJob);
+    },
+  });
 
   const applyProductSearchAndFilters = useCallback(
     (
@@ -1737,6 +1715,7 @@ export default function ProductsPageClient({
         }
 
         applyPriceCheckJob(data.job, true);
+        refreshPriceCheckRef.current();
 
         if (isActivePriceCheckJob(data.job)) {
           showToast(
@@ -1782,6 +1761,7 @@ export default function ProductsPageClient({
 
   const openPromotedListings = (productIds: string[]) => {
     setSelectedProductIds(productIds);
+    setHasOpenedPromotions(true);
     setIsPromotedListingsOpen(true);
   };
 
@@ -1789,14 +1769,7 @@ export default function ProductsPageClient({
     if (!promotedListingsJob || !isActivePromotedListingsJob(promotedListingsJob)) {
       applyPromotedListingsJob(job);
     }
-    void fetchPromotedListingsQueue()
-      .then((queue) => {
-        setPromotedListingsQueuedCount(queue.queuedCount);
-        if (queue.currentJob) applyPromotedListingsJob(queue.currentJob);
-      })
-      .catch(() => {
-        // The submitted job remains visible; polling will reconcile the queue.
-      });
+    refreshPromotionsNow();
   };
 
   return (
@@ -1940,7 +1913,10 @@ export default function ProductsPageClient({
             <button
               ref={filterMenuButtonRef}
               type="button"
-              onClick={() => setIsPromotedListingsOpen(true)}
+              onClick={() => {
+                setHasOpenedPromotions(true);
+                setIsPromotedListingsOpen(true);
+              }}
               className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50"
             >
               View
@@ -2462,20 +2438,21 @@ export default function ProductsPageClient({
         onManagePromotionsSelected={openPromotedListings}
         onBulkEditSelected={(ids) => {
           setSelectedProductIds(ids);
+          setHasOpenedBulkEdit(true);
           setIsBulkEditOpen(true);
         }}
       />
 
-      <BulkEditModal
+      {hasOpenedBulkEdit && <BulkEditModal
         open={isBulkEditOpen}
         storeId={supplierOptions[0]?.id ?? null}
         selectedProductIds={selectedProductIds}
         onOpen={() => setIsBulkEditOpen(true)}
         onClose={() => setIsBulkEditOpen(false)}
         onToast={showToast}
-      />
+      />}
 
-      <PromotedListingsModal
+      {hasOpenedPromotions && <PromotedListingsModal
         open={isPromotedListingsOpen}
         selectedProductIds={selectedProductIds}
         selectedProducts={selectedProducts}
@@ -2484,7 +2461,7 @@ export default function ProductsPageClient({
         onClose={() => setIsPromotedListingsOpen(false)}
         onJobStarted={handlePromotedListingsJobStarted}
         onToast={showToast}
-      />
+      />}
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-gray-600">
         <span>

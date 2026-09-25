@@ -8,6 +8,7 @@ import AsinLink from "@/components/AsinLink";
 import Toast from "@/components/Toast";
 import { useTimedActionProgress } from "@/hooks/useTimedActionProgress";
 import { useToast } from "@/hooks/useToast";
+import { useAdaptivePolling } from "@/hooks/useAdaptivePolling";
 import {
   buildActiveJobAssignmentIndex,
   getActiveJobAssignment,
@@ -52,8 +53,6 @@ const CURRENT_RESEARCH_BATCH_STATUSES = new Set([
 ]);
 const ACTIVE_RESEARCH_BATCH_STATUSES = new Set(["QUEUED", "RUNNING", "PAUSING"]);
 const PRICE_CHECK_JOB_STORAGE_KEY = "listflow.products.activePriceCheckJobId";
-const ACTIVE_JOB_LIVE_REFRESH_MS = 5_000;
-const ACTIVE_JOB_LIVE_TIMEOUT_MS = 10_000;
 type ActionCenterFilter =
   | "pendingReviews"
   | "failedChecks"
@@ -851,11 +850,11 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
   const hasActiveJobs = useMemo(
     () =>
       activePriceJobs.length > 0 ||
-      activeImportJobs.length > 0 ||
+      activeImportJobs.some((job) => job.status !== "PAUSED") ||
       activeResearchBatches.length > 0 ||
       currentActionJobs.length > 0,
     [
-      activeImportJobs.length,
+      activeImportJobs,
       activePriceJobs.length,
       activeResearchBatches.length,
       currentActionJobs.length,
@@ -867,74 +866,26 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
     "Worker offline. Open Start ListFlow Worker on PC 1 to run long jobs.";
   const previousHasActiveJobsRef = useRef(hasActiveJobs);
 
-  useEffect(() => {
-    if (!hasActiveJobs) {
-      return;
-    }
-
-    let requestInFlight = false;
-    let controller: AbortController | null = null;
-
-    async function refreshLiveStatus() {
-      if (requestInFlight || document.visibilityState === "hidden") {
-        return;
-      }
-
-      requestInFlight = true;
-      controller = new AbortController();
-      const timeout = window.setTimeout(
-        () => controller?.abort(),
-        ACTIVE_JOB_LIVE_TIMEOUT_MS,
-      );
-
-      try {
-        const response = await fetch("/api/action-center/live", {
-          cache: "no-store",
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          return;
-        }
-        const live = (await response.json()) as LiveActionCenterData;
-        setData((current) => ({
-          ...current,
-          worker: live.worker,
-          workers: live.workers,
-          jobs: live.jobs,
-          summary: {
-            ...current.summary,
-            runningJobs: live.runningJobs,
-          },
-        }));
-      } catch (error) {
-        if (!(error instanceof DOMException && error.name === "AbortError")) {
-          // Keep the last good snapshot. The next bounded poll can recover.
-        }
-      } finally {
-        window.clearTimeout(timeout);
-        requestInFlight = false;
-        controller = null;
-      }
-    }
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        void refreshLiveStatus();
-      }
-    };
-
-    const interval = window.setInterval(
-      () => void refreshLiveStatus(),
-      ACTIVE_JOB_LIVE_REFRESH_MS,
-    );
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      controller?.abort();
-      window.clearInterval(interval);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [hasActiveJobs]);
+  const refreshLiveNow = useAdaptivePolling({
+    resourceKey: "action-center-live",
+    active: hasActiveJobs,
+    poll: async (signal) => {
+      const response = await fetch("/api/action-center/live", {
+        cache: "no-store",
+        signal,
+      });
+      if (!response.ok) return;
+      const live = (await response.json()) as LiveActionCenterData;
+      if (signal.aborted) return;
+      setData((current) => ({
+        ...current,
+        worker: live.worker,
+        workers: live.workers,
+        jobs: live.jobs,
+        summary: { ...current.summary, runningJobs: live.runningJobs },
+      }));
+    },
+  });
 
   useEffect(() => {
     if (previousHasActiveJobsRef.current && !hasActiveJobs) {
@@ -966,6 +917,7 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
         );
       }
       showToast(message, variant);
+      refreshLiveNow();
       router.refresh();
       setTimeout(() => {
         router.refresh();
