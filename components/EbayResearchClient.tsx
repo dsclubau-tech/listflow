@@ -829,7 +829,7 @@ export default function EbayResearchClient({
     if (
       usesSoldComps(requestedMode) &&
       !window.confirm(
-        "Sold comps use browser scraping on eBay pages and may be blocked or throttled by eBay. Safe Mode avoids this by using the official API only. Continue with advanced sold comps?"
+        "Sold comps use browser scraping on eBay pages and may be blocked or throttled by eBay. Safe Mode does not include sold comps. Continue with advanced sold comps?"
       )
     ) {
       return;
@@ -1344,7 +1344,7 @@ export default function EbayResearchClient({
           <div className="flex items-center gap-3">
             <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-500"></span>
-              Safe Mode (API only)
+              Safe Mode
             </span>
             <button
               type="button"
@@ -1359,7 +1359,7 @@ export default function EbayResearchClient({
               }}
               className="text-xs font-medium text-gray-600 hover:text-gray-900 underline transition-colors"
             >
-              {advancedSoldComps ? "Return to Safe Mode" : "Advanced / Sold comps"}
+              {advancedSoldComps ? "Return to Safe Mode" : "Advanced Mode"}
             </button>
           </div>
         </div>
@@ -1497,7 +1497,7 @@ export default function EbayResearchClient({
                   className="mt-1.5 w-full rounded-lg border border-gray-300 px-3.5 py-2.5 text-sm text-gray-900 shadow-xs focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
                 />
                 <p className="mt-1.5 text-xs text-gray-500">
-                  Runs 5 API-only searches per batch with cooldown. Results saved for 24 hours.
+                  Runs 5 Safe Mode searches per batch with cooldown. Results saved for 24 hours.
                 </p>
                 {batchCooldownEstimate && (
                   <p className="mt-1 text-xs font-medium text-amber-700">
@@ -2020,11 +2020,6 @@ export default function EbayResearchClient({
                       <span>{getConditionFilterLabel(selectedJob.conditionFilter)}</span>
                       <span>·</span>
                       <span>limit {selectedJob.limit}</span>
-                      {selectedJob.mode === "ACTIVE" && (
-                        <span className="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-medium text-emerald-700 ring-1 ring-inset ring-emerald-600/20">
-                          API-only
-                        </span>
-                      )}
                     </div>
                   </div>
 
@@ -2111,8 +2106,8 @@ export default function EbayResearchClient({
                       value={formatMoney(selectedJob.activeSummary.averageLowest10)}
                     />
                     <SummaryStat
-                      label="Safe Mode"
-                      value="API-only"
+                      label="Mode"
+                      value="Safe Mode"
                       subtext={
                         selectedJob.completedAt
                           ? `Done ${formatDate(selectedJob.completedAt)}${
