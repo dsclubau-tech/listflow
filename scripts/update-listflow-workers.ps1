@@ -23,6 +23,17 @@ function Get-PlaywrightVersion {
   return ($version | Out-String).Trim()
 }
 
+function Test-LocalTsx {
+  $tsxPath = Join-Path $repoRoot "node_modules\.bin\tsx.cmd"
+  if (-not (Test-Path -LiteralPath $tsxPath -PathType Leaf)) { return $false }
+  try {
+    & $tsxPath --version *> $null
+    return $LASTEXITCODE -eq 0
+  } catch {
+    return $false
+  }
+}
+
 try {
   Start-Transcript -Path $logPath -Append | Out-Null
   $transcriptStarted = $true
@@ -61,14 +72,18 @@ try {
     Write-Host "ListFlow files are up to date. Restarting workers so they load the current code."
   }
 
-  Invoke-CheckedCommand "Validating the current six-worker configuration" "npm.cmd" @("run", "workers:local:check")
+  if (Test-LocalTsx) {
+    Invoke-CheckedCommand "Validating the current six-worker configuration" "npm.cmd" @("run", "workers:local:check")
+  } else {
+    Write-Host "The local tsx runtime is missing or damaged. Dependencies will be repaired after workers stop, then the configuration will be validated." -ForegroundColor Yellow
+  }
   $oldPlaywrightVersion = Get-PlaywrightVersion
   Invoke-CheckedCommand "Stopping local workers gracefully" "powershell.exe" @(
     "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
     (Join-Path $PSScriptRoot "stop-listflow-workers.ps1")
   )
   Invoke-CheckedCommand "Fast-forwarding stable master" "git.exe" @("merge", "--ff-only", "origin/master")
-  Invoke-CheckedCommand "Installing exact dependencies" "npm.cmd" @("ci")
+  Invoke-CheckedCommand "Installing exact dependencies, including worker tools" "npm.cmd" @("ci", "--include=dev")
   Invoke-CheckedCommand "Generating Prisma client" "npm.cmd" @("exec", "prisma", "generate")
 
   $newPlaywrightVersion = Get-PlaywrightVersion

@@ -133,7 +133,7 @@ try {
     Write-Host "Worker setup can continue, but eBay jobs may fail until these are added."
   }
 
-  Invoke-CheckedCommand "Installing exact dependencies" "npm.cmd" @("ci")
+  Invoke-CheckedCommand "Installing exact dependencies, including worker tools" "npm.cmd" @("ci", "--include=dev")
   Invoke-CheckedCommand "Installing Chromium for worker scraping" "npm.cmd" @("run", "browser:install")
   Invoke-CheckedCommand "Generating Prisma client" "npm.cmd" @("exec", "prisma", "generate")
   Invoke-CheckedCommand "Checking the six-worker database configuration" "npm.cmd" @("run", "workers:local:check")
