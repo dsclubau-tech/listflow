@@ -12,6 +12,7 @@ import {
   type ProductSortOrder,
 } from "@/lib/product-sort";
 import { buildProductSearchWhere } from "@/lib/product-search";
+import { getMinimumProductQuantity } from "@/lib/low-stock-products";
 
 const PAGE_SIZE_OPTIONS = [10, 20, 50, 100, 200] as const;
 export const DEFAULT_PRODUCTS_PAGE_SIZE = 100;
@@ -181,7 +182,7 @@ export function normalizeProductsQuery(
     title: getTextParam(params, "title"),
     brand: getTextParam(params, "brand"),
     note: getTextParam(params, "note"),
-    searchQuery: getTextParam(params, "q"),
+    searchQuery: getTextParam(params, "q").length >= 3 ? getTextParam(params, "q").slice(0, 100) : "",
     buyItemId: getTextParam(params, "buyItemId"),
     productId: getTextParam(params, "productId"),
     sellPriceMin: getNumberParam(params, "sellPriceMin"),
@@ -252,7 +253,8 @@ export function hasProfitRangeFilter(query: NormalizedProductsQuery) {
 
 export function buildProductsWhere(
   storeId: string,
-  query: NormalizedProductsQuery
+  query: NormalizedProductsQuery,
+  minimumProductQuantity = 2,
 ): Prisma.ProductWhereInput {
   const whereClauses: Prisma.ProductWhereInput[] = [
     { status: { in: [ProductStatus.IMPORTED, ProductStatus.ON_HOLD] } },
@@ -390,7 +392,7 @@ export function buildProductsWhere(
     whereClauses.push({
       AND: [
         { amazonStockLeft: { not: null } },
-        { amazonStockLeft: { lte: 3 } },
+        { amazonStockLeft: { gte: 0, lt: getMinimumProductQuantity(minimumProductQuantity) } },
       ],
     });
   } else if (query.stockMonitoring === "has-stock-data") {

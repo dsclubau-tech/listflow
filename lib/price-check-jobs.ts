@@ -71,6 +71,7 @@ type CreateJobInput = {
   storeId: string;
   productIds?: unknown[];
   all?: boolean;
+  allOnHold?: boolean;
   trigger?: PriceCheckJobTrigger;
 };
 
@@ -747,7 +748,72 @@ export async function cancelPriceCheckJob(
   return serializePriceCheckJob(job);
 }
 
+async function createOnHoldPriceCheckJob(input: CreateJobInput) {
+  const schedulerVersion = await itemSchedulerEnabled(input.storeId) ? 2 : 1;
+  return prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`listflow-on-hold-recheck:${input.storeId}`}))::text`;
+    const held = await tx.product.findMany({
+      where: { storeId: input.storeId, status: ProductStatus.ON_HOLD },
+      select: { id: true, asin: true, _count: { select: { variants: true } } },
+      orderBy: [{ updatedAt: "desc" }, { id: "asc" }],
+    });
+    const eligibleIds = held.filter((product) =>
+      isValidAsin(product.asin) && product._count.variants > 0,
+    ).map((product) => product.id);
+    const selected = new Set(eligibleIds);
+    const activeJobs = await tx.priceCheckJob.findMany({
+      where: { storeId: input.storeId, status: { in: ACTIVE_JOB_STATUSES }, dismissedAt: null },
+      orderBy: { createdAt: "desc" },
+    });
+    const overlapping = eligibleIds.length === 0 ? [] : activeJobs.filter((job) =>
+      job.scope === PriceCheckJobScope.ALL || job.productIds.some((id) => selected.has(id)),
+    );
+    if (overlapping.length > 0) {
+      const conflicting = overlapping.some((job) =>
+        job.status === PriceCheckJobStatus.CANCELLING ||
+        !eligibleIds.every((id) => job.productIds.includes(id)),
+      );
+      const covering = overlapping.find((job) =>
+        job.status !== PriceCheckJobStatus.CANCELLING &&
+        eligibleIds.every((id) => job.productIds.includes(id)),
+      );
+      if (covering && !conflicting) {
+        return { job: serializePriceCheckJob(covering), reused: true,
+          eligibleCount: eligibleIds.length, ineligibleCount: held.length - eligibleIds.length };
+      }
+      throw new JobConflictError("Another active price check overlaps held products. Wait for it to finish before rechecking all.");
+    }
+    const job = await tx.priceCheckJob.create({
+      data: {
+        userId: input.userId,
+        storeId: input.storeId,
+        scope: PriceCheckJobScope.SELECTED,
+        trigger: input.trigger ?? PriceCheckJobTrigger.MANUAL,
+        status: eligibleIds.length ? PriceCheckJobStatus.QUEUED : PriceCheckJobStatus.COMPLETED,
+        productIds: eligibleIds,
+        total: eligibleIds.length,
+        reason: eligibleIds.length ? null : "No eligible held products found.",
+        completedAt: eligibleIds.length ? null : new Date(),
+        schedulerVersion,
+        ...(schedulerVersion === 2 ? {
+          items: { create: eligibleIds.map((productId, position) => ({
+            storeId: input.storeId, productId, position,
+          })) },
+        } : {}),
+      },
+    });
+    return { job: serializePriceCheckJob(job), reused: false,
+      eligibleCount: eligibleIds.length, ineligibleCount: held.length - eligibleIds.length };
+  }, { timeout: 30_000 });
+}
+
 export async function createPriceCheckJob(input: CreateJobInput) {
+  if (input.allOnHold) {
+    if (input.all || input.productIds !== undefined) {
+      throw new Error("Recheck all held products cannot be combined with another selection.");
+    }
+    return createOnHoldPriceCheckJob(input);
+  }
   const requestedProductIds = normalizeProductIds(input.productIds);
   const isSelectedScope = requestedProductIds.length > 0;
 

@@ -310,7 +310,12 @@ async function getCachedActionCenterQueues(
     variants: { some: {} },
     priceCheckError: { not: null },
   } satisfies Prisma.ProductWhereInput;
-  const lowStockWhere = getLowStockProductWhere(storeId);
+  const settings = await prisma.supplierSettings.findUnique({
+    where: { storeId_supplierName: { storeId, supplierName: "Amazon AU" } },
+    select: { minProductQuantity: true },
+  });
+  const minimum = settings?.minProductQuantity ?? 2;
+  const lowStockWhere = getLowStockProductWhere(storeId, minimum);
   const onHoldWhere = {
     status: ProductStatus.ON_HOLD,
     storeId,
@@ -462,6 +467,7 @@ async function getCachedActionCenterQueues(
           priceCheckError: product.priceCheckError,
           amazonStockLeft: product.amazonStockLeft,
           savedQuantity: product.quantity,
+          lowStockThreshold: minimum,
         }),
       })),
     },

@@ -168,10 +168,10 @@ test("on-hold reason explains every supported hold path", () => {
   assert.equal(
     getOnHoldReason({
       priceCheckError: null,
-      amazonStockLeft: 2,
+      amazonStockLeft: 1,
       savedQuantity: 1,
     }),
-    "Low Amazon stock (2 left).",
+    "Low Amazon stock (1 left).",
   );
   assert.equal(
     getOnHoldReason({

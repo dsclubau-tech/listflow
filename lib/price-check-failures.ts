@@ -3,7 +3,7 @@ import { getAmazonPriceUnavailableMessage } from "@/lib/amazon-price-tracking";
 import {
   isAmazonStockHealthy,
   isResolvedLowStockHoldReason,
-  LOW_STOCK_THRESHOLD,
+  isAmazonStockLow,
 } from "@/lib/low-stock-products";
 
 export const PRICE_CHECK_AUTO_HOLD_REASON_PREFIX =
@@ -174,10 +174,12 @@ type AutoHoldCandidate = {
   ebayItemId: string | null;
   priceCheckError: string | null;
   priceCheckFailureCode: PriceCheckFailureCode | null;
+  verifiedStockLeft?: number | null;
 };
 
 export function selectPriceCheckAutoHoldProductIds(input: {
   enabled: boolean;
+  minimumProductQuantity?: number;
   products: AutoHoldCandidate[];
   coveredProductIds?: Iterable<string>;
 }) {
@@ -188,11 +190,13 @@ export function selectPriceCheckAutoHoldProductIds(input: {
       (product) =>
         product.status === "IMPORTED" &&
         Boolean(product.ebayItemId) &&
-        Boolean(product.priceCheckError) &&
-        isAutoHoldPriceCheckFailureCode(product.priceCheckFailureCode) &&
-        (input.enabled ||
-          product.priceCheckFailureCode === PriceCheckFailureCode.AMAZON_ASIN_REDIRECT ||
-          product.priceCheckFailureCode === PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE) &&
+        ((Boolean(product.priceCheckError) &&
+          isAutoHoldPriceCheckFailureCode(product.priceCheckFailureCode) &&
+          (input.enabled ||
+            product.priceCheckFailureCode === PriceCheckFailureCode.AMAZON_ASIN_REDIRECT ||
+            product.priceCheckFailureCode === PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE)) ||
+          (product.priceCheckFailureCode !== PriceCheckFailureCode.TECHNICAL_ERROR &&
+            isAmazonStockLow(product.verifiedStockLeft, input.minimumProductQuantity ?? 2))) &&
         !covered.has(product.id),
     )
     .map((product) => product.id);
@@ -208,6 +212,8 @@ type AutoResumeCandidate = {
   priceCheckError: string | null;
   priceCheckFailureCode: PriceCheckFailureCode | null;
   amazonStockLeft?: number | null;
+  verifiedStockLeft?: number | null;
+  minimumProductQuantity?: number;
   amazonAvailability?: AmazonAvailability | string | null;
   holdOrigin?: ProductHoldOrigin | string | null;
   holdSavedQuantity?: number | null;
@@ -282,7 +288,7 @@ export function isRecoveredRegularPriceAutoHold(product: AutoResumeCandidate) {
     hasFreshVerifiedBuyBox(product) &&
     !product.priceCheckError &&
     !product.priceCheckFailureCode &&
-    isAmazonStockHealthy(product.amazonStockLeft)
+    isAmazonStockHealthy(product.amazonStockLeft, product.minimumProductQuantity ?? 2)
   );
 }
 
@@ -292,7 +298,9 @@ export function isRecoveredLowStockAutoHold(product: AutoResumeCandidate) {
       product.holdOrigin === ProductHoldOrigin.LOW_STOCK &&
       product.amazonAvailability === AmazonAvailability.IN_STOCK &&
       typeof product.amazonStockLeft === "number" &&
-      product.amazonStockLeft > LOW_STOCK_THRESHOLD &&
+      product.verifiedStockLeft !== null &&
+    product.verifiedStockLeft !== undefined &&
+    product.verifiedStockLeft >= (product.minimumProductQuantity ?? 2) &&
       hasValidRecoveredPrice(product.amazonPrice) &&
       hasFreshVerifiedBuyBox(product) &&
       !product.priceCheckError &&
@@ -304,8 +312,11 @@ export function isRecoveredLowStockAutoHold(product: AutoResumeCandidate) {
     Boolean(product.ebayItemId) &&
     isResolvedLowStockHoldReason(product.holdReason) &&
     hasFreshVerifiedBuyBox(product) &&
+    hasValidRecoveredPrice(product.amazonPrice) &&
     typeof product.amazonStockLeft === "number" &&
-    product.amazonStockLeft > LOW_STOCK_THRESHOLD &&
+    product.verifiedStockLeft !== null &&
+    product.verifiedStockLeft !== undefined &&
+    product.verifiedStockLeft >= (product.minimumProductQuantity ?? 2) &&
     !product.priceCheckError &&
     !product.priceCheckFailureCode
   );
@@ -316,7 +327,8 @@ export function isRecoveredPriceCheckAutoHold(product: AutoResumeCandidate) {
     product.status !== "ON_HOLD" ||
     product.amazonAvailability !== AmazonAvailability.IN_STOCK ||
     !product.ebayItemId ||
-    product.hasUnappliedPriceChange
+    product.hasUnappliedPriceChange ||
+    isAmazonStockLow(product.amazonStockLeft, product.minimumProductQuantity ?? 2)
   ) {
     return false;
   }

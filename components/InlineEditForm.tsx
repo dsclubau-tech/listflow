@@ -1337,7 +1337,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       setSaveMessage({
         variant: "error",
         title: "Save failed",
-        text: "Amazon ASIN must be 10 letters or numbers.",
+        text: "Custom Label SKU must be a 10-character Amazon ASIN.",
       });
       setIsSaving(false);
       return false;
@@ -1759,7 +1759,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
     if (!currentAsin || !isValidAsin(currentAsin)) {
       setSaveMessage({
         title: "Regrab blocked",
-        text: "Add a valid 10-character Amazon ASIN first.",
+        text: "Add a valid 10-character Custom Label SKU (Amazon ASIN) first.",
         variant: "error",
       });
       return;
@@ -2366,10 +2366,11 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
               <a href="https://www.ebay.com.au/sch/categories" target="_blank" rel="noopener noreferrer" className="underline hover:text-gray-600">ebay.com.au/sch/categories</a>
             </p>
 
-            {/* Amazon ASIN */}
+            {/* Amazon tracking identifier */}
             <div className="col-span-full">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Amazon ASIN</label>
+              <label htmlFor="custom-label-sku" className="block text-sm font-medium text-gray-700 mb-1">Custom Label SKU</label>
               <input
+                id="custom-label-sku"
                 type="text"
                 value={asin}
                 onChange={(e) => setAsin(e.target.value)}
@@ -2379,14 +2380,14 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                 placeholder="B0XXXXXXXX"
               />
               <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-500">
-                <span>Required for Amazon price tracking.</span>
+                <span>Enter the 10-character Amazon ASIN used for price tracking.</span>
                 {currentAsin && isValidAsin(currentAsin) && (
                   <span className="inline-flex items-center gap-1">
                     <AsinLink
                       asin={currentAsin}
                       className="font-mono text-orange-600 hover:text-orange-800 hover:underline"
                     />
-                    <CopyButton text={currentAsin} label="Copy ASIN" />
+                    <CopyButton text={currentAsin} label="Copy Custom Label SKU" />
                   </span>
                 )}
               </div>

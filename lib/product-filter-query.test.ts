@@ -93,6 +93,18 @@ test("buildProductsWhere applies search filters", () => {
   assert.equal(serialized.includes("ebayItemId"), true);
 });
 
+test("Products search starts at three characters and limits query length", () => {
+  assert.equal(normalizeProductsQuery({ q: "ab" }).searchQuery, "");
+  assert.equal(normalizeProductsQuery({ q: "abc" }).searchQuery, "abc");
+  assert.equal(normalizeProductsQuery({ q: "x".repeat(120) }).searchQuery.length, 100);
+});
+
+test("low-stock filtering follows the store minimum", () => {
+  const query = normalizeProductsQuery({ stockMonitoring: "low-stock" });
+  const where = buildProductsWhere("store-1", query, 3);
+  assert.equal(stringify(where).includes('"amazonStockLeft":{"gte":0,"lt":3}'), true);
+});
+
 test("buildProductsWhere applies decimal fee ranges to their matching units", () => {
   const where = buildProductsWhere(
     "store-1",

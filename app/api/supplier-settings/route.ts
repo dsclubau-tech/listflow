@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import { getOrCreateStoreSupplierSettings } from "@/lib/supplier-settings";
+import { invalidateStoreCaches } from "@/lib/cache-tags";
 import {
   normalizeTier,
   type ProfitTierConfig,
@@ -41,6 +42,11 @@ export async function PATCH(request: Request) {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+  }
+
+  if (body.minProductQuantity !== undefined &&
+      (!Number.isSafeInteger(body.minProductQuantity) || body.minProductQuantity < 1)) {
+    return NextResponse.json({ error: "Minimum Product Quantity must be a positive integer." }, { status: 400 });
   }
 
   const settings = await getOrCreateStoreSupplierSettings(storeSession.storeId);
@@ -140,6 +146,9 @@ export async function PATCH(request: Request) {
     });
   });
 
+  if (data.minProductQuantity !== undefined) {
+    invalidateStoreCaches(storeSession.storeId, ["products", "drafts", "actionCenter"]);
+  }
   return NextResponse.json(updated);
 }
 

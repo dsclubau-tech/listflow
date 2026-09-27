@@ -4,97 +4,56 @@ import { ProductStatus } from "../app/generated/prisma/enums";
 import {
   getLowStockResolvedUpdate,
   getLowStockProductWhere,
+  getMinimumProductQuantity,
+  isAmazonStockLow,
   isLowStockHoldJobMetadata,
   isAmazonStockHealthy,
   isResolvedLowStockHoldReason,
   LOW_STOCK_HOLD_JOB_KIND,
   LOW_STOCK_RESOLVED_HOLD_REASON,
-  LOW_STOCK_THRESHOLD,
 } from "./low-stock-products";
 
-test("low-stock actions are scoped to imported products in the current store", () => {
-  assert.deepEqual(getLowStockProductWhere("store-current"), {
-    storeId: "store-current",
-    status: ProductStatus.IMPORTED,
-    asin: { not: null },
-    amazonStockLeft: { not: null, lte: LOW_STOCK_THRESHOLD },
-  });
-  assert.equal(LOW_STOCK_THRESHOLD, 3);
+test("store minimum is a positive integer with a default of two", () => {
+  assert.equal(getMinimumProductQuantity(undefined), 2);
+  assert.equal(getMinimumProductQuantity(3), 3);
+  assert.equal(getMinimumProductQuantity(0), 2);
+  assert.equal(getMinimumProductQuantity(2.5), 2);
+});
+
+test("stock below the configured minimum is held and equal stock is sufficient", () => {
+  for (const minimum of [1, 2, 3]) {
+    assert.equal(isAmazonStockLow(minimum - 1, minimum), true);
+    assert.equal(isAmazonStockLow(minimum, minimum), false);
+    assert.equal(isAmazonStockHealthy(minimum, minimum), true);
+    assert.equal(isAmazonStockHealthy(minimum - 1, minimum), false);
+    assert.deepEqual(getLowStockProductWhere("store-current", minimum), {
+      storeId: "store-current",
+      status: ProductStatus.IMPORTED,
+      asin: { not: null },
+      amazonStockLeft: { gte: 0, lt: minimum },
+    });
+  }
+  assert.equal(isAmazonStockLow(null, 2), false);
+  assert.equal(isAmazonStockLow(undefined, 2), false);
+  assert.equal(isAmazonStockHealthy(undefined, 2), false);
 });
 
 test("low-stock bulk hold jobs have explicit metadata", () => {
-  assert.equal(
-    isLowStockHoldJobMetadata({ kind: LOW_STOCK_HOLD_JOB_KIND }),
-    true
-  );
+  assert.equal(isLowStockHoldJobMetadata({ kind: LOW_STOCK_HOLD_JOB_KIND }), true);
   assert.equal(isLowStockHoldJobMetadata({ kind: "manual-hold" }), false);
   assert.equal(isLowStockHoldJobMetadata(null), false);
 });
 
-test("getLowStockResolvedUpdate resolves holdReason when stock is healthy", () => {
-  // Case 1: ON_HOLD with Low Amazon stock, scraped stock is null (In stock) -> resolved
-  assert.deepEqual(
-    getLowStockResolvedUpdate(
-      { status: ProductStatus.ON_HOLD, holdReason: "Low Amazon stock (2 left)." },
-      null
-    ),
-    { holdReason: LOW_STOCK_RESOLVED_HOLD_REASON }
-  );
-
-  // Case 2: ON_HOLD with Low Amazon stock, scraped stock is > LOW_STOCK_THRESHOLD (e.g., 5) -> resolved
-  assert.deepEqual(
-    getLowStockResolvedUpdate(
-      { status: ProductStatus.ON_HOLD, holdReason: "Low Amazon stock (1 left)." },
-      5
-    ),
-    { holdReason: LOW_STOCK_RESOLVED_HOLD_REASON }
-  );
-
-  // Case 3: ON_HOLD with Low Amazon stock, scraped stock is still <= LOW_STOCK_THRESHOLD -> no change
-  assert.deepEqual(
-    getLowStockResolvedUpdate(
-      { status: ProductStatus.ON_HOLD, holdReason: "Low Amazon stock (2 left)." },
-      2
-    ),
-    {}
-  );
-
-  // Case 4: ON_HOLD with non-stock holdReason (e.g. manual hold) -> no change
-  assert.deepEqual(
-    getLowStockResolvedUpdate(
-      { status: ProductStatus.ON_HOLD, holdReason: "Put on hold manually." },
-      null
-    ),
-    {}
-  );
-
-  // Case 5: Product is IMPORTED (not ON_HOLD) -> no change
-  assert.deepEqual(
-    getLowStockResolvedUpdate(
-      { status: ProductStatus.IMPORTED, holdReason: "Low Amazon stock (2 left)." },
-      null
-    ),
-    {}
-  );
-
-  // Case 6: stockLeft is undefined (not scraped / simulated) -> no change
-  assert.deepEqual(
-    getLowStockResolvedUpdate(
-      { status: ProductStatus.ON_HOLD, holdReason: "Low Amazon stock (2 left)." },
-      undefined
-    ),
-    {}
-  );
-});
-
-test("healthy stock and resolved low-stock reasons are recognized safely", () => {
-  assert.equal(isAmazonStockHealthy(null), true);
-  assert.equal(isAmazonStockHealthy(4), true);
-  assert.equal(isAmazonStockHealthy(3), false);
-  assert.equal(isAmazonStockHealthy(undefined), false);
-  assert.equal(
-    isResolvedLowStockHoldReason(LOW_STOCK_RESOLVED_HOLD_REASON),
-    true,
-  );
+test("low-stock recovery requires a confirmed count at or above the current minimum", () => {
+  const held = { status: ProductStatus.ON_HOLD, holdReason: "Low Amazon stock (1 left).", holdOrigin: "LOW_STOCK" };
+  assert.deepEqual(getLowStockResolvedUpdate(held, 1, 2), {});
+  assert.deepEqual(getLowStockResolvedUpdate(held, 2, 2), { holdReason: LOW_STOCK_RESOLVED_HOLD_REASON });
+  assert.deepEqual(getLowStockResolvedUpdate(held, 2, 3), {});
+  assert.deepEqual(getLowStockResolvedUpdate(held, null, 2), {});
+  assert.deepEqual(getLowStockResolvedUpdate(held, undefined, 2), {});
+  assert.deepEqual(getLowStockResolvedUpdate({ ...held, holdReason: "Put on hold manually." }, 5, 2), {});
+  assert.deepEqual(getLowStockResolvedUpdate({ ...held, holdOrigin: "MANUAL" }, 5, 2), {});
+  assert.deepEqual(getLowStockResolvedUpdate({ ...held, status: ProductStatus.IMPORTED }, 5, 2), {});
+  assert.equal(isResolvedLowStockHoldReason(LOW_STOCK_RESOLVED_HOLD_REASON), true);
   assert.equal(isResolvedLowStockHoldReason("Put on hold manually."), false);
 });

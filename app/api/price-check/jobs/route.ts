@@ -19,9 +19,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let body: { productIds?: unknown[]; all?: boolean };
+  let body: { productIds?: unknown[]; all?: boolean; allOnHold?: boolean };
   try {
-    body = (await request.json()) as { productIds?: unknown[]; all?: boolean };
+    body = (await request.json()) as { productIds?: unknown[]; all?: boolean; allOnHold?: boolean };
   } catch (error) {
     log.error("price-check/jobs/POST", "Invalid JSON body", error);
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
@@ -35,6 +35,7 @@ export async function POST(request: Request) {
       storeId: storeSession.storeId,
       productIds: body.productIds,
       all: body.all === true,
+      allOnHold: body.allOnHold === true,
     });
 
     log.info("price-check/jobs/POST", "Price check job request accepted", {

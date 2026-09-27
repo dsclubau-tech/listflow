@@ -71,7 +71,7 @@ test("automatic recovery requires affirmative availability and low-stock evidenc
       ...base,
       origin: ProductHoldOrigin.LOW_STOCK,
       availability: "IN_STOCK",
-      stockLeft: 3,
+      stockLeft: 1,
     }),
     false,
   );

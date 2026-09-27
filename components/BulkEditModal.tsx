@@ -625,7 +625,7 @@ export default function BulkEditModal({
           label={job.status === "CANCELLED" ? "Bulk edit cancelled" : job.status === "CANCELLING" ? "Cancelling bulk edit" : isActiveJob(job) ? "Bulk edit in progress" : "Bulk edit finished"}
           percent={getProgressPercent(job)}
           detail={`${job.processed}/${job.total} processed`}
-          tone={job.failed > 0 ? "red" : isTerminalJob(job) ? "green" : "blue"}
+          tone="green"
         />
         <span className="mt-2 block text-xs font-semibold text-blue-700">View details</span>
       </button>
@@ -1082,7 +1082,7 @@ export default function BulkEditModal({
                 }
                 percent={progressPercent}
                 detail={`${job.processed}/${job.total} processed (${job.succeeded} succeeded, ${job.failed} failed)`}
-                tone={job.failed > 0 ? "red" : terminalJob ? "green" : "blue"}
+                tone="green"
               />
               {!terminalJob && job.queuePosition && job.queuePosition > 1 && (
                 <div className="mt-2 text-xs text-gray-600">Queue position {job.queuePosition}</div>

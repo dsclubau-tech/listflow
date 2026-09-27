@@ -16,6 +16,7 @@ import {
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
 import { getStockReplenishmentCandidates } from "@/lib/stock-replenishment-rules";
+import { getMinimumProductQuantity } from "@/lib/low-stock-products";
 
 const MAX_REPLENISHMENTS_PER_RUN = Math.max(
   1,
@@ -57,12 +58,18 @@ async function runStockReplenishmentClaimed(
   storeId: string,
 ): Promise<StockReplenishmentResult> {
   const storeNumber = await getStoreNumber(storeId);
+  const settings = await prisma.supplierSettings.findUnique({
+    where: { storeId_supplierName: { storeId, supplierName: "Amazon AU" } },
+    select: { minProductQuantity: true },
+  });
+  const minimum = getMinimumProductQuantity(settings?.minProductQuantity);
   const products = await prisma.product.findMany({
     where: {
       storeId,
       status: ProductStatus.IMPORTED,
       ebayItemId: { not: null },
       quantity: { gt: 0 },
+      OR: [{ amazonStockLeft: null }, { amazonStockLeft: { gte: minimum } }],
     },
     select: {
       id: true,

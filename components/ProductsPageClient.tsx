@@ -601,7 +601,7 @@ export default function ProductsPageClient({
   useEffect(() => {
     const query = searchDraft.trim();
 
-    if (query.length < 2) {
+    if (query.length < 3) {
       setSearchSuggestions([]);
       setIsSearchSuggestionsOpen(false);
       setIsLoadingSearchSuggestions(false);
@@ -644,7 +644,7 @@ export default function ProductsPageClient({
           setIsLoadingSearchSuggestions(false);
         }
       }
-    }, 180);
+    }, 150);
 
     return () => {
       controller.abort();
@@ -1066,6 +1066,10 @@ export default function ProductsPageClient({
       }
     ) => {
       const trimmed = (options?.search ?? searchDraft).trim();
+      if (trimmed.length > 0 && trimmed.length < 3 && !options?.productId) {
+        showToast("Enter at least 3 characters.", "error");
+        return;
+      }
       const filtersToApply = options?.advancedDraft ?? advancedFilterDraft;
       const validationError = getProductRangeFilterValidationError(filtersToApply);
       if (validationError) {
@@ -1111,7 +1115,18 @@ export default function ProductsPageClient({
 
   useEffect(() => {
     const query = searchDraft.trim();
-    if ((query.length > 0 && query.length < 2) || query === searchQuery) {
+    if (query === searchQuery) {
+      return;
+    }
+
+    if (query.length > 0 && query.length < 3) {
+      if (searchQuery) {
+        const params = new URLSearchParams(searchParamsString);
+        params.delete("q");
+        params.delete("productId");
+        params.set("page", "1");
+        router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+      }
       return;
     }
 
@@ -1122,7 +1137,7 @@ export default function ProductsPageClient({
       if (query) params.set("q", query);
       else params.delete("q");
       router.replace(`${pathname}?${params.toString()}`, { scroll: false });
-    }, query ? 250 : 0);
+    }, query ? 150 : 0);
 
     return () => window.clearTimeout(timeout);
   }, [pathname, router, searchDraft, searchParamsString, searchQuery]);
@@ -1974,6 +1989,7 @@ export default function ProductsPageClient({
               <input
                 ref={searchInputRef}
                 type="text"
+                maxLength={100}
                 value={searchDraft}
                 onChange={(event) => {
                   setSearchDraft(event.target.value);
@@ -1981,7 +1997,7 @@ export default function ProductsPageClient({
                   setActiveSearchSuggestionIndex(-1);
                 }}
                 onFocus={() => {
-                  if (searchDraft.trim().length >= 2) {
+                  if (searchDraft.trim().length >= 3) {
                     setIsSearchSuggestionsOpen(true);
                   }
                 }}
@@ -2019,7 +2035,7 @@ export default function ProductsPageClient({
                   </svg>
                 </button>
               )}
-              {isSearchSuggestionsOpen && searchDraft.trim().length >= 2 && (
+              {isSearchSuggestionsOpen && searchDraft.trim().length >= 3 && (
                 <div
                   id="product-search-suggestions"
                   role="listbox"
@@ -2084,6 +2100,9 @@ export default function ProductsPageClient({
                     </div>
                   )}
                 </div>
+              )}
+              {searchDraft.trim().length > 0 && searchDraft.trim().length < 3 && (
+                <span className="absolute left-0 top-full mt-1 text-xs text-gray-500">Enter at least 3 characters</span>
               )}
             </div>
             <button

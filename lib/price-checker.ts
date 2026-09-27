@@ -881,7 +881,8 @@ export async function runPriceCheck(
         const amazonStockUpdate = getAmazonStockUpdate(scrapedAmazonStockLeft);
         const lowStockResolvedUpdate = getLowStockResolvedUpdate(
           product,
-          scrapedAmazonStockLeft
+          scrapedAmazonStockLeft,
+          supplierSettings.minProductQuantity,
         );
 
         if (currentAmazonPrice === null) {

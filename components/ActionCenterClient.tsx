@@ -988,18 +988,20 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
 
   function startPriceCheckJob(
     key: string,
-    body: { all?: boolean; productIds?: string[] },
+    body: { all?: boolean; allOnHold?: boolean; productIds?: string[] },
     emptyMessage: string,
     startedLabel: (total: number) => string
   ) {
     void runAction(key, async () => {
-      if (!body.all && (!body.productIds || body.productIds.length === 0)) {
+      if (!body.all && !body.allOnHold && (!body.productIds || body.productIds.length === 0)) {
         return emptyMessage;
       }
 
       const result = await postJson<{
         job?: ActionCenterPriceCheckJob;
         reused?: boolean;
+        eligibleCount?: number;
+        ineligibleCount?: number;
       }>("/api/price-check/jobs", body);
 
       if (result.job && isActivePriceJob(result.job)) {
@@ -1012,7 +1014,9 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
       }
 
       const total = result.job?.total ?? 0;
-      return startedLabel(total);
+      if (body.allOnHold && total === 0) return "No eligible held products to recheck.";
+      const skipped = result.ineligibleCount ?? 0;
+      return `${startedLabel(total)}${skipped ? ` ${skipped} held product${skipped === 1 ? "" : "s"} could not be checked.` : ""}`;
     });
   }
 
@@ -1309,6 +1313,15 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
           ? "Cancellation requested. The current operation will finish before the job stops."
           : "Job already finished.";
     });
+  }
+
+  function recheckAllHeldProducts() {
+    startPriceCheckJob(
+      "recheck-all-held",
+      { allOnHold: true },
+      "No eligible held products to recheck.",
+      (total) => `Rechecking ${total} held product${total === 1 ? "" : "s"}.`,
+    );
   }
 
   function cancelImportJob(job: ActionCenterEbayImportJob) {
@@ -2161,6 +2174,13 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
             onClearSelection={clearSelection}
           >
             <ActionButton
+              onClick={recheckAllHeldProducts}
+              disabled={adjustedSummary.onHold === 0 || runningAction === "recheck-all-held"}
+              tone="primary"
+            >
+              {runningAction === "recheck-all-held" ? "Starting..." : "Recheck all"}
+            </ActionButton>
+            <ActionButton
               onClick={() =>
                 bulkResumeProducts(
                   selectedInActiveTab.length > 0 ? selectedInActiveTab : undefined
@@ -2197,6 +2217,10 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                   : `End visible (${visibleOnHoldItems.length})`}
             </ActionButton>
           </SectionHeader>
+
+          <p className="border-b border-gray-200 px-4 py-2 text-xs text-gray-500">
+            Recheck all covers eligible held products on every page, regardless of search, filters, or selection.
+          </p>
 
           <div className="flex flex-wrap items-center gap-3 border-b border-gray-200 bg-gray-50/60 px-4 py-3">
             <label className="min-w-56 flex-1 sm:max-w-md">

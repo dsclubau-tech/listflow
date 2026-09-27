@@ -12,6 +12,8 @@ import {
 } from "@/lib/price-check-failures";
 import { invalidateJobCaches } from "@/lib/cache-tags";
 import { logger } from "@/lib/logger";
+import { getMinimumProductQuantity } from "@/lib/low-stock-products";
+import { getPriceCheckRecoveryEvidence, priceCheckRecoveryRelations } from "@/lib/price-check-recovery-evidence";
 import {
   finalizePriceCheckAutoResumeForJob,
   queuePriceCheckAutoResumeForRun,
@@ -63,7 +65,7 @@ async function queueAutoResumesSafelyForRun(input: {
   }
 }
 
-async function getAutoHoldEnabled(tx: TransactionClient, storeId: string) {
+async function getAutoHoldSettings(tx: TransactionClient, storeId: string) {
   const settings = await tx.supplierSettings.findUnique({
     where: {
       storeId_supplierName: {
@@ -71,10 +73,11 @@ async function getAutoHoldEnabled(tx: TransactionClient, storeId: string) {
         supplierName: SUPPLIER_NAME,
       },
     },
-    select: { autoHoldOnPriceCheckFailure: true },
+    select: { autoHoldOnPriceCheckFailure: true, minProductQuantity: true },
   });
 
-  return settings?.autoHoldOnPriceCheckFailure ?? true;
+  return { enabled: settings?.autoHoldOnPriceCheckFailure ?? true,
+    minimum: getMinimumProductQuantity(settings?.minProductQuantity) };
 }
 
 async function resolveCandidateIds(
@@ -86,7 +89,7 @@ async function resolveCandidateIds(
     all?: boolean;
   },
 ) {
-  const enabled = await getAutoHoldEnabled(tx, input.storeId);
+  const { enabled, minimum } = await getAutoHoldSettings(tx, input.storeId);
 
   if (!input.all && input.productIds.length === 0) {
     return [];
@@ -97,9 +100,10 @@ async function resolveCandidateIds(
       ...(input.all ? {} : { id: { in: input.productIds } }),
       storeId: input.storeId,
       lastPriceCheck: { gte: input.failedSince },
-      priceCheckFailureCode: {
-        in: [...AUTO_HOLD_PRICE_CHECK_FAILURE_CODES],
-      },
+      OR: [
+        { priceCheckFailureCode: { in: [...AUTO_HOLD_PRICE_CHECK_FAILURE_CODES] } },
+        { amazonStockLeft: { gte: 0, lt: minimum } },
+      ],
     },
     select: {
       id: true,
@@ -107,11 +111,18 @@ async function resolveCandidateIds(
       ebayItemId: true,
       priceCheckError: true,
       priceCheckFailureCode: true,
+      lastPriceCheck: true,
+      ...priceCheckRecoveryRelations,
     },
   });
+  const candidates = products.map((product) => ({
+    ...product,
+    ...getPriceCheckRecoveryEvidence(product),
+  }));
   const candidateIds = selectPriceCheckAutoHoldProductIds({
     enabled,
-    products,
+    minimumProductQuantity: minimum,
+    products: candidates,
   });
 
   if (candidateIds.length === 0) {
@@ -131,7 +142,8 @@ async function resolveCandidateIds(
 
   return selectPriceCheckAutoHoldProductIds({
     enabled,
-    products,
+    minimumProductQuantity: minimum,
+    products: candidates,
     coveredProductIds,
   });
 }
@@ -143,6 +155,7 @@ async function createAutoHoldAction(
     storeId: string;
     productIds: string[];
     sourcePriceCheckJobId?: string;
+    checkedSince: Date;
   },
 ) {
   if (input.productIds.length === 0) {
@@ -159,6 +172,7 @@ async function createAutoHoldAction(
       total: input.productIds.length,
       metadata: {
         kind: "price-check-auto-hold",
+        checkedSince: input.checkedSince.toISOString(),
         ...(input.sourcePriceCheckJobId
           ? { sourcePriceCheckJobId: input.sourcePriceCheckJobId }
           : { source: "direct-price-check" }),
@@ -198,6 +212,7 @@ export async function finalizePriceCheckAutoHoldForJob(
       storeId: job.storeId,
       productIds,
       sourcePriceCheckJobId: job.id,
+      checkedSince: job.startedAt,
     });
 
     await tx.priceCheckJob.update({
@@ -248,6 +263,7 @@ export async function queuePriceCheckAutoHoldForRun(input: {
       userId: input.userId,
       storeId: input.storeId,
       productIds,
+      checkedSince: input.failedSince,
     });
 
     return {

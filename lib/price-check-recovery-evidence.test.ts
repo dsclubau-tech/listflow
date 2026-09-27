@@ -22,8 +22,11 @@ const evidence = {
     identityOutcome: "MATCH",
     buyBoxOutcome: "AVAILABLE",
     postcodeVerified: true,
+    stockLeft: 4,
+    observedAt: new Date("2026-01-01T00:01:00Z"),
   }],
   _count: { priceHistory: 0 },
+  lastPriceCheck: new Date("2026-01-01T00:00:00Z"),
 };
 
 test("the resume worker needs observation evidence as well as the product row", () => {
@@ -57,7 +60,7 @@ test("all eligible automatic hold types recover without requiring a saved quanti
         assert.equal(isRecoveredPriceCheckAutoHold({ ...product, hasUnappliedPriceChange: true }), false);
         assert.equal(isRecoveredPriceCheckAutoHold({ ...product, postcodeVerified: false }), false);
         if (holdOrigin === "LOW_STOCK") {
-          assert.equal(isRecoveredPriceCheckAutoHold({ ...product, amazonStockLeft: 3 }), false);
+          assert.equal(isRecoveredPriceCheckAutoHold({ ...product, amazonStockLeft: 1 }), false);
         }
       }
     }
@@ -76,7 +79,20 @@ test("missing or inconclusive observations cannot restore stock", () => {
   ]) {
     assert.equal(isRecoveredPriceCheckAutoHold({
       ...heldProduct,
-      ...getPriceCheckRecoveryEvidence({ ...evidence, amazonPriceObservations: [observation] }),
+      ...getPriceCheckRecoveryEvidence({ ...evidence, amazonPriceObservations: [{ ...evidence.amazonPriceObservations[0], ...observation }] }),
     }), false);
   }
+});
+
+test("stale stock observations cannot release a low-stock hold", () => {
+  const stale = getPriceCheckRecoveryEvidence({
+    ...evidence,
+    lastPriceCheck: new Date("2026-01-01T00:02:00Z"),
+  });
+  assert.equal(stale.verifiedStockLeft, null);
+  assert.equal(stale.identityOutcome, null);
+  assert.equal(isRecoveredPriceCheckAutoHold({ ...heldProduct, ...stale }), false);
+  assert.equal(isRecoveredPriceCheckAutoHold({
+    ...heldProduct, holdOrigin: "LOW_STOCK", amazonStockLeft: 4, ...stale,
+  }), false);
 });

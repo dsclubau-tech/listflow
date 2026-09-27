@@ -98,11 +98,12 @@ export function canAutomaticallyRecoverHold(input: {
   hasVerifiedPrice: boolean;
   savedQuantity?: number | null;
   identityVerified?: boolean;
+  minimumProductQuantity?: number;
 }) {
   if (input.origin === ProductHoldOrigin.MANUAL || input.origin === ProductHoldOrigin.UNKNOWN) return false;
   if (!input.hasVerifiedPrice) return false;
   if (input.identityVerified === false) return false;
   if (input.availability === "OUT_OF_STOCK" || input.availability === "UNKNOWN") return false;
-  if (input.origin === ProductHoldOrigin.LOW_STOCK && (input.stockLeft === null || input.stockLeft === undefined || input.stockLeft <= 3)) return false;
+  if (input.origin === ProductHoldOrigin.LOW_STOCK && (input.stockLeft === null || input.stockLeft === undefined || input.stockLeft < (input.minimumProductQuantity ?? 2))) return false;
   return true;
 }

@@ -194,6 +194,24 @@ test("automatic hold candidates require a current product failure and are dedupe
   );
 });
 
+test("verified low stock holds independently of the failure toggle", () => {
+  const base = {
+    status: "IMPORTED", ebayItemId: "123", priceCheckError: null,
+    priceCheckFailureCode: null,
+  };
+  const products = [
+    { ...base, id: "one", verifiedStockLeft: 1 },
+    { ...base, id: "two", verifiedStockLeft: 2 },
+    { ...base, id: "unknown", verifiedStockLeft: null },
+    { ...base, id: "technical", verifiedStockLeft: 1,
+      priceCheckFailureCode: PriceCheckFailureCode.TECHNICAL_ERROR },
+  ];
+  assert.deepEqual(selectPriceCheckAutoHoldProductIds({ enabled: false,
+    minimumProductQuantity: 2, products }), ["one"]);
+  assert.deepEqual(selectPriceCheckAutoHoldProductIds({ enabled: false,
+    minimumProductQuantity: 3, products }), ["one", "two"]);
+});
+
 test("automatic hold reasons are stable for later recovery checks", () => {
   assert.equal(
     getPriceCheckAutoHoldReason(" Deal price is no longer available on Amazon. "),
@@ -229,7 +247,7 @@ test("automatic resume candidates only include recovered false deal-price holds"
     holdReason: DEAL_PRICE_UNAVAILABLE_AUTO_HOLD_REASON,
     priceCheckError: null,
     priceCheckFailureCode: null,
-    amazonStockLeft: 1,
+    amazonStockLeft: 2,
     identityOutcome: "MATCH",
     buyBoxOutcome: "AVAILABLE",
     postcodeVerified: true,
@@ -275,6 +293,7 @@ test("automatic resume candidates include resolved low-stock holds but exclude u
     priceCheckError: null,
     priceCheckFailureCode: null,
     amazonStockLeft: 4,
+    verifiedStockLeft: 4,
     identityOutcome: "MATCH",
     buyBoxOutcome: "AVAILABLE",
     postcodeVerified: true,
@@ -283,9 +302,9 @@ test("automatic resume candidates include resolved low-stock holds but exclude u
   };
   const products = [
     recoveredStock,
-    { ...recoveredStock, id: "healthy-count", amazonStockLeft: 8 },
-    { ...recoveredStock, id: "still-low", amazonStockLeft: 3 },
-    { ...recoveredStock, id: "unknown-count", amazonStockLeft: null },
+    { ...recoveredStock, id: "healthy-count", amazonStockLeft: 8, verifiedStockLeft: 8 },
+    { ...recoveredStock, id: "still-low", amazonStockLeft: 1, verifiedStockLeft: 1 },
+    { ...recoveredStock, id: "unknown-count", amazonStockLeft: null, verifiedStockLeft: null },
     { ...recoveredStock, id: "manual", holdReason: "Put on hold manually." },
     {
       ...recoveredStock,

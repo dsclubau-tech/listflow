@@ -22,7 +22,7 @@ import {
 } from "@/lib/price-check-failures";
 import {
   LOW_STOCK_RESOLVED_HOLD_REASON,
-  LOW_STOCK_THRESHOLD,
+  getMinimumProductQuantity,
 } from "@/lib/low-stock-products";
 
 const ACTIVE_ACTION_STATUSES = [
@@ -54,6 +54,11 @@ async function resolveCandidateIds(
     return [];
   }
 
+  const settings = await tx.supplierSettings.findUnique({
+    where: { storeId_supplierName: { storeId: input.storeId, supplierName: "Amazon AU" } },
+    select: { minProductQuantity: true },
+  });
+  const minimum = getMinimumProductQuantity(settings?.minProductQuantity);
   const products = await tx.product.findMany({
     where: {
       ...(input.all ? {} : { id: { in: input.productIds } }),
@@ -78,7 +83,7 @@ async function resolveCandidateIds(
         {
           holdOrigin: ProductHoldOrigin.LOW_STOCK,
           amazonAvailability: AmazonAvailability.IN_STOCK,
-          amazonStockLeft: { gt: LOW_STOCK_THRESHOLD },
+          amazonStockLeft: { gte: minimum },
           amazonPrice: { gt: 0 },
         },
         {
@@ -90,14 +95,14 @@ async function resolveCandidateIds(
           holdReason: REGULAR_PRICE_UNAVAILABLE_AUTO_HOLD_REASON,
           OR: [
             { amazonStockLeft: null },
-            { amazonStockLeft: { gt: LOW_STOCK_THRESHOLD } },
+            { amazonStockLeft: { gte: minimum } },
           ],
         },
         {
           holdReason: LOW_STOCK_RESOLVED_HOLD_REASON,
           OR: [
             { amazonStockLeft: null },
-            { amazonStockLeft: { gt: LOW_STOCK_THRESHOLD } },
+            { amazonStockLeft: { gte: minimum } },
           ],
         },
       ],
@@ -115,12 +120,14 @@ async function resolveCandidateIds(
       amazonAvailability: true,
       holdOrigin: true,
       holdSavedQuantity: true,
+      lastPriceCheck: true,
       ...priceCheckRecoveryRelations,
     },
   });
   const candidates = products.map((product) => ({
     ...product,
     ...getPriceCheckRecoveryEvidence(product),
+    minimumProductQuantity: minimum,
   }));
   const candidateIds = selectPriceCheckAutoResumeProductIds({ products: candidates });
 

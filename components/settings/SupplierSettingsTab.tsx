@@ -998,7 +998,7 @@ export default function SupplierSettingsTab() {
                     onChange={(e) => updateField("minProductQuantity", Math.max(1, parseInt(e.target.value) || 1))}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
-                  <p className="text-xs text-gray-400 mt-1">Minimum stock quantity required to keep the product active</p>
+                  <p className="text-xs text-gray-400 mt-1">Hold automatically when verified Amazon stock is below this number</p>
                 </div>
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">Maximum Shipping Days</label>

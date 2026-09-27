@@ -10,8 +10,10 @@ import {
   getLowStockProductWhere,
   isLowStockHoldJobMetadata,
   LOW_STOCK_HOLD_JOB_KIND,
-  LOW_STOCK_THRESHOLD,
+  getMinimumProductQuantity,
+  isAmazonStockLow,
 } from "@/lib/low-stock-products";
+import { getPriceCheckRecoveryEvidence, priceCheckRecoveryRelations } from "@/lib/price-check-recovery-evidence";
 import { prisma } from "@/lib/prisma";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
@@ -69,16 +71,23 @@ export async function POST(request: Request) {
 
     await assertWorkerOnlineForStore(storeSession.storeId);
     const userId = await getInternalUserId();
+    const settings = await prisma.supplierSettings.findUnique({
+      where: { storeId_supplierName: { storeId: storeSession.storeId, supplierName: "Amazon AU" } },
+      select: { minProductQuantity: true },
+    });
+    const minimum = getMinimumProductQuantity(settings?.minProductQuantity);
     const lowStockProducts =
       body.allLowStock === true
         ? await prisma.product.findMany({
-            where: getLowStockProductWhere(storeSession.storeId),
-            select: { id: true },
+            where: getLowStockProductWhere(storeSession.storeId, minimum),
+            select: { id: true, lastPriceCheck: true, ...priceCheckRecoveryRelations },
             orderBy: [{ amazonStockLeft: "asc" }, { title: "asc" }],
           })
         : null;
     const productIds = lowStockProducts
-      ? lowStockProducts.map((product) => product.id)
+      ? lowStockProducts.filter((product) =>
+          isAmazonStockLow(getPriceCheckRecoveryEvidence(product).verifiedStockLeft, minimum),
+        ).map((product) => product.id)
       : body.productIds ?? [];
     const result = await createEbayActionJob({
       userId,
@@ -88,7 +97,7 @@ export async function POST(request: Request) {
       metadata: lowStockProducts
         ? {
             kind: LOW_STOCK_HOLD_JOB_KIND,
-            threshold: LOW_STOCK_THRESHOLD,
+            minimum,
           }
         : undefined,
     });

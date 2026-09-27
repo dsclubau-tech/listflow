@@ -27,6 +27,7 @@ import type { ProductSelectionSummary } from "@/types/product-selection";
 import type { SerializedProductRow } from "@/types/product-row";
 import { getProductUploadedAt } from "@/lib/product-uploaded-at";
 import { rankProductSearchResults } from "@/lib/product-search";
+import { getFastProductSearchPage } from "@/lib/fast-product-search";
 
 export { normalizeProductsQuery };
 export type {
@@ -350,7 +351,11 @@ export async function getCachedProductsSelectionData(
   cacheLife(LISTFLOW_FRESH_CACHE_LIFE);
   cacheTag(productsCacheTag(storeId), draftsCacheTag(storeId));
 
-  const where = buildProductsWhere(storeId, query);
+  const settings = await prisma.supplierSettings.findUnique({
+    where: { storeId_supplierName: { storeId, supplierName: "Amazon AU" } },
+    select: { minProductQuantity: true },
+  });
+  const where = buildProductsWhere(storeId, query, settings?.minProductQuantity ?? 2);
 
   if (hasProfitRangeFilter(query) || query.sortBy || query.searchQuery) {
     const orderedIds = await getComputedProductOrderIds(where, query);
@@ -387,8 +392,33 @@ export async function getCachedProductsPageData(
     draftsCacheTag(storeId)
   );
 
-  const where = buildProductsWhere(storeId, query);
+  const settings = await prisma.supplierSettings.findUnique({
+    where: { storeId_supplierName: { storeId, supplierName: "Amazon AU" } },
+    select: { minProductQuantity: true },
+  });
+  const where = buildProductsWhere(storeId, query, settings?.minProductQuantity ?? 2);
   const supplierOptions = [{ id: storeId, name: storeName }];
+
+  if (query.searchQuery) {
+    const minimum = settings?.minProductQuantity ?? 2;
+    const requested = await getFastProductSearchPage({
+      storeId, query, minimumProductQuantity: minimum,
+      take: query.pageSize, skip: (query.requestedPage - 1) * query.pageSize,
+    });
+    const page = getPage(requested.totalCount, query);
+    const ids = page === query.requestedPage ? requested.ids :
+      (await getFastProductSearchPage({ storeId, query, minimumProductQuantity: minimum,
+        take: query.pageSize, skip: (page - 1) * query.pageSize })).ids;
+    const products = await getProductRowsByIds(storeId, ids);
+    return {
+      products: serializeProducts(products),
+      totalCount: requested.totalCount,
+      page, pageSize: query.pageSize, sortBy: query.sortBy,
+      sortOrder: query.sortOrder, importedFilter: query.importedFilter,
+      productFilter: query.productFilter, hasAdvancedFilters: query.hasAdvancedFilters,
+      supplierOptions,
+    };
+  }
 
   if (hasProfitRangeFilter(query) || query.sortBy || query.searchQuery) {
     // Visible prices and profits can come from variant ranges. Compute the

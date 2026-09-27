@@ -169,13 +169,6 @@ function getProductHoldReason(product: Pick<SerializedProductRow, "status" | "ho
   if (product.quantity <= 0) {
     return "Listing quantity was set to 0.";
   }
-  if (
-    product.amazonStockLeft !== null &&
-    product.amazonStockLeft !== undefined &&
-    product.amazonStockLeft <= 3
-  ) {
-    return `Low Amazon stock (${product.amazonStockLeft} left).`;
-  }
   return "Put on hold manually.";
 }
 

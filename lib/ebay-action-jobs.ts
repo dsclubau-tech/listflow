@@ -4,6 +4,7 @@ import {
   EbayActionJobStatus,
   EbayActionJobType,
   ProductStatus,
+  PriceCheckFailureCode,
 } from "@/app/generated/prisma/enums";
 import { Prisma } from "@/app/generated/prisma/client";
 import {
@@ -80,7 +81,7 @@ import {
   isPriceCheckAutoResumeMetadata,
   isRecoveredPriceCheckAutoHold,
 } from "@/lib/price-check-failures";
-import { isLowStockHoldJobMetadata } from "@/lib/low-stock-products";
+import { getMinimumProductQuantity, isAmazonStockLow, isLowStockHoldJobMetadata } from "@/lib/low-stock-products";
 import { getPriceCheckRecoveryEvidence, priceCheckRecoveryRelations } from "@/lib/price-check-recovery-evidence";
 import {
   captureHoldQuantities,
@@ -1225,6 +1226,9 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
   const automaticPriceCheckHold =
     job.type === EbayActionJobType.HOLD &&
     isPriceCheckAutoHoldMetadata(job.metadata);
+  const automaticLowStockHold =
+    job.type === EbayActionJobType.HOLD &&
+    isLowStockHoldJobMetadata(job.metadata);
   const automaticPriceCheckResume =
     job.type === EbayActionJobType.RESUME &&
     isPriceCheckAutoResumeMetadata(job.metadata);
@@ -1235,7 +1239,8 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       variants: {
         orderBy: { createdAt: "asc" },
       },
-      ...(automaticPriceCheckResume ? priceCheckRecoveryRelations : {}),
+      ...(automaticPriceCheckResume || automaticPriceCheckHold || automaticLowStockHold
+        ? priceCheckRecoveryRelations : {}),
     },
   });
 
@@ -1545,12 +1550,28 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
   }
 
   if (job.type === EbayActionJobType.HOLD) {
-    if (
-      automaticPriceCheckHold &&
-      (product.status !== ProductStatus.IMPORTED ||
-        !product.priceCheckError ||
-        !isAutoHoldPriceCheckFailureCode(product.priceCheckFailureCode))
-    ) {
+    const settings = await prisma.supplierSettings.findUnique({
+      where: { storeId_supplierName: { storeId: product.storeId, supplierName: "Amazon AU" } },
+      select: { minProductQuantity: true, autoHoldOnPriceCheckFailure: true },
+    });
+    const minimum = getMinimumProductQuantity(settings?.minProductQuantity);
+    const verifiedStockLeft = automaticPriceCheckHold || automaticLowStockHold
+      ? getPriceCheckRecoveryEvidence(product).verifiedStockLeft : null;
+    if (automaticLowStockHold &&
+        (product.status !== ProductStatus.IMPORTED ||
+          !isAmazonStockLow(verifiedStockLeft, minimum))) {
+      return { ok: true, failure: null };
+    }
+    const failureHold = Boolean(product.priceCheckError) &&
+      isAutoHoldPriceCheckFailureCode(product.priceCheckFailureCode) &&
+      ((settings?.autoHoldOnPriceCheckFailure ?? true) ||
+        product.priceCheckFailureCode === PriceCheckFailureCode.AMAZON_ASIN_REDIRECT ||
+        product.priceCheckFailureCode === PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE);
+    const priceCheckLowStockHold = automaticPriceCheckHold &&
+      product.priceCheckFailureCode !== PriceCheckFailureCode.TECHNICAL_ERROR &&
+      isAmazonStockLow(verifiedStockLeft, minimum);
+    if (automaticPriceCheckHold &&
+        (product.status !== ProductStatus.IMPORTED || (!failureHold && !priceCheckLowStockHold))) {
       return { ok: true, failure: null };
     }
 
@@ -1612,28 +1633,20 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       };
     }
 
-    let holdReason = "Put on hold manually.";
-    const automaticLowStockHold = isLowStockHoldJobMetadata(job.metadata);
-    if (automaticPriceCheckHold) {
-      holdReason = getPriceCheckAutoHoldReason(product.priceCheckError);
+    let holdReason = product.quantity <= 0
+      ? "Listing quantity was set to 0."
+      : "Put on hold manually.";
+    if (priceCheckLowStockHold) {
+      holdReason = `Low Amazon stock (${verifiedStockLeft} left; minimum ${minimum}).`;
     } else if (automaticLowStockHold) {
-      holdReason =
-        product.amazonStockLeft !== null
-          ? `Low Amazon stock (${product.amazonStockLeft} left).`
-          : "Low Amazon stock.";
-    } else if (product.quantity <= 0) {
-      holdReason = "Listing quantity was set to 0.";
-    } else if (
-      product.amazonStockLeft !== null &&
-      product.amazonStockLeft <= 3
-    ) {
-      holdReason = `Low Amazon stock (${product.amazonStockLeft} left).`;
+      holdReason = `Low Amazon stock (${verifiedStockLeft} left; minimum ${minimum}).`;
+    } else if (automaticPriceCheckHold && failureHold) {
+      holdReason = getPriceCheckAutoHoldReason(product.priceCheckError);
     }
 
     const holdOrigin = getProductHoldOrigin({
-      automaticPriceCheck: automaticPriceCheckHold,
-      lowStock: automaticLowStockHold ||
-        (!automaticPriceCheckHold && product.amazonStockLeft !== null && product.amazonStockLeft <= 3),
+      automaticPriceCheck: automaticPriceCheckHold && failureHold && !priceCheckLowStockHold,
+      lowStock: automaticLowStockHold || priceCheckLowStockHold,
       failureCode: product.priceCheckFailureCode,
       existing: product.holdOrigin,
     });
@@ -1670,14 +1683,16 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
   }
 
   if (job.type === EbayActionJobType.RESUME) {
-    if (
-      automaticPriceCheckResume &&
-      !isRecoveredPriceCheckAutoHold({
+    if (automaticPriceCheckResume) {
+      const settings = await prisma.supplierSettings.findUnique({
+        where: { storeId_supplierName: { storeId: product.storeId, supplierName: "Amazon AU" } },
+        select: { minProductQuantity: true },
+      });
+      if (!isRecoveredPriceCheckAutoHold({
         ...product,
         ...getPriceCheckRecoveryEvidence(product),
-      })
-    ) {
-      return { ok: true, failure: null };
+        minimumProductQuantity: getMinimumProductQuantity(settings?.minProductQuantity),
+      })) return { ok: true, failure: null };
     }
 
     if (

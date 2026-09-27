@@ -78,10 +78,10 @@ export function getOnHoldReason(input: {
     return "Listing quantity was set to 0.";
   }
 
-  const lowStockThreshold = input.lowStockThreshold ?? 3;
+  const lowStockThreshold = input.lowStockThreshold ?? 2;
   if (
     input.amazonStockLeft !== null &&
-    input.amazonStockLeft <= lowStockThreshold
+    input.amazonStockLeft < lowStockThreshold
   ) {
     return `Low Amazon stock (${input.amazonStockLeft} left).`;
   }
