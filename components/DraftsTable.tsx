@@ -131,45 +131,10 @@ const productListingStatusPresentation: Record<
   },
 };
 
-function getProductHoldReason(product: Pick<SerializedProductRow, "status" | "holdReason" | "priceCheckError" | "amazonStockLeft" | "quantity" | "holdOrigin">) {
-  if (product.status !== "ON_HOLD") {
-    return null;
-  }
-  const explicitReason = product.holdReason?.trim();
-  if (explicitReason) {
-    return explicitReason;
-  }
-  const priceCheckError = product.priceCheckError?.trim();
-  if (priceCheckError) {
-    const verification = (product as typeof product & {
-      amazonVerification?: {
-        requestedAsin?: string | null;
-        selectedAsin?: string | null;
-        identityOutcome?: string | null;
-        buyBoxOutcome?: string | null;
-      } | null;
-    }).amazonVerification;
-    if (verification?.identityOutcome === "MISMATCH") {
-      return `Different ASIN: expected ${verification.requestedAsin ?? "unknown"}, detected ${verification.selectedAsin ?? "unknown"}.`;
-    }
-    if (verification?.buyBoxOutcome === "UNAVAILABLE") {
-      return "Unavailable: normal Amazon Buy Box is missing.";
-    }
-    return `Automatic hold after failed price check: ${priceCheckError}`;
-  }
-  if (product.holdOrigin === "UNKNOWN") {
-    return "Hold needs review: the original hold source could not be verified.";
-  }
-  if (product.holdOrigin?.startsWith("PRICE_CHECK_")) {
-    return "Automatic price-check hold; waiting for verified recovery.";
-  }
-  if (product.holdOrigin === "LOW_STOCK") {
-    return "Low Amazon stock; waiting for verified replenishment.";
-  }
-  if (product.quantity <= 0) {
-    return "Listing quantity was set to 0.";
-  }
-  return "Put on hold manually.";
+function getProductHoldReason(product: SerializedProductRow) {
+  return product.status === "ON_HOLD"
+    ? product.currentHoldReason ?? product.holdReason ?? "Put on hold manually."
+    : null;
 }
 
 function formatMoney(value: string | number | null | undefined) {
@@ -575,7 +540,11 @@ function getPriceTrackingState(product: SerializedProductRow) {
       label: "Check failed",
       badgeClass: "bg-red-100 text-red-700",
       priceHistoryId: null,
-      detail: product.priceCheckError,
+      detail: product.status === "ON_HOLD" &&
+        product.holdOrigin &&
+        !["MANUAL", "UNKNOWN", "PRICE_CHECK_UNSAFE_PRICE"].includes(product.holdOrigin)
+          ? product.currentHoldReason ?? product.priceCheckError
+          : product.priceCheckError,
     };
   }
 
@@ -584,7 +553,11 @@ function getPriceTrackingState(product: SerializedProductRow) {
       label: "Pending review",
       badgeClass: "bg-amber-100 text-amber-800",
       priceHistoryId: lastHistory.id,
-      detail: getAmazonChangeDetail(product),
+      detail: product.status === "ON_HOLD" &&
+        product.holdOrigin &&
+        !["MANUAL", "UNKNOWN", "PRICE_CHECK_UNSAFE_PRICE"].includes(product.holdOrigin)
+          ? product.currentHoldReason ?? getAmazonChangeDetail(product)
+          : getAmazonChangeDetail(product),
     };
   }
 
@@ -592,6 +565,10 @@ function getPriceTrackingState(product: SerializedProductRow) {
   if (heldState) {
     return {
       ...heldState,
+      detail: product.holdOrigin &&
+        !["MANUAL", "UNKNOWN", "PRICE_CHECK_UNSAFE_PRICE"].includes(product.holdOrigin)
+          ? product.currentHoldReason ?? heldState.detail
+          : heldState.detail,
       badgeClass: "bg-amber-100 text-amber-800",
       priceHistoryId: null,
     };
@@ -3047,6 +3024,7 @@ export default function DraftsTable({
                         <details className="mt-1 max-w-[12rem] text-xs text-amber-700" onClick={(event) => event.stopPropagation()}>
                           <summary className="cursor-pointer">Hold details</summary>
                           <p className="mt-1 whitespace-normal break-words">{getProductHoldReason(product)}</p>
+                          {product.latestCheckAt && <p className="mt-1 text-gray-500">Latest check: {formatDateTime(product.latestCheckAt)}</p>}
                           <p className="mt-1 whitespace-normal break-words">{getHeldProductTrackingState(product)?.detail}</p>
                         </details>
                       )}

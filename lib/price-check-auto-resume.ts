@@ -121,6 +121,7 @@ async function resolveCandidateIds(
       holdOrigin: true,
       holdSavedQuantity: true,
       lastPriceCheck: true,
+      holdLastObservationId: true,
       ...priceCheckRecoveryRelations,
     },
   });

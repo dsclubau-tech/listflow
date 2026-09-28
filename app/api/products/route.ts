@@ -8,7 +8,7 @@ import { resolveProductPolicySelection } from "@/lib/policy-defaults";
 import { invalidateDraftCaches } from "@/lib/cache-tags";
 import { getEbayCategoryAspects, getStoreNumber } from "@/lib/ebay";
 import { resolveRequiredItemSpecifics } from "@/lib/required-specific-resolver";
-import { applyEbayLocationMetadata } from "@/lib/ebay-location";
+import { applyEbayLocationMetadata, validateAuPostcodeLocation } from "@/lib/ebay-location";
 import { normalizeAmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
 import { dedupeProductImages } from "@/lib/product-images";
 import { normalizeFullProductTitle, toEbayListingTitle } from "@/lib/product-title";
@@ -212,6 +212,7 @@ export async function POST(request: Request) {
         select: {
           defaultCountry: true,
           defaultZipcode: true,
+          defaultLocationText: true,
           automaticSkuFilling: true,
           ebayFeePercent: true,
           fixedFeeAmount: true,
@@ -229,6 +230,7 @@ export async function POST(request: Request) {
         select: {
           defaultCountry: true,
           defaultZipcode: true,
+          defaultLocationText: true,
           automaticSkuFilling: true,
           ebayFeePercent: true,
           fixedFeeAmount: true,
@@ -276,9 +278,16 @@ export async function POST(request: Request) {
       }
     }
 
+    const locationError = validateAuPostcodeLocation(
+      resolvedItemSpecifics._PostalCode || supplierSettings?.defaultZipcode || "3170",
+      resolvedItemSpecifics._Country || supplierSettings?.defaultCountry || "Australia",
+      resolvedItemSpecifics._Location || supplierSettings?.defaultLocationText,
+    );
+    if (locationError) return NextResponse.json({ error: locationError }, { status: 400 });
     resolvedItemSpecifics = applyEbayLocationMetadata(resolvedItemSpecifics, {
       country: supplierSettings?.defaultCountry ?? "Australia",
       postalCode: supplierSettings?.defaultZipcode ?? "3170",
+      location: supplierSettings?.defaultLocationText,
     });
 
     const createProduct = async () => {

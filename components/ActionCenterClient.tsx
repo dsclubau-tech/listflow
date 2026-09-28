@@ -2316,6 +2316,10 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                       <div>
                         <span className="font-semibold text-gray-500 block">Reason:</span>
                         <span className="font-medium text-gray-800">{item.reason}</span>
+                        {item.showLatestCheckSeparately && item.latestCheckMessage && (
+                          <span className="mt-1 block text-gray-500">Latest check: {item.latestCheckMessage}</span>
+                        )}
+                        {item.latestCheckAt && <span className="mt-1 block text-gray-400">{formatDateTime(item.latestCheckAt)}</span>}
                       </div>
                       <div className="flex items-center justify-between pt-1 border-t border-gray-200/60">
                         <span className="text-gray-500">Quantity:</span>
@@ -2407,6 +2411,10 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                         <div className="line-clamp-3" title={item.reason}>
                           {item.reason}
                         </div>
+                        {item.showLatestCheckSeparately && item.latestCheckMessage && (
+                          <div className="mt-1 text-xs text-gray-500">Latest check: {item.latestCheckMessage}</div>
+                        )}
+                        {item.latestCheckAt && <div className="mt-1 text-xs text-gray-400">{formatDateTime(item.latestCheckAt)}</div>}
                       </td>
                       <td className="px-4 py-3 text-sm text-gray-700">{item.quantity}</td>
                       <td className="px-4 py-3">

@@ -1,4 +1,5 @@
 import "server-only";
+import { resolveCurrentHoldReason } from "@/lib/current-hold-reason";
 
 import type { Prisma } from "@/app/generated/prisma/client";
 import { cacheLife, cacheTag } from "next/cache";
@@ -79,6 +80,7 @@ const productRowSelect = {
   holdOrigin: true,
   holdGeneration: true,
   holdSavedQuantity: true,
+  holdLastObservationId: true,
   internalNote: true,
   storeId: true,
   createdById: true,
@@ -121,8 +123,10 @@ const productRowSelect = {
   },
   amazonPriceObservations: {
     orderBy: { observedAt: "desc" },
-    take: 1,
+    take: 5,
     select: {
+      id: true,
+      stockLeft: true,
       requestedAsin: true,
       selectedAsin: true,
       identityOutcome: true,
@@ -228,7 +232,7 @@ function serializeProductSelection(
   }));
 }
 
-function serializeProducts(products: ProductRowPayload[]): SerializedProductRow[] {
+function serializeProducts(products: ProductRowPayload[], minimumProductQuantity: number): SerializedProductRow[] {
   // Editor-only fields are loaded from the product detail endpoint on expansion.
   return products.map(({ uploadLogs, ...product }) => {
     const uploadedAt = getProductUploadedAt({
@@ -238,8 +242,28 @@ function serializeProducts(products: ProductRowPayload[]): SerializedProductRow[
       status: product.status,
     });
 
+    const currentObservation = product.amazonPriceObservations.find(
+      (observation) => observation.id === product.holdLastObservationId,
+    ) ?? null;
+    const holdExplanation = resolveCurrentHoldReason({
+      status: product.status,
+      holdOrigin: product.holdOrigin,
+      holdReason: product.holdReason,
+      priceCheckError: product.priceCheckError,
+      priceCheckFailureCode: product.priceCheckFailureCode,
+      lastPriceCheck: product.lastPriceCheck,
+      amazonStockLeft: product.amazonStockLeft,
+      amazonAvailability: product.amazonAvailability,
+      savedQuantity: product.quantity,
+      minimumProductQuantity,
+      hasPendingReview: product.priceHistory.length > 0,
+      asin: product.asin,
+      latestObservation: currentObservation,
+    });
+
     return ({
       ...product,
+      ...holdExplanation,
       price: product.price.toString(),
       amazonPrice: product.amazonPrice?.toString() ?? null,
       lastPriceCheck: product.lastPriceCheck?.toISOString() ?? null,
@@ -261,10 +285,10 @@ function serializeProducts(products: ProductRowPayload[]): SerializedProductRow[
         appliedAt: entry.appliedAt?.toISOString() ?? null,
         createdAt: entry.createdAt.toISOString(),
       })),
-      amazonVerification: product.amazonPriceObservations[0]
+      amazonVerification: (currentObservation ?? product.amazonPriceObservations[0])
         ? {
-            ...product.amazonPriceObservations[0],
-            observedAt: product.amazonPriceObservations[0].observedAt.toISOString(),
+            ...(currentObservation ?? product.amazonPriceObservations[0]),
+            observedAt: (currentObservation ?? product.amazonPriceObservations[0]).observedAt.toISOString(),
           }
         : null,
       store: product.store,
@@ -411,7 +435,7 @@ export async function getCachedProductsPageData(
         take: query.pageSize, skip: (page - 1) * query.pageSize })).ids;
     const products = await getProductRowsByIds(storeId, ids);
     return {
-      products: serializeProducts(products),
+      products: serializeProducts(products, settings?.minProductQuantity ?? 2),
       totalCount: requested.totalCount,
       page, pageSize: query.pageSize, sortBy: query.sortBy,
       sortOrder: query.sortOrder, importedFilter: query.importedFilter,
@@ -433,7 +457,7 @@ export async function getCachedProductsPageData(
     const products = await getProductRowsByIds(storeId, pageIds);
 
     return {
-      products: serializeProducts(products),
+      products: serializeProducts(products, settings?.minProductQuantity ?? 2),
       totalCount,
       page,
       pageSize: query.pageSize,
@@ -470,7 +494,7 @@ export async function getCachedProductsPageData(
         });
 
   return {
-    products: serializeProducts(products),
+    products: serializeProducts(products, settings?.minProductQuantity ?? 2),
     totalCount,
     page,
     pageSize: query.pageSize,

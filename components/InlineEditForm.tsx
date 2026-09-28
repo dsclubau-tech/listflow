@@ -37,6 +37,7 @@ import {
   getEbayCountryLabel,
   getSuburbsForAuPostcode,
   resolveEbayLocationMetadata,
+  validateAuPostcodeLocation,
 } from "@/lib/ebay-location";
 import {
   DEFAULT_AMAZON_PRICE_TRACKING_MODE,
@@ -1358,6 +1359,12 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
     }
 
     // Embed internal location metadata with _ prefix so the XML builder can use it.
+    const locationError = validateAuPostcodeLocation(defaultZipcode, countryLocation, selectedLocationText);
+    if (locationError) {
+      setSaveMessage({ variant: "error", title: "Save failed", text: locationError });
+      setIsSaving(false);
+      return false;
+    }
     const locationMetadata = resolveEbayLocationMetadata({
       country: countryLocation,
       postalCode: defaultZipcode,
@@ -2534,7 +2541,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
               <label className="block text-sm font-medium text-gray-700 mb-1">Default Item Country</label>
               <select
                 value={countryLocation}
-                onChange={(e) => setCountryLocation(e.target.value)}
+                onChange={(e) => { setCountryLocation(e.target.value); setSelectedLocationText(""); }}
                 className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm text-gray-900 focus:outline-none focus:ring-2 focus:ring-orange-500"
               >
                 <option value="Australia">Australia</option>
@@ -2562,8 +2569,8 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                 if (!auSuburbs || auSuburbs.suburbs.length <= 1) return null;
                 const currentSuburb =
                   auSuburbs.suburbs.find((sub) =>
-                    resolvedItemLocation.toLowerCase().startsWith(sub.toLowerCase()),
-                  ) || auSuburbs.suburbs[0];
+                    resolvedItemLocation.toLowerCase() === `${sub}, ${auSuburbs.state}`.toLowerCase(),
+                  ) || "";
                 return (
                   <div className="mt-1.5 flex items-center gap-2">
                     <span className="text-xs font-medium text-gray-500">Suburb:</span>
@@ -2576,6 +2583,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                       }}
                       className="h-7 rounded border border-gray-300 bg-white px-2 text-xs text-gray-800 focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500"
                     >
+                      <option value="">Select suburb</option>
                       {auSuburbs.suburbs.map((sub) => (
                         <option key={sub} value={sub}>
                           {sub} ({defaultZipcode})

@@ -59,6 +59,7 @@ export interface ScrapedProduct {
     quantity: number;
     country: string;
     zipcode: string;
+    locationText?: string | null;
     shippingMethod: string;
     storeNumber: number;
     shippingPolicyId: string | null;

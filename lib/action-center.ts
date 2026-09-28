@@ -1,4 +1,5 @@
 import "server-only";
+import { resolveCurrentHoldReason } from "@/lib/current-hold-reason";
 
 import {
   EbayActionJobStatus,
@@ -24,7 +25,6 @@ import {
   calculatePendingReviewMetrics,
   getEffectiveListingQuantity,
   getLatestPendingReviewHistory,
-  getOnHoldReason,
 } from "@/lib/action-center-metrics";
 import { getLowStockProductWhere } from "@/lib/low-stock-products";
 import {
@@ -107,6 +107,10 @@ export interface OnHoldActionItem {
   product: ActionCenterProductSummary;
   quantity: number;
   reason: string;
+  currentHoldReason: string;
+  latestCheckAt: string | null;
+  latestCheckMessage: string | null;
+  showLatestCheckSeparately: boolean;
 }
 
 export interface ActionCenterPriceCheckJob {
@@ -350,7 +354,15 @@ async function getCachedActionCenterQueues(
         orderBy: { updatedAt: "desc" },
         select: {
           id: true, title: true, asin: true, ebayItemId: true, status: true,
-          quantity: true, amazonStockLeft: true, priceCheckError: true, holdReason: true,
+          quantity: true, amazonStockLeft: true, priceCheckError: true,
+          priceCheckFailureCode: true, lastPriceCheck: true, amazonAvailability: true,
+          holdReason: true, holdOrigin: true, holdLastObservationId: true,
+          priceHistory: { where: { appliedAt: null }, take: 1, select: { id: true } },
+          amazonPriceObservations: {
+            orderBy: { observedAt: "desc" },
+            take: 5,
+            select: { id: true, stockLeft: true, requestedAsin: true, identityOutcome: true, observedAt: true },
+          },
         },
       }),
     ]);
@@ -459,17 +471,35 @@ async function getCachedActionCenterQueues(
         product: serializeProduct(product),
         amazonStockLeft: product.amazonStockLeft,
       })),
-      onHold: onHoldProducts.map((product) => ({
-        product: serializeProduct(product),
-        quantity: getEffectiveListingQuantity(product.status, product.quantity),
-        reason: getOnHoldReason({
+      onHold: onHoldProducts.map((product) => {
+        const explanation = resolveCurrentHoldReason({
+          status: product.status,
+          holdOrigin: product.holdOrigin,
           holdReason: product.holdReason,
           priceCheckError: product.priceCheckError,
+          priceCheckFailureCode: product.priceCheckFailureCode,
+          lastPriceCheck: product.lastPriceCheck,
           amazonStockLeft: product.amazonStockLeft,
+          amazonAvailability: product.amazonAvailability,
           savedQuantity: product.quantity,
-          lowStockThreshold: minimum,
-        }),
-      })),
+          minimumProductQuantity: minimum,
+          hasPendingReview: product.priceHistory.length > 0,
+          asin: product.asin,
+          latestObservation: product.amazonPriceObservations.find(
+            (observation) => observation.id === product.holdLastObservationId,
+          ) ?? null,
+        });
+        return {
+          product: serializeProduct(product),
+          quantity: getEffectiveListingQuantity(product.status, product.quantity),
+          reason: explanation.currentHoldReason ?? "Put on hold manually.",
+          currentHoldReason: explanation.currentHoldReason ?? "Put on hold manually.",
+          latestCheckAt: explanation.latestCheckAt,
+          latestCheckMessage: explanation.latestCheckMessage,
+          showLatestCheckSeparately: !product.holdOrigin ||
+            ["MANUAL", "UNKNOWN", "PRICE_CHECK_UNSAFE_PRICE"].includes(product.holdOrigin),
+        };
+      }),
     },
   };
 }

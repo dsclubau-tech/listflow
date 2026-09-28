@@ -9,7 +9,7 @@ import {
   parsePackageDimensionValue,
   parsePackageWeight,
 } from "@/lib/amazon-package-dimensions";
-import { resolveEbayLocationMetadata } from "@/lib/ebay-location";
+import { resolveEbayLocationMetadata, validateAuPostcodeLocation } from "@/lib/ebay-location";
 import {
   MAX_EBAY_PICTURES,
   dedupeProductImages,
@@ -134,6 +134,12 @@ function getValidatedCategoryId(product: Product): string {
 }
 
 function getLocationMetadata(specifics: ProductSpecifics | null) {
+  const locationError = validateAuPostcodeLocation(
+    specifics?.["_PostalCode"],
+    specifics?.["_Country"],
+    specifics?.["_Location"],
+  );
+  if (locationError) throw new Error(locationError);
   const metadata = resolveEbayLocationMetadata({
     country: specifics?.["_Country"],
     currency: specifics?.["_Currency"],

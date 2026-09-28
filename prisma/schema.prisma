@@ -1020,6 +1020,7 @@ model SupplierSettings {
   defaultQuantity       Int     @default(1)
   defaultCountry        String  @default("Australia")
   defaultZipcode        String  @default("3170")
+  defaultLocationText    String?
   defaultShippingMethod String  @default("Cheapest with tracking")
   defaultTemplateId     String?
 

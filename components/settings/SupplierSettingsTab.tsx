@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { calculateSellPrice } from "@/lib/variant-pricing";
 import { PostcodeAutocomplete } from "@/components/PostcodeAutocomplete";
 import { AUTOMATIC_PRICE_CHECK_TIMES } from "@/lib/automatic-price-check-schedule";
@@ -11,6 +11,7 @@ interface SupplierSettingsData {
   defaultQuantity: number;
   defaultCountry: string;
   defaultZipcode: string;
+  defaultLocationText: string | null;
   defaultShippingMethod: string;
   defaultShippingPolicyId: string | null;
   defaultPaymentPolicyId: string | null;
@@ -112,6 +113,8 @@ export default function SupplierSettingsTab() {
 
   // Settings state
   const [settings, setSettings] = useState<SupplierSettingsData | null>(null);
+  const savedLocationRef = useRef<Pick<SupplierSettingsData,
+    "defaultCountry" | "defaultZipcode" | "defaultLocationText"> | null>(null);
 
   // Automatic price check state
   const [autoCheckStatus, setAutoCheckStatus] = useState<AutoCheckSummary | null>(null);
@@ -145,6 +148,11 @@ export default function SupplierSettingsTab() {
       if (res.ok) {
         const data = await res.json();
         setSettings(data);
+        savedLocationRef.current = {
+          defaultCountry: data.defaultCountry,
+          defaultZipcode: data.defaultZipcode,
+          defaultLocationText: data.defaultLocationText,
+        };
         setSelectedStore(String(data.storeNumber || 1));
       }
     } finally {
@@ -302,6 +310,11 @@ export default function SupplierSettingsTab() {
   // Save
   async function handleSave() {
     if (!settings) return;
+    const savedLocation = savedLocationRef.current;
+    const locationChanged = !savedLocation ||
+      settings.defaultCountry !== savedLocation.defaultCountry ||
+      settings.defaultZipcode !== savedLocation.defaultZipcode ||
+      settings.defaultLocationText !== savedLocation.defaultLocationText;
     setSaving(true);
     try {
       const res = await fetch("/api/supplier-settings", {
@@ -309,8 +322,11 @@ export default function SupplierSettingsTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           defaultQuantity: settings.defaultQuantity,
-          defaultCountry: settings.defaultCountry,
-          defaultZipcode: settings.defaultZipcode,
+          ...(locationChanged ? {
+            defaultCountry: settings.defaultCountry,
+            defaultZipcode: settings.defaultZipcode,
+            defaultLocationText: settings.defaultLocationText,
+          } : {}),
           defaultShippingMethod: settings.defaultShippingMethod,
           defaultShippingPolicyId: settings.defaultShippingPolicyId,
           defaultPaymentPolicyId: settings.defaultPaymentPolicyId,
@@ -339,10 +355,25 @@ export default function SupplierSettingsTab() {
         }),
       });
 
-      if (res.ok) {
-        setToast("Settings saved");
-        setTimeout(() => setToast(null), 3000);
+      const result = await res.json();
+      if (!res.ok) {
+        setToast(result.error || "Could not save settings");
+        return;
       }
+      setSettings(result);
+      savedLocationRef.current = {
+        defaultCountry: result.defaultCountry,
+        defaultZipcode: result.defaultZipcode,
+        defaultLocationText: result.defaultLocationText,
+      };
+      const updated = result.draftLocationUpdated ?? 0;
+      const skipped = result.draftLocationSkipped ?? 0;
+      setToast(
+        updated || skipped
+          ? `Settings saved; updated ${updated} drafts${skipped ? `, skipped ${skipped} active uploads` : ""}`
+          : "Settings saved",
+      );
+      setTimeout(() => setToast(null), 3000);
     } finally {
       setSaving(false);
     }
@@ -463,7 +494,7 @@ export default function SupplierSettingsTab() {
                   <label className="block text-xs text-gray-500 mb-1">Default Item Country</label>
                   <select
                     value={settings.defaultCountry}
-                    onChange={(e) => updateField("defaultCountry", e.target.value)}
+                    onChange={(e) => setSettings((prev) => prev ? { ...prev, defaultCountry: e.target.value, defaultLocationText: null } : prev)}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
                   >
                     {countries.map((c) => (
@@ -475,7 +506,8 @@ export default function SupplierSettingsTab() {
                   <label className="block text-xs text-gray-500 mb-1">Default Zipcode</label>
                   <PostcodeAutocomplete
                     value={settings.defaultZipcode}
-                    onChange={(pc) => updateField("defaultZipcode", pc)}
+                    onChange={(pc, loc) => setSettings((prev) => prev ? { ...prev, defaultZipcode: pc, defaultLocationText: loc || null } : prev)}
+                    selectedLocationText={settings.defaultLocationText ?? ""}
                     country={settings.defaultCountry}
                   />
                 </div>
@@ -1167,7 +1199,7 @@ export default function SupplierSettingsTab() {
 
         {/* ===== SAVE BUTTON (shared across all sub-tabs) ===== */}
         <div className="mt-8 pt-4 border-t border-gray-200 flex flex-col-reverse sm:flex-row sm:items-center justify-between gap-4">
-          <span className="text-xs text-gray-400 text-center sm:text-left">Changes will be applied only for the new products</span>
+          <span className="text-xs text-gray-400 text-center sm:text-left">Location changes apply to new products and unpublished drafts; other settings apply to new products</span>
           <button
             onClick={handleSave}
             disabled={saving}

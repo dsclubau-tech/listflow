@@ -843,8 +843,8 @@ export default function BulkEditModal({
               <select
                 value={
                   auSuburbsData.suburbs.find((sub) =>
-                    displayLocation.toLowerCase().startsWith(sub.toLowerCase()),
-                  ) || auSuburbsData.suburbs[0]
+                    displayLocation.toLowerCase() === `${sub}, ${auSuburbsData.state}`.toLowerCase(),
+                  ) || ""
                 }
                 onChange={(e) => {
                   const chosenSuburb = e.target.value;
@@ -853,6 +853,7 @@ export default function BulkEditModal({
                 }}
                 className="h-8 rounded-md border border-gray-300 bg-white px-2 text-xs font-medium text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
               >
+                <option value="">Select suburb</option>
                 {auSuburbsData.suburbs.map((sub) => (
                   <option key={sub} value={sub}>
                     {sub} ({item.postalCode})

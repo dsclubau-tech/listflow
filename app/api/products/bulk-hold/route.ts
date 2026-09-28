@@ -80,7 +80,7 @@ export async function POST(request: Request) {
       body.allLowStock === true
         ? await prisma.product.findMany({
             where: getLowStockProductWhere(storeSession.storeId, minimum),
-            select: { id: true, lastPriceCheck: true, ...priceCheckRecoveryRelations },
+            select: { id: true, lastPriceCheck: true, holdLastObservationId: true, ...priceCheckRecoveryRelations },
             orderBy: [{ amazonStockLeft: "asc" }, { title: "asc" }],
           })
         : null;

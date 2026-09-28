@@ -56,39 +56,6 @@ export function getEffectiveListingQuantity(
   return status === "ON_HOLD" ? 0 : savedQuantity;
 }
 
-export function getOnHoldReason(input: {
-  holdReason?: string | null;
-  priceCheckError: string | null;
-  amazonStockLeft: number | null;
-  savedQuantity: number;
-  lowStockThreshold?: number;
-}) {
-  const explicitReason = input.holdReason?.trim();
-  if (explicitReason) {
-    return explicitReason;
-  }
-
-  const priceCheckError = input.priceCheckError?.trim();
-
-  if (priceCheckError) {
-    return `Automatic hold after failed price check: ${priceCheckError}`;
-  }
-
-  if (input.savedQuantity <= 0) {
-    return "Listing quantity was set to 0.";
-  }
-
-  const lowStockThreshold = input.lowStockThreshold ?? 2;
-  if (
-    input.amazonStockLeft !== null &&
-    input.amazonStockLeft < lowStockThreshold
-  ) {
-    return `Low Amazon stock (${input.amazonStockLeft} left).`;
-  }
-
-  return "Put on hold manually.";
-}
-
 export function getStoredQuantityAfterEdit(
   status: string,
   displayedQuantity: number,

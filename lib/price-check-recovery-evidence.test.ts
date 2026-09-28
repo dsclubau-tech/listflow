@@ -18,7 +18,9 @@ const heldProduct = {
 };
 
 const evidence = {
+  holdLastObservationId: "observation-1",
   amazonPriceObservations: [{
+    id: "observation-1",
     identityOutcome: "MATCH",
     buyBoxOutcome: "AVAILABLE",
     postcodeVerified: true,
@@ -95,4 +97,15 @@ test("stale stock observations cannot release a low-stock hold", () => {
   assert.equal(isRecoveredPriceCheckAutoHold({
     ...heldProduct, holdOrigin: "LOW_STOCK", amazonStockLeft: 4, ...stale,
   }), false);
+});
+
+test("a late observation from an older check cannot replace the committed recovery evidence", () => {
+  const committed = getPriceCheckRecoveryEvidence({
+    ...evidence,
+    amazonPriceObservations: [
+      { ...evidence.amazonPriceObservations[0], id: "older-check", stockLeft: 0, observedAt: new Date("2026-01-01T00:03:00Z") },
+      evidence.amazonPriceObservations[0],
+    ],
+  });
+  assert.equal(committed.verifiedStockLeft, 4);
 });

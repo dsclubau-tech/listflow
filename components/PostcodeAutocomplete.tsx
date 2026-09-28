@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   getEbayCountryMetadata,
   getZipcodeLocationText,
+  getSuburbsForAuPostcode,
   searchAuPostcodes,
   type AuPostcodeSuggestion,
 } from "@/lib/ebay-location";
@@ -45,8 +46,12 @@ export function PostcodeAutocomplete({
     selectedLocationText !== undefined ? selectedLocationText : internalSelectedLocation;
 
   const resolvedLocation = isAu
-    ? getZipcodeLocationText(value, country, effectiveSelectedLocation) || effectiveSelectedLocation
+    ? getZipcodeLocationText(value, country, effectiveSelectedLocation)
     : "";
+
+  useEffect(() => {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
+  }, [country]);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -72,7 +77,7 @@ export function PostcodeAutocomplete({
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     const rawVal = e.target.value;
     setInternalSelectedLocation("");
-    const newLoc = isAu ? getZipcodeLocationText(rawVal, country, effectiveSelectedLocation) : "";
+    const newLoc = isAu ? getZipcodeLocationText(rawVal, country) : "";
     onChange(rawVal, newLoc);
 
     if (debounceTimerRef.current) {
@@ -93,6 +98,7 @@ export function PostcodeAutocomplete({
   }
 
   function handleSelectSuggestion(suggestion: AuPostcodeSuggestion) {
+    if (debounceTimerRef.current) clearTimeout(debounceTimerRef.current);
     setInternalSelectedLocation(suggestion.locationText);
     onChange(suggestion.postcode, suggestion.locationText);
     setIsOpen(false);
@@ -139,13 +145,13 @@ export function PostcodeAutocomplete({
         className={className}
       />
 
-      {showHint && resolvedLocation && (
-        <span className="mt-1 block text-xs text-emerald-600 font-medium truncate" title={resolvedLocation}>
-          📍 {resolvedLocation}
+      {showHint && isAu && value.trim() && (
+        <span className={`mt-1 block text-xs font-medium truncate ${resolvedLocation ? "text-emerald-600" : "text-amber-700"}`} title={resolvedLocation || "Select suburb"}>
+          {resolvedLocation ? `📍 ${resolvedLocation}` : getSuburbsForAuPostcode(value) ? "Select suburb" : "Enter a valid postcode"}
         </span>
       )}
 
-      {isOpen && suggestions.length > 0 && (
+      {isAu && isOpen && suggestions.length > 0 && (
         <ul
           onMouseDown={(e) => e.preventDefault()}
           className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-md bg-white py-1 shadow-lg ring-1 ring-black/5 text-xs"
@@ -153,8 +159,7 @@ export function PostcodeAutocomplete({
           {suggestions.map((item, index) => {
             const isSelected = index === activeIndex;
             const isCurrentSelected =
-              resolvedLocation === item.locationText ||
-              resolvedLocation.toLowerCase().startsWith(item.suburb.toLowerCase());
+              resolvedLocation === item.locationText;
             return (
               <li
                 key={`${item.postcode}-${item.suburb}-${index}`}

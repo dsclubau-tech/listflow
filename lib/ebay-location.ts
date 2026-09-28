@@ -150,25 +150,43 @@ export function getZipcodeLocationText(
     const entry = AU_POSTCODES[paddedCode] || AU_POSTCODES[normalizedPostalCode];
     if (entry && entry.suburbs.length > 0) {
       if (typeof preferredSuburb === "string" && preferredSuburb.trim()) {
-        const cleanPreferred = preferredSuburb.trim().toLowerCase();
+        const cleanPreferred = normalizeLookup(preferredSuburb).replace(/\s*,\s*/g, ", ");
         const matched = entry.suburbs.find((sub) => {
-          const lowerSub = sub.toLowerCase();
+          const lowerSub = normalizeLookup(sub);
           return (
             lowerSub === cleanPreferred ||
-            cleanPreferred === `${lowerSub}, ${entry.state.toLowerCase()}` ||
-            cleanPreferred.startsWith(`${lowerSub},`) ||
-            cleanPreferred.startsWith(lowerSub)
+            cleanPreferred === `${lowerSub}, ${entry.state.toLowerCase()}`
           );
         });
         if (matched) {
           return `${matched}, ${entry.state}`;
         }
+        return "";
       }
-      return `${entry.suburbs[0]}, ${entry.state}`;
+      return entry.suburbs.length === 1 ? `${entry.suburbs[0]}, ${entry.state}` : "";
     }
   }
 
   return "";
+}
+
+export function validateAuPostcodeLocation(
+  postalCode: unknown,
+  country: unknown,
+  location: unknown,
+): string | null {
+  if (getEbayCountryMetadata(country).code !== "AU") return null;
+  const entry = getSuburbsForAuPostcode(postalCode);
+  if (!entry) return "Enter a valid Australian postcode.";
+  const metadata = getEbayCountryMetadata(country);
+  const selected = normalizeText(location);
+  const preferred = selected && !isCountryOnlyLocation(selected, metadata)
+    ? selected
+    : undefined;
+  if (!getZipcodeLocationText(postalCode, country, preferred)) {
+    return "Select a suburb that matches the postcode.";
+  }
+  return null;
 }
 
 export function searchAuPostcodes(
@@ -262,7 +280,7 @@ export function resolveEbayLocationMetadata(input?: {
   );
   const location =
     providedLocation && !isCountryOnly
-      ? providedLocation
+      ? zipcodeLocation || providedLocation
       : zipcodeLocation || postalCode || metadata.defaultLocation;
 
   return {
@@ -282,10 +300,16 @@ export function applyEbayLocationMetadata(
     postalCode?: unknown;
   },
 ): ItemSpecificsRecord {
+  const country = itemSpecifics._Country || defaults?.country;
+  const currentLocation = normalizeText(itemSpecifics._Location);
+  const location = !currentLocation ||
+    isCountryOnlyLocation(currentLocation, getEbayCountryMetadata(country))
+      ? defaults?.location || currentLocation
+      : currentLocation;
   const metadata = resolveEbayLocationMetadata({
-    country: itemSpecifics._Country || defaults?.country,
+    country,
     currency: itemSpecifics._Currency,
-    location: itemSpecifics._Location || defaults?.location,
+    location,
     postalCode: itemSpecifics._PostalCode || defaults?.postalCode,
     site: itemSpecifics._Site,
   });

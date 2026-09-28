@@ -4,7 +4,7 @@ import { Prisma } from "@/app/generated/prisma/client";
 import { ProductStatus } from "@/app/generated/prisma/enums";
 import { applyKeywordFilter } from "@/lib/keyword-filter";
 import { normalizeItemSpecifics, sanitizeEbayItemSpecifics } from "@/lib/item-specifics";
-import { resolveEbayLocationMetadata } from "@/lib/ebay-location";
+import { resolveEbayLocationMetadata, validateAuPostcodeLocation } from "@/lib/ebay-location";
 import { resolveProductPolicySelection } from "@/lib/policy-defaults";
 import { prisma } from "@/lib/prisma";
 import { calculateSellPrice } from "@/lib/variant-pricing";
@@ -188,6 +188,9 @@ function normalizeLocationOperation(value: unknown): NormalizedBulkEditOperation
   if (!COUNTRY_METADATA[location]) {
     throw new Error("Location must be Australia, United States, or United Kingdom.");
   }
+
+  const locationError = validateAuPostcodeLocation(postalCode, location, locationText);
+  if (locationError) throw new Error(locationError);
 
   return {
     field: "location",

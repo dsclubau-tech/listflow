@@ -275,7 +275,8 @@ async function automaticallyApplyPriceIncrease(input: {
           include: { variants: true },
         });
         const currentVariants = new Map(current?.variants.map((variant) => [variant.id, variant]));
-        if (!current || current.status !== input.product.status ||
+        if (!current || current.lastPriceCheck?.getTime() !== input.checkedAt.getTime() ||
+            current.status !== input.product.status ||
             Number(current.price) !== Number(input.product.price) ||
             input.variants.some((variant) => {
               const actual = currentVariants.get(variant.id);
@@ -302,6 +303,11 @@ async function automaticallyApplyPriceIncrease(input: {
       reviseResult.errorMessage || "Failed to revise eBay listing.";
 
     await measure("database-write", () => prisma.$transaction(async (tx) => {
+      const claim = await tx.product.updateMany({
+        where: { id: input.product.id, lastPriceCheck: input.checkedAt },
+        data: { lastPriceCheck: input.checkedAt },
+      });
+      if (!claim.count) return;
       await tx.priceHistory.updateMany({
         where: {
           productId: input.product.id,
@@ -329,6 +335,11 @@ async function automaticallyApplyPriceIncrease(input: {
   }
 
   await measure("database-write", () => prisma.$transaction(async (tx) => {
+    const claim = await tx.product.updateMany({
+      where: { id: input.product.id, lastPriceCheck: input.checkedAt },
+      data: { lastPriceCheck: input.checkedAt },
+    });
+    if (!claim.count) return;
     await Promise.all(
       input.variants.map((variant) =>
         tx.variant.update({
@@ -569,9 +580,12 @@ export async function runPriceCheck(
     }
   };
   const recordProductFailure = async (input: PriceCheckProductFailure) => {
-    await measureStage("database-write", () =>
-      prisma.product.update({
-        where: { id: input.productId },
+    const persisted = await measureStage("database-write", () =>
+      prisma.product.updateMany({
+        where: {
+          id: input.productId,
+          OR: [{ lastPriceCheck: null }, { lastPriceCheck: { lt: input.checkedAt } }],
+        },
         data: {
           lastPriceCheck: input.checkedAt,
           priceCheckError: input.message,
@@ -584,6 +598,7 @@ export async function runPriceCheck(
       }),
     );
     result.failed += 1;
+    if (!persisted.count) return;
 
     if (!options.onProductFailure) {
       return;
@@ -748,8 +763,8 @@ export async function runPriceCheck(
 
         result.skipped += 1;
 
-        await measureStage("database-write", () => prisma.product.update({
-          where: { id: product.id },
+        await measureStage("database-write", () => prisma.product.updateMany({
+          where: { id: product.id, lastPriceCheck: null },
           data: {
             lastPriceCheck: null,
             priceCheckError: null,
@@ -942,7 +957,15 @@ export async function runPriceCheck(
           const primaryVariant = product.variants[0];
           const currentAmazonPriceDecimal = toMoneyDecimal(currentAmazonPrice);
 
-          await measureStage("database-write", () => prisma.$transaction(async (tx) => {
+          const persisted = await measureStage("database-write", () => prisma.$transaction(async (tx) => {
+            const claim = await tx.product.updateMany({
+              where: {
+                id: product.id,
+                OR: [{ lastPriceCheck: null }, { lastPriceCheck: { lt: checkedAt } }],
+              },
+              data: { lastPriceCheck: checkedAt },
+            });
+            if (!claim.count) return false;
             await tx.product.update({
               where: { id: product.id },
               data: {
@@ -963,7 +986,12 @@ export async function runPriceCheck(
                 buyPrice: currentAmazonPriceDecimal,
               },
             });
+            return true;
           }));
+          if (!persisted) {
+            await reportProductComplete(product.id);
+            continue;
+          }
 
           logger.info("price-checker/run", "First check — baseline established", {
             productId: product.id,
@@ -1011,8 +1039,11 @@ export async function runPriceCheck(
           if (!buyPriceMismatch) {
             result.skipped += 1;
 
-            await measureStage("database-write", () => prisma.product.update({
-              where: { id: product.id },
+            await measureStage("database-write", () => prisma.product.updateMany({
+              where: {
+                id: product.id,
+                OR: [{ lastPriceCheck: null }, { lastPriceCheck: { lt: checkedAt } }],
+              },
               data: {
                 amazonPrice: toMoneyDecimal(currentAmazonPrice),
                 ...amazonStockUpdate,
@@ -1079,7 +1110,15 @@ export async function runPriceCheck(
           const mismatchChangePercent =
             ((currentAmazonPrice - primaryBuyPrice) / primaryBuyPrice) * 100;
 
-          await measureStage("database-write", () => prisma.$transaction(async (tx) => {
+          const persisted = await measureStage("database-write", () => prisma.$transaction(async (tx) => {
+            const claim = await tx.product.updateMany({
+              where: {
+                id: product.id,
+                OR: [{ lastPriceCheck: null }, { lastPriceCheck: { lt: checkedAt } }],
+              },
+              data: { lastPriceCheck: checkedAt },
+            });
+            if (!claim.count) return false;
             await tx.priceHistory.updateMany({
               where: {
                 productId: product.id,
@@ -1123,7 +1162,12 @@ export async function runPriceCheck(
                 createdAt: checkedAt,
               })),
             });
+            return true;
           }));
+          if (!persisted) {
+            await reportProductComplete(product.id);
+            continue;
+          }
 
           result.changed += 1;
           const mismatchPrimarySellPrice =
@@ -1259,7 +1303,15 @@ export async function runPriceCheck(
           continue;
         }
 
-        await measureStage("database-write", () => prisma.$transaction(async (tx) => {
+        const persisted = await measureStage("database-write", () => prisma.$transaction(async (tx) => {
+          const claim = await tx.product.updateMany({
+            where: {
+              id: product.id,
+              OR: [{ lastPriceCheck: null }, { lastPriceCheck: { lt: checkedAt } }],
+            },
+            data: { lastPriceCheck: checkedAt },
+          });
+          if (!claim.count) return false;
           await tx.priceHistory.updateMany({
             where: {
               productId: product.id,
@@ -1303,7 +1355,12 @@ export async function runPriceCheck(
               createdAt: checkedAt,
             })),
           });
+          return true;
         }));
+        if (!persisted) {
+          await reportProductComplete(product.id);
+          continue;
+        }
 
         result.changed += 1;
 

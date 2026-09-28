@@ -44,6 +44,7 @@ export async function getOrCreateStoreSupplierSettings(storeId: string) {
       defaultQuantity: globalSettings?.defaultQuantity ?? 1,
       defaultCountry: globalSettings?.defaultCountry ?? "Australia",
       defaultZipcode: globalSettings?.defaultZipcode ?? "3170",
+      defaultLocationText: globalSettings?.defaultLocationText ?? null,
       defaultShippingMethod:
         globalSettings?.defaultShippingMethod ?? "Cheapest with tracking",
       defaultShippingPolicyId: globalSettings?.defaultShippingPolicyId ?? null,

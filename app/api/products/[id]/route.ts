@@ -9,7 +9,8 @@ import { resolveProductPolicySelection } from "@/lib/policy-defaults";
 import { invalidateProductCaches } from "@/lib/cache-tags";
 import { isValidAsin, normalizeAsin } from "@/lib/price-check-eligibility";
 import { ProductHoldOrigin, ProductStatus } from "@/app/generated/prisma/enums";
-import { applyEbayLocationMetadata } from "@/lib/ebay-location";
+import { applyEbayLocationMetadata, validateAuPostcodeLocation } from "@/lib/ebay-location";
+import { resolveCurrentHoldReason } from "@/lib/current-hold-reason";
 import { isAmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
 import {
   MAX_EBAY_PICTURES,
@@ -38,20 +39,50 @@ export async function GET(
   }
 
   try {
-    const product = await prisma.product.findFirst({
-      where: { id, storeId: storeSession.storeId },
-      include: {
-        store: { select: { id: true, name: true } },
-        createdBy: { select: { id: true, name: true } },
-      },
-    });
+    const [product, settings] = await Promise.all([
+      prisma.product.findFirst({
+        where: { id, storeId: storeSession.storeId },
+        include: {
+          store: { select: { id: true, name: true } },
+          createdBy: { select: { id: true, name: true } },
+          _count: { select: { priceHistory: { where: { appliedAt: null } } } },
+          amazonPriceObservations: {
+            orderBy: { observedAt: "desc" },
+            take: 5,
+            select: { id: true, requestedAsin: true, identityOutcome: true, stockLeft: true, observedAt: true },
+          },
+        },
+      }),
+      prisma.supplierSettings.findUnique({
+        where: { storeId_supplierName: { storeId: storeSession.storeId, supplierName: SUPPLIER_NAME } },
+        select: { minProductQuantity: true },
+      }),
+    ]);
 
     if (!product) {
       return NextResponse.json({ error: "Product not found" }, { status: 404 });
     }
 
+    const holdExplanation = resolveCurrentHoldReason({
+      status: product.status,
+      holdOrigin: product.holdOrigin,
+      holdReason: product.holdReason,
+      priceCheckError: product.priceCheckError,
+      priceCheckFailureCode: product.priceCheckFailureCode,
+      lastPriceCheck: product.lastPriceCheck,
+      amazonStockLeft: product.amazonStockLeft,
+      amazonAvailability: product.amazonAvailability,
+      savedQuantity: product.quantity,
+      minimumProductQuantity: settings?.minProductQuantity ?? 2,
+      hasPendingReview: product._count.priceHistory > 0,
+      asin: product.asin,
+      latestObservation: product.amazonPriceObservations.find(
+        (observation) => observation.id === product.holdLastObservationId,
+      ) ?? null,
+    });
     return NextResponse.json({
       ...product,
+      ...holdExplanation,
       price: product.price.toString(),
       amazonPrice: product.amazonPrice?.toString() ?? null,
       lastPriceCheck: product.lastPriceCheck?.toISOString() ?? null,
@@ -331,18 +362,27 @@ export async function PATCH(
             supplierName: SUPPLIER_NAME,
           },
         },
-        select: { defaultCountry: true, defaultZipcode: true },
+        select: { defaultCountry: true, defaultZipcode: true, defaultLocationText: true },
       })) ??
       (await prisma.supplierSettings.findFirst({
         where: { storeId: null, supplierName: SUPPLIER_NAME },
-        select: { defaultCountry: true, defaultZipcode: true },
+        select: { defaultCountry: true, defaultZipcode: true, defaultLocationText: true },
       }));
 
+    const proposedSpecifics = sanitizeEbayItemSpecifics(data.itemSpecifics);
+    const locationError = validateAuPostcodeLocation(
+      proposedSpecifics._PostalCode || supplierSettings?.defaultZipcode || "3170",
+      proposedSpecifics._Country || supplierSettings?.defaultCountry || "Australia",
+      proposedSpecifics._Location || supplierSettings?.defaultLocationText,
+    );
+    if (locationError) return NextResponse.json({ error: locationError }, { status: 400 });
+
     data.itemSpecifics = applyEbayLocationMetadata(
-      sanitizeEbayItemSpecifics(data.itemSpecifics),
+      proposedSpecifics,
       {
         country: supplierSettings?.defaultCountry ?? "Australia",
         postalCode: supplierSettings?.defaultZipcode ?? "3170",
+        location: supplierSettings?.defaultLocationText,
       },
     );
 

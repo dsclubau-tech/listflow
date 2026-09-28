@@ -112,6 +112,7 @@ async function resolveCandidateIds(
       priceCheckError: true,
       priceCheckFailureCode: true,
       lastPriceCheck: true,
+      holdLastObservationId: true,
       ...priceCheckRecoveryRelations,
     },
   });

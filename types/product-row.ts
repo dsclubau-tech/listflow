@@ -54,6 +54,9 @@ export type SerializedProductRow = Omit<
   promotedAdSyncedAt?: string | null;
   internalNote?: string | null;
   holdReason?: string | null;
+  currentHoldReason?: string | null;
+  latestCheckAt?: string | null;
+  latestCheckMessage?: string | null;
   uploadedAt?: string | null;
   createdAt: string;
   updatedAt: string;

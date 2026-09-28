@@ -2,8 +2,9 @@
 export const priceCheckRecoveryRelations = {
   amazonPriceObservations: {
     orderBy: { observedAt: "desc" },
-    take: 1,
+    take: 5,
     select: {
+      id: true,
       identityOutcome: true,
       buyBoxOutcome: true,
       postcodeVerified: true,
@@ -18,6 +19,7 @@ export const priceCheckRecoveryRelations = {
 
 export function getPriceCheckRecoveryEvidence(product: {
   amazonPriceObservations: Array<{
+    id: string;
     identityOutcome: string | null;
     buyBoxOutcome: string | null;
     postcodeVerified: boolean;
@@ -26,8 +28,11 @@ export function getPriceCheckRecoveryEvidence(product: {
   }>;
   _count: { priceHistory: number };
   lastPriceCheck?: Date | null;
+  holdLastObservationId?: string | null;
 }) {
-  const latest = product.amazonPriceObservations[0];
+  const latest = product.amazonPriceObservations.find(
+    (observation) => observation.id === product.holdLastObservationId,
+  );
   const current = Boolean(latest?.observedAt && product.lastPriceCheck &&
     latest.observedAt >= product.lastPriceCheck);
   return {

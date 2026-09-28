@@ -100,7 +100,7 @@ test("buildAddItemXML keeps required item specifics when trimming", () => {
   assert.match(xml, /<Name>Type<\/Name>\s*<Value>Wedge Pillow<\/Value>/);
 });
 
-test("buildAddItemXML repairs country-only item location from postcode", () => {
+test("buildAddItemXML requires a selected suburb for ambiguous postcodes", () => {
   const product = {
     ...buildTestProduct(),
     itemSpecifics: {
@@ -112,12 +112,24 @@ test("buildAddItemXML repairs country-only item location from postcode", () => {
       _PostalCode: "3170",
     },
   };
-  const xml = buildAddItemXML(product);
+  assert.throws(() => buildAddItemXML(product), /Select a suburb/);
+});
 
-  assert.match(xml, /<Country>AU<\/Country>/);
-  assert.match(xml, /<Location>Mulgrave, VIC<\/Location>/);
-  assert.match(xml, /<PostalCode>3170<\/PostalCode>/);
-  assert.doesNotMatch(xml, /<Location>Australia<\/Location>/);
+test("buildAddItemXML preserves exact selected 3175 suburb", () => {
+  const product = {
+    ...buildTestProduct(),
+    itemSpecifics: {
+      Brand: "Test Brand",
+      _Country: "Australia",
+      _Currency: "AUD",
+      _Site: "Australia",
+      _Location: "Dandenong North, VIC",
+      _PostalCode: "3175",
+    },
+  };
+  const xml = buildAddItemXML(product);
+  assert.match(xml, /<Location>Dandenong North, VIC<\/Location>/);
+  assert.match(xml, /<PostalCode>3175<\/PostalCode>/);
 });
 
 test("buildShippingPackageDetailsXml sends full package weight and dimensions", () => {

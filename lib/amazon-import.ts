@@ -211,6 +211,7 @@ export async function executeAmazonImport({
     quantity: supplierSettings?.defaultQuantity ?? 1,
     country: supplierSettings?.defaultCountry ?? "Australia",
     zipcode: supplierSettings?.defaultZipcode ?? "3170",
+    locationText: supplierSettings?.defaultLocationText ?? null,
     shippingMethod:
       supplierSettings?.defaultShippingMethod ?? "Cheapest with tracking",
     storeNumber: supplierSettings?.storeNumber ?? 1,
