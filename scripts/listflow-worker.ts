@@ -14,6 +14,7 @@ import {
   type WorkerRole,
 } from "../lib/worker-routing";
 import { configureWorkerDatabaseProfile } from "../lib/worker-database-profile";
+import { assertWorkerSchemaReady } from "../lib/worker-schema-check";
 import { createSingleFlightTask, WorkerDatabaseRecovery } from "../lib/worker-database-recovery";
 import { getPriceCheckOptimizationEnvironmentSummary } from "../lib/price-check-optimizations";
 
@@ -547,6 +548,7 @@ async function main() {
   }
 
   modules = await loadWorkerModules();
+  await assertWorkerSchemaReady(modules.prisma);
   console.log(`Database connection settings: ${JSON.stringify(modules.getDatabaseConnectionDiagnostics())}`);
 
   try {

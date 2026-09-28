@@ -17,12 +17,11 @@ export function configureWorkerDatabaseProfile(
     throw new Error(`Unsupported worker database profile: ${profile}`);
   }
 
-  const databaseUrl =
-    environment.LISTFLOW_DEPLOYED_DATABASE_URL?.trim() ||
-    environment.MIGRATION_SOURCE_DATABASE_URL?.trim();
-  const directUrl =
-    environment.LISTFLOW_DEPLOYED_DIRECT_URL?.trim() ||
-    environment.MIGRATION_SOURCE_DIRECT_URL?.trim();
+  const explicitDatabaseUrl = environment.LISTFLOW_DEPLOYED_DATABASE_URL?.trim();
+  const databaseUrl = explicitDatabaseUrl || environment.MIGRATION_SOURCE_DATABASE_URL?.trim();
+  // Legacy migration-source credentials may point at a different database.
+  const directUrl = environment.LISTFLOW_DEPLOYED_DIRECT_URL?.trim() ||
+    (!explicitDatabaseUrl ? environment.MIGRATION_SOURCE_DIRECT_URL?.trim() : undefined);
 
   if (!databaseUrl) {
     throw new Error(
@@ -32,9 +31,7 @@ export function configureWorkerDatabaseProfile(
 
   environment.DATABASE_URL = databaseUrl;
   environment.LISTFLOW_SUPABASE_TRANSACTION_POOLER = "false";
-  if (directUrl) {
-    environment.DIRECT_URL = directUrl;
-  }
+  environment.DIRECT_URL = directUrl || databaseUrl;
 
   return profile;
 }

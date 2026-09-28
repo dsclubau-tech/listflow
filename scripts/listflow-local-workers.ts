@@ -12,6 +12,7 @@ import {
   type LocalWorkerDefinition,
 } from "../lib/local-worker-config";
 import { configureWorkerDatabaseProfile } from "../lib/worker-database-profile";
+import { assertWorkerSchemaReady } from "../lib/worker-schema-check";
 
 const moduleWithLoad = Module as unknown as {
   _load: (request: string, parent?: unknown, isMain?: boolean) => unknown;
@@ -233,6 +234,7 @@ async function loadWorkerDefinitions() {
 
   try {
     await prisma.$queryRaw`SELECT 1`;
+    await assertWorkerSchemaReady(prisma);
     const stores = await prisma.store.findMany({
       where: {
         isActive: true,
