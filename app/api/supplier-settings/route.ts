@@ -7,6 +7,7 @@ import { invalidateStoreCaches } from "@/lib/cache-tags";
 import { resolveEbayLocationMetadata, validateAuPostcodeLocation } from "@/lib/ebay-location";
 import { Prisma } from "@/app/generated/prisma/client";
 import { applyLocationToDraftSpecifics, isUnpublishedDraftLocationTarget } from "@/lib/supplier-location-propagation";
+import { resolveAmazonDeliveryPostcode } from "@/lib/amazon-delivery-postcode";
 import {
   normalizeTier,
   type ProfitTierConfig,
@@ -99,6 +100,14 @@ export async function PATCH(request: Request) {
   for (const field of allowedFields) {
     if (body[field] !== undefined) {
       data[field] = body[field];
+    }
+  }
+
+  if (data.scrapePostcode !== undefined) {
+    try {
+      data.scrapePostcode = resolveAmazonDeliveryPostcode(data.scrapePostcode);
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : "Invalid Amazon Delivery Postcode." }, { status: 400 });
     }
   }
 

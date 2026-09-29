@@ -782,6 +782,13 @@ test("verifyAmazonDeliveryPostcode detects visible AU postcode location", () => 
       ),
       false
     );
+    assert.equal(
+      verifyAmazonDeliveryPostcode(
+        amazonProductHtml({ buyboxPrice: "$129.99", descriptionHtml: "<p>Delivery postcode 2217 is mentioned in product details.</p>" }),
+        "2217"
+      ),
+      false
+    );
   });
 });
 
@@ -886,7 +893,13 @@ test("scrapeAmazonProductDirect uses a rendered selected-variant price fallback"
       priceTrackingMode: "REGULAR",
       resolveMissingPrice: async (request) => {
         fallbackRequests.push(request);
-        return 119.99;
+        return {
+          price: 119.99, priceMode: "REGULAR", stockLeft: null,
+          detectedAsin: request.asin, identityOutcome: "MATCH",
+          postcodeVerified: true, buyBoxOutcome: "AVAILABLE",
+          priceChoices: { regular: 119.99, deal: null },
+          acceptedPriceSource: "rendered_selected_variant_buybox",
+        };
       },
     },
   );
@@ -934,7 +947,13 @@ test("scrapeAmazonProductDirect completes Advanced price choices with one render
       postcode: "2217",
       resolveMissingPriceChoices: async (request) => {
         fallbackRequests.push(request);
-        return { regular: 249.98, deal: 159.98 };
+        return {
+          price: 249.98, priceMode: "REGULAR", stockLeft: null,
+          detectedAsin: request.asin, identityOutcome: "MATCH",
+          postcodeVerified: true, buyBoxOutcome: "AVAILABLE",
+          priceChoices: { regular: 249.98, deal: 159.98 },
+          acceptedPriceSource: "rendered_selected_variant_buybox",
+        };
       },
     },
   );
@@ -1114,6 +1133,45 @@ test("scrapeAmazonProductDirect treats See All Buying Options as unavailable", a
       assert.equal((error as { code: string }).code, "AMAZON_BUYBOX_UNAVAILABLE");
       return true;
     },
+  );
+});
+
+test("verified rendered buybox replaces an earlier unavailable page", async (t) => {
+  const { scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
+  installFetchMock(t, [
+    { body: amazonProductHtml({ buyboxMessage: "See All Buying Options" }) },
+    { body: '{"isValidAddress":1}' },
+    { body: amazonProductHtml({ buyboxMessage: "See All Buying Options", postcode: "2217" }) },
+    { body: amazonProductHtml({ buyboxMessage: "See All Buying Options", postcode: "2217" }) },
+  ]);
+  const stages: Array<{ stage: string; metadata?: Record<string, unknown> }> = [];
+  const product = await scrapeAmazonProductDirect("https://www.amazon.com.au/dp/B0TEST1234", {
+    postcode: "2217",
+    onStage: (stage, _duration, metadata) => stages.push({ stage, metadata }),
+    resolveMissingPrice: async ({ asin }) => ({
+      price: 119.99, priceMode: "REGULAR", stockLeft: null,
+      detectedAsin: asin, identityOutcome: "MATCH", postcodeVerified: true,
+      buyBoxOutcome: "AVAILABLE", acceptedPriceSource: "#buybox .priceToPay",
+      priceChoices: { regular: 119.99, deal: null },
+    }),
+  });
+  assert.equal(product.price, 119.99);
+  assert.equal(stages.find((item) => item.stage === "price_extract")?.metadata?.observationSource, "rendered");
+});
+
+test("later verified unavailable retry invalidates an earlier price", async (t) => {
+  const { AmazonDirectScrapeError, scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
+  installFetchMock(t, [
+    { body: amazonProductHtml({ regularPrice: "$79.99" }) },
+    { body: '{"isValidAddress":1}' },
+    { body: amazonProductHtml({ regularPrice: "$79.99", postcode: "2217" }) },
+    { body: amazonProductHtml({ buyboxMessage: "See All Buying Options", postcode: "2217" }) },
+  ]);
+  await assert.rejects(
+    scrapeAmazonProductDirect("https://www.amazon.com.au/dp/B0TEST1234", {
+      postcode: "2217", discoverAllPriceChoices: true,
+    }),
+    (error) => error instanceof AmazonDirectScrapeError && error.code === "AMAZON_BUYBOX_UNAVAILABLE",
   );
 });
 

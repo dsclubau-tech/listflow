@@ -1183,12 +1183,14 @@ export default function SupplierSettingsTab() {
                     <PostcodeAutocomplete
                       value={settings.scrapePostcode}
                       onChange={(pc) => updateField("scrapePostcode", pc.replace(/\D/g, ""))}
+                      mode="postcode"
+                      maxLength={4}
                       country="Australia"
                       placeholder="e.g. 2217"
                     />
                     <p className="mt-1 text-xs text-gray-400">
-                      The scraper will set this postcode on Amazon to get local pricing
-                      and availability. Default: 2217 (Kogarah, NSW).
+                      Used only for Amazon delivery, pricing, and availability checks.
+                      Default: 2217 (Kogarah, NSW).
                     </p>
                   </div>
                 </div>

@@ -6,6 +6,7 @@ import {
   AmazonAvailability,
 } from "@/app/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
+import { resolveAmazonDeliveryPostcode } from "@/lib/amazon-delivery-postcode";
 import {
   scrapeAmazonPrice,
   type ScrapedAmazonPrice,
@@ -446,10 +447,11 @@ export async function runPriceCheck(
   }
 
   const supplierSettings = await getSupplierSettings(options.storeId);
+  const scrapePostcode = resolveAmazonDeliveryPostcode(supplierSettings.scrapePostcode);
   const deliveryState =
     optimizationConfig.enabled.includes("delivery-state") &&
-    supplierSettings.scrapePostcode
-      ? createAmazonDeliveryStateSession(supplierSettings.scrapePostcode)
+    scrapePostcode
+      ? createAmazonDeliveryStateSession(scrapePostcode)
       : undefined;
 
   if (!options.ignoreSchedule && !supplierSettings.priceTrackingEnabled) {
@@ -680,7 +682,7 @@ export async function runPriceCheck(
       return scrapeAmazonPrice(
         asin,
         browser,
-        supplierSettings.scrapePostcode || undefined,
+        scrapePostcode,
         priceTrackingMode,
         variantHints,
         timing.enabled || sharedSnapshot || deliveryState
@@ -856,7 +858,7 @@ export async function runPriceCheck(
                 buyBoxOutcome: scrapeResult?.buyBoxOutcome ?? "UNKNOWN",
                 postcodeVerified: scrapeResult?.postcodeVerified === true,
                 verifiedPostcode: scrapeResult?.postcodeVerified
-                  ? supplierSettings.scrapePostcode
+                  ? scrapePostcode
                   : null,
                 acceptedPriceSource: scrapeResult?.acceptedPriceSource ?? null,
                 availability: amazonAvailabilityUpdate.amazonAvailability,

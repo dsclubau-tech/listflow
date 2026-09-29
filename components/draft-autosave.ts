@@ -114,9 +114,15 @@ function buildItemSpecifics(data: ScrapedProduct) {
   }
 
   return sanitizeEbayItemSpecifics(
-    applyEbayLocationMetadata(specifics, {
+    applyEbayLocationMetadata({
+      ...specifics,
+      _Country: data.supplierDefaults?.country || specifics._Country,
+      _PostalCode: data.supplierDefaults?.zipcode || specifics._PostalCode,
+      _Location: data.supplierDefaults?.locationText || specifics._Location,
+    }, {
       country: data.supplierDefaults?.country,
       postalCode: data.supplierDefaults?.zipcode,
+      location: data.supplierDefaults?.locationText,
     }),
   );
 }

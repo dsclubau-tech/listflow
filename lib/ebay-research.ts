@@ -28,6 +28,7 @@ import {
 } from "@/lib/worker-claim-policy";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
+import { resolveAmazonDeliveryPostcode } from "@/lib/amazon-delivery-postcode";
 import { launchScraperBrowser } from "@/lib/scraper-browser";
 import type { BrowserContext, Page } from "playwright-core";
 import {
@@ -46,7 +47,6 @@ import {
 
 const VALID_LIMITS = [10, 30] as const;
 const DEFAULT_RESEARCH_LIMIT = 30;
-const DEFAULT_POSTCODE = "2217";
 const ACTIVE_SEARCH_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const EMPTY_ACTIVE_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
 const ACTIVE_SEARCH_CACHE_VERSION = "v7";
@@ -657,15 +657,10 @@ async function getContextPostcode(storeId: string) {
     },
     select: {
       scrapePostcode: true,
-      defaultZipcode: true,
     },
   });
 
-  return (
-    settings?.scrapePostcode?.trim() ||
-    settings?.defaultZipcode?.trim() ||
-    DEFAULT_POSTCODE
-  );
+  return resolveAmazonDeliveryPostcode(settings?.scrapePostcode);
 }
 
 async function fetchActiveListings(

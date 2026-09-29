@@ -19,6 +19,7 @@ interface PostcodeAutocompleteProps {
   maxLength?: number;
   showHint?: boolean;
   selectedLocationText?: string;
+  mode?: "suburb" | "postcode";
 }
 
 export function PostcodeAutocomplete({
@@ -31,6 +32,7 @@ export function PostcodeAutocomplete({
   maxLength = 6,
   showHint = true,
   selectedLocationText,
+  mode = "suburb",
 }: PostcodeAutocompleteProps) {
   const [suggestions, setSuggestions] = useState<AuPostcodeSuggestion[]>([]);
   const [isOpen, setIsOpen] = useState(false);
@@ -77,14 +79,14 @@ export function PostcodeAutocomplete({
   function handleInputChange(e: React.ChangeEvent<HTMLInputElement>) {
     const rawVal = e.target.value;
     setInternalSelectedLocation("");
-    const newLoc = isAu ? getZipcodeLocationText(rawVal, country) : "";
+    const newLoc = isAu && mode === "suburb" ? getZipcodeLocationText(rawVal, country) : "";
     onChange(rawVal, newLoc);
 
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
     }
 
-    if (isAu && rawVal.trim().length >= 1) {
+    if (mode === "suburb" && isAu && rawVal.trim().length >= 1) {
       debounceTimerRef.current = setTimeout(() => {
         const matches = searchAuPostcodes(rawVal.trim(), 25);
         setSuggestions(matches);
@@ -132,7 +134,7 @@ export function PostcodeAutocomplete({
         value={value}
         onChange={handleInputChange}
         onFocus={() => {
-          if (isAu && value.trim().length >= 1) {
+          if (mode === "suburb" && isAu && value.trim().length >= 1) {
             const matches = searchAuPostcodes(value.trim(), 25);
             setSuggestions(matches);
             setIsOpen(matches.length > 0);
@@ -142,16 +144,17 @@ export function PostcodeAutocomplete({
         placeholder={placeholder}
         disabled={disabled}
         maxLength={maxLength}
+        inputMode={mode === "postcode" ? "numeric" : undefined}
         className={className}
       />
 
-      {showHint && isAu && value.trim() && (
+      {showHint && isAu && value.trim() && mode === "suburb" && (
         <span className={`mt-1 block text-xs font-medium truncate ${resolvedLocation ? "text-emerald-600" : "text-amber-700"}`} title={resolvedLocation || "Select suburb"}>
           {resolvedLocation ? `📍 ${resolvedLocation}` : getSuburbsForAuPostcode(value) ? "Select suburb" : "Enter a valid postcode"}
         </span>
       )}
 
-      {isAu && isOpen && suggestions.length > 0 && (
+      {mode === "suburb" && isAu && isOpen && suggestions.length > 0 && (
         <ul
           onMouseDown={(e) => e.preventDefault()}
           className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-md bg-white py-1 shadow-lg ring-1 ring-black/5 text-xs"

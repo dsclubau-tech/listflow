@@ -8,7 +8,7 @@ import { resolveProductPolicySelection } from "@/lib/policy-defaults";
 import { invalidateDraftCaches } from "@/lib/cache-tags";
 import { getEbayCategoryAspects, getStoreNumber } from "@/lib/ebay";
 import { resolveRequiredItemSpecifics } from "@/lib/required-specific-resolver";
-import { applyEbayLocationMetadata, validateAuPostcodeLocation } from "@/lib/ebay-location";
+import { resolveProductListingLocation } from "@/lib/product-listing-location";
 import { normalizeAmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
 import { dedupeProductImages } from "@/lib/product-images";
 import { normalizeFullProductTitle, toEbayListingTitle } from "@/lib/product-title";
@@ -201,8 +201,7 @@ export async function POST(request: Request) {
     const listingTitle = toEbayListingTitle(filteredFullTitle);
     const createdById = await getInternalUserId();
     let resolvedItemSpecifics = sanitizeEbayItemSpecifics(itemSpecifics);
-    const supplierSettings =
-      (await prisma.supplierSettings.findUnique({
+    const storeSupplierSettings = await prisma.supplierSettings.findUnique({
         where: {
           storeId_supplierName: {
             storeId: storeSession.storeId,
@@ -224,7 +223,8 @@ export async function POST(request: Request) {
             orderBy: [{ minPrice: "asc" }, { maxPrice: "asc" }],
           },
         },
-      })) ??
+      });
+    const supplierSettings = storeSupplierSettings ??
       (await prisma.supplierSettings.findFirst({
         where: { storeId: null, supplierName: SUPPLIER_NAME },
         select: {
@@ -243,6 +243,16 @@ export async function POST(request: Request) {
           },
         },
       }));
+
+    const listingLocation = resolveProductListingLocation(resolvedItemSpecifics, {
+      defaultCountry: storeSupplierSettings?.defaultCountry,
+      defaultZipcode: storeSupplierSettings?.defaultZipcode,
+      defaultLocationText: storeSupplierSettings?.defaultLocationText,
+    });
+    if (listingLocation.error) {
+      return NextResponse.json({ error: listingLocation.error, code: listingLocation.code }, { status: 400 });
+    }
+    resolvedItemSpecifics = listingLocation.specifics;
 
     if (/^\d+$/.test(normalizedCategory)) {
       try {
@@ -277,18 +287,6 @@ export async function POST(request: Request) {
         // Draft creation should not fail only because eBay Taxonomy is unavailable.
       }
     }
-
-    const locationError = validateAuPostcodeLocation(
-      resolvedItemSpecifics._PostalCode || supplierSettings?.defaultZipcode || "3170",
-      resolvedItemSpecifics._Country || supplierSettings?.defaultCountry || "Australia",
-      resolvedItemSpecifics._Location || supplierSettings?.defaultLocationText,
-    );
-    if (locationError) return NextResponse.json({ error: locationError }, { status: 400 });
-    resolvedItemSpecifics = applyEbayLocationMetadata(resolvedItemSpecifics, {
-      country: supplierSettings?.defaultCountry ?? "Australia",
-      postalCode: supplierSettings?.defaultZipcode ?? "3170",
-      location: supplierSettings?.defaultLocationText,
-    });
 
     const createProduct = async () => {
       const maxAttempts = 3;

@@ -12,6 +12,7 @@ import { getEbaySuggestedCategories, getStoreNumber } from "@/lib/ebay";
 import { normalizeItemSpecifics } from "@/lib/item-specifics";
 import { getStorePolicyDefaults } from "@/lib/policy-defaults";
 import { prisma } from "@/lib/prisma";
+import { resolveAmazonDeliveryPostcode } from "@/lib/amazon-delivery-postcode";
 
 export type AmazonImportExecutionMode = "normal" | "advanced" | "regrab";
 
@@ -122,10 +123,7 @@ export async function executeAmazonImport({
     discoverAllPriceChoices,
     onStage: logStage,
     priceTrackingMode,
-    postcode:
-      supplierSettings?.scrapePostcode?.trim() ||
-      supplierSettings?.defaultZipcode?.trim() ||
-      "2217",
+    postcode: resolveAmazonDeliveryPostcode(supplierSettings?.scrapePostcode),
     resolveMissingPriceChoices: discoverAllPriceChoices
       ? async ({ asin, postcode }) => {
           const result = await resolveRenderedAmazonPrices(
@@ -133,14 +131,7 @@ export async function executeAmazonImport({
             postcode,
             "REGULAR",
           );
-          return {
-            regular:
-              result.priceChoices?.regular ??
-              (result.priceMode === "REGULAR" ? result.price : null),
-            deal:
-              result.priceChoices?.deal ??
-              (result.priceMode === "DEAL" ? result.price : null),
-          };
+          return result;
         }
       : undefined,
     resolveMissingPrice: discoverAllPriceChoices
@@ -151,7 +142,7 @@ export async function executeAmazonImport({
             postcode,
             requestedMode,
           );
-          return result.price;
+          return result;
         },
   });
 
