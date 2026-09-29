@@ -7,6 +7,7 @@ import {
   extractAmazonProductTitle,
   parseAmazonPostcodeResponse,
 } from "@/lib/amazon-direct-parse";
+import { classifyAmazonImportPage, validateAmazonImportResult } from "@/lib/amazon-import-page";
 
 const moduleWithLoad = Module as unknown as {
   _load: (
@@ -213,7 +214,7 @@ test("scrapeAmazonProductDirect retries once when the initial page has no produc
   ]);
 
   const product = await scrapeAmazonProductDirect(
-    "https://www.amazon.com.au/dp/B0GWM5MWXX",
+    "https://www.amazon.com.au/dp/B0TEST1234",
     { postcode: "2217" }
   );
 
@@ -280,7 +281,7 @@ test("scrapeAmazonProductDirect includes shipping fee in product buy price", asy
   ]);
 
   const product = await scrapeAmazonProductDirect(
-    "https://www.amazon.com.au/dp/B0CCHSMGWT",
+    "https://www.amazon.com.au/dp/B0TEST1234",
     {
       postcode: "2217",
       priceTrackingMode: "REGULAR",
@@ -849,7 +850,7 @@ test("scrapeAmazonProductDirect retries the localized selected-variant buybox", 
   ]);
 
   const product = await scrapeAmazonProductDirect(
-    "https://www.amazon.com.au/dp/B0GWM5MWXX",
+    "https://www.amazon.com.au/dp/B0TEST1234",
     {
       postcode: "2217",
       priceTrackingMode: "REGULAR",
@@ -887,7 +888,7 @@ test("scrapeAmazonProductDirect uses a rendered selected-variant price fallback"
   ]);
 
   const product = await scrapeAmazonProductDirect(
-    "https://www.amazon.com.au/dp/B0GWM5MWXX",
+    "https://www.amazon.com.au/dp/B0TEST1234",
     {
       postcode: "2217",
       priceTrackingMode: "REGULAR",
@@ -1111,6 +1112,71 @@ test("scrapeAmazonProductDirect fails when only page-wide prices exist after pos
       );
       return true;
     }
+  );
+});
+
+test("busy pages cannot masquerade as Amazon product metadata", () => {
+  assert.equal(classifyAmazonImportPage("<html><title>Server Busy</title><body>Try again</body></html>").kind, "TEMPORARY_ERROR");
+  assert.equal(classifyAmazonImportPage(amazonProductHtml({ title: "A busy family's travel kettle" })).kind, "PRODUCT");
+  assert.equal(validateAmazonImportResult({ title: "Server Busy", asin: "B0TEST1234" })?.code, "AMAZON_IMPORT_METADATA_INVALID");
+});
+
+test("a busy localized page retains verified metadata and skips direct price retry", async (t) => {
+  const { scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
+  const good = amazonProductHtml({ title: "DeLonghi Kettle", buyboxPrice: "$169.00", postcode: "2217" });
+  const calls = installFetchMock(t, [
+    { body: amazonProductHtml({ title: "DeLonghi Kettle" }) },
+    { body: '{"isValidAddress":1}' },
+    { body: "<html><title>Server Busy</title><body>Try again</body></html>" },
+  ]);
+  let renderedCalls = 0;
+  const result = await scrapeAmazonProductDirect("https://www.amazon.com.au/dp/B0TEST1234", {
+    postcode: "2217",
+    resolveMissingPrice: async () => {
+      renderedCalls += 1;
+      return {
+        price: 169, priceMode: "REGULAR", stockLeft: null, detectedAsin: "B0TEST1234",
+        identityOutcome: "MATCH", postcodeVerified: true, buyBoxOutcome: "AVAILABLE",
+        priceChoices: { regular: 169, deal: null }, importPageHtml: good,
+      };
+    },
+  });
+  assert.equal(result.fullTitle, "DeLonghi Kettle");
+  assert.equal(result.price, 169);
+  assert.equal(calls.length, 3);
+  assert.equal(renderedCalls, 1);
+});
+
+test("a busy initial page can recover on the one metadata retry", async (t) => {
+  const { scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
+  installFetchMock(t, [
+    { body: "<html><title>Server Busy</title><body>Try again</body></html>" },
+    { body: amazonProductHtml({ title: "Recovered Kettle" }) },
+    { body: '{"isValidAddress":1}' },
+    { body: amazonProductHtml({ title: "Recovered Kettle", buyboxPrice: "$169.00", postcode: "2217" }) },
+  ]);
+  const product = await scrapeAmazonProductDirect("https://www.amazon.com.au/dp/B0TEST1234", { postcode: "2217" });
+  assert.equal(product.fullTitle, "Recovered Kettle");
+});
+
+test("repeated busy pages fail without creating import data", async (t) => {
+  const { AmazonDirectScrapeError, scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
+  installFetchMock(t, [
+    { body: "<html><title>Server Busy</title></html>" },
+    { body: "<html><title>Server Busy</title></html>" },
+  ]);
+  await assert.rejects(
+    scrapeAmazonProductDirect("https://www.amazon.com.au/dp/B0TEST1234", { postcode: "2217" }),
+    (error) => error instanceof AmazonDirectScrapeError && error.code === "AMAZON_PAGE_TEMPORARILY_UNAVAILABLE",
+  );
+});
+
+test("a real page identifier that differs from the requested ASIN is rejected", async (t) => {
+  const { AmazonDirectScrapeError, scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
+  installFetchMock(t, [{ body: amazonProductHtml({ title: "Wrong Variant" }) }]);
+  await assert.rejects(
+    scrapeAmazonProductDirect("https://www.amazon.com.au/dp/B0OTHER123", { postcode: "2217" }),
+    (error) => error instanceof AmazonDirectScrapeError && error.code === "AMAZON_ASIN_REDIRECT",
   );
 });
 

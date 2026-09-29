@@ -13,6 +13,7 @@ import { normalizeItemSpecifics } from "@/lib/item-specifics";
 import { getStorePolicyDefaults } from "@/lib/policy-defaults";
 import { prisma } from "@/lib/prisma";
 import { resolveAmazonDeliveryPostcode } from "@/lib/amazon-delivery-postcode";
+import { validateAmazonImportResult } from "@/lib/amazon-import-page";
 
 export type AmazonImportExecutionMode = "normal" | "advanced" | "regrab";
 
@@ -40,25 +41,34 @@ const STAGE_PROGRESS: Record<AmazonScrapeStage, number> = {
   page_fetch: 25,
   html_parse: 40,
   postcode_set: 58,
+  rendered_recovery: 65,
   price_extract: 76,
   category_suggest: 88,
   draft_ready: 96,
 };
 
 async function withTimeout<T>(
-  promise: Promise<T>,
+  operation: (signal: AbortSignal) => Promise<T>,
   timeoutMs: number,
   message: string,
 ): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
+  const controller = new AbortController();
   const timeoutPromise = new Promise<never>((_, reject) => {
-    timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+    timeout = setTimeout(() => { controller.abort(); reject(new Error(message)); }, timeoutMs);
   });
+  const work = Promise.resolve().then(() => operation(controller.signal));
 
   try {
-    return await Promise.race([promise, timeoutPromise]);
+    return await Promise.race([work, timeoutPromise]);
   } finally {
     if (timeout) clearTimeout(timeout);
+    if (controller.signal.aborted) {
+      await Promise.race([
+        work.then(() => undefined, () => undefined),
+        new Promise<void>((resolve) => setTimeout(resolve, 1_500)),
+      ]);
+    }
   }
 }
 
@@ -72,9 +82,10 @@ export async function executeAmazonImport({
 }: ExecuteAmazonImportInput) {
   const allowMetadataOnly = mode === "regrab";
   const discoverAllPriceChoices = mode === "advanced";
-  const supplierSettings = await prisma.supplierSettings.findFirst({
-    where: { supplierName: "Amazon AU", storeId },
-  });
+  const [supplierSettings, policyDefaults] = await Promise.all([
+    prisma.supplierSettings.findFirst({ where: { supplierName: "Amazon AU", storeId } }),
+    getStorePolicyDefaults(storeId),
+  ]);
 
   onProgress?.("scrape_started", 12);
 
@@ -103,8 +114,27 @@ export async function executeAmazonImport({
     );
 
     const { scrapeAmazonPrice } = await import("@/lib/amazon-scraper");
+    const reuseBrowser = process.env.LISTFLOW_AMAZON_IMPORT_BROWSER_REUSE_ENABLED === "true";
+    const lease = reuseBrowser
+      ? await (await import("@/lib/amazon-import-browser-manager")).acquireImportBrowser(storeId, postcode)
+      : null;
+    const fallbackStartedAt = Date.now();
     const result = await withTimeout(
-      scrapeAmazonPrice(asin, undefined, postcode, requestedPriceMode),
+      async (signal) => {
+        const discardOnAbort = () => { void lease?.release(true); };
+        signal.addEventListener("abort", discardOnAbort, { once: true });
+        try {
+          return await scrapeAmazonPrice(asin, lease?.browser, postcode, requestedPriceMode, undefined, {
+            captureImportPage: true,
+            signal,
+            deliveryState: lease?.deliveryState,
+            onTiming: (stage, durationMs) => log.info("amazon-import", "Rendered recovery stage", { stage, durationMs, asin }),
+          });
+        } finally {
+          signal.removeEventListener("abort", discardOnAbort);
+          await lease?.release(signal.aborted);
+        }
+      },
       40_000,
       "Rendered Amazon price lookup timed out",
     );
@@ -114,6 +144,8 @@ export async function executeAmazonImport({
       price: result.price,
       priceChoices: result.priceChoices,
       priceTrackingMode: requestedPriceMode,
+      durationMs: Date.now() - fallbackStartedAt,
+      browserReused: reuseBrowser,
     });
     return result;
   };
@@ -146,6 +178,9 @@ export async function executeAmazonImport({
         },
   });
 
+  const metadataFailure = validateAmazonImportResult(product);
+  if (metadataFailure) throw new AmazonDirectScrapeError(metadataFailure.message, 422, metadataFailure.code);
+
   if (!allowMetadataOnly && (product.price === null || product.price <= 0)) {
     log.warn("amazon-import", "Scrape did not find a valid Amazon price", {
       url,
@@ -172,7 +207,7 @@ export async function executeAmazonImport({
     }
 
     const suggestions = await withTimeout(
-      getEbaySuggestedCategories(product.title, storeNumber, product.category),
+      (signal) => getEbaySuggestedCategories(product.title, storeNumber, product.category, signal),
       15_000,
       "eBay category detection timed out",
     );
@@ -197,7 +232,6 @@ export async function executeAmazonImport({
     );
   }
 
-  const policyDefaults = await getStorePolicyDefaults(storeId);
   const supplierDefaults = {
     quantity: supplierSettings?.defaultQuantity ?? 1,
     country: supplierSettings?.defaultCountry ?? "Australia",

@@ -14,6 +14,8 @@ import {
 } from "@/lib/product-title";
 import { prependTitleToDescription } from "@/lib/description-title";
 import type { ExistingProductConflict } from "@/types/product-duplicate";
+import { validateAmazonImportResult } from "@/lib/amazon-import-page";
+import { reportClientEvent } from "@/lib/client-logger";
 
 type DraftCreateResponse = {
   id?: string;
@@ -128,6 +130,8 @@ function buildItemSpecifics(data: ScrapedProduct) {
 }
 
 export async function createDraftFromScrapedProduct(data: ScrapedProduct) {
+  const metadataFailure = validateAmazonImportResult(data);
+  if (metadataFailure) throw new Error(metadataFailure.message);
   if (data.price === null || data.price <= 0) {
     throw new Error(
       "Amazon product was found, but ListFlow could not read a valid price. No draft was created."
@@ -146,6 +150,7 @@ export async function createDraftFromScrapedProduct(data: ScrapedProduct) {
     data.description
   );
 
+  const saveStartedAt = typeof performance === "undefined" ? Date.now() : performance.now();
   const response = await fetch("/api/products", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -171,6 +176,10 @@ export async function createDraftFromScrapedProduct(data: ScrapedProduct) {
   });
 
   const body = await readDraftCreateResponse(response);
+  const saveDurationMs = Math.round((typeof performance === "undefined" ? Date.now() : performance.now()) - saveStartedAt);
+  void reportClientEvent("amazon-import/draft-save", "Draft save request completed", {
+    data: { durationMs: saveDurationMs, status: response.status, asin: data.asin },
+  });
 
   if (!response.ok || !body.id) {
     if (body.code === "DUPLICATE_ASIN" && body.existing) {

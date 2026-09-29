@@ -184,6 +184,8 @@ export function getAmazonImportStageMessage(stage: string) {
       return "Checking the configured delivery location.";
     case "PRICE_EXTRACT":
       return "Reading the selected variant Buy Box price.";
+    case "RENDERED_RECOVERY":
+      return "Verifying product details and price in the browser.";
     case "RETRYING_ON_UNIFIED_WORKER":
       return "Retrying with the unified worker.";
     case "RETRYING_ON_PEER_WORKER":

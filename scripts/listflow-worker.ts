@@ -67,6 +67,8 @@ const IDLE_SLEEP_MS = parsePositiveWorkerMs(
   process.env.LISTFLOW_WORKER_IDLE_SLEEP_MS,
   10_000
 );
+const IMPORT_FAST_POLL_ENABLED = process.env.LISTFLOW_AMAZON_IMPORT_FAST_POLL_ENABLED === "true";
+const IMPORT_POLL_MS = Math.max(500, parsePositiveWorkerMs(process.env.LISTFLOW_AMAZON_IMPORT_POLL_MS, 1_000));
 const ERROR_SLEEP_MS = parsePositiveWorkerMs(
   process.env.LISTFLOW_WORKER_ERROR_SLEEP_MS,
   Math.max(IDLE_SLEEP_MS, 30_000)
@@ -223,6 +225,31 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitForQueuedImport(stores: Array<{ id: string }>) {
+  if (!IMPORT_FAST_POLL_ENABLED || stores.length === 0) {
+    await sleep(IDLE_SLEEP_MS);
+    return;
+  }
+  const deadline = Date.now() + IDLE_SLEEP_MS;
+  while (!stopping && !hasWorkerStopRequest() && Date.now() < deadline) {
+    await sleep(Math.min(IMPORT_POLL_MS, Math.max(1, deadline - Date.now())));
+    if (stopping || hasWorkerStopRequest()) return;
+    const pending = await modules.prisma.amazonImportJob.findFirst({
+      where: {
+        storeId: { in: stores.map((store) => store.id) },
+        status: "QUEUED",
+        nextAttemptAt: { lte: new Date() },
+        OR: [{ requiredWorkerRole: null }, { requiredWorkerRole: workerRole }],
+        ...(workerRole === "store-specific" ? {
+          NOT: { stage: "RETRYING_ON_PEER_WORKER", workerId },
+        } : {}),
+      },
+      select: { id: true },
+    });
+    if (pending) return;
+  }
+}
+
 function getErrorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error ?? "Unknown error");
 }
@@ -310,6 +337,9 @@ async function recoverDatabaseConnection() {
       sendHeartbeat().catch(() => undefined),
       modules.pauseDatabaseLogging(),
     ]);
+    if (process.env.LISTFLOW_AMAZON_IMPORT_BROWSER_REUSE_ENABLED === "true") {
+      await (await import("../lib/amazon-import-browser-manager")).closeImportBrowser();
+    }
     await modules.prisma.$disconnect();
     databaseRecovery.recordSuccess();
   } finally {
@@ -786,7 +816,7 @@ async function main() {
         }
 
         if (!didWork && !stopping && !hasWorkerStopRequest()) {
-          await sleep(IDLE_SLEEP_MS);
+          await waitForQueuedImport(currentStores);
         }
         databaseRecovery.recordSuccess();
       } catch (error) {
@@ -814,6 +844,9 @@ async function main() {
       workerName,
       workerRole,
     });
+    if (process.env.LISTFLOW_AMAZON_IMPORT_BROWSER_REUSE_ENABLED === "true") {
+      await (await import("../lib/amazon-import-browser-manager")).closeImportBrowser();
+    }
     await modules.prisma.$disconnect();
     releaseLocalWorkerGuard();
   }

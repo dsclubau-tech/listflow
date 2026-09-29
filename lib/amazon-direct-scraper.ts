@@ -41,11 +41,13 @@ import { resolveAmazonDeliveryPostcode } from "@/lib/amazon-delivery-postcode";
 import { selectImportPriceObservation, type ImportPriceObservation } from "@/lib/amazon-import-price-observation";
 import type { ScrapedAmazonPrice } from "@/lib/amazon-scraper";
 import { PriceCheckFailure } from "@/lib/price-check-failures";
+import { classifyAmazonImportPage, validateAmazonImportResult } from "@/lib/amazon-import-page";
 
 export type AmazonScrapeStage =
   | "page_fetch"
   | "html_parse"
   | "postcode_set"
+  | "rendered_recovery"
   | "price_extract"
   | "category_suggest"
   | "draft_ready";
@@ -1407,6 +1409,26 @@ export function renderAmazonDescription($: CheerioAPI) {
 }
 
 function parseProductHtml(html: string, canonicalUrl: string): ScrapedProduct {
+  const quality = classifyAmazonImportPage(html);
+  if (quality.kind !== "PRODUCT") {
+    throw new AmazonDirectScrapeError(
+      quality.kind === "TEMPORARY_ERROR"
+        ? "Amazon returned a temporary error page. Please retry; no draft was created."
+        : quality.kind === "CHALLENGE"
+          ? "Amazon blocked the product page request. No draft was created."
+          : "Could not verify the Amazon product page. No draft was created.",
+      422,
+      quality.kind === "TEMPORARY_ERROR" ? "AMAZON_PAGE_TEMPORARILY_UNAVAILABLE"
+        : quality.kind === "CHALLENGE" ? "AMAZON_BLOCKED" : "AMAZON_IMPORT_METADATA_INVALID",
+    );
+  }
+  const requestedAsin = extractAmazonAsinFromValue(canonicalUrl);
+  if (requestedAsin && quality.asin !== requestedAsin) {
+    throw new AmazonDirectScrapeError(
+      `Amazon returned ASIN ${quality.asin} instead of the requested ASIN ${requestedAsin}.`,
+      422, "AMAZON_ASIN_REDIRECT",
+    );
+  }
   if (detectAmazonBlock(html)) {
     throw new AmazonDirectScrapeError(
       "Amazon blocked the product page request. No draft was created.",
@@ -1456,6 +1478,19 @@ function parseProductHtml(html: string, canonicalUrl: string): ScrapedProduct {
     brand,
     amazonPriceTrackingMode: DEFAULT_AMAZON_PRICE_TRACKING_MODE,
   } satisfies ScrapedProduct;
+}
+
+function applyVerifiedProductMetadata(target: ScrapedProduct, page: ScrapedProduct) {
+  target.title = page.title || target.title;
+  target.fullTitle = page.fullTitle || target.fullTitle;
+  target.description = page.description || target.description;
+  target.images = page.images.length > 0 ? page.images : target.images;
+  target.category = page.category || target.category;
+  target.itemSpecifics = Object.keys(page.itemSpecifics).length > 0
+    ? page.itemSpecifics : target.itemSpecifics;
+  target.variantName = page.variantName ?? target.variantName;
+  target.asin = page.asin || target.asin;
+  target.brand = page.brand || target.brand;
 }
 
 function toScrapedPriceChoice(choice: AmazonBuyboxPriceResult | null) {
@@ -1593,7 +1628,7 @@ export async function scrapeAmazonProductDirect(
   } catch (error) {
     if (
       !(error instanceof AmazonDirectScrapeError) ||
-      error.code !== "AMAZON_TITLE_MISSING"
+      !["AMAZON_TITLE_MISSING", "AMAZON_IMPORT_METADATA_INVALID", "AMAZON_PAGE_TEMPORARILY_UNAVAILABLE"].includes(error.code)
     ) {
       throw error;
     }
@@ -1677,7 +1712,8 @@ export async function scrapeAmazonProductDirect(
     postcodeResult.responseConfirmed || postcodeVerified;
 
   const localizedParseStartedAt = Date.now();
-  let localizedProduct: ScrapedProduct;
+  let localizedProduct: ScrapedProduct | null = null;
+  let localizedPageInvalid = false;
   try {
     localizedProduct = parseProductHtml(localizedHtml, canonicalUrl);
   } catch (error) {
@@ -1692,10 +1728,17 @@ export async function scrapeAmazonProductDirect(
       });
       return product;
     }
-
-    throw error;
+    if (error instanceof AmazonDirectScrapeError &&
+        ["AMAZON_PAGE_TEMPORARILY_UNAVAILABLE", "AMAZON_IMPORT_METADATA_INVALID", "AMAZON_BLOCKED"].includes(error.code)) {
+      localizedPageInvalid = true;
+      logStage(options, "html_parse", localizedParseStartedAt, {
+        asin: product.asin, localized: true, skippedInvalidPage: true, reason: error.code,
+      });
+    } else {
+      throw error;
+    }
   }
-  logStage(options, "html_parse", localizedParseStartedAt, {
+  if (localizedProduct) logStage(options, "html_parse", localizedParseStartedAt, {
     asin: localizedProduct.asin,
     title: localizedProduct.title,
     imageCount: localizedProduct.images.length,
@@ -1708,37 +1751,8 @@ export async function scrapeAmazonProductDirect(
     postcodeVerified,
   });
 
-  product.title = localizedProduct.title || product.title;
-  product.fullTitle = localizedProduct.fullTitle || product.fullTitle;
-  product.description = localizedProduct.description || product.description;
-  product.images =
-    localizedProduct.images.length > 0 ? localizedProduct.images : product.images;
-  product.category = localizedProduct.category || product.category;
-  product.itemSpecifics =
-    Object.keys(localizedProduct.itemSpecifics).length > 0
-      ? localizedProduct.itemSpecifics
-      : product.itemSpecifics;
-  product.variantName = localizedProduct.variantName ?? product.variantName;
-  if (
-    localizedProduct.asin &&
-    product.asin &&
-    localizedProduct.asin.trim().toUpperCase() !== product.asin.trim().toUpperCase()
-  ) {
-    throw new AmazonDirectScrapeError(
-      `Amazon returned ASIN ${localizedProduct.asin} instead of the requested ASIN ${product.asin}.`,
-      422,
-      "AMAZON_ASIN_REDIRECT",
-    );
-  }
-  product.asin = localizedProduct.asin || product.asin;
-  product.brand = localizedProduct.brand || product.brand;
-
-  if (!product.description && !options.allowMetadataOnly) {
-    throw new AmazonDirectScrapeError(
-      "Amazon did not provide About this item or Product Description content. No draft was created.",
-      422,
-      "AMAZON_DESCRIPTION_MISSING",
-    );
+  if (localizedProduct) {
+    applyVerifiedProductMetadata(product, localizedProduct);
   }
 
   const priceStartedAt = Date.now();
@@ -1773,12 +1787,12 @@ export async function scrapeAmazonProductDirect(
     });
   };
 
-  addDirectObservation("localized", localizedHtml, localizedProduct.asin);
+  if (localizedProduct) addDirectObservation("localized", localizedHtml, localizedProduct.asin);
   let selection = selectImportPriceObservation(observations, product.asin, requestedMode, hasExplicitMode);
   const needsMoreChoices = () => options.discoverAllPriceChoices &&
     (!selection.observation?.choices.regular || !selection.observation?.choices.deal);
 
-  if (!options.allowMetadataOnly && (!selection.choice || needsMoreChoices())) {
+  if (!options.allowMetadataOnly && !localizedPageInvalid && (!selection.choice || needsMoreChoices())) {
     priceRetryAttempted = true;
     try {
       const retryStartedAt = Date.now();
@@ -1789,6 +1803,7 @@ export async function scrapeAmazonProductDirect(
         canonicalUrl, bytes: retryHtml.length, localized: true, retry: true, reason: "buybox_price_missing",
       });
       const retryProduct = parseProductHtml(retryHtml, canonicalUrl);
+      applyVerifiedProductMetadata(product, retryProduct);
       addDirectObservation("retry", retryHtml, retryProduct.asin);
       selection = selectImportPriceObservation(observations, product.asin, requestedMode, hasExplicitMode);
       if (selection.observation?.source === "retry") selectedHtml = retryHtml;
@@ -1801,10 +1816,23 @@ export async function scrapeAmazonProductDirect(
     const resolver = options.resolveMissingPriceChoices || options.resolveMissingPrice;
     if (resolver) {
       renderedFallbackAttempted = true;
+      logStage(options, "rendered_recovery", Date.now(), {
+        asin: product.asin, postcode, localizedPageInvalid,
+      });
       try {
         const result = options.resolveMissingPriceChoices
           ? await options.resolveMissingPriceChoices({ asin: product.asin, postcode })
           : await options.resolveMissingPrice!({ asin: product.asin, postcode, priceTrackingMode: requestedMode });
+        if (result.importPageHtml) {
+          try {
+            const recoveredProduct = parseProductHtml(result.importPageHtml, canonicalUrl);
+            applyVerifiedProductMetadata(product, recoveredProduct);
+          } catch (error) {
+            if (!(error instanceof AmazonDirectScrapeError) || error.code !== "AMAZON_IMPORT_METADATA_INVALID") throw error;
+            // A verified price may supplement earlier verified metadata, but an
+            // unrecognized rendered page must never replace that metadata.
+          }
+        }
         const regular = toRenderedBuyboxPriceChoice(
           product.asin, "REGULAR", result.priceChoices?.regular ??
             (result.priceMode === "REGULAR" ? result.price : null),
@@ -1934,6 +1962,16 @@ export async function scrapeAmazonProductDirect(
     }
   }
   product.amazonPriceTrackingMode = accepted.mode;
+
+  if (!product.description && !options.allowMetadataOnly) {
+    throw new AmazonDirectScrapeError(
+      "Amazon did not provide About this item or Product Description content. No draft was created.",
+      422, "AMAZON_DESCRIPTION_MISSING",
+    );
+  }
+
+  const metadataFailure = validateAmazonImportResult(product);
+  if (metadataFailure) throw new AmazonDirectScrapeError(metadataFailure.message, 422, metadataFailure.code);
 
   if (product.images.length === 0) {
     throw new AmazonDirectScrapeError(

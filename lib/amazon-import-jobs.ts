@@ -18,6 +18,7 @@ import type { AmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
 import type { WorkerContext } from "@/lib/job-coordination";
 import { logger } from "@/lib/logger";
 import { prisma } from "@/lib/prisma";
+import { validateAmazonImportResult } from "@/lib/amazon-import-page";
 import {
   filterRunnableJobsForWorker,
   getWorkerClaimPolicy,
@@ -76,18 +77,20 @@ export function serializeAmazonImportJob(job: {
   updatedAt: Date;
   completedAt: Date | null;
 }) {
+  const staleResultError = job.status === AmazonImportJobStatus.COMPLETED
+    ? validateAmazonImportResult(job.result) : null;
   return {
     id: job.id,
-    status: job.status,
-    stage: job.stage,
-    progress: job.progress,
+    status: staleResultError ? AmazonImportJobStatus.FAILED : job.status,
+    stage: staleResultError ? "FAILED" : job.stage,
+    progress: staleResultError ? 0 : job.progress,
     result:
-      job.status === AmazonImportJobStatus.COMPLETED ? job.result : null,
+      job.status === AmazonImportJobStatus.COMPLETED && !staleResultError ? job.result : null,
     errorMessage:
-      job.status === AmazonImportJobStatus.FAILED ? job.errorMessage : null,
-    errorCode: job.status === AmazonImportJobStatus.FAILED ? job.errorCode : null,
+      staleResultError?.message ?? (job.status === AmazonImportJobStatus.FAILED ? job.errorMessage : null),
+    errorCode: staleResultError?.code ?? (job.status === AmazonImportJobStatus.FAILED ? job.errorCode : null),
     errorStatus:
-      job.status === AmazonImportJobStatus.FAILED ? job.errorStatus : null,
+      staleResultError ? 422 : job.status === AmazonImportJobStatus.FAILED ? job.errorStatus : null,
     workerName: job.workerName,
     createdAt: job.createdAt.toISOString(),
     updatedAt: job.updatedAt.toISOString(),
@@ -274,6 +277,7 @@ export async function runNextAmazonImportJobForStore(
         mode: job.kind,
         attempt: job.attempts,
         workerRole: worker.workerRole,
+        queueMs: Date.now() - job.createdAt.getTime(),
       });
 
       const result = await executeAmazonImport({
@@ -286,6 +290,8 @@ export async function runNextAmazonImportJobForStore(
         log: jobLogger,
         onProgress: updateProgress,
       });
+      const metadataFailure = validateAmazonImportResult(result);
+      if (metadataFailure) throw new AmazonDirectScrapeError(metadataFailure.message, 422, metadataFailure.code);
 
       await prisma.amazonImportJob.update({
         where: { id: job.id },

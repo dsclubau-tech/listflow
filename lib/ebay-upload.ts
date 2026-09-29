@@ -20,6 +20,7 @@ import {
 } from "@/lib/upload-item-specifics";
 import { prisma } from "@/lib/prisma";
 import { scrapeAmazonPackageItemSpecificsDirect } from "@/lib/amazon-direct-scraper";
+import { isInvalidAmazonImportTitle } from "@/lib/amazon-import-page";
 import { fillMissingPackageDimensionItemSpecifics } from "@/lib/amazon-package-dimensions";
 import { hasMismatchedApplianceCategory } from "@/lib/ebay-category-selection";
 import {
@@ -320,6 +321,16 @@ export async function uploadProductToEbay(input: {
         status: 200,
         productTitle: product.title,
         body: { success: true, itemId, reconciled: true },
+      };
+    }
+
+    if (product.asin &&
+        (isInvalidAmazonImportTitle(product.title) ||
+          (product.fullTitle && isInvalidAmazonImportTitle(product.fullTitle)))) {
+      const errorMessage = "This draft contains an Amazon error-page title. Regrab the product details, review them, and Save before uploading to eBay.";
+      return {
+        ok: false, status: 422, productTitle: product.title,
+        body: { success: false, error: errorMessage },
       };
     }
 

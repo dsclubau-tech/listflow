@@ -96,6 +96,8 @@ export interface ScrapedAmazonPrice {
   buyBoxOutcome?: "AVAILABLE" | "UNAVAILABLE" | "UNKNOWN";
   postcodeVerified?: boolean;
   acceptedPriceSource?: string | null;
+  /** Internal import-only page snapshot; never persisted with a product or job. */
+  importPageHtml?: string;
 }
 
 async function getNormalBuyBoxOutcome(page: Page): Promise<"AVAILABLE" | "UNAVAILABLE" | "UNKNOWN"> {
@@ -134,6 +136,8 @@ export type AmazonPriceScrapeOptions = {
   onDeliveryStateEvent?: (
     event: "seeded" | "reused" | "rejected" | "reset",
   ) => void;
+  captureImportPage?: boolean;
+  signal?: AbortSignal;
 };
 
 async function measureAmazonPriceStage<T>(
@@ -818,8 +822,11 @@ export async function scrapeAmazonPrice(
     userAgent,
     reusedDeliveryState ? deliveryState?.storageState ?? undefined : undefined,
   );
+  const abortScrape = () => { void context.close().catch(() => {}); };
+  options?.signal?.addEventListener("abort", abortScrape, { once: true });
 
   try {
+    options?.signal?.throwIfAborted();
     await measureAmazonPriceStage(options, "navigation", () =>
       page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
         waitUntil: "domcontentloaded",
@@ -1272,8 +1279,10 @@ export async function scrapeAmazonPrice(
       buyBoxOutcome,
       postcodeVerified: exactPostcodeVerified,
       acceptedPriceSource: selectedPrice?.selector ?? null,
+      importPageHtml: options?.captureImportPage ? await page.content() : undefined,
     };
   } finally {
+    options?.signal?.removeEventListener("abort", abortScrape);
     await context.close().catch(() => {});
 
     if (!browser) {

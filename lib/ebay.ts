@@ -1688,7 +1688,7 @@ export function clearEbayBusinessPoliciesCache(storeNumber?: 1 | 2 | 3) {
  */
 const smallKitchenCategoryCache = new Map<number, { expiresAt: number; categories: EbayCategorySuggestion[] }>();
 
-async function getSmallKitchenCategories(storeNumber: 1 | 2 | 3): Promise<EbayCategorySuggestion[]> {
+async function getSmallKitchenCategories(storeNumber: 1 | 2 | 3, signal?: AbortSignal): Promise<EbayCategorySuggestion[]> {
   const cached = smallKitchenCategoryCache.get(storeNumber);
   if (cached && cached.expiresAt > Date.now()) return cached.categories;
   const accessToken = await getOAuthAccessToken(storeNumber);
@@ -1697,7 +1697,7 @@ async function getSmallKitchenCategories(storeNumber: 1 | 2 | 3): Promise<EbayCa
   // tree, since title search can match a brand to an entirely unrelated domain.
   const response = await fetch(`${EBAY_API_BASE_URL}/commerce/taxonomy/v1/category_tree/15/get_category_subtree?category_id=20667`, {
     headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
-    signal: AbortSignal.timeout(10_000),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
   });
   if (response.status === 429) await recordStoreEbayBackoff(storeId, "BROWSE", "HTTP 429");
   if (!response.ok) throw new Error(`Kitchen category lookup returned HTTP ${response.status}`);
@@ -1724,10 +1724,11 @@ export async function getEbaySuggestedCategories(
   title: string,
   storeNumber: 1 | 2 | 3,
   sourceCategory?: string | null,
+  signal?: AbortSignal,
 ): Promise<Array<{ categoryId: string; categoryName: string }>> {
   try {
     if (getSmallKitchenApplianceType(title, sourceCategory)) {
-      return selectSmallKitchenApplianceCategories(title, await getSmallKitchenCategories(storeNumber), sourceCategory);
+      return selectSmallKitchenApplianceCategories(title, await getSmallKitchenCategories(storeNumber, signal), sourceCategory);
     }
     // Truncate long titles at a word boundary (max 80 chars)
     let query = title.trim();
@@ -1750,6 +1751,7 @@ export async function getEbaySuggestedCategories(
         "Content-Type": "application/json",
         Accept: "application/json",
       },
+      signal,
     });
 
     const responseText = await response.text();
@@ -1807,6 +1809,7 @@ export async function getEbaySuggestedCategories(
             "Content-Type": "application/json",
             Accept: "application/json",
           },
+          signal,
         });
 
         if (fallbackRes.ok) {
@@ -1875,6 +1878,20 @@ export type EbayCategoryAspect = {
   inputType: string | null;
 };
 
+const categoryAspectCache = new Map<string, { expiresAt: number; aspects: EbayCategoryAspect[] }>();
+const pendingCategoryAspectRequests = new Map<string, Promise<EbayCategoryAspect[]>>();
+const CATEGORY_ASPECT_TTL_MS = 6 * 60 * 60 * 1000;
+const CATEGORY_ASPECT_CACHE_MAX = 256;
+
+function cacheCategoryAspects(key: string, aspects: EbayCategoryAspect[]) {
+  if (!aspects.length) return;
+  categoryAspectCache.delete(key);
+  categoryAspectCache.set(key, { expiresAt: Date.now() + CATEGORY_ASPECT_TTL_MS, aspects });
+  if (categoryAspectCache.size > CATEGORY_ASPECT_CACHE_MAX) {
+    categoryAspectCache.delete(categoryAspectCache.keys().next().value!);
+  }
+}
+
 /**
  * Fetches eBay AU category aspect metadata for a leaf category.
  * category_tree_id 15 = eBay Australia.
@@ -1888,6 +1905,30 @@ export async function getEbayCategoryAspects(
     return [];
   }
 
+  if (process.env.LISTFLOW_AMAZON_IMPORT_ASPECT_CACHE_ENABLED !== "true") {
+    return fetchEbayCategoryAspects(normalizedCategoryId, storeNumber);
+  }
+  const key = `${EBAY_API_BASE_URL}:15:${storeNumber}:${normalizedCategoryId}`;
+  const cached = categoryAspectCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.aspects;
+  if (cached) categoryAspectCache.delete(key);
+  const pending = pendingCategoryAspectRequests.get(key);
+  if (pending) return pending;
+  const request = fetchEbayCategoryAspects(normalizedCategoryId, storeNumber);
+  pendingCategoryAspectRequests.set(key, request);
+  try {
+    const aspects = await request;
+    cacheCategoryAspects(key, aspects);
+    return aspects;
+  } finally {
+    if (pendingCategoryAspectRequests.get(key) === request) pendingCategoryAspectRequests.delete(key);
+  }
+}
+
+async function fetchEbayCategoryAspects(
+  normalizedCategoryId: string,
+  storeNumber: 1 | 2 | 3,
+): Promise<EbayCategoryAspect[]> {
   try {
     const accessToken = await getOAuthAccessToken(storeNumber);
     const url =
@@ -1902,6 +1943,7 @@ export async function getEbayCategoryAspects(
         "Content-Type": "application/json",
         Accept: "application/json",
       },
+      signal: AbortSignal.timeout(5_000),
     });
     const responseText = await response.text();
 
