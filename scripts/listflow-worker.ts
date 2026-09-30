@@ -651,6 +651,7 @@ async function main() {
   console.log(`Database profile: ${workerDatabaseProfile}`);
   const runtimeRevision = workerRevision;
   const priceCheckOptimizations = getPriceCheckOptimizationEnvironmentSummary();
+  console.log(`Postcode reuse stores: ${priceCheckOptimizations.deliveryStateAllowedStoreIds?.join(", ") ?? "inherit general allowlist"}`);
   console.log(`Revision: ${runtimeRevision}`);
   console.log(
     `Price-check timing: ${priceCheckOptimizations.timingEnabled ? "enabled" : "disabled"}`,

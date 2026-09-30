@@ -17,6 +17,7 @@ export type PriceCheckOptimizationConfig = {
   requested: PriceCheckOptimizationName[];
   enabled: PriceCheckOptimizationName[];
   allowedStoreIds: string[];
+  deliveryStateAllowedStoreIds: string[] | null;
   storeAllowed: boolean;
   unknown: string[];
 };
@@ -55,14 +56,23 @@ export function resolvePriceCheckOptimizationConfig(
   const storeAllowed = Boolean(
     storeId && allowedStoreIds.includes(storeId),
   );
+  // Optional narrower canary scope. Absence preserves existing configuration;
+  // an explicitly empty value disables delivery-state reuse for all stores.
+  const deliveryStateAllowedStoreIds = environment.LISTFLOW_PRICE_CHECK_DELIVERY_STATE_STORE_IDS === undefined
+    ? null
+    : parseList(environment.LISTFLOW_PRICE_CHECK_DELIVERY_STATE_STORE_IDS);
 
   return {
     timingEnabled: isEnabled(
       environment.LISTFLOW_PRICE_CHECK_TIMING_ENABLED,
     ),
     requested,
-    enabled: unknown.length === 0 && storeAllowed ? requested : [],
+    enabled: unknown.length === 0 && storeAllowed ? requested.filter(name =>
+      name !== "delivery-state" || deliveryStateAllowedStoreIds === null ||
+      Boolean(storeId && deliveryStateAllowedStoreIds.includes(storeId)),
+    ) : [],
     allowedStoreIds,
+    deliveryStateAllowedStoreIds,
     storeAllowed,
     unknown,
   };
@@ -76,6 +86,7 @@ export function getPriceCheckOptimizationEnvironmentSummary(
     timingEnabled: config.timingEnabled,
     requested: config.requested,
     allowedStoreIds: config.allowedStoreIds,
+    deliveryStateAllowedStoreIds: config.deliveryStateAllowedStoreIds,
     unknown: config.unknown,
   };
 }

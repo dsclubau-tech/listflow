@@ -28,6 +28,9 @@ test("comparison includes price, shipping, stock, mode, variant, and identity", 
     }),
     false,
   );
+  assert.equal(amazonPriceComparisonOutcomesMatch(base, {
+    ...base, value: { ...base.value, postcodeVerified: true },
+  }), false);
 });
 
 test("comparison normalizes missing optional result fields", () => {

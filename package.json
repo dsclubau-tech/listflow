@@ -8,6 +8,7 @@
     "build": "prisma generate && next build",
     "start": "next start",
     "test": "tsx --test lib/*.test.ts",
+    "test:delivery": "tsx --test lib/amazon-delivery-state.test.ts lib/amazon-price-postcode.test.ts lib/amazon-price-comparison.test.ts lib/price-check-optimizations.test.ts scripts/test-amazon-delivery-reuse.ts",
     "test:products": "tsx --test lib/product-filter-query.test.ts lib/product-profit.test.ts",
     "test:upload": "tsx --test lib/amazon-direct-scraper.test.ts lib/amazon-buybox-price.test.ts lib/draft-products-state.test.ts lib/ebay-required-specifics.test.ts lib/ebay-upload-reconciliation.test.ts lib/item-specifics.test.ts lib/product-duplicate.test.ts lib/required-specific-resolver.test.ts",
     "test:e2e": "playwright test",

@@ -2497,7 +2497,7 @@ export default function DraftsTable({
               {isProductsView && (
                 <>
                   <th className="px-3 py-3 text-left">Price Tracking</th>
-                  <th className="sticky right-[90px] z-20 border-l border-gray-200 bg-gray-50 px-2 py-3 text-left">Note</th>
+                  <th className="border-l border-gray-200 px-2 py-3 text-left">Note</th>
                 </>
               )}
               <th
@@ -3119,7 +3119,7 @@ export default function DraftsTable({
                     )}
 
                     {isProductsView && (
-                      <td className={`hidden xl:table-cell sticky right-[90px] z-10 border-l border-gray-100 px-2 py-3 ${stickyActionToneClass}`} onClick={(event) => event.stopPropagation()}>
+                      <td className="hidden xl:table-cell border-l border-gray-100 px-2 py-3" onClick={(event) => event.stopPropagation()}>
                         <InternalNotePreview
                           note={visibleNote}
                           productTitle={product.title}

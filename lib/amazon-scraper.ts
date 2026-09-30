@@ -40,6 +40,7 @@ import {
   seedAmazonDeliveryState,
   type AmazonDeliveryStateSession,
   type AmazonDeliveryStorageState,
+  type AmazonDeliveryStateEvent,
 } from "@/lib/amazon-delivery-state";
 
 export interface ScrapedProduct {
@@ -134,7 +135,8 @@ export type AmazonPriceScrapeOptions = {
   deliveryState?: AmazonDeliveryStateSession;
   allowDeliveryStateReuse?: boolean;
   onDeliveryStateEvent?: (
-    event: "seeded" | "reused" | "rejected" | "reset",
+    event: AmazonDeliveryStateEvent,
+    detail?: { reason?: string },
   ) => void;
   captureImportPage?: boolean;
   signal?: AbortSignal;
@@ -159,10 +161,11 @@ async function measureAmazonPriceStage<T>(
 
 function reportAmazonDeliveryStateEvent(
   options: AmazonPriceScrapeOptions | undefined,
-  event: "seeded" | "reused" | "rejected" | "reset",
+  event: AmazonDeliveryStateEvent,
+  detail?: { reason?: string },
 ) {
   try {
-    options?.onDeliveryStateEvent?.(event);
+    options?.onDeliveryStateEvent?.(event, detail);
   } catch {
     // Performance instrumentation must never change scraper behavior.
   }
@@ -822,6 +825,28 @@ export async function scrapeAmazonPrice(
     userAgent,
     reusedDeliveryState ? deliveryState?.storageState ?? undefined : undefined,
   );
+  const rejectDeliveryState = (reason: string) => {
+    if (!deliveryState) return;
+    resetAmazonDeliveryState(deliveryState, { disable: true, reason });
+    reportAmazonDeliveryStateEvent(options, "rejected", { reason });
+    reportAmazonDeliveryStateEvent(options, "disabled", { reason });
+  };
+  const requireVerifiedPostcode = async () => {
+    if (!postcode) return;
+    exactPostcodeVerified = await measureAmazonPriceStage(
+      options,
+      "delivery-final-verification",
+      () => verifyExactAmazonDeliveryPostcode(page, postcode),
+    );
+    if (!exactPostcodeVerified) {
+      const reason = `Amazon did not verify configured postcode ${postcode} on the final product page.`;
+      rejectDeliveryState(reason);
+      throw new PriceCheckFailure(
+        PriceCheckFailureCode.TECHNICAL_ERROR,
+        `${reason} Price and availability were not accepted.`,
+      );
+    }
+  };
   const abortScrape = () => { void context.close().catch(() => {}); };
   options?.signal?.addEventListener("abort", abortScrape, { once: true });
 
@@ -844,11 +869,7 @@ export async function scrapeAmazonPrice(
       if (exactPostcodeVerified) {
         reportAmazonDeliveryStateEvent(options, "reused");
       } else {
-        resetAmazonDeliveryState(deliveryState, {
-          disable: true,
-          reason: `Seeded Amazon delivery state did not verify postcode ${postcode}.`,
-        });
-        reportAmazonDeliveryStateEvent(options, "rejected");
+        rejectDeliveryState(`Seeded Amazon delivery state did not verify postcode ${postcode}.`);
         await context.close().catch(() => {});
 
         reusedDeliveryState = false;
@@ -879,6 +900,7 @@ export async function scrapeAmazonPrice(
       let postcodeApplied = false;
 
       for (let attempt = 1; attempt <= MAX_POSTCODE_ATTEMPTS; attempt++) {
+        reportAmazonDeliveryStateEvent(options, "setup");
         const success = await measureAmazonPriceStage(
           options,
           "postcode-setup",
@@ -924,13 +946,7 @@ export async function scrapeAmazonPrice(
         () => verifyExactAmazonDeliveryPostcode(page, postcode),
       );
       if (!exactPostcodeVerified) {
-        if (deliveryState) {
-          resetAmazonDeliveryState(deliveryState, {
-            disable: true,
-            reason: `Amazon did not verify configured postcode ${postcode}.`,
-          });
-          reportAmazonDeliveryStateEvent(options, "rejected");
-        }
+        rejectDeliveryState(`Amazon did not verify configured postcode ${postcode}.`);
         throw new PriceCheckFailure(
           PriceCheckFailureCode.TECHNICAL_ERROR,
           `Amazon did not verify the configured delivery postcode ${postcode}; price and availability were not accepted.`,
@@ -991,6 +1007,7 @@ export async function scrapeAmazonPrice(
       .catch(() => "unknown");
 
     if (stockStatus === "out_of_stock") {
+      await requireVerifiedPostcode();
       // Check if the delivery location is still non-AU — that means
       // the postcode setter failed and "out of stock" is a geo-location
       // issue, not a real stock issue.
@@ -1128,6 +1145,10 @@ export async function scrapeAmazonPrice(
         }
       }
     }
+
+    // Variant navigation may change delivery context. Verify it before
+    // returning price/stock or classifying a marketplace failure.
+    await requireVerifiedPostcode();
 
     // ── Final ASIN integrity check ──────────────────────────────────────
     // Always verify the page ASIN matches what we requested. If Amazon

@@ -14,6 +14,22 @@ test("postcode verification requires the exact configured postcode", () => {
   assert.equal(hasExactAmazonDeliveryPostcode("Deliver to Sydney 2000", "2217"), false);
   assert.equal(hasExactAmazonDeliveryPostcode("Deliver to Australia", "2217"), false);
   assert.equal(hasExactAmazonDeliveryPostcode("Suburb 12217", "2217"), false);
+  assert.equal(hasExactAmazonDeliveryPostcode("Darwin 0800", "0800"), true);
+  assert.equal(hasExactAmazonDeliveryPostcode("Darwin 800", "0800"), false);
+});
+
+test("clearing a browser discards its state and a new run starts independently", () => {
+  const browser = {} as Browser;
+  const session = createAmazonDeliveryStateSession("2217");
+  seedAmazonDeliveryState(session, {
+    browser, userAgent: "agent", storageState: { cookies: [], origins: [] },
+  });
+  resetAmazonDeliveryState(session);
+  assert.equal(session.browser, null);
+  assert.equal(session.userAgent, null);
+  assert.equal(session.storageState, null);
+  assert.equal(canReuseAmazonDeliveryState(session, browser, "2217"), false);
+  assert.equal(createAmazonDeliveryStateSession("2217").disabled, false);
 });
 
 test("delivery state is scoped to the browser and postcode", () => {

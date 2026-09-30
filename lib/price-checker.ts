@@ -1,4 +1,5 @@
 import type { Browser } from "playwright-core";
+import { getPriceCheckProductDelayMs, resolvePriceCheckProductPacing } from "@/lib/price-check-pacing";
 import { Prisma } from "@/app/generated/prisma/client";
 import {
   PriceCheckFailureCode,
@@ -52,23 +53,7 @@ import {
 } from "@/lib/amazon-delivery-state";
 
 const PRICE_TOLERANCE = 0.01;
-const MIN_SAFE_PRODUCT_DELAY_MS = 1000;
-const DEFAULT_PRODUCT_DELAY_MIN_MS = 3000;
-const DEFAULT_PRODUCT_DELAY_MAX_MS = 7000;
-const PRODUCT_DELAY_MIN_MS = Math.max(
-  MIN_SAFE_PRODUCT_DELAY_MS,
-  readDelayMs(
-    "LISTFLOW_PRICE_CHECK_PRODUCT_DELAY_MIN_MS",
-    DEFAULT_PRODUCT_DELAY_MIN_MS
-  )
-);
-const PRODUCT_DELAY_MAX_MS = Math.max(
-  PRODUCT_DELAY_MIN_MS,
-  readDelayMs(
-    "LISTFLOW_PRICE_CHECK_PRODUCT_DELAY_MAX_MS",
-    DEFAULT_PRODUCT_DELAY_MAX_MS
-  )
-);
+const PRODUCT_PACING = resolvePriceCheckProductPacing();
 const DEFAULT_PRODUCT_CHECK_TIMEOUT_MS = 120_000;
 const PRODUCT_CHECK_TIMEOUT_MS = Math.max(
   15_000,
@@ -168,10 +153,7 @@ function readDelayMs(envName: string, fallback: number) {
 }
 
 function getProductDelayMs() {
-  return (
-    PRODUCT_DELAY_MIN_MS +
-    Math.random() * (PRODUCT_DELAY_MAX_MS - PRODUCT_DELAY_MIN_MS)
-  );
+  return getPriceCheckProductDelayMs(PRODUCT_PACING);
 }
 
 function withTimeout<T>(
@@ -453,6 +435,7 @@ export async function runPriceCheck(
     scrapePostcode
       ? createAmazonDeliveryStateSession(scrapePostcode)
       : undefined;
+  const deliveryEvents: Record<string, number> = {};
 
   if (!options.ignoreSchedule && !supplierSettings.priceTrackingEnabled) {
     return {
@@ -651,6 +634,11 @@ export async function runPriceCheck(
   let sharedBrowser: Browser | null = null;
   const getSharedBrowser = async () => {
     if (!sharedBrowser || !sharedBrowser.isConnected()) {
+      if (deliveryState && sharedBrowser) {
+        resetAmazonDeliveryState(deliveryState);
+        deliveryEvents.reset = (deliveryEvents.reset ?? 0) + 1;
+        timing.increment("delivery-state-reset");
+      }
       sharedBrowser = await launchScraperBrowser();
     }
     return sharedBrowser;
@@ -658,6 +646,8 @@ export async function runPriceCheck(
   const closeSharedBrowser = async () => {
     if (deliveryState) {
       resetAmazonDeliveryState(deliveryState);
+      deliveryEvents.reset = (deliveryEvents.reset ?? 0) + 1;
+      timing.increment("delivery-state-reset");
     }
     if (sharedBrowser) {
       const browserToClose = sharedBrowser;
@@ -696,8 +686,18 @@ export async function runPriceCheck(
               sharedSnapshot,
               deliveryState,
               allowDeliveryStateReuse,
-              onDeliveryStateEvent: (event) =>
-                timing.increment(`delivery-state-${event}`),
+              onDeliveryStateEvent: (event, detail) => {
+                deliveryEvents[event] = (deliveryEvents[event] ?? 0) + 1;
+                timing.increment(`delivery-state-${event}`);
+                if (event === "disabled") {
+                  logger.warn("price-checker/delivery-state", "Postcode reuse disabled for the remaining run", {
+                    jobId: options.jobId,
+                    storeId: options.storeId,
+                    scrapePostcode,
+                    reason: detail?.reason ?? deliveryState?.disabledReason,
+                  });
+                }
+              },
             }
           : undefined,
       );
@@ -1503,10 +1503,23 @@ export async function runPriceCheck(
   } finally {
     await closeSharedBrowser();
     invalidateRunCaches();
+    if (deliveryState) {
+      logger.info("price-checker/delivery-state", "Postcode session reuse summary", {
+        jobId: options.jobId,
+        storeId: options.storeId,
+        scrapePostcode,
+        outcome: runOutcome,
+        optimizations: optimizationConfig.enabled,
+        events: deliveryEvents,
+        disabled: deliveryState.disabled,
+        disabledReason: deliveryState.disabledReason,
+      });
+    }
     if (timing.enabled) {
       logger.info("price-checker/timing", "Price check timing summary", {
         jobId: options.jobId,
         storeId: options.storeId,
+        scrapePostcode,
         outcome: runOutcome,
         optimizations: optimizationConfig.enabled,
         result,

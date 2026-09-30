@@ -27,6 +27,10 @@ export function normalizeAmazonPriceComparisonOutcome(
     variantSelectionReason: outcome.value.variantSelectionReason ?? null,
     detectedAsin: outcome.value.detectedAsin ?? null,
     asinRedirected: outcome.value.asinRedirected ?? false,
+    identityOutcome: outcome.value.identityOutcome ?? null,
+    buyBoxOutcome: outcome.value.buyBoxOutcome ?? null,
+    postcodeVerified: outcome.value.postcodeVerified ?? false,
+    acceptedPriceSource: outcome.value.acceptedPriceSource ?? null,
   };
 }
 

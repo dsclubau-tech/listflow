@@ -2,6 +2,9 @@ import "dotenv/config";
 
 import fs from "node:fs";
 import path from "node:path";
+import { setTimeout as pause } from "node:timers/promises";
+import { getPriceCheckProductDelayMs, resolvePriceCheckProductPacing } from "../lib/price-check-pacing";
+import { PriceCheckTimingRecorder } from "../lib/price-check-optimizations";
 import {
   scrapeAmazonPrice,
   type ScrapedAmazonPrice,
@@ -82,33 +85,60 @@ async function main() {
   const inputArgument = readArgument("--input");
   if (!inputArgument) {
     throw new Error(
-      "Usage: npm run price-check:compare -- --input <30-products.json> [--output <report.json>]",
+      "Usage: npm run price-check:compare -- --input <30-products.json> [--output <report.json>] [--optimizations delivery-state[,shared-snapshot]]",
     );
   }
 
   const inputPath = path.resolve(inputArgument);
   const outputArgument = readArgument("--output");
   const input = loadInput(inputPath);
+  const optimizations = (readArgument("--optimizations") ?? "delivery-state").split(",");
+  if (optimizations.some(name => name !== "delivery-state" && name !== "shared-snapshot")) {
+    throw new Error("Comparison supports only delivery-state and shared-snapshot.");
+  }
+  const pacing = resolvePriceCheckProductPacing();
+  const startedAt = Date.now();
+  const controller = new AbortController();
+  const cancel = () => controller.abort();
   const deliveryState = createAmazonDeliveryStateSession(input.postcode);
   const browser = await launchScraperBrowser();
   const deliveryEvents: string[] = [];
   const comparisons = [];
+  process.on("SIGINT", cancel);
+  process.on("SIGTERM", cancel);
+  let attempts = 0;
+  let pacingMs = 0;
+  let activeTiming = new PriceCheckTimingRecorder(true);
+  const onTiming = (stage: string, durationMs: number) => activeTiming.record(stage, durationMs);
+  const pacedCapture = async (operation: () => Promise<ScrapedAmazonPrice>) => {
+    controller.signal.throwIfAborted();
+    if (attempts++ > 0) {
+      const durationMs = getPriceCheckProductDelayMs(pacing);
+      pacingMs += durationMs;
+      await pause(durationMs, undefined, { signal: controller.signal });
+    }
+    activeTiming = new PriceCheckTimingRecorder(true);
+    const result = await captureOutcome(operation);
+    controller.signal.throwIfAborted();
+    return { ...result, stages: activeTiming.snapshot().stages };
+  };
 
   try {
     for (const [index, product] of input.products.entries()) {
       const mode = product.priceTrackingMode ?? "REGULAR";
       const runBaseline = () =>
-        captureOutcome(() =>
+        pacedCapture(() =>
           scrapeAmazonPrice(
             product.asin,
             browser,
             input.postcode,
             mode,
             product.variantHints,
+            { onTiming, signal: controller.signal },
           ),
         );
       const runExperiment = () =>
-        captureOutcome(() =>
+        pacedCapture(() =>
           scrapeAmazonPrice(
             product.asin,
             browser,
@@ -116,8 +146,10 @@ async function main() {
             mode,
             product.variantHints,
             {
-              sharedSnapshot: true,
-              deliveryState,
+              sharedSnapshot: optimizations.includes("shared-snapshot"),
+              deliveryState: optimizations.includes("delivery-state") ? deliveryState : undefined,
+              onTiming,
+              signal: controller.signal,
               allowDeliveryStateReuse: true,
               onDeliveryStateEvent: (event) =>
                 deliveryEvents.push(`${index + 1}:${event}`),
@@ -142,16 +174,21 @@ async function main() {
         ),
         baseline: {
           durationMs: baseline.durationMs,
+          stages: baseline.stages,
           outcome: normalizeAmazonPriceComparisonOutcome(baseline.outcome),
         },
         experiment: {
           durationMs: experiment.durationMs,
+          stages: experiment.stages,
           outcome: normalizeAmazonPriceComparisonOutcome(experiment.outcome),
         },
       });
+      process.stderr.write(`Compared ${index + 1}/30: ${product.asin} (${comparisons.at(-1)?.match ? "match" : "mismatch"})\n`);
     }
   } finally {
     await browser.close().catch(() => {});
+    process.off("SIGINT", cancel);
+    process.off("SIGTERM", cancel);
   }
 
   const mismatches = comparisons.filter((comparison) => !comparison.match);
@@ -159,6 +196,12 @@ async function main() {
     generatedAt: new Date().toISOString(),
     inputPath,
     products: comparisons.length,
+    optimizations,
+    pacing,
+    pacingMs: Math.round(pacingMs),
+    elapsedMs: Date.now() - startedAt,
+    baselineScrapeMs: comparisons.reduce((sum, item) => sum + item.baseline.durationMs, 0),
+    experimentScrapeMs: comparisons.reduce((sum, item) => sum + item.experiment.durationMs, 0),
     matches: comparisons.length - mismatches.length,
     mismatches: mismatches.length,
     deliveryStateDisabled: deliveryState.disabled,

@@ -4,6 +4,14 @@ export type AmazonDeliveryStorageState = Awaited<
   ReturnType<BrowserContext["storageState"]>
 >;
 
+export type AmazonDeliveryStateEvent =
+  | "setup"
+  | "seeded"
+  | "reused"
+  | "rejected"
+  | "disabled"
+  | "reset";
+
 export type AmazonDeliveryStateSession = {
   readonly postcode: string;
   browser: Browser | null;

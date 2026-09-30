@@ -45,6 +45,22 @@ describe("price-check optimization configuration", () => {
     assert.equal(config.timingEnabled, true);
     assert.deepEqual(config.enabled, []);
   });
+
+  test("delivery-state canary scope preserves other features for other allowed stores", () => {
+    const environment = {
+      LISTFLOW_PRICE_CHECK_OPTIMIZATIONS: "shared-snapshot,delivery-state",
+      LISTFLOW_PRICE_CHECK_OPTIMIZATION_STORE_IDS: "store-1,store-2",
+      LISTFLOW_PRICE_CHECK_DELIVERY_STATE_STORE_IDS: "store-1",
+    };
+    assert.deepEqual(resolvePriceCheckOptimizationConfig("store-1", environment).enabled,
+      ["shared-snapshot", "delivery-state"]);
+    assert.deepEqual(resolvePriceCheckOptimizationConfig("store-2", environment).enabled,
+      ["shared-snapshot"]);
+    assert.deepEqual(resolvePriceCheckOptimizationConfig("store-1", {
+      ...environment, LISTFLOW_PRICE_CHECK_DELIVERY_STATE_STORE_IDS: "",
+    }).enabled, ["shared-snapshot"]);
+    assert.deepEqual(resolvePriceCheckOptimizationConfig("other-store", environment).enabled, []);
+  });
 });
 
 test("timing recorder is inert when disabled", () => {
