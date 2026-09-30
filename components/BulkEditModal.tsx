@@ -1,10 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import ActionProgressBar from "@/components/ActionProgressBar";
 import { PostcodeAutocomplete } from "@/components/PostcodeAutocomplete";
 import { getSuburbsForAuPostcode, getZipcodeLocationText } from "@/lib/ebay-location";
+import {
+  useBulkEditJob,
+  isActiveBulkEditJob as isActiveJob,
+  isTerminalBulkEditJob as isTerminalJob,
+  type BulkEditJob,
+  type BulkEditSkipped,
+} from "@/hooks/useBulkEditJob";
 
 type ToastVariant = "success" | "error";
 
@@ -72,33 +80,10 @@ type SupportDataLoaded = {
   descriptionTemplates: boolean;
 };
 
-type BulkEditJobError = {
-  productId: string;
-  title: string;
-  error: string;
-};
-
-type BulkEditJob = {
-  id: string;
-  type: string;
-  status: "QUEUED" | "RUNNING" | "CANCELLING" | "CANCELLED" | "COMPLETED" | "FAILED";
-  total: number;
-  processed: number;
-  succeeded: number;
-  failed: number;
-  errors: BulkEditJobError[];
-  updatedAt?: string;
-  queuePosition?: number | null;
-};
-
-type BulkEditSkipped = {
-  productId: string;
-  title: string;
-  reason: string;
-};
-
 interface BulkEditModalProps {
   open: boolean;
+  view: "editor" | "job";
+  notificationContainer: HTMLElement | null;
   storeId: string | null;
   selectedProductIds: string[];
   onClose: () => void;
@@ -161,7 +146,6 @@ const EMPTY_SUPPORT_DATA_LOADED: SupportDataLoaded = {
   policyTemplates: false,
   descriptionTemplates: false,
 };
-const BULK_EDIT_JOB_STORAGE_PREFIX = "listflow:bulk-edit-job:";
 
 function makeItem(field: BulkEditField): BulkEditItem {
   const numericDefault =
@@ -191,14 +175,6 @@ function makeItem(field: BulkEditField): BulkEditItem {
 
 function fieldLabel(field: BulkEditField) {
   return FIELD_DEFINITIONS.find((definition) => definition.field === field)?.label ?? field;
-}
-
-function isActiveJob(job: BulkEditJob | null) {
-  return job?.status === "QUEUED" || job?.status === "RUNNING" || job?.status === "CANCELLING";
-}
-
-function isTerminalJob(job: BulkEditJob | null) {
-  return job?.status === "COMPLETED" || job?.status === "FAILED" || job?.status === "CANCELLED";
 }
 
 function getProgressPercent(job: BulkEditJob | null) {
@@ -253,6 +229,8 @@ function buildOperation(item: BulkEditItem) {
 
 export default function BulkEditModal({
   open,
+  view,
+  notificationContainer,
   storeId,
   selectedProductIds,
   onClose,
@@ -271,13 +249,34 @@ export default function BulkEditModal({
     EMPTY_SUPPORT_DATA_LOADED
   );
   const [loadingPolicies, setLoadingPolicies] = useState(false);
-  const [job, setJob] = useState<BulkEditJob | null>(null);
   const requestIdRef = useRef<string | null>(null);
-  const [skipped, setSkipped] = useState<BulkEditSkipped[]>([]);
-  const [terminalNotifiedJobId, setTerminalNotifiedJobId] = useState<string | null>(null);
-  const [workerOnline, setWorkerOnline] = useState<boolean | null>(null);
-  const [pollingInterrupted, setPollingInterrupted] = useState(false);
-  const lastSuccessfulPollRef = useRef(Date.now());
+  const requestInFlight = useRef(false);
+  const dialogGeneration = useRef(0);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const openingControl = useRef<HTMLElement | null>(null);
+  const displayedJob = useRef<string | null>(null);
+  const previousStore = useRef(storeId);
+  const requestScope = useMemo(() => ({ storeId, cancelled: false }), [storeId]);
+  const [retryError, setRetryError] = useState<string | null>(null);
+  const onCompleted = useCallback((completed: BulkEditJob) => {
+    router.refresh();
+    onToast(
+      completed.status === "CANCELLED"
+        ? `Bulk edit cancelled. ${completed.succeeded} listing${completed.succeeded === 1 ? "" : "s"} updated.`
+        : completed.status === "FAILED"
+          ? `Bulk edit failed. ${completed.succeeded} listing${completed.succeeded === 1 ? "" : "s"} updated. View results for details.`
+          : completed.failed > 0
+            ? `Bulk edit finished with ${completed.failed} failed listing${completed.failed === 1 ? "" : "s"}.`
+            : `Bulk edit finished for ${completed.succeeded} listing${completed.succeeded === 1 ? "" : "s"}.`,
+      completed.failed > 0 || completed.status === "FAILED" ? "error" : "success",
+    );
+    if (view === "job" || displayedJob.current === completed.id) onClose();
+  }, [onClose, onToast, router, view]);
+  const { job, skipped, workerOnline, pollingInterrupted, restoring, trackJob, dismiss } = useBulkEditJob(storeId, onCompleted);
+  const detailsView = Boolean(job && (view === "job" || isActiveJob(job)));
+  useEffect(() => {
+    displayedJob.current = open && detailsView ? job?.id ?? null : null;
+  }, [detailsView, job?.id, open]);
   const selectedStoreId = storeId;
   const selectedCount = selectedProductIds.length;
   const selectedFields = useMemo(
@@ -358,36 +357,65 @@ export default function BulkEditModal({
   }, [items]);
 
   useEffect(() => {
-    if (!open) {
+    if (!open && !submitting) {
       requestIdRef.current = null;
       setItems([]);
       setMenuOpen(false);
       setFieldSearch("");
-      setSubmitting(false);
-      setSkipped([]);
-      setTerminalNotifiedJobId(null);
       setPolicies(null);
       setPolicyTemplates([]);
       setDescriptionTemplates([]);
       setSupportDataLoaded(EMPTY_SUPPORT_DATA_LOADED);
       setLoadingPolicies(false);
     }
-  }, [open]);
+  }, [open, submitting]);
 
   useEffect(() => {
-    if (!selectedStoreId || job) return;
-    const savedJobId = window.localStorage.getItem(
-      `${BULK_EDIT_JOB_STORAGE_PREFIX}${selectedStoreId}`,
-    );
-    if (!savedJobId) return;
-    void fetch(`/api/products/bulk-edit/jobs/${savedJobId}`, { cache: "no-store" })
-      .then(async (response) => {
-        const data = (await response.json().catch(() => ({}))) as { job?: BulkEditJob };
-        if (response.ok && data.job) setJob(data.job);
-        else window.localStorage.removeItem(`${BULK_EDIT_JOB_STORAGE_PREFIX}${selectedStoreId}`);
-      })
-      .catch(() => setPollingInterrupted(true));
-  }, [job, selectedStoreId]);
+    if (previousStore.current !== storeId) {
+      previousStore.current = storeId;
+      dialogGeneration.current += 1;
+      requestInFlight.current = false;
+      requestIdRef.current = null;
+      setSubmitting(false);
+      setItems([]);
+      setRetryError(null);
+      onClose();
+    }
+  }, [storeId, onClose]);
+
+  useEffect(() => {
+    requestScope.cancelled = false;
+    return () => { requestScope.cancelled = true; };
+  }, [requestScope]);
+
+  useEffect(() => {
+    if (!open) return;
+    const previousFocus = openingControl.current ?? document.activeElement as HTMLElement | null;
+    openingControl.current = null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    dialogRef.current?.querySelector<HTMLElement>("button")?.focus();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        dialogGeneration.current += 1;
+        onClose();
+      } else if (event.key === "Tab") {
+        const controls = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex='0']") ?? []).filter(element => element.getClientRects().length > 0);
+        const first = controls[0];
+        const last = controls.at(-1);
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.body.style.overflow = previousOverflow;
+      if (previousFocus?.isConnected) previousFocus.focus();
+      else if (previousFocus?.id) document.getElementById(previousFocus.id)?.focus();
+    };
+  }, [open, onClose]);
 
   useEffect(() => {
     if (!open) {
@@ -526,113 +554,28 @@ export default function BulkEditModal({
     supportDataLoaded,
   ]);
 
-  const polledJobId = job?.id ?? null;
-  const polledJobActive = isActiveJob(job);
-
-  useEffect(() => {
-    if (!polledJobId || !polledJobActive) {
-      return;
-    }
-
-    let cancelled = false;
-    let polling = false;
-    const jobId = polledJobId;
-
-    async function pollJob() {
-      if (polling) return;
-      polling = true;
-      try {
-        const [response, workerResponse] = await Promise.all([
-          fetch(`/api/products/bulk-edit/jobs/${jobId}`, {
-            cache: "no-store",
-            signal: AbortSignal.timeout(10_000),
-          }),
-          fetch("/api/worker/status", {
-            cache: "no-store",
-            signal: AbortSignal.timeout(10_000),
-          }),
-        ]);
-        const data = (await response.json().catch(() => ({}))) as {
-          job?: BulkEditJob;
-        };
-
-        if (!cancelled && response.ok && data.job) {
-          setJob(data.job);
-          lastSuccessfulPollRef.current = Date.now();
-          setPollingInterrupted(false);
-        }
-        const workerData = (await workerResponse.json().catch(() => ({}))) as {
-          workers?: Array<{ online?: boolean; capabilities?: string[] }>;
-        };
-        if (!cancelled && workerResponse.ok) {
-          setWorkerOnline(
-            workerData.workers?.some(
-              (worker) =>
-                worker.online === true &&
-                worker.capabilities?.includes("durable-bulk-edit-v1"),
-            ) === true,
-          );
-        }
-      } catch {
-        if (!cancelled && Date.now() - lastSuccessfulPollRef.current >= 15_000) {
-          setPollingInterrupted(true);
-        }
-      } finally {
-        polling = false;
-      }
-    }
-
-    void pollJob();
-    const interval = window.setInterval(() => {
-      void pollJob();
-    }, 2000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(interval);
-    };
-  }, [polledJobActive, polledJobId]);
-
-  useEffect(() => {
-    if (!isTerminalJob(job) || !job || terminalNotifiedJobId === job.id) {
-      return;
-    }
-
-    setTerminalNotifiedJobId(job.id);
-    if (selectedStoreId && job.failed === 0) {
-      window.localStorage.removeItem(`${BULK_EDIT_JOB_STORAGE_PREFIX}${selectedStoreId}`);
-    }
-    router.refresh();
-    onToast(
-      job.status === "CANCELLED"
-        ? `Bulk edit cancelled. ${job.succeeded} listing${job.succeeded === 1 ? "" : "s"} updated.`
-        : job.failed > 0
-        ? `Bulk edit finished with ${job.failed} failed listing${job.failed === 1 ? "" : "s"}.`
-        : `Bulk edit finished for ${job.succeeded} listing${job.succeeded === 1 ? "" : "s"}.`,
-      job.failed > 0 ? "error" : "success"
-    );
-  }, [job, onToast, router, selectedStoreId, terminalNotifiedJobId]);
-
   if (!open) {
     if (!job) return null;
-    return (
-      <button
-        type="button"
-        onClick={onOpen}
-        className="fixed bottom-4 right-4 z-40 w-72 rounded-lg border border-blue-200 bg-white p-3 text-left shadow-lg"
-      >
+    const card = (
+      <div className="pointer-events-auto order-first w-full rounded-lg border border-blue-200 bg-white p-3 shadow-lg" data-bulk-edit-result-card>
         <ActionProgressBar
-          label={job.status === "CANCELLED" ? "Bulk edit cancelled" : job.status === "CANCELLING" ? "Cancelling bulk edit" : isActiveJob(job) ? "Bulk edit in progress" : "Bulk edit finished"}
+          label={job.status === "CANCELLED" ? "Bulk edit cancelled" : job.status === "CANCELLING" ? "Cancelling bulk edit" : isActiveJob(job) ? "Bulk edit in progress" : job.status === "FAILED" ? "Bulk edit failed" : "Bulk edit finished"}
           percent={getProgressPercent(job)}
-          detail={`${job.processed}/${job.total} processed`}
+          detail={`${job.processed}/${job.total} processed (${job.succeeded} succeeded, ${job.failed} failed)`}
           tone="green"
         />
-        <span className="mt-2 block text-xs font-semibold text-blue-700">View details</span>
-      </button>
+        <div className="mt-2 flex items-center justify-between gap-3">
+          <button id="bulk-edit-view-job" type="button" onClick={event => { openingControl.current = event.currentTarget; onOpen(); }} className="text-xs font-semibold text-blue-700 hover:underline">
+            {isActiveJob(job) ? "View progress" : "View results"}
+          </button>
+          {isTerminalJob(job) && <button type="button" onClick={dismiss} className="text-xs font-semibold text-gray-500 hover:text-gray-800">Dismiss</button>}
+        </div>
+      </div>
     );
+    return notificationContainer ? createPortal(card, notificationContainer) : null;
   }
-
   function addField(field: BulkEditField) {
+    if (requestInFlight.current) return;
     const definition = FIELD_DEFINITIONS.find((item) => item.field === field);
     if (!definition || definition.disabled || selectedFields.has(field)) {
       return;
@@ -645,6 +588,7 @@ export default function BulkEditModal({
   }
 
   function updateItem(id: string, patch: Partial<BulkEditItem>) {
+    if (requestInFlight.current) return;
     requestIdRef.current = null;
     setItems((current) =>
       current.map((item) => (item.id === id ? { ...item, ...patch } : item))
@@ -652,12 +596,13 @@ export default function BulkEditModal({
   }
 
   function removeItem(id: string) {
+    if (requestInFlight.current) return;
     requestIdRef.current = null;
     setItems((current) => current.filter((item) => item.id !== id));
   }
 
   async function submitBulkEdit() {
-    if (validationError || selectedCount === 0 || isActiveJob(job)) {
+    if (validationError || selectedCount === 0 || isActiveJob(job) || restoring || requestInFlight.current || detailsView) {
       return;
     }
 
@@ -675,8 +620,9 @@ export default function BulkEditModal({
       return;
     }
 
+    requestInFlight.current = true;
+    const submittedDialog = dialogGeneration.current;
     setSubmitting(true);
-    setSkipped([]);
 
     try {
       const operations = items.map((item) => {
@@ -703,39 +649,39 @@ export default function BulkEditModal({
         skipped?: BulkEditSkipped[];
       };
 
+      if (requestScope.cancelled) return;
       if (!response.ok || !data.job) {
         throw new Error(data.error || "Bulk edit failed.");
       }
 
-      setJob(data.job);
+      if (!trackJob(data.job, data.skipped ?? [])) throw new Error("Bulk edit returned a job for a different store.");
+      setRetryError(null);
       requestIdRef.current = null;
-      if (selectedStoreId) {
-        window.localStorage.setItem(`${BULK_EDIT_JOB_STORAGE_PREFIX}${selectedStoreId}`, data.job.id);
-      }
-      setSkipped(data.skipped ?? []);
+      if (dialogGeneration.current === submittedDialog) onOpen();
       onToast(data.message || "Bulk edit queued.", "success");
     } catch (error) {
-      onToast(error instanceof Error ? error.message : "Bulk edit failed.", "error");
+      if (!requestScope.cancelled) onToast(error instanceof Error ? error.message : "Bulk edit failed.", "error");
     } finally {
-      setSubmitting(false);
+      if (!requestScope.cancelled) { requestInFlight.current = false; setSubmitting(false); }
     }
   }
 
   async function retryFailedItems() {
-    if (!job || job.failed === 0) return;
+    if (!job || job.failed === 0 || !isTerminalJob(job) || requestInFlight.current) return;
+    requestInFlight.current = true;
+    setRetryError(null);
     setSubmitting(true);
     try {
       const response = await fetch(`/api/products/bulk-edit/jobs/${job.id}/retry`, { method: "POST" });
       const data = (await response.json().catch(() => ({}))) as { job?: BulkEditJob; error?: string };
+      if (requestScope.cancelled) return;
       if (!response.ok || !data.job) throw new Error(data.error || "Unable to retry failed items.");
-      setJob(data.job);
-      setTerminalNotifiedJobId(null);
-      lastSuccessfulPollRef.current = Date.now();
+      if (!trackJob(data.job)) throw new Error("Retry returned a job for a different store.");
       onToast("Failed listings were queued again.", "success");
     } catch (error) {
-      onToast(error instanceof Error ? error.message : "Unable to retry failed items.", "error");
+      if (!requestScope.cancelled) setRetryError(error instanceof Error ? error.message : "Unable to retry failed items.");
     } finally {
-      setSubmitting(false);
+      if (!requestScope.cancelled) { requestInFlight.current = false; setSubmitting(false); }
     }
   }
 
@@ -934,12 +880,9 @@ export default function BulkEditModal({
   const terminalJob = isTerminalJob(job);
 
   function closeModal() {
+    dialogGeneration.current += 1;
     if (activeJob) {
       onToast("Bulk edit is still running in the background.", "success");
-    }
-
-    if (terminalJob && job?.failed === 0) {
-      setJob(null);
     }
 
     onClose();
@@ -951,15 +894,19 @@ export default function BulkEditModal({
       onClick={closeModal}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="bulk-edit-heading"
         className="max-h-[calc(100dvh-1rem)] sm:max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-xl bg-white shadow-2xl flex flex-col"
         onClick={(event) => event.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-4 border-b border-gray-200 px-4 sm:px-6 py-4 sm:py-5 flex-shrink-0">
           <div>
-            <h2 className="text-lg sm:text-xl font-semibold text-gray-900">
-              Bulk Edit{" "}
+            <h2 id="bulk-edit-heading" className="text-lg sm:text-xl font-semibold text-gray-900">
+              {detailsView ? terminalJob ? "Bulk Edit Results" : "Bulk Edit Progress" : "Bulk Edit"}{" "}
               <span className="text-xs sm:text-sm font-medium text-gray-500">
-                ({selectedCount} products)
+                ({detailsView ? job?.total : selectedCount} products)
               </span>
             </h2>
           </div>
@@ -976,98 +923,102 @@ export default function BulkEditModal({
         </div>
 
         <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4 sm:py-5">
-          <div className="relative inline-block">
-            <button
-              type="button"
-              onClick={() => setMenuOpen((current) => !current)}
-              disabled={activeJob || terminalJob}
-              className="inline-flex items-center gap-2 rounded-md bg-amber-500 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 5v14M5 12h14" />
-              </svg>
-              Add item to edit
-            </button>
-            {menuOpen && (
-              <div className="absolute left-0 top-full z-10 mt-2 w-72 sm:w-80 max-w-[calc(100vw-3rem)] overflow-hidden rounded-md border border-gray-200 bg-white shadow-lg">
-                <div className="border-b border-gray-100 p-2">
-                  <input
-                    type="search"
-                    value={fieldSearch}
-                    onChange={(event) => setFieldSearch(event.target.value)}
-                    placeholder="Search"
-                    className="h-9 w-full rounded-md border border-gray-200 px-3 text-sm text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
-                  />
-                </div>
-                <div className="max-h-72 overflow-y-auto py-1">
-                  {filteredFields.map((definition) => (
-                    <button
-                      key={definition.field}
-                      type="button"
-                      onClick={() => addField(definition.field)}
-                      disabled={definition.disabled}
-                      className="flex w-full items-center justify-between gap-3 px-4 py-2 text-left text-sm font-medium text-gray-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-white"
-                    >
-                      <span>{definition.label}</span>
-                      <span className="flex items-center gap-1">
-                        {definition.tag && (
-                          <span className="rounded-full border border-gray-200 px-1.5 py-0.5 text-[11px] font-medium text-gray-500">
-                            {definition.tag}
-                          </span>
-                        )}
-                        {definition.disabled && (
-                          <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-400">
-                            Coming soon
-                          </span>
-                        )}
-                      </span>
-                    </button>
-                  ))}
-                  {filteredFields.length === 0 && (
-                    <div className="px-4 py-3 text-sm text-gray-500">
-                      No matching fields
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="mt-4 space-y-3">
-            {items.map((item) => (
-              <div
-                key={item.id}
-                className="rounded-lg border border-gray-200 bg-gray-50 p-4"
+          {!detailsView && <>
+            <div className="relative inline-block">
+              <button
+                type="button"
+                onClick={() => setMenuOpen((current) => !current)}
+                disabled={submitting || restoring}
+                className="inline-flex items-center gap-2 rounded-md bg-amber-500 px-3 py-2 text-sm font-semibold text-white transition-colors hover:bg-amber-600 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <div className="mb-2 flex items-center justify-between">
-                  <span className="text-sm font-semibold text-gray-900">
-                    {fieldLabel(item.field)}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => removeItem(item.id)}
-                    className="text-xs font-semibold text-red-600 hover:text-red-800"
-                  >
-                    Remove
-                  </button>
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 5v14M5 12h14" />
+                </svg>
+                Add item to edit
+              </button>
+              {menuOpen && (
+                <div className="absolute left-0 top-full z-10 mt-2 w-72 sm:w-80 max-w-[calc(100vw-3rem)] overflow-hidden rounded-md border border-gray-200 bg-white shadow-lg">
+                  <div className="border-b border-gray-100 p-2">
+                    <input
+                      type="search"
+                      value={fieldSearch}
+                      onChange={(event) => setFieldSearch(event.target.value)}
+                      placeholder="Search"
+                      className="h-9 w-full rounded-md border border-gray-200 px-3 text-sm text-gray-900 focus:border-orange-500 focus:outline-none focus:ring-2 focus:ring-orange-500/20"
+                    />
+                  </div>
+                  <div className="max-h-72 overflow-y-auto py-1">
+                    {filteredFields.map((definition) => (
+                      <button
+                        key={definition.field}
+                        type="button"
+                        onClick={() => addField(definition.field)}
+                        disabled={definition.disabled}
+                        className="flex w-full items-center justify-between gap-3 px-4 py-2 text-left text-sm font-medium text-gray-700 transition-colors hover:bg-amber-50 disabled:cursor-not-allowed disabled:text-gray-300 disabled:hover:bg-white"
+                      >
+                        <span>{definition.label}</span>
+                        <span className="flex items-center gap-1">
+                          {definition.tag && (
+                            <span className="rounded-full border border-gray-200 px-1.5 py-0.5 text-[11px] font-medium text-gray-500">
+                              {definition.tag}
+                            </span>
+                          )}
+                          {definition.disabled && (
+                            <span className="rounded-full bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-400">
+                              Coming soon
+                            </span>
+                          )}
+                        </span>
+                      </button>
+                    ))}
+                    {filteredFields.length === 0 && (
+                      <div className="px-4 py-3 text-sm text-gray-500">
+                        No matching fields
+                      </div>
+                    )}
+                  </div>
                 </div>
-                {renderValueControl(item)}
-              </div>
-            ))}
-            {items.length === 0 && (
-              <div className="rounded-lg border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500">
-                Choose fields above to start bulk editing.
+              )}
+            </div>
+
+            <div className="mt-4 space-y-3">
+              {items.map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded-lg border border-gray-200 bg-gray-50 p-4"
+                >
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-sm font-semibold text-gray-900">
+                      {fieldLabel(item.field)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => removeItem(item.id)}
+                      disabled={submitting}
+                      className="text-xs font-semibold text-red-600 hover:text-red-800"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                  <fieldset disabled={submitting}>{renderValueControl(item)}</fieldset>
+                </div>
+              ))}
+              {items.length === 0 && (
+                <div className="rounded-lg border border-dashed border-gray-300 p-8 text-center text-sm text-gray-500">
+                  Choose fields above to start bulk editing.
+                </div>
+              )}
+            </div>
+
+            {items.length > 0 && validationError && (
+              <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+                {validationError}
               </div>
             )}
-          </div>
+            {restoring && <p className="mt-4 text-sm text-gray-500" role="status">Checking previous bulk edit…</p>}
+          </>}
 
-          {validationError && (
-            <div className="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-              {validationError}
-            </div>
-          )}
-
-          {job && (
+          {detailsView && job && (
             <div className="mt-4 rounded-md border border-gray-200 bg-gray-50 p-3">
               <ActionProgressBar
                 label={
@@ -1075,6 +1026,8 @@ export default function BulkEditModal({
                     ? "Bulk edit cancelled"
                     : job.status === "CANCELLING"
                       ? "Cancelling - finishing current operation"
+                    : job.status === "FAILED"
+                      ? "Bulk edit failed"
                     : terminalJob
                     ? job.failed > 0
                       ? "Bulk edit completed with errors"
@@ -1113,11 +1066,13 @@ export default function BulkEditModal({
                   ))}
                 </div>
               )}
+              {job.errorMessage && <p className="mt-2 text-sm text-red-700">{job.errorMessage}</p>}
+              {retryError && <p className="mt-2 text-sm text-red-700" role="alert">{retryError}</p>}
               {terminalJob && job.status !== "CANCELLED" && job.failed > 0 && (
                 <button
                   type="button"
                   onClick={() => void retryFailedItems()}
-                  disabled={submitting || workerOnline === false}
+                  disabled={submitting}
                   className="mt-3 rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
                 >
                   {submitting ? "Queuing retry..." : `Retry ${job.failed} failed`}
@@ -1126,7 +1081,7 @@ export default function BulkEditModal({
             </div>
           )}
 
-          {skipped.length > 0 && (
+          {detailsView && skipped.length > 0 && (
             <div className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-3">
               <div className="text-sm font-semibold text-amber-900">
                 Skipped {skipped.length} product{skipped.length === 1 ? "" : "s"}
@@ -1149,16 +1104,16 @@ export default function BulkEditModal({
             onClick={closeModal}
             className="rounded-md border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-700 transition-colors hover:bg-gray-50"
           >
-            {activeJob || terminalJob ? "Close" : "Cancel"}
+            {detailsView ? "Close" : "Cancel"}
           </button>
-          <button
+          {!detailsView && <button
             type="button"
             onClick={() => void submitBulkEdit()}
-            disabled={Boolean(validationError) || submitting || activeJob || terminalJob}
+            disabled={Boolean(validationError) || selectedCount === 0 || submitting || restoring}
             className="rounded-md bg-gray-900 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-gray-700 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {submitting ? "Updating..." : "Update"}
-          </button>
+          </button>}
         </div>
       </div>
     </div>

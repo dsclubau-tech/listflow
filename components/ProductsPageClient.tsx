@@ -17,6 +17,7 @@ import ActionProgressBar from "@/components/ActionProgressBar";
 import DraftsTable from "@/components/DraftsTable";
 import type { PromotedListingsJob } from "@/components/PromotedListingsModal";
 import Toast from "@/components/Toast";
+import NotificationStack from "@/components/NotificationStack";
 import { useToast } from "@/hooks/useToast";
 import { useAdaptivePolling } from "@/hooks/useAdaptivePolling";
 import { getSelectedPriceCheckSummary } from "@/lib/price-check-eligibility";
@@ -428,6 +429,10 @@ export default function ProductsPageClient({
   const [isLoadingAllSelection, setIsLoadingAllSelection] = useState(false);
   const [isCopyingTitles, setIsCopyingTitles] = useState(false);
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
+  const [bulkEditView, setBulkEditView] = useState<"editor" | "job">("editor");
+  const [notificationContainer, setNotificationContainer] = useState<HTMLDivElement | null>(null);
+  const closeBulkEdit = useCallback(() => setIsBulkEditOpen(false), []);
+  const openBulkEditJob = useCallback(() => { setBulkEditView("job"); setIsBulkEditOpen(true); }, []);
   const [hasOpenedBulkEdit, setHasOpenedBulkEdit] = useState(false);
   const [isPromotedListingsOpen, setIsPromotedListingsOpen] = useState(false);
   const [hasOpenedPromotions, setHasOpenedPromotions] = useState(false);
@@ -2458,16 +2463,19 @@ export default function ProductsPageClient({
         onBulkEditSelected={(ids) => {
           setSelectedProductIds(ids);
           setHasOpenedBulkEdit(true);
+          setBulkEditView("editor");
           setIsBulkEditOpen(true);
         }}
       />
 
       {hasOpenedBulkEdit && <BulkEditModal
         open={isBulkEditOpen}
+        view={bulkEditView}
+        notificationContainer={notificationContainer}
         storeId={supplierOptions[0]?.id ?? null}
         selectedProductIds={selectedProductIds}
-        onOpen={() => setIsBulkEditOpen(true)}
-        onClose={() => setIsBulkEditOpen(false)}
+        onOpen={openBulkEditJob}
+        onClose={closeBulkEdit}
         onToast={showToast}
       />}
 
@@ -2534,13 +2542,17 @@ export default function ProductsPageClient({
         </div>
       </div>
 
+      <NotificationStack ref={setNotificationContainer}>
       {toast.visible && (
         <Toast
+          key={toast.id}
+          position="inline"
           message={toast.message}
           variant={toast.variant}
           onClose={hideToast}
         />
       )}
+      </NotificationStack>
     </>
   );
 }
