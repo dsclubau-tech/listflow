@@ -17,6 +17,7 @@ import Button from "@/components/ui/Button";
 import CopyButton from "@/components/ui/CopyButton";
 import { hasMissingItemSpecifics } from "@/components/draft-upload-response";
 import InlineEditForm from "@/components/InlineEditForm";
+import InternalNotePreview from "@/components/InternalNotePreview";
 import {
   getPriceCheckEligibility,
   getSelectedPriceCheckSummary,
@@ -811,6 +812,20 @@ export default function DraftsTable({
     useState<SerializedProductRow | null>(null);
   const [removalAction, setRemovalAction] = useState<RemovalAction | null>(null);
   const [noteDraft, setNoteDraft] = useState("");
+  const [savedNotes, setSavedNotes] = useState<Record<string, string | null>>({});
+
+  useEffect(() => {
+    setSavedNotes((current) => {
+      const confirmed = products.filter((product) =>
+        Object.prototype.hasOwnProperty.call(current, product.id) &&
+        (product.internalNote ?? null) === current[product.id]
+      );
+      if (confirmed.length === 0) return current;
+      const next = { ...current };
+      for (const product of confirmed) delete next[product.id];
+      return next;
+    });
+  }, [products]);
   const [savingNoteId, setSavingNoteId] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<{
     product: SerializedProductRow;
@@ -1340,7 +1355,9 @@ export default function DraftsTable({
 
   function openInternalNote(product: SerializedProductRow) {
     setNotingProduct(product);
-    setNoteDraft(product.internalNote ?? "");
+    setNoteDraft((Object.prototype.hasOwnProperty.call(savedNotes, product.id)
+      ? savedNotes[product.id]
+      : product.internalNote) ?? "");
   }
 
   async function handleSaveInternalNote() {
@@ -1367,6 +1384,7 @@ export default function DraftsTable({
         noteDraft.trim() ? "Internal note saved" : "Internal note cleared",
         "success"
       );
+      setSavedNotes((current) => ({ ...current, [notingProduct.id]: noteDraft.trim() || null }));
       setNotingProduct(null);
       setNoteDraft("");
       router.refresh();
@@ -2381,7 +2399,7 @@ export default function DraftsTable({
           <table
             className={`block w-full xl:table ${
               isProductsView
-                ? "xl:min-w-[1574px] xl:table-fixed"
+                ? "xl:min-w-[1740px] xl:table-fixed"
                 : ""
             } ${isSortPending ? "listflow-table-sorting" : ""}`}
           >
@@ -2399,7 +2417,7 @@ export default function DraftsTable({
               <col className="w-[84px]" />
               <col className="w-[94px]" />
               <col className="w-[230px]" />
-              <col className="w-12" />
+              <col className="w-[200px]" />
               <col className="w-[90px]" />
             </colgroup>
           )}
@@ -2479,7 +2497,7 @@ export default function DraftsTable({
               {isProductsView && (
                 <>
                   <th className="px-3 py-3 text-left">Price Tracking</th>
-                  <th className="px-2 py-3 text-left">Note</th>
+                  <th className="sticky right-[90px] z-20 border-l border-gray-200 bg-gray-50 px-2 py-3 text-left">Note</th>
                 </>
               )}
               <th
@@ -2511,6 +2529,9 @@ export default function DraftsTable({
               const trackingState = isProductsView
                 ? getPriceTrackingState(product)
                 : null;
+              const visibleNote = Object.prototype.hasOwnProperty.call(savedNotes, product.id)
+                ? savedNotes[product.id]
+                : product.internalNote;
               const promotedAdState = isProductsView
                 ? getPromotedAdState(product)
                 : null;
@@ -2730,21 +2751,18 @@ export default function DraftsTable({
                             </div>
                           </div>
 
+                          <div onClick={(event) => event.stopPropagation()}>
+                            <InternalNotePreview
+                              note={visibleNote}
+                              productTitle={product.title}
+                              onClick={() => openInternalNote(product)}
+                            />
+                          </div>
+
                           {/* Footer Row: Uploaded Date + Actions */}
                           <div className="flex items-center justify-between border-t border-gray-100 pt-2 text-xs text-gray-500" onClick={(e) => e.stopPropagation()}>
                             <span>Uploaded: {formatDate(product.uploadedAt) ?? "-"}</span>
                             <div className="flex items-center gap-2">
-                              <button
-                                type="button"
-                                onClick={() => openInternalNote(product)}
-                                className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-                                  product.internalNote
-                                    ? "text-orange-600 bg-orange-50 hover:bg-orange-100"
-                                    : "text-gray-600 bg-gray-100 hover:bg-gray-200"
-                                }`}
-                              >
-                                <span>{product.internalNote ? "Note: " + product.internalNote.slice(0, 10) + "…" : "+ Note"}</span>
-                              </button>
                               <button
                                 type="button"
                                 onClick={() => toggleExpand(product.id)}
@@ -3101,41 +3119,12 @@ export default function DraftsTable({
                     )}
 
                     {isProductsView && (
-                      <td className="hidden xl:table-cell px-2 py-3" onClick={(e) => e.stopPropagation()}>
-                        <button
-                          type="button"
+                      <td className={`hidden xl:table-cell sticky right-[90px] z-10 border-l border-gray-100 px-2 py-3 ${stickyActionToneClass}`} onClick={(event) => event.stopPropagation()}>
+                        <InternalNotePreview
+                          note={visibleNote}
+                          productTitle={product.title}
                           onClick={() => openInternalNote(product)}
-                          title={
-                            product.internalNote
-                              ? `Edit internal note: ${product.internalNote}`
-                              : "Add an internal note"
-                          }
-                          aria-label={
-                            product.internalNote
-                              ? "Edit internal note"
-                              : "Add an internal note"
-                          }
-                          className={`inline-flex h-8 w-8 items-center justify-center rounded transition-colors ${
-                            product.internalNote
-                              ? "text-orange-600 hover:bg-orange-50"
-                              : "text-gray-400 hover:bg-gray-100 hover:text-gray-700"
-                          }`}
-                        >
-                          <svg
-                            className="h-4 w-4"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                            strokeWidth={1.8}
-                            aria-hidden="true"
-                          >
-                            <path
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              d="M7.5 4.5h7.25a2.75 2.75 0 012.75 2.75v5.5a2.75 2.75 0 01-2.75 2.75H11L6.5 20v-3.75a1.75 1.75 0 01-1.5-1.73V7.25A2.75 2.75 0 017.5 4.5z"
-                            />
-                          </svg>
-                        </button>
+                        />
                       </td>
                     )}
 

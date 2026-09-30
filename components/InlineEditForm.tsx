@@ -2722,6 +2722,9 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                 status: product.status,
                 images: product.images,
                 asin: currentAsin,
+                promotedAdStatus: product.promotedAdStatus,
+                promotedAdPercent: product.promotedAdPercent,
+                promotedAdRateStrategy: product.promotedAdRateStrategy,
               }}
             />
           </div>

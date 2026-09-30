@@ -4,6 +4,7 @@ import {
   getProductDisplayProfitBreakdown,
   getProductIdsMatchingDisplayProfitRange,
   getProductDisplayProfits,
+  getVariantDisplayProfit,
   productMatchesDisplayProfitRange,
 } from "@/lib/product-profit";
 
@@ -25,6 +26,23 @@ test("getProductDisplayProfits matches visible variant net profit", () => {
   );
 });
 
+test("variant after-ad profit uses its own price and the listing's synced rate", () => {
+  const promotion = {
+    promotedAdStatus: "PROMOTED",
+    promotedAdRateStrategy: "FIXED",
+    promotedAdPercent: 3.5,
+  };
+  const first = getVariantDisplayProfit({ buyPrice: 100, sellPrice: 140, feesPercent: 10, feesFixed: 2 }, promotion);
+  const second = getVariantDisplayProfit({ buyPrice: 40, sellPrice: 80, feesPercent: 10, feesFixed: 2 }, promotion);
+  assert.deepEqual(first, { profit: 24, profitAfterAdFee: 19.1 });
+  assert.deepEqual(second, { profit: 30, profitAfterAdFee: 27.2 });
+  assert.equal(getVariantDisplayProfit({ buyPrice: 100, sellPrice: 140 }, {
+    ...promotion, promotedAdRateStrategy: "DYNAMIC",
+  })?.profitAfterAdFee, null);
+  assert.equal(getVariantDisplayProfit({ buyPrice: 100, sellPrice: 140 }, {
+    ...promotion, promotedAdStatus: "NOT_PROMOTED",
+  })?.profitAfterAdFee, 40);
+});
 test("getProductDisplayProfits uses product fallback when no variants exist", () => {
   assert.deepEqual(
     getProductDisplayProfits({

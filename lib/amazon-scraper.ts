@@ -4,7 +4,7 @@ import {
   extractAmazonPostcodeToken,
   parseAmazonPostcodeResponse,
 } from "@/lib/amazon-direct-parse";
-import { extractLocalizedBuyboxPriceChoices } from "@/lib/amazon-buybox-price";
+import { extractLocalizedBuyboxPriceChoices, selectAmazonBuyboxPriceForMode } from "@/lib/amazon-buybox-price";
 import { parseAmazonShippingFeeFromText } from "@/lib/amazon-shipping";
 import { extractAmazonNewOfferStockLeft } from "@/lib/amazon-stock";
 import { extractAmazonPriceSnapshot } from "@/lib/amazon-price-snapshot";
@@ -1045,10 +1045,7 @@ export async function scrapeAmazonPrice(
         () => extractAmazonBuyboxPriceChoicesFromPage(page, normalizedAsin),
       );
     }
-    let selectedPrice =
-      priceTrackingMode === "DEAL"
-        ? priceChoices.deal
-        : (priceChoices.regular ?? priceChoices.deal);
+    let selectedPrice = selectAmazonBuyboxPriceForMode(priceChoices, priceTrackingMode);
     let price = selectedPrice?.price ?? null;
 
     let variantSwatchSelected = false;
@@ -1103,10 +1100,7 @@ export async function scrapeAmazonPrice(
               () => extractAmazonBuyboxPriceChoicesFromPage(page, normalizedAsin),
             );
           }
-          selectedPrice =
-            priceTrackingMode === "DEAL"
-              ? priceChoices.deal
-              : (priceChoices.regular ?? priceChoices.deal);
+          selectedPrice = selectAmazonBuyboxPriceForMode(priceChoices, priceTrackingMode);
           price = selectedPrice?.price ?? null;
 
           if (price !== null) {

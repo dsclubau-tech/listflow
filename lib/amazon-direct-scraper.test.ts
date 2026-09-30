@@ -258,6 +258,27 @@ test("scrapeAmazonProductDirect uses selected Amazon price tracking mode", async
   assert.equal(product.priceChoices?.deal?.price, 63.99);
 });
 
+test("regular direct import accepts a public limited-time deal and preserves price choices and shipping", async (t) => {
+  const { scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
+  const html = (postcode?: string) => amazonProductHtml({
+    dealPrice: "$80.00", postcode,
+    shippingHtml: '<div id="deliveryBlockMessage">$4.95 delivery</div>',
+  }).replace("Deal price", "Limited time deal");
+  const calls = installFetchMock(t, [
+    { body: html() }, { body: '{"isValidAddress":1}' }, { body: html("2217") },
+  ]);
+  const product = await scrapeAmazonProductDirect("https://www.amazon.com.au/dp/B0TEST1234", {
+    postcode: "2217", priceTrackingMode: "REGULAR",
+  });
+  assert.equal(product.price, 84.95);
+  assert.equal(product.rawPrice, 80);
+  assert.equal(product.shippingPrice, 4.95);
+  assert.equal(product.amazonPriceTrackingMode, "REGULAR");
+  assert.equal(product.priceChoices?.regular?.price, 84.95);
+  assert.equal(product.priceChoices?.deal?.price, 84.95);
+  assert.equal(calls.length, 3);
+});
+
 test("scrapeAmazonProductDirect includes shipping fee in product buy price", async (t) => {
   const { scrapeAmazonProductDirect } = await loadAmazonDirectScraper();
 

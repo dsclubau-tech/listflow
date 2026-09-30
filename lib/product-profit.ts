@@ -35,7 +35,7 @@ function isInRange(value: number, min: number | null, max: number | null) {
   return (min === null || value >= min) && (max === null || value <= max);
 }
 
-function getSyncedPromotedAdPercent(product: ProductProfitInput) {
+function getSyncedPromotedAdPercent(product: Pick<ProductProfitInput, "promotedAdStatus" | "promotedAdPercent" | "promotedAdRateStrategy">) {
   if (product.promotedAdStatus === "NOT_PROMOTED") {
     return 0;
   }
@@ -57,38 +57,32 @@ export type ProductDisplayProfit = {
   profitAfterAdFee: number | null;
 };
 
+export function getVariantDisplayProfit(
+  variant: ProductProfitVariant,
+  promotion: Pick<ProductProfitInput, "promotedAdStatus" | "promotedAdPercent" | "promotedAdRateStrategy">,
+): ProductDisplayProfit | null {
+  const buyPrice = parseMoney(variant.buyPrice);
+  const sellPrice = parseMoney(variant.sellPrice);
+  if (buyPrice === null || sellPrice === null) return null;
+
+  const pricing = {
+    buyPrice,
+    sellPrice,
+    feesPercent: variant.feesPercent ?? 0,
+    feesFixed: variant.feesFixed ?? 0,
+  };
+  const promotedAdPercent = getSyncedPromotedAdPercent(promotion);
+  return {
+    profit: calculateNetProfit(pricing),
+    profitAfterAdFee: promotedAdPercent === null
+      ? null
+      : calculateNetProfit({ ...pricing, promotedAdPercent }),
+  };
+}
 export function getProductDisplayProfitBreakdown(product: ProductProfitInput) {
   const promotedAdPercent = getSyncedPromotedAdPercent(product);
   const variantProfits = (product.variants ?? [])
-    .map((variant) => {
-      const buyPrice = parseMoney(variant.buyPrice);
-      const sellPrice = parseMoney(variant.sellPrice);
-
-      if (buyPrice === null || sellPrice === null) {
-        return null;
-      }
-
-      const profit = calculateNetProfit({
-        buyPrice,
-        sellPrice,
-        feesPercent: variant.feesPercent ?? 0,
-        feesFixed: variant.feesFixed ?? 0,
-      });
-
-      return {
-        profit,
-        profitAfterAdFee:
-          promotedAdPercent === null
-            ? null
-            : calculateNetProfit({
-                buyPrice,
-                sellPrice,
-                feesPercent: variant.feesPercent ?? 0,
-                feesFixed: variant.feesFixed ?? 0,
-                promotedAdPercent,
-              }),
-      } satisfies ProductDisplayProfit;
-    })
+    .map((variant) => getVariantDisplayProfit(variant, product))
     .filter((value): value is ProductDisplayProfit => value !== null);
 
   if (variantProfits.length > 0) {

@@ -266,7 +266,7 @@ test("extractLocalizedBuyboxPriceChoices reads Exclusive Prime price labels", ()
   assert.equal(choices.regular?.mode, "REGULAR");
 });
 
-test("extractLocalizedBuyboxPriceChoices recognizes limited-time deal labels", () => {
+test("public limited-time deals remain eligible for regular tracking", () => {
   const examples = [
     { label: "Limited time deal", price: "210.98", rrp: "349.00" },
     { label: "LIMITED   TIME   DEAL", price: "169.00", rrp: "329.00" },
@@ -298,7 +298,8 @@ test("extractLocalizedBuyboxPriceChoices recognizes limited-time deal labels", (
 
     assert.equal(choices.deal?.price, Number(example.price));
     assert.equal(choices.deal?.mode, "DEAL");
-    assert.equal(choices.regular, null);
+    assert.equal(choices.regular?.price, Number(example.price));
+    assert.equal(choices.regular?.mode, "REGULAR");
     assert.equal(
       extractLocalizedBuyboxPriceForMode($, `B0LIMITED${index}`, "DEAL")
         ?.price,
@@ -322,7 +323,94 @@ test("extractLocalizedBuyboxPriceChoices reads split limited-time deal markup", 
   const choices = extractLocalizedBuyboxPriceChoices($, "B0LIMITED99");
 
   assert.equal(choices.deal?.price, 210.98);
-  assert.equal(choices.regular, null);
+  assert.equal(choices.regular?.price, 210.98);
+});
+
+test("regular tracking follows a public promotion and its end without double-counting shipping", () => {
+  for (const [label, price] of [["", 100], ["Limited time deal", 80], ["", 100]] as const) {
+    const $ = load(`<div id="corePrice_feature_div">
+      <span>${label}</span><span class="a-price priceToPay"><span class="a-offscreen">$${price}.00</span></span>
+      <div class="basisPrice">RRP: <span class="a-price a-text-price"><span class="a-offscreen">$120.00</span></span></div>
+    </div><div id="deliveryBlockMessage">$4.95 delivery</div>`);
+    const selected = extractLocalizedBuyboxPriceForMode($, "B0PUBLIC01", "REGULAR");
+    assert.equal(selected?.itemPrice, price);
+    assert.equal(selected?.price, price + 4.95);
+    assert.equal(selected?.shippingFee, 4.95);
+  }
+});
+
+test("limited-time label never promotes a Prime-only price, including restrictions elsewhere in the Buy Box", () => {
+  for (const restriction of [
+    "Exclusive Prime price", "With Prime", "This deal is exclusively for Amazon Prime members.",
+    "Prime members only", "Prime price", "Prime Big Deal", "Join Prime", "Subscribe & Save", "Business price",
+  ]) {
+    const $ = load(`<div id="corePrice_feature_div">Limited time deal
+      <span class="a-price priceToPay"><span class="a-offscreen">$80.00</span></span>
+    </div><div id="desktop_buybox">${restriction}</div>`);
+    assert.equal(extractLocalizedBuyboxPriceForMode($, "B0PUBLIC01", "REGULAR"), null, restriction);
+  }
+});
+
+test("Prime deal, new regular, and used offers keep their distinct prices", () => {
+  const $ = load(`<div id="corePrice_feature_div">Limited time deal
+    <span class="a-price priceToPay"><span class="a-offscreen">$162.45</span></span>
+  </div><div id="desktop_buybox"><div id="buyBoxAccordion">
+    <div data-csa-c-buying-option-type="PRIME_SAVINGS_UPSELL">Deal price
+      <span class="a-price"><span class="a-offscreen">$162.45</span></span>
+      This deal is exclusively for Amazon Prime members. Join Prime
+    </div>
+    <div data-csa-c-buying-option-type="NEW">Regular Price
+      <span class="a-price"><span class="a-offscreen">$171.00</span></span>
+    </div>
+    <div data-csa-c-buying-option-type="USED">Used – Very Good
+      <span class="a-price"><span class="a-offscreen">$157.32</span></span>
+    </div>
+  </div></div>`);
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0PUBLIC01");
+  assert.equal(choices.regular?.price, 171);
+  assert.equal(choices.deal?.price, 162.45);
+});
+
+test("a separate deal option does not become regular when its regular card has no price", () => {
+  const $ = load(`<div id="desktop_buybox"><div id="buyBoxAccordion">
+    <div data-csa-c-buying-option-type="DEAL">Limited time deal
+      <span class="a-price"><span class="a-offscreen">$80.00</span></span>
+    </div><div data-csa-c-buying-option-type="NEW">Regular Price</div>
+  </div></div>`);
+  assert.equal(extractLocalizedBuyboxPriceForMode($, "B0PUBLIC01", "REGULAR"), null);
+});
+
+test("limited-time label does not make reference, coupon, used, or unstructured prices regular", () => {
+  for (const markup of [
+    '<div class="basisPrice">Was: <span class="a-price a-text-price"><span class="a-offscreen">$100.00</span></span></div>',
+    '<div class="coupon">Save <span class="a-price"><span class="a-offscreen">$10.00</span></span></div>',
+    '<div data-csa-c-buying-option-type="USED">Used <span class="a-price"><span class="a-offscreen">$60.00</span></span></div>',
+    '<div data-csa-c-buying-option-type="RENEWED">Refurbished <span class="a-price"><span class="a-offscreen">$60.00</span></span></div>',
+    '<div class="a-box">Used – Very Good <span class="a-price"><span class="a-offscreen">$60.00</span></span></div>',
+    '<div class="unknown-price">$80.00</div>',
+  ]) {
+    const $ = load(`<div id="corePrice_feature_div">Limited time deal ${markup}</div>`);
+    assert.equal(extractLocalizedBuyboxPriceForMode($, "B0PUBLIC01", "REGULAR"), null, markup);
+  }
+});
+
+test("ambiguous conflicting limited-time prices are not promoted to regular", () => {
+  const $ = load(`<div id="corePrice_feature_div">Limited time deal
+    <span class="a-price priceToPay"><span class="a-offscreen">$80.00</span></span>
+  </div><div id="desktop_buybox">Limited time deal
+    <span class="a-price priceToPay"><span class="a-offscreen">$90.00</span></span>
+  </div>`);
+  assert.equal(extractLocalizedBuyboxPriceForMode($, "B0PUBLIC01", "REGULAR"), null);
+});
+
+test("crossed-out regular reference price is never selected instead of the public sale price", () => {
+  const $ = load(`<div id="corePrice_feature_div">Limited time deal
+    <span class="a-price priceToPay"><span class="a-offscreen">$80.00</span></span>
+    <div class="basisPrice">Regular Price: <span class="a-price a-text-price"><span class="a-offscreen">$100.00</span></span></div>
+  </div>`);
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0PUBLIC01");
+  assert.equal(choices.regular?.price, 80);
+  assert.equal(choices.deal?.price, 80);
 });
 
 test("extractLocalizedBuyboxPriceForMode stays strict for regular-only prices", () => {

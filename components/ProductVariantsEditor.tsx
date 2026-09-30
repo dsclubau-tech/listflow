@@ -4,8 +4,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import CopyButton from "@/components/ui/CopyButton";
+import VariantProfitDisplay from "@/components/VariantProfitDisplay";
 import EditVariantModal from "@/components/EditVariantModal";
-import { calculateNetProfit } from "@/lib/variant-pricing";
+import { getVariantDisplayProfit } from "@/lib/product-profit";
 import type { VariantRecord } from "@/types/variant";
 
 interface ProductVariantsEditorProps {
@@ -17,6 +18,9 @@ interface ProductVariantsEditorProps {
     status?: string;
     images: string[];
     asin?: string | null;
+    promotedAdStatus?: string | null;
+    promotedAdPercent?: number | null;
+    promotedAdRateStrategy?: string | null;
   };
 }
 
@@ -171,8 +175,8 @@ export default function ProductVariantsEditor({
           Loading variants...
         </div>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-gray-200 bg-white">
-          <table className="w-full text-sm">
+        <div className="overflow-x-auto rounded-lg border border-gray-200 bg-white">
+          <table className="w-full min-w-[900px] text-sm">
             <thead>
               <tr className="bg-gray-50 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
                 <th className="px-4 py-3">Image</th>
@@ -186,12 +190,12 @@ export default function ProductVariantsEditor({
             </thead>
             <tbody>
               {variants.map((variant) => {
-                const totalProfit = calculateNetProfit({
+                const breakdown = getVariantDisplayProfit({
                   buyPrice: toNumber(variant.buyPrice),
                   sellPrice: toNumber(variant.sellPrice),
                   feesPercent: variant.feesPercent,
                   feesFixed: variant.feesFixed,
-                });
+                }, product);
 
                 return (
                   <tr key={variant.id} className="border-t border-gray-200">
@@ -244,12 +248,11 @@ export default function ProductVariantsEditor({
                     <td className="px-4 py-3 text-gray-900">
                       ${toNumber(variant.sellPrice).toFixed(2)}
                     </td>
-                    <td
-                      className={`px-4 py-3 font-medium ${
-                        totalProfit < 0 ? "text-red-700" : "text-gray-900"
-                      }`}
-                    >
-                      ${totalProfit.toFixed(2)}
+                    <td className="px-4 py-3">
+                      <VariantProfitDisplay
+                        profit={breakdown?.profit ?? 0}
+                        profitAfterAdFee={breakdown?.profitAfterAdFee ?? null}
+                      />
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-3">
@@ -290,6 +293,9 @@ export default function ProductVariantsEditor({
         defaultQuantity={product.quantity}
         defaultImages={product.images}
         defaultSku={product.asin || null}
+        promotedAdStatus={product.promotedAdStatus}
+        promotedAdPercent={product.promotedAdPercent}
+        promotedAdRateStrategy={product.promotedAdRateStrategy}
         variant={editingVariant}
         onClose={() => {
           setModalOpen(false);

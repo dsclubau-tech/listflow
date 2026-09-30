@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { extractAmazonPriceSnapshot } from "./amazon-price-snapshot";
+import { selectAmazonBuyboxPriceForMode } from "./amazon-buybox-price";
 
 test("one ready HTML snapshot supplies stock, item price, and shipping", () => {
   const result = extractAmazonPriceSnapshot(
@@ -31,4 +32,18 @@ test("snapshot preserves unknown stock and missing delivery data", () => {
   assert.equal(result.stockLeft, null);
   assert.equal(result.priceChoices.regular?.price, 31.5);
   assert.equal(result.priceChoices.regular?.shippingFee, null);
+});
+
+test("rendered snapshot selection accepts public deals but never falls back to Prime-only prices", () => {
+  const publicHtml = `<div id="corePrice_feature_div">Limited time deal
+    <span class="a-price priceToPay"><span class="a-offscreen">$80.00</span></span>
+  </div>`;
+  const publicSnapshot = extractAmazonPriceSnapshot(publicHtml, "B0SNAPSHOT1");
+  assert.equal(selectAmazonBuyboxPriceForMode(publicSnapshot.priceChoices, "REGULAR")?.price, 80);
+  const primeSnapshot = extractAmazonPriceSnapshot(
+    publicHtml + '<div id="desktop_buybox">This deal is exclusively for Amazon Prime members.</div>',
+    "B0SNAPSHOT1",
+  );
+  assert.equal(selectAmazonBuyboxPriceForMode(primeSnapshot.priceChoices, "REGULAR"), null);
+  assert.equal(selectAmazonBuyboxPriceForMode(primeSnapshot.priceChoices, "DEAL")?.price, 80);
 });

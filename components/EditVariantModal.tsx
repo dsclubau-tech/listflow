@@ -11,6 +11,7 @@ import {
   calculateTotalFees,
 } from "@/lib/variant-pricing";
 import { dedupeProductImages } from "@/lib/product-images";
+import { getVariantDisplayProfit } from "@/lib/product-profit";
 import {
   getEffectiveListingQuantity,
   getStoredQuantityAfterEdit,
@@ -22,6 +23,9 @@ interface EditVariantModalProps {
   productId: string;
   productTitle: string;
   isProductOnHold?: boolean;
+  promotedAdStatus?: string | null;
+  promotedAdPercent?: number | null;
+  promotedAdRateStrategy?: string | null;
   defaultBuyPrice: number;
   defaultQuantity: number;
   defaultImages: string[];
@@ -263,6 +267,9 @@ export default function EditVariantModal({
   productId,
   productTitle,
   isProductOnHold = false,
+  promotedAdStatus,
+  promotedAdPercent,
+  promotedAdRateStrategy,
   defaultBuyPrice,
   defaultQuantity,
   defaultImages,
@@ -468,6 +475,12 @@ export default function EditVariantModal({
     feesPercent: toNumber(form.feesPercent),
     feesFixed: toNumber(form.feesFixed),
   });
+  const profitAfterAdFee = getVariantDisplayProfit({
+    buyPrice: buyPriceNumber,
+    sellPrice: sellPriceNumber,
+    feesPercent: toNumber(form.feesPercent),
+    feesFixed: toNumber(form.feesFixed),
+  }, { promotedAdStatus, promotedAdPercent, promotedAdRateStrategy })?.profitAfterAdFee ?? null;
   const isNegativeTotalProfit = totalProfit < 0;
   const desiredQuantity = Math.max(0, Math.floor(toNumber(form.quantity)));
   const willResumeOnSave = isProductOnHold && desiredQuantity > 0;
@@ -845,6 +858,16 @@ export default function EditVariantModal({
                 }`}
               >
                 ${totalProfit.toFixed(2)}
+              </p>
+              <p
+                className={`text-[11px] sm:text-xs font-medium ${
+                  profitAfterAdFee !== null && profitAfterAdFee < 0 ? "text-red-700" : "text-gray-700"
+                }`}
+                title={profitAfterAdFee === null
+                  ? "Sync eBay Ads to calculate profit after the promoted-ad fee. Dynamic campaigns do not expose a fixed fee rate."
+                  : "Profit after the current promoted-ad fee"}
+              >
+                After ad: {profitAfterAdFee === null ? "Unavailable" : `$${profitAfterAdFee.toFixed(2)}`}
               </p>
               <p
                 className={`text-[11px] sm:text-xs ${

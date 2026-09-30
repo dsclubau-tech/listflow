@@ -9,6 +9,17 @@ const DEAL_PRICE_LABEL_PATTERN =
 const LIGHTNING_DEAL_LABEL_PATTERN = /lightning(?:\s+|\s*-\s*)deal/i;
 const PRIME_MEMBER_PRICE_LABEL_PATTERN = /prime member price/i;
 const REGULAR_PRICE_LABEL_PATTERN = /regular price/i;
+const LIMITED_TIME_DEAL_LABEL_PATTERN = /limited(?:\s+|\s*-\s*)time(?:\s+|\s*-\s*)deal/i;
+// Delivery advertising may mention Prime; only offer eligibility/upsell language
+// disqualifies a public promotion. Dedicated offer cards are checked separately.
+const RESTRICTED_OFFER_PATTERN = /exclusive\s+prime|prime\s+(?:exclusive|member|deal|price|only|big\s+deal)|with\s+prime|(?:only|exclusiv\w*)\s+for\s+(?:amazon\s+)?prime|join\s+prime|subscribe\s*(?:&|and)\s*save|subscription|business\s+(?:price|exclusive)/i;
+const NON_NEW_OFFER_PATTERN = /\bused\b|\brenewed\b|\brefurbished\b|\bsecond[ -]hand\b/i;
+const SEPARATE_OR_RESTRICTED_OFFER_SELECTOR = [
+  '[data-csa-c-buying-option-type]:not([data-csa-c-buying-option-type="NEW" i])',
+  '[id*="primeSavingsUpsell" i]',
+  '[id*="dealAccordion" i]',
+  '[id*="usedAccordion" i]',
+].join(",");
 
 const BUYBOX_PRICE_CONTAINER_SELECTORS = [
   "#corePrice_feature_div",
@@ -52,6 +63,10 @@ const NON_CURRENT_PRICE_ANCESTOR_SELECTOR = [
   "#sns-base-price",
   '[class*="coupon"]',
   '[id*="coupon"]',
+  '[data-csa-c-buying-option-type="USED" i]',
+  '[data-csa-c-buying-option-type="RENEWED" i]',
+  '[data-csa-c-buying-option-type="REFURBISHED" i]',
+  '[id*="usedAccordion" i]',
 ].join(",");
 
 const REFERENCE_PRICE_SELECTORS = [
@@ -116,6 +131,12 @@ function parseFirstPriceFromText(value: string): number | null {
 
 function normalizeText(value: string) {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function currentOfferText(container: ReturnType<CheerioAPI>) {
+  const copy = container.clone();
+  copy.find(NON_CURRENT_PRICE_ANCESTOR_SELECTOR).remove();
+  return normalizeText(copy.text());
 }
 
 function hasPositiveSavingsPercentage(value: string) {
@@ -236,7 +257,7 @@ function parsePriceElement(
   return parseFirstPriceFromText(priceElement.text());
 }
 
-function parseContainerBuyboxPrice($: CheerioAPI, container: any): number | null {
+function parseContainerBuyboxPrice($: CheerioAPI, container: ReturnType<CheerioAPI>): number | null {
   for (const sel of [
     ".apex-core-price-identifier .apex-pricetopay-value",
     ".apex-pricetopay-value",
@@ -324,7 +345,7 @@ function fallbackBuyboxPriceSweep(
   return null;
 }
 
-export function extractLocalizedBuyboxPriceChoices(
+function extractBuyboxPriceChoices(
   $: CheerioAPI,
   asin: string
 ): AmazonBuyboxPriceChoices {
@@ -436,11 +457,12 @@ export function extractLocalizedBuyboxPriceChoices(
     }
 
     const containerText = normalizeText(container.text());
+    const priceSectionText = currentOfferText(container);
     const hasLabelledPriceSection =
-      DEAL_PRICE_LABEL_PATTERN.test(containerText) ||
-      REGULAR_PRICE_LABEL_PATTERN.test(containerText);
+      DEAL_PRICE_LABEL_PATTERN.test(priceSectionText) ||
+      REGULAR_PRICE_LABEL_PATTERN.test(priceSectionText);
     const labelledDeal = extractLabelledPrice(
-      containerText,
+      priceSectionText,
       DEAL_PRICE_LABEL_PATTERN,
       [REGULAR_PRICE_LABEL_PATTERN]
     );
@@ -464,7 +486,7 @@ export function extractLocalizedBuyboxPriceChoices(
     }
 
     const labelledRegular = extractLabelledPrice(
-      containerText,
+      priceSectionText,
       REGULAR_PRICE_LABEL_PATTERN,
       [DEAL_PRICE_LABEL_PATTERN]
     );
@@ -546,7 +568,7 @@ export function extractLocalizedBuyboxPriceChoices(
           hasVerifiedSavingsDeal ||
           /with prime/i.test(containerText);
         const containerLooksRegular =
-          REGULAR_PRICE_LABEL_PATTERN.test(containerText);
+          REGULAR_PRICE_LABEL_PATTERN.test(priceSectionText);
 
         let mode: AmazonPriceTrackingMode;
         if (selectorLooksDeal || isPrimeUpsellOption) {
@@ -641,13 +663,60 @@ export function extractLocalizedBuyboxPriceChoices(
   return choices;
 }
 
+function isPublicLimitedTimePrice(
+  $: CheerioAPI,
+  deal: AmazonBuyboxPriceResult,
+) {
+  const regions = $(BUYBOX_PRICE_CONTAINER_SELECTORS.join(",") + ",#buyBoxAccordion");
+  const offerText = currentOfferText(regions);
+  if (!LIMITED_TIME_DEAL_LABEL_PATTERN.test(offerText) ||
+      RESTRICTED_OFFER_PATTERN.test(offerText) ||
+      NON_NEW_OFFER_PATTERN.test(offerText) ||
+      REGULAR_PRICE_LABEL_PATTERN.test(offerText) ||
+      LIGHTNING_DEAL_LABEL_PATTERN.test(offerText) ||
+      regions.find(SEPARATE_OR_RESTRICTED_OFFER_SELECTOR).length > 0) {
+    return false;
+  }
+
+  // A deal label or crossed-out RRP alone is not an offer. Require one current
+  // price in supported markup, allowing repeated displays of the same amount.
+  // Conflicting amounts or unrecognized multi-offer layouts remain unverified.
+  const currentPrices = new Set<number>();
+  regions.find(BUYBOX_PRICE_VALUE_SELECTORS.join(",")).each((_, element) => {
+    if ($(element).closest(NON_CURRENT_PRICE_ANCESTOR_SELECTOR).length > 0) return;
+    const price = parsePriceElement($, element);
+    if (price !== null) currentPrices.add(price);
+  });
+  return currentPrices.size === 1 && currentPrices.has(deal.itemPrice ?? deal.price);
+}
+
+export function extractLocalizedBuyboxPriceChoices(
+  $: CheerioAPI,
+  asin: string,
+): AmazonBuyboxPriceChoices {
+  const choices = extractBuyboxPriceChoices($, asin);
+  if (!choices.regular && choices.deal && isPublicLimitedTimePrice($, choices.deal)) {
+    // Preserve Deal tracking and the shipping-inclusive amount. This public
+    // offer is also the regular purchase price; do not apply shipping again.
+    choices.regular = { ...choices.deal, mode: "REGULAR", label: "Regular price" };
+  }
+  return choices;
+}
+
+export function selectAmazonBuyboxPriceForMode(
+  choices: AmazonBuyboxPriceChoices,
+  mode: AmazonPriceTrackingMode,
+): AmazonBuyboxPriceResult | null {
+  return mode === "DEAL" ? choices.deal : choices.regular;
+}
+
 export function extractLocalizedBuyboxPriceForMode(
   $: CheerioAPI,
   asin: string,
   mode: AmazonPriceTrackingMode
 ): AmazonBuyboxPriceResult | null {
   const choices = extractLocalizedBuyboxPriceChoices($, asin);
-  return mode === "DEAL" ? choices.deal : choices.regular;
+  return selectAmazonBuyboxPriceForMode(choices, mode);
 }
 
 export function extractLocalizedBuyboxPrice(
