@@ -2,7 +2,10 @@ import "server-only";
 
 import fs from "fs";
 import path from "path";
-import { randomUUID } from "crypto";
+import { createHash, randomUUID } from "crypto";
+import os from "node:os";
+import { createRotatingWorkerLog } from "@/lib/rotating-worker-log";
+import { createLogRedactor, redactLogValue } from "@/lib/worker-log-redaction.mjs";
 import type { Prisma } from "@/app/generated/prisma/client";
 import { createDatabaseLogWriter } from "@/lib/database-log-writer";
 import {
@@ -65,7 +68,22 @@ interface LoggerApi {
 }
 
 const LOG_DIR = path.join(process.cwd(), "logs");
-export const LOG_FILE_PATH = path.join(LOG_DIR, "listflow.log");
+const isWorkerProcess = process.env.LISTFLOW_WORKER_PROCESS === "true";
+const logIdentity = (process.env.LISTFLOW_WORKER_ID || process.env.LISTFLOW_WORKER_STORE_LOGIN_ID || "manual").replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 100);
+export const LOG_FILE_PATH = path.join(LOG_DIR, isWorkerProcess ? `events-${logIdentity}.log` : "listflow.log");
+const redact = createLogRedactor(process.env);
+const runtimeContext = {
+  processId: process.pid,
+  sessionId: randomUUID(),
+  revision: process.env.LISTFLOW_REVISION || process.env.VERCEL_GIT_COMMIT_SHA || process.env.RAILWAY_GIT_COMMIT_SHA,
+  machineId: createHash("sha256").update(os.hostname()).digest("hex").slice(0, 12),
+};
+const workerFileLog = createRotatingWorkerLog(LOG_FILE_PATH, {
+  onError(error) {
+    const code = (error as NodeJS.ErrnoException)?.code || "UNKNOWN";
+    process.stderr.write(`[LOGGER FILE ERROR] ${code}; file logging will retry in 30 seconds. Use Collect ListFlow Diagnostics.\n`);
+  },
+});
 
 function ensureLogDir(): void {
   if (!fs.existsSync(LOG_DIR)) {
@@ -86,8 +104,8 @@ function mergeScope(base: LogScope, next?: LogScope): LogScope {
 }
 
 function buildLogEntry(options: WriteLogOptions): LogEntry {
-  const source = options.source ?? "server";
-  const runtime = options.runtime ?? "node";
+  const source = options.source ?? (isWorkerProcess ? "worker" : "server");
+  const runtime = options.runtime ?? (isWorkerProcess ? "worker" : "node");
   const normalizedError = normalizeError(options.error);
   const environment =
     options.environment ??
@@ -98,6 +116,7 @@ function buildLogEntry(options: WriteLogOptions): LogEntry {
         : process.env.NODE_ENV || "local");
 
   return {
+    ...runtimeContext,
     id: randomUUID(),
     timestamp: options.timestamp ?? new Date().toISOString(),
     level: options.level,
@@ -123,8 +142,8 @@ function buildLogEntry(options: WriteLogOptions): LogEntry {
     durationMs: options.durationMs,
     userId: options.userId,
     storeId: options.storeId,
-    workerId: options.workerId,
-    workerName: options.workerName,
+    workerId: options.workerId ?? (isWorkerProcess ? process.env.LISTFLOW_WORKER_ID : undefined),
+    workerName: options.workerName ?? (isWorkerProcess ? process.env.LISTFLOW_WORKER_NAME : undefined),
     jobType: options.jobType,
     jobId: options.jobId,
     productId: options.productId,
@@ -140,7 +159,7 @@ function buildLogEntry(options: WriteLogOptions): LogEntry {
 const databaseLogWriter = createDatabaseLogWriter({
   onError(error) {
     const message = error instanceof Error ? error.message : String(error);
-    process.stderr.write(`[LOGGER DB ERROR] ${message}; database logging paused for 30 seconds, local logging continues.\n`);
+    process.stderr.write(`[LOGGER DB ERROR] ${redact(message)}; database logging paused for 30 seconds, local logging continues.\n`);
   },
 });
 
@@ -162,7 +181,9 @@ async function persistEntryToDatabase(entry: LogEntry): Promise<void> {
   await databaseLogWriter.write(async () => {
     const { prisma } = await import("@/lib/prisma");
     const metadata = sanitizeForLog({
+      runtimeContext: { processId: entry.processId, sessionId: entry.sessionId, revision: entry.revision, machineId: entry.machineId },
       data: entry.data,
+      errorCode: entry.error?.code,
       errorCause: entry.error?.cause,
       errorRaw: entry.error?.raw,
     }) as Prisma.InputJsonValue;
@@ -217,7 +238,13 @@ function persistEntry(entry: LogEntry): void {
     process.stdout.write(`${serialized}\n`);
   }
 
-  if (writeToFile) {
+  if (writeToFile && isWorkerProcess) {
+    if (!workerFileLog.write(`${serialized}\n`) && !writeToStdout) {
+      process.stderr.write(`[LOGGER FILE FALLBACK] ${serialized}\n`);
+    }
+  }
+
+  if (writeToFile && !isWorkerProcess) {
     try {
       ensureLogDir();
       void fs.promises
@@ -276,6 +303,10 @@ function coerceLogEntry(value: unknown): LogEntry | null {
   const error = normalizeError(raw.error);
 
   return {
+    processId: typeof raw.processId === "number" ? raw.processId : undefined,
+    sessionId: typeof raw.sessionId === "string" ? raw.sessionId : undefined,
+    revision: typeof raw.revision === "string" ? raw.revision : undefined,
+    machineId: typeof raw.machineId === "string" ? raw.machineId : undefined,
     id: typeof raw.id === "string" ? raw.id : randomUUID(),
     timestamp:
       typeof raw.timestamp === "string" ? raw.timestamp : new Date().toISOString(),
@@ -323,7 +354,7 @@ function coerceLogEntry(value: unknown): LogEntry | null {
 }
 
 export function writeLog(options: WriteLogOptions): LogEntry {
-  const entry = buildLogEntry(options);
+  const entry = redactLogValue(buildLogEntry(options), redact) as LogEntry;
   persistEntry(entry);
   return entry;
 }

@@ -74,6 +74,7 @@ scripts/migration-snapshots/
 
 # local scratch / temporary scripts
 /scratch/
+/diagnostics/
 /txt
 
 # local cost calculator

@@ -13,6 +13,8 @@ import {
 } from "../lib/local-worker-config";
 import { configureWorkerDatabaseProfile } from "../lib/worker-database-profile";
 import { assertWorkerSchemaReady } from "../lib/worker-schema-check";
+import { createRotatingWorkerLog, createWorkerLineCapture } from "../lib/rotating-worker-log";
+import { createLogRedactor } from "../lib/worker-log-redaction.mjs";
 
 const moduleWithLoad = Module as unknown as {
   _load: (request: string, parent?: unknown, isMain?: boolean) => unknown;
@@ -33,6 +35,13 @@ const logsDir = path.join(repoRoot, "logs");
 const supervisorLockPath = path.join(logsDir, "local-workers.supervisor.lock");
 const supervisorStopPath = path.join(logsDir, "local-workers.stop");
 const stableRuntimeMs = 5 * 60 * 1_000;
+const redact = createLogRedactor(process.env);
+const supervisorLog = createRotatingWorkerLog(path.join(logsDir, "local-workers-supervisor.log"), {
+  onError() { process.stderr.write("[SUPERVISOR LOG ERROR] Could not write logs; retrying in 30 seconds.\n"); },
+});
+function supervisorEvent(event: string, details: Record<string, unknown> = {}) {
+  supervisorLog.write(redact(JSON.stringify({ timestamp: new Date().toISOString(), event, processId: process.pid, ...details })) + "\n");
+}
 
 type WorkerRuntime = {
   definition: LocalWorkerDefinition;
@@ -89,10 +98,10 @@ function releaseSupervisorGuard() {
 
 function writePrefixedOutput(
   definition: LocalWorkerDefinition,
-  output: Buffer,
+  output: string,
   destination: NodeJS.WriteStream,
 ) {
-  const text = output.toString();
+  const text = output;
   const prefix = `[${definition.workerId}] `;
   destination.write(prefix + text.replace(/\r?\n(?!$)/g, `\n${prefix}`));
 }
@@ -122,6 +131,7 @@ function maybeFinishShutdown() {
 function scheduleWorkerRestart(runtime: WorkerRuntime) {
   const delay = getLocalWorkerRestartDelay(runtime.restartAttempt);
   runtime.restartAttempt += 1;
+  supervisorEvent("worker-restart-scheduled", { workerId: runtime.definition.workerId, attempt: runtime.restartAttempt, delayMs: delay });
   console.error(
     `${runtime.definition.workerName} stopped unexpectedly. Restarting in ${Math.round(delay / 1_000)} seconds.`,
   );
@@ -142,7 +152,13 @@ function startWorker(runtime: WorkerRuntime) {
   fs.rmSync(workerStopPath, { force: true });
 
   const logPath = path.join(logsDir, definition.logFileName);
-  const logStream = fs.createWriteStream(logPath, { flags: "a" });
+  const logStream = createRotatingWorkerLog(logPath, {
+    onError(error) {
+      const code = (error as NodeJS.ErrnoException)?.code || "UNKNOWN";
+      supervisorEvent("worker-log-write-failed", { workerId: definition.workerId, code });
+      console.error(`Worker log unavailable for ${definition.workerId}: ${code}. Retrying in 30 seconds.`);
+    },
+  });
   logStream.write(`\n[${new Date().toISOString()}] Starting ${definition.workerName}\n`);
 
   const child = spawn(
@@ -173,27 +189,31 @@ function startWorker(runtime: WorkerRuntime) {
     runtime.stableTimer = null;
   }, stableRuntimeMs);
 
-  child.stdout.on("data", (chunk: Buffer) => {
-    logStream.write(chunk);
-    writePrefixedOutput(definition, chunk, process.stdout);
+  const capture = (stream: "stdout" | "stderr") => createWorkerLineCapture(line => {
+    const safeLine = redact(line);
+    logStream.write(`[${new Date().toISOString()}] [${stream}] ${safeLine}`);
+    writePrefixedOutput(definition, safeLine, process[stream]);
   });
-  child.stderr.on("data", (chunk: Buffer) => {
-    logStream.write(chunk);
-    writePrefixedOutput(definition, chunk, process.stderr);
-  });
+  const stdout = capture("stdout");
+  const stderr = capture("stderr");
+  child.stdout.on("data", (chunk: Buffer) => stdout.write(chunk));
+  child.stderr.on("data", (chunk: Buffer) => stderr.write(chunk));
   child.on("error", (error) => {
-    const message = `${definition.workerName} process error: ${error.message}`;
+    const message = redact(`${definition.workerName} process error: ${error.stack || error.message}`);
+    supervisorEvent("worker-process-error", { workerId: definition.workerId, error: message });
     logStream.write(`${message}\n`);
     console.error(message);
   });
   child.on("close", (code, signal) => {
+    stdout.end();
+    stderr.end();
+    supervisorEvent("worker-exited", { workerId: definition.workerId, code, signal, stopping: shuttingDown });
     clearTimer(runtime.stableTimer);
     runtime.stableTimer = null;
     runtime.child = null;
     logStream.write(
       `[${new Date().toISOString()}] Exited with code ${code ?? "none"}, signal ${signal ?? "none"}\n`,
     );
-    logStream.end();
 
     if (shuttingDown || fs.existsSync(workerStopPath)) {
       maybeFinishShutdown();
@@ -202,12 +222,14 @@ function startWorker(runtime: WorkerRuntime) {
     }
   });
 
+  supervisorEvent("worker-started", { workerId: definition.workerId, childProcessId: child.pid });
   console.log(`Started ${definition.workerName} (PID ${child.pid ?? "pending"}).`);
 }
 
 function requestShutdown(reason: string) {
   if (shuttingDown) return;
   shuttingDown = true;
+  supervisorEvent("shutdown-requested", { reason });
   console.log(`Stopping all local ListFlow workers: ${reason}`);
 
   if (controlTimer) {
@@ -256,6 +278,7 @@ async function main() {
   try {
     const { definitions, profile } = await loadWorkerDefinitions();
     fs.rmSync(supervisorStopPath, { force: true });
+    supervisorEvent("supervisor-ready", { workerCount: definitions.length, profile, node: process.version });
     console.log("ListFlow six-worker supervisor online");
     console.log(`Database profile: ${profile}`);
     console.log(`Workers: ${definitions.length}`);
@@ -298,6 +321,8 @@ process.on("SIGINT", () => requestShutdown("Ctrl+C received"));
 process.on("SIGTERM", () => requestShutdown("termination requested"));
 
 main().catch((error) => {
-  console.error(error instanceof Error ? error.message : error);
+  const detail = redact(error instanceof Error ? error.stack || error.message : String(error));
+  supervisorEvent("supervisor-fatal", { error: detail });
+  console.error(detail);
   process.exitCode = 1;
 });

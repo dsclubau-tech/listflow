@@ -147,6 +147,33 @@ overwrite local Git changes. Commercial development happens on
 The setup writes details to `logs/setup-worker.log`. Each worker has a separate
 `logs/worker-<store>-<a|b>.log` file.
 
+## Worker Logs and Support Diagnostics
+
+Double-click **Collect ListFlow Diagnostics.cmd** in the ListFlow folder, or
+use the **Collect ListFlow Diagnostics** desktop shortcut created by setup.
+The collector writes a ZIP to the `diagnostics` folder. Share that ZIP with
+the time the problem happened, the affected store, and the action you tried.
+Review it before sharing: known credentials are masked and environment files
+are excluded, but store, job, and product identifiers may remain.
+
+The collector runs locally without contacting Supabase or eBay, starting
+workers, or requiring npm dependencies. Node.js 22 must be installed. For a
+plain JSON report, run `npm.cmd run workers:diagnostics` (or
+`node scripts/collect-worker-diagnostics.mjs` if npm needs repair).
+
+Each supervised worker has a timestamped console log and a structured
+`events-<worker-id>.log` file. These files and the supervisor event log rotate
+at 5 MiB, with three backups per file. Disk-write failures are reported and
+retried after 30 seconds without stopping job processing. Existing historical
+`listflow.log` and maintenance transcripts are included as bounded tails in
+diagnostics; they are not deleted by the collector.
+
+Structured events include available store/job identifiers, error codes,
+stacks, process and session IDs, a machine identifier, and the running
+revision. The ZIP includes recent incidents, restart/exit events, dependency
+versions, memory/disk information, and local process-lock observations.
+The report is a snapshot, not a live health check or a guarantee of diagnosis.
+
 ## Health Check
 
 Check database connectivity while the local app is running:

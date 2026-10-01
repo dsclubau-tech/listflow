@@ -17,8 +17,10 @@ import { configureWorkerDatabaseProfile } from "../lib/worker-database-profile";
 import { assertWorkerSchemaReady } from "../lib/worker-schema-check";
 import { createSingleFlightTask, WorkerDatabaseRecovery } from "../lib/worker-database-recovery";
 import { getPriceCheckOptimizationEnvironmentSummary } from "../lib/price-check-optimizations";
+import { createLogRedactor } from "../lib/worker-log-redaction.mjs";
 
 const workerDatabaseProfile = configureWorkerDatabaseProfile();
+process.env.LISTFLOW_WORKER_PROCESS = "true";
 
 function getRuntimeRevision() {
   const environmentRevision =
@@ -90,6 +92,7 @@ let workerId = process.env.LISTFLOW_WORKER_ID || "";
 let workerRole: WorkerRole = "legacy";
 const startedAt = new Date();
 const workerRevision = getRuntimeRevision();
+process.env.LISTFLOW_REVISION = workerRevision;
 let stopping = false;
 let heartbeatStoreIds: string[] = [];
 let localGuardPath: string | null = null;
@@ -837,8 +840,7 @@ async function main() {
           await recoverDatabaseConnection();
         }
         console.error(`Worker loop failed; retrying in ${ERROR_SLEEP_MS}ms:`, message);
-        modules.logger.warn("worker/loop", "Worker loop failed; retrying", {
-          error: message,
+        modules.logger.error("worker/loop", "Worker loop failed; retrying", error, {
           retryInMs: ERROR_SLEEP_MS,
         });
         await sleep(ERROR_SLEEP_MS);
@@ -860,6 +862,10 @@ async function main() {
   }
 }
 
+process.on("uncaughtExceptionMonitor", (error, origin) => {
+  modules?.logger?.error("worker/uncaught", "Worker crashed outside the job loop", error, { origin });
+});
+
 process.on("SIGINT", () => {
   stopping = true;
   console.log("Stopping ListFlow Worker...");
@@ -871,7 +877,10 @@ process.on("SIGTERM", () => {
 });
 
 main().catch(async (error) => {
-  console.error(error instanceof Error ? error.message : error);
+  if (modules?.logger) {
+    modules.logger.error("worker/fatal", "Worker stopped after a fatal error", error);
+  }
+  console.error(createLogRedactor(process.env)(error instanceof Error ? error.stack || error.message : String(error)));
   await modules?.prisma.$disconnect();
   releaseLocalWorkerGuard();
   process.exitCode = 1;

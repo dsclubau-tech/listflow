@@ -9,6 +9,7 @@ export type LogSource = "server" | "client" | "proxy" | "worker";
 export type LogRuntime = "node" | "browser" | "edge" | "worker";
 
 export interface NormalizedError {
+  code?: string | number;
   name?: string;
   message: string;
   stack?: string;
@@ -42,6 +43,10 @@ export interface LogScope {
 }
 
 export interface LogEntry {
+  processId?: number;
+  sessionId?: string;
+  revision?: string;
+  machineId?: string;
   id: string;
   timestamp: string;
   level: LogLevel;
@@ -252,6 +257,7 @@ export function normalizeError(error: unknown): NormalizedError | undefined {
   ) {
     return {
       name: typeof error.name === "string" ? error.name : undefined,
+      code: typeof error.code === "string" || typeof error.code === "number" ? error.code : undefined,
       message: truncateString(error.message),
       stack: typeof error.stack === "string" ? truncateString(error.stack) : undefined,
       digest: typeof error.digest === "string" ? error.digest : undefined,
@@ -262,10 +268,12 @@ export function normalizeError(error: unknown): NormalizedError | undefined {
 
   if (error instanceof Error) {
     const digest = (error as { digest?: unknown }).digest;
+    const code = (error as { code?: unknown }).code;
     const cause = (error as Error & { cause?: unknown }).cause;
 
     return {
       name: error.name || "Error",
+      code: typeof code === "string" || typeof code === "number" ? code : undefined,
       message: truncateString(error.message || "Unknown error"),
       stack: typeof error.stack === "string" ? truncateString(error.stack) : undefined,
       digest: typeof digest === "string" ? digest : undefined,

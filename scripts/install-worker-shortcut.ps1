@@ -9,13 +9,14 @@ $startPath = Join-Path $repoRoot "scripts\start-all-listflow-workers.cmd"
 $stopPath = Join-Path $repoRoot "scripts\stop-all-listflow-workers.cmd"
 $updatePath = Join-Path $repoRoot "scripts\update-listflow-workers.cmd"
 $setupPath = Join-Path $repoRoot "Setup ListFlow Worker.cmd"
+$diagnosticsPath = Join-Path $repoRoot "Collect ListFlow Diagnostics.cmd"
 $desktop = [Environment]::GetFolderPath("Desktop")
 $startShortcutPath = Join-Path $desktop "Start All 6 ListFlow Workers.lnk"
 $stopShortcutPath = Join-Path $desktop "Stop All ListFlow Workers.lnk"
 $updateShortcutPath = Join-Path $desktop "Update ListFlow Workers.lnk"
 $repairShortcutPath = Join-Path $desktop "Repair ListFlow Workers.lnk"
 
-foreach ($requiredPath in @($startPath, $stopPath, $updatePath)) {
+foreach ($requiredPath in @($startPath, $stopPath, $updatePath, $diagnosticsPath)) {
   if (-not (Test-Path -LiteralPath $requiredPath)) {
     throw "Worker control script was not found at $requiredPath"
   }
@@ -36,6 +37,7 @@ function New-ListFlowShortcut($shortcutPath, $targetPath, $description) {
 New-ListFlowShortcut $startShortcutPath $startPath "Start two local workers for each ListFlow store"
 New-ListFlowShortcut $stopShortcutPath $stopPath "Gracefully stop all local ListFlow workers"
 New-ListFlowShortcut $updateShortcutPath $updatePath "Update stable ListFlow worker code and restart all workers"
+New-ListFlowShortcut (Join-Path $desktop "Collect ListFlow Diagnostics.lnk") $diagnosticsPath "Collect recent worker logs and a redacted diagnostic report"
 
 $legacyShortcutPath = Join-Path $desktop "Start ListFlow Worker.lnk"
 Remove-Item -LiteralPath $legacyShortcutPath -Force -ErrorAction SilentlyContinue
