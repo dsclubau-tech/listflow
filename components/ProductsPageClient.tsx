@@ -18,6 +18,8 @@ import DraftsTable from "@/components/DraftsTable";
 import type { PromotedListingsJob } from "@/components/PromotedListingsModal";
 import Toast from "@/components/Toast";
 import NotificationStack from "@/components/NotificationStack";
+import BulkEditProgressCard, { BulkEditJobControl } from "@/components/BulkEditProgressCard";
+import { useBulkEditJob, type BulkEditJob } from "@/hooks/useBulkEditJob";
 import { useToast } from "@/hooks/useToast";
 import { useAdaptivePolling } from "@/hooks/useAdaptivePolling";
 import { getSelectedPriceCheckSummary } from "@/lib/price-check-eligibility";
@@ -430,9 +432,8 @@ export default function ProductsPageClient({
   const [isCopyingTitles, setIsCopyingTitles] = useState(false);
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
   const [bulkEditView, setBulkEditView] = useState<"editor" | "job">("editor");
-  const [notificationContainer, setNotificationContainer] = useState<HTMLDivElement | null>(null);
+  const bulkEditReturnFocus = useRef<HTMLElement | null>(null);
   const closeBulkEdit = useCallback(() => setIsBulkEditOpen(false), []);
-  const openBulkEditJob = useCallback(() => { setBulkEditView("job"); setIsBulkEditOpen(true); }, []);
   const [hasOpenedBulkEdit, setHasOpenedBulkEdit] = useState(false);
   const [isPromotedListingsOpen, setIsPromotedListingsOpen] = useState(false);
   const [hasOpenedPromotions, setHasOpenedPromotions] = useState(false);
@@ -469,6 +470,29 @@ export default function ProductsPageClient({
   const filterMenuRef = useRef<HTMLDivElement | null>(null);
   const filterMenuButtonRef = useRef<HTMLButtonElement | null>(null);
   const { toast, showToast, hideToast } = useToast();
+  const onBulkEditCompleted = useCallback((completed: BulkEditJob) => {
+    router.refresh();
+    closeBulkEdit();
+    showToast(
+      completed.status === "CANCELLED"
+        ? `Bulk edit cancelled. ${completed.succeeded} listing${completed.succeeded === 1 ? "" : "s"} updated.`
+        : completed.status === "FAILED"
+          ? `Bulk edit failed. ${completed.succeeded} listing${completed.succeeded === 1 ? "" : "s"} updated. View results for details.`
+          : completed.failed > 0
+            ? `Bulk edit finished with ${completed.failed} failed listing${completed.failed === 1 ? "" : "s"}.`
+            : `Bulk edit finished for ${completed.succeeded} listing${completed.succeeded === 1 ? "" : "s"}.`,
+      completed.failed > 0 || completed.status === "FAILED" ? "error" : "success",
+    );
+  }, [closeBulkEdit, router, showToast]);
+  const bulkEditTracking = useBulkEditJob(supplierOptions[0]?.id ?? null, onBulkEditCompleted);
+  const { hidePreview: hideBulkEditPreview } = bulkEditTracking;
+  const openBulkEditJob = useCallback(() => {
+    bulkEditReturnFocus.current = document.activeElement as HTMLElement | null;
+    hideBulkEditPreview();
+    setHasOpenedBulkEdit(true);
+    setBulkEditView("job");
+    setIsBulkEditOpen(true);
+  }, [hideBulkEditPreview]);
   const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const isPromotionJobActive = isActivePromotedListingsJob(promotedListingsJob);
   const displayedProductFilter = pendingProductFilter ?? productFilter;
@@ -1955,8 +1979,9 @@ export default function ProductsPageClient({
       )}
 
       <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-xl font-semibold text-gray-900">Products</h1>
+          <BulkEditJobControl job={bulkEditTracking.job} onOpen={openBulkEditJob} />
           <span className="text-sm text-gray-500">
             ({totalCount} {listingCountLabel})
           </span>
@@ -2461,6 +2486,7 @@ export default function ProductsPageClient({
         isEbayAdsSyncing={isSyncingEbayAds}
         onManagePromotionsSelected={openPromotedListings}
         onBulkEditSelected={(ids) => {
+          bulkEditReturnFocus.current = document.activeElement as HTMLElement | null;
           setSelectedProductIds(ids);
           setHasOpenedBulkEdit(true);
           setBulkEditView("editor");
@@ -2471,10 +2497,10 @@ export default function ProductsPageClient({
       {hasOpenedBulkEdit && <BulkEditModal
         open={isBulkEditOpen}
         view={bulkEditView}
-        notificationContainer={notificationContainer}
+        tracking={bulkEditTracking}
+        returnFocusRef={bulkEditReturnFocus}
         storeId={supplierOptions[0]?.id ?? null}
         selectedProductIds={selectedProductIds}
-        onOpen={openBulkEditJob}
         onClose={closeBulkEdit}
         onToast={showToast}
       />}
@@ -2542,7 +2568,10 @@ export default function ProductsPageClient({
         </div>
       </div>
 
-      <NotificationStack ref={setNotificationContainer}>
+      <NotificationStack>
+      {bulkEditTracking.previewVisible && bulkEditTracking.job && (
+        <BulkEditProgressCard job={bulkEditTracking.job} onClose={bulkEditTracking.hidePreview} onView={openBulkEditJob} />
+      )}
       {toast.visible && (
         <Toast
           key={toast.id}

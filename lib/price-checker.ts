@@ -428,6 +428,14 @@ export async function runPriceCheck(
     );
   }
 
+  if (optimizationConfig.deliveryStateConfigurationIssue) {
+    logger.warn("price-checker/config", optimizationConfig.deliveryStateConfigurationIssue, {
+      jobId: options.jobId,
+      storeId: options.storeId,
+      deliveryStateMode: optimizationConfig.deliveryStateMode,
+    });
+  }
+
   const supplierSettings = await getSupplierSettings(options.storeId);
   const scrapePostcode = resolveAmazonDeliveryPostcode(supplierSettings.scrapePostcode);
   const deliveryState =

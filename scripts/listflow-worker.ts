@@ -650,8 +650,14 @@ async function main() {
   console.log(`Amazon retry target: ${amazonRetryTarget}`);
   console.log(`Database profile: ${workerDatabaseProfile}`);
   const runtimeRevision = workerRevision;
-  const priceCheckOptimizations = getPriceCheckOptimizationEnvironmentSummary();
-  console.log(`Postcode reuse stores: ${priceCheckOptimizations.deliveryStateAllowedStoreIds?.join(", ") ?? "inherit general allowlist"}`);
+  const priceCheckOptimizations = getPriceCheckOptimizationEnvironmentSummary(process.env, stores.map(store => store.id));
+  console.log(`Postcode reuse mode: ${priceCheckOptimizations.deliveryStateMode ?? "invalid (disabled)"}`);
+  console.log(`Postcode reuse exclusions: ${priceCheckOptimizations.deliveryStateDisabledStoreIds.join(", ") || "none"}`);
+  console.log(`Postcode reuse allowlist: ${priceCheckOptimizations.deliveryStateAllowedStoreIds?.join(", ") ?? "inherit general allowlist"}`);
+  for (const effective of priceCheckOptimizations.stores) {
+    console.log(`Postcode reuse effective: ${JSON.stringify(effective)}`);
+    if (effective.deliveryStateConfigurationIssue) console.warn(effective.deliveryStateConfigurationIssue);
+  }
   console.log(`Revision: ${runtimeRevision}`);
   console.log(
     `Price-check timing: ${priceCheckOptimizations.timingEnabled ? "enabled" : "disabled"}`,
@@ -763,6 +769,7 @@ async function main() {
                 workerRole,
                 storeName: store.name,
                 storeLoginId: store.loginId,
+                postcodeReuse: getPriceCheckOptimizationEnvironmentSummary(process.env, [store.id]).stores[0],
               },
               { storeId: store.id },
             );

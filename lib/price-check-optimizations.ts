@@ -4,13 +4,10 @@ export const PRICE_CHECK_OPTIMIZATION_NAMES = [
   "delivery-state",
 ] as const;
 
-export type PriceCheckOptimizationName =
-  (typeof PRICE_CHECK_OPTIMIZATION_NAMES)[number];
-
-export type PriceCheckOptimizationEnvironment = Record<
-  string,
-  string | undefined
->;
+export const DELIVERY_STATE_MODES = ["allowlist", "all", "off"] as const;
+export type DeliveryStateMode = (typeof DELIVERY_STATE_MODES)[number];
+export type PriceCheckOptimizationName = (typeof PRICE_CHECK_OPTIMIZATION_NAMES)[number];
+export type PriceCheckOptimizationEnvironment = Record<string, string | undefined>;
 
 export type PriceCheckOptimizationConfig = {
   timingEnabled: boolean;
@@ -18,6 +15,11 @@ export type PriceCheckOptimizationConfig = {
   enabled: PriceCheckOptimizationName[];
   allowedStoreIds: string[];
   deliveryStateAllowedStoreIds: string[] | null;
+  deliveryStateMode: DeliveryStateMode | null;
+  deliveryStateDisabledStoreIds: string[];
+  deliveryStateEnabled: boolean;
+  deliveryStateDisabledReason: string | null;
+  deliveryStateConfigurationIssue: string | null;
   storeAllowed: boolean;
   unknown: string[];
 };
@@ -28,51 +30,60 @@ function isEnabled(value: string | undefined) {
 }
 
 function parseList(value: string | undefined) {
-  return Array.from(
-    new Set(
-      (value ?? "")
-        .split(",")
-        .map((item) => item.trim())
-        .filter(Boolean),
-    ),
-  );
+  return Array.from(new Set((value ?? "").split(",").map(item => item.trim()).filter(Boolean)));
 }
 
 export function resolvePriceCheckOptimizationConfig(
   storeId: string | undefined,
   environment: PriceCheckOptimizationEnvironment = process.env,
 ): PriceCheckOptimizationConfig {
-  const rawRequested = parseList(
-    environment.LISTFLOW_PRICE_CHECK_OPTIMIZATIONS,
-  );
+  const rawRequested = parseList(environment.LISTFLOW_PRICE_CHECK_OPTIMIZATIONS);
   const known = new Set<string>(PRICE_CHECK_OPTIMIZATION_NAMES);
-  const unknown = rawRequested.filter((name) => !known.has(name));
+  const unknown = rawRequested.filter(name => !known.has(name));
   const requested = rawRequested.filter(
     (name): name is PriceCheckOptimizationName => known.has(name),
   );
-  const allowedStoreIds = parseList(
-    environment.LISTFLOW_PRICE_CHECK_OPTIMIZATION_STORE_IDS,
-  );
-  const storeAllowed = Boolean(
-    storeId && allowedStoreIds.includes(storeId),
-  );
-  // Optional narrower canary scope. Absence preserves existing configuration;
-  // an explicitly empty value disables delivery-state reuse for all stores.
+  const allowedStoreIds = parseList(environment.LISTFLOW_PRICE_CHECK_OPTIMIZATION_STORE_IDS);
+  const identified = Boolean(storeId?.trim());
+  const storeAllowed = Boolean(identified && allowedStoreIds.includes(storeId!));
+  // Absence retains legacy scope. An explicit empty allowlist enables no stores in allowlist mode.
   const deliveryStateAllowedStoreIds = environment.LISTFLOW_PRICE_CHECK_DELIVERY_STATE_STORE_IDS === undefined
     ? null
     : parseList(environment.LISTFLOW_PRICE_CHECK_DELIVERY_STATE_STORE_IDS);
+  const rawMode = environment.LISTFLOW_PRICE_CHECK_DELIVERY_STATE_MODE?.trim().toLowerCase();
+  const deliveryStateMode = rawMode === undefined ? "allowlist"
+    : (DELIVERY_STATE_MODES as readonly string[]).includes(rawMode) ? rawMode as DeliveryStateMode : null;
+  const deliveryStateDisabledStoreIds = parseList(environment.LISTFLOW_PRICE_CHECK_DELIVERY_STATE_DISABLED_STORE_IDS);
+  const reuseRequested = requested.includes("delivery-state");
+  const deliveryStateConfigurationIssue = deliveryStateMode === null
+    ? "Invalid postcode reuse mode; expected allowlist, all, or off."
+    : reuseRequested && deliveryStateMode !== "off" && !identified
+      ? "Postcode reuse requires a database store identity."
+      : null;
+  let deliveryStateDisabledReason: string | null = null;
+  if (deliveryStateConfigurationIssue) deliveryStateDisabledReason = deliveryStateConfigurationIssue;
+  else if (unknown.length > 0) deliveryStateDisabledReason = "Unknown optimization disables requested optimizations.";
+  else if (!reuseRequested) deliveryStateDisabledReason = "The delivery-state feature is not configured.";
+  else if (deliveryStateMode === "off") deliveryStateDisabledReason = "Postcode reuse is disabled globally.";
+  else if (deliveryStateDisabledStoreIds.includes(storeId!)) deliveryStateDisabledReason = "This store is excluded from postcode reuse.";
+  else if (deliveryStateMode === "allowlist" && (!storeAllowed ||
+    (deliveryStateAllowedStoreIds !== null && !deliveryStateAllowedStoreIds.includes(storeId!)))) {
+    deliveryStateDisabledReason = "This store is outside the postcode reuse allowlists.";
+  }
+  const deliveryStateEnabled = deliveryStateDisabledReason === null;
 
   return {
-    timingEnabled: isEnabled(
-      environment.LISTFLOW_PRICE_CHECK_TIMING_ENABLED,
-    ),
+    timingEnabled: isEnabled(environment.LISTFLOW_PRICE_CHECK_TIMING_ENABLED),
     requested,
-    enabled: unknown.length === 0 && storeAllowed ? requested.filter(name =>
-      name !== "delivery-state" || deliveryStateAllowedStoreIds === null ||
-      Boolean(storeId && deliveryStateAllowedStoreIds.includes(storeId)),
-    ) : [],
+    enabled: unknown.length === 0 ? requested.filter(name => name === "delivery-state"
+      ? deliveryStateEnabled : storeAllowed) : [],
     allowedStoreIds,
     deliveryStateAllowedStoreIds,
+    deliveryStateMode,
+    deliveryStateDisabledStoreIds,
+    deliveryStateEnabled,
+    deliveryStateDisabledReason,
+    deliveryStateConfigurationIssue,
     storeAllowed,
     unknown,
   };
@@ -80,6 +91,7 @@ export function resolvePriceCheckOptimizationConfig(
 
 export function getPriceCheckOptimizationEnvironmentSummary(
   environment: PriceCheckOptimizationEnvironment = process.env,
+  storeIds: string[] = [],
 ) {
   const config = resolvePriceCheckOptimizationConfig(undefined, environment);
   return {
@@ -87,7 +99,19 @@ export function getPriceCheckOptimizationEnvironmentSummary(
     requested: config.requested,
     allowedStoreIds: config.allowedStoreIds,
     deliveryStateAllowedStoreIds: config.deliveryStateAllowedStoreIds,
+    deliveryStateMode: config.deliveryStateMode,
+    deliveryStateDisabledStoreIds: config.deliveryStateDisabledStoreIds,
     unknown: config.unknown,
+    stores: Array.from(new Set(storeIds)).map(storeId => {
+      const effective = resolvePriceCheckOptimizationConfig(storeId, environment);
+      return {
+        storeId,
+        enabled: effective.enabled,
+        deliveryStateEnabled: effective.deliveryStateEnabled,
+        deliveryStateDisabledReason: effective.deliveryStateDisabledReason,
+        deliveryStateConfigurationIssue: effective.deliveryStateConfigurationIssue,
+      };
+    }),
   };
 }
 

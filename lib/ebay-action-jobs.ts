@@ -1,5 +1,7 @@
 import "server-only";
 
+import { createBulkEditJobWithItems } from "@/lib/bulk-edit-job-creation";
+
 import {
   EbayActionJobStatus,
   EbayActionJobType,
@@ -2599,32 +2601,20 @@ export async function createEbayActionJob(input: CreateEbayActionJobInput) {
 
   let job: EbayActionJobRecord;
   try {
-    job = await prisma.ebayActionJob.create({
-      data: {
+    const data = {
       userId: input.userId,
       storeId: input.storeId,
       type: input.type,
-      status:
-        productIds.length > 0
-          ? EbayActionJobStatus.QUEUED
-          : EbayActionJobStatus.COMPLETED,
+      status: productIds.length > 0 ? EbayActionJobStatus.QUEUED : EbayActionJobStatus.COMPLETED,
       productIds,
       total: productIds.length,
       metadata: input.metadata ?? {},
       requestId: input.requestId,
-      ...(input.type === EbayActionJobType.BULK_EDIT_REVISE && input.itemPayload
-        ? {
-            bulkEditItems: {
-              create: productIds.map((productId) => ({
-                productId,
-                payload: input.itemPayload as Prisma.InputJsonValue,
-              })),
-            },
-          }
-        : {}),
       completedAt: productIds.length > 0 ? null : new Date(),
-      },
-    });
+    };
+    job = input.type === EbayActionJobType.BULK_EDIT_REVISE && input.itemPayload
+      ? await createBulkEditJobWithItems(prisma, data, productIds, input.itemPayload)
+      : await prisma.ebayActionJob.create({ data });
   } catch (error) {
     if (
       input.requestId &&

@@ -8,6 +8,7 @@ import { resolveEbayLocationMetadata, validateAuPostcodeLocation } from "@/lib/e
 import { resolveProductPolicySelection } from "@/lib/policy-defaults";
 import { prisma } from "@/lib/prisma";
 import { calculateSellPrice } from "@/lib/variant-pricing";
+import { BULK_EDIT_DATABASE_BATCH_SIZE } from "@/lib/bulk-edit-job-creation";
 
 export type BulkEditField =
   | "feesPercent"
@@ -52,7 +53,6 @@ type ApplyBulkProductEditsInput = {
 };
 
 const TITLE_MAX_LENGTH = 80;
-const MAX_PRODUCT_IDS = 500;
 const COUNTRY_METADATA: Record<
   string,
   { country: string; currency: string; site: string }
@@ -77,10 +77,6 @@ export function normalizeBulkEditProductIds(productIds: unknown[]) {
 
   if (normalized.length === 0) {
     throw new Error("Select at least one product to bulk edit.");
-  }
-
-  if (normalized.length > MAX_PRODUCT_IDS) {
-    throw new Error(`Bulk edit supports up to ${MAX_PRODUCT_IDS} products at a time.`);
   }
 
   return normalized;
@@ -668,16 +664,19 @@ export async function prepareBulkProductEditJob(input: ApplyBulkProductEditsInpu
     throw new Error("Confirm exact title replacement before updating multiple products.");
   }
 
-  const products = await prisma.product.findMany({
-    where: { id: { in: productIds }, storeId: input.storeId },
-    select: {
-      id: true,
-      title: true,
-      status: true,
-      ebayItemId: true,
-      _count: { select: { variants: true } },
-    },
-  });
+  const products = [];
+  for (let offset = 0; offset < productIds.length; offset += BULK_EDIT_DATABASE_BATCH_SIZE) {
+    products.push(...await prisma.product.findMany({
+      where: { id: { in: productIds.slice(offset, offset + BULK_EDIT_DATABASE_BATCH_SIZE) }, storeId: input.storeId },
+      select: {
+        id: true,
+        title: true,
+        status: true,
+        ebayItemId: true,
+        _count: { select: { variants: true } },
+      },
+    }));
+  }
   const byId = new Map(products.map((product) => [product.id, product]));
   const variantOperation = hasVariantOperation(operations);
   const eligibleProductIds: string[] = [];

@@ -61,6 +61,7 @@ export function useBulkEditJob(
   onCompleted: (job: BulkEditJob) => void,
 ) {
   const [tracked, setTracked] = useState<TrackedJob | null>(null);
+  const [preview, setPreview] = useState<{ storeId: string; jobId: string; expiresAt: number } | null>(null);
   const [workerOnline, setWorkerOnline] = useState<boolean | null>(null);
   const [pollingInterrupted, setPollingInterrupted] = useState(false);
   const [restoring, setRestoring] = useState(false);
@@ -75,6 +76,7 @@ export function useBulkEditJob(
     const controller = new AbortController();
     const requestGeneration = ++generation.current;
     setTracked(null);
+    setPreview(null);
     setWorkerOnline(null);
     setPollingInterrupted(false);
     let savedJobId: string | null = null;
@@ -117,8 +119,21 @@ export function useBulkEditJob(
     setPollingInterrupted(false);
     setTracked(current => ({ job: next, skipped: nextSkipped ?? (current?.job.id === next.id ? current.skipped : []) }));
     saveReference(storeId, next.id, nextSkipped);
+    setPreview(isActiveBulkEditJob(next) ? { storeId, jobId: next.id, expiresAt: Date.now() + 5_000 } : null);
     return true;
   }, [storeId]);
+
+  const hidePreview = useCallback(() => setPreview(null), []);
+  useEffect(() => {
+    window.addEventListener("pagehide", hidePreview);
+    return () => window.removeEventListener("pagehide", hidePreview);
+  }, [hidePreview]);
+  useEffect(() => {
+    if (!preview) return;
+    const timer = window.setTimeout(hidePreview, Math.max(0, preview.expiresAt - Date.now()));
+    return () => window.clearTimeout(timer);
+  }, [hidePreview, preview]);
+  const previewVisible = Boolean(preview && preview.storeId === storeId && preview.jobId === job?.id && isActiveBulkEditJob(job));
 
   const jobId = job?.id;
   const active = isActiveBulkEditJob(job);
@@ -162,6 +177,7 @@ export function useBulkEditJob(
     const key = completionKey(job);
     if (notified.current.has(key)) return;
     notified.current.add(key);
+    setPreview(null);
     onCompleted(job);
   }, [job, onCompleted]);
 
@@ -172,5 +188,7 @@ export function useBulkEditJob(
     saveReference(storeId, null);
   }, [job, storeId]);
 
-  return { job, skipped, workerOnline, pollingInterrupted, restoring, trackJob, dismiss };
+  return { job, skipped, workerOnline, pollingInterrupted, restoring, trackJob, dismiss, previewVisible, hidePreview };
 }
+
+export type BulkEditJobController = ReturnType<typeof useBulkEditJob>;

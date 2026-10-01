@@ -1,13 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { useRouter } from "next/navigation";
+import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import ActionProgressBar from "@/components/ActionProgressBar";
 import { PostcodeAutocomplete } from "@/components/PostcodeAutocomplete";
 import { getSuburbsForAuPostcode, getZipcodeLocationText } from "@/lib/ebay-location";
 import {
-  useBulkEditJob,
+  type BulkEditJobController,
   isActiveBulkEditJob as isActiveJob,
   isTerminalBulkEditJob as isTerminalJob,
   type BulkEditJob,
@@ -83,11 +81,11 @@ type SupportDataLoaded = {
 interface BulkEditModalProps {
   open: boolean;
   view: "editor" | "job";
-  notificationContainer: HTMLElement | null;
+  tracking: BulkEditJobController;
+  returnFocusRef?: RefObject<HTMLElement | null>;
   storeId: string | null;
   selectedProductIds: string[];
   onClose: () => void;
-  onOpen: () => void;
   onToast: (message: string, variant: ToastVariant) => void;
 }
 
@@ -230,14 +228,13 @@ function buildOperation(item: BulkEditItem) {
 export default function BulkEditModal({
   open,
   view,
-  notificationContainer,
+  tracking,
+  returnFocusRef,
   storeId,
   selectedProductIds,
   onClose,
-  onOpen,
   onToast,
 }: BulkEditModalProps) {
-  const router = useRouter();
   const [items, setItems] = useState<BulkEditItem[]>([]);
   const [menuOpen, setMenuOpen] = useState(false);
   const [fieldSearch, setFieldSearch] = useState("");
@@ -251,32 +248,13 @@ export default function BulkEditModal({
   const [loadingPolicies, setLoadingPolicies] = useState(false);
   const requestIdRef = useRef<string | null>(null);
   const requestInFlight = useRef(false);
-  const dialogGeneration = useRef(0);
   const dialogRef = useRef<HTMLDivElement | null>(null);
-  const openingControl = useRef<HTMLElement | null>(null);
-  const displayedJob = useRef<string | null>(null);
   const previousStore = useRef(storeId);
   const requestScope = useMemo(() => ({ storeId, cancelled: false }), [storeId]);
   const [retryError, setRetryError] = useState<string | null>(null);
-  const onCompleted = useCallback((completed: BulkEditJob) => {
-    router.refresh();
-    onToast(
-      completed.status === "CANCELLED"
-        ? `Bulk edit cancelled. ${completed.succeeded} listing${completed.succeeded === 1 ? "" : "s"} updated.`
-        : completed.status === "FAILED"
-          ? `Bulk edit failed. ${completed.succeeded} listing${completed.succeeded === 1 ? "" : "s"} updated. View results for details.`
-          : completed.failed > 0
-            ? `Bulk edit finished with ${completed.failed} failed listing${completed.failed === 1 ? "" : "s"}.`
-            : `Bulk edit finished for ${completed.succeeded} listing${completed.succeeded === 1 ? "" : "s"}.`,
-      completed.failed > 0 || completed.status === "FAILED" ? "error" : "success",
-    );
-    if (view === "job" || displayedJob.current === completed.id) onClose();
-  }, [onClose, onToast, router, view]);
-  const { job, skipped, workerOnline, pollingInterrupted, restoring, trackJob, dismiss } = useBulkEditJob(storeId, onCompleted);
+  const [submissionError, setSubmissionError] = useState<string | null>(null);
+  const { job, skipped, workerOnline, pollingInterrupted, restoring, trackJob, dismiss } = tracking;
   const detailsView = Boolean(job && (view === "job" || isActiveJob(job)));
-  useEffect(() => {
-    displayedJob.current = open && detailsView ? job?.id ?? null : null;
-  }, [detailsView, job?.id, open]);
   const selectedStoreId = storeId;
   const selectedCount = selectedProductIds.length;
   const selectedFields = useMemo(
@@ -367,18 +345,19 @@ export default function BulkEditModal({
       setDescriptionTemplates([]);
       setSupportDataLoaded(EMPTY_SUPPORT_DATA_LOADED);
       setLoadingPolicies(false);
+      setSubmissionError(null);
     }
   }, [open, submitting]);
 
   useEffect(() => {
     if (previousStore.current !== storeId) {
       previousStore.current = storeId;
-      dialogGeneration.current += 1;
       requestInFlight.current = false;
       requestIdRef.current = null;
       setSubmitting(false);
       setItems([]);
       setRetryError(null);
+      setSubmissionError(null);
       onClose();
     }
   }, [storeId, onClose]);
@@ -390,15 +369,13 @@ export default function BulkEditModal({
 
   useEffect(() => {
     if (!open) return;
-    const previousFocus = openingControl.current ?? document.activeElement as HTMLElement | null;
-    openingControl.current = null;
+    const previousFocus = returnFocusRef?.current ?? document.activeElement as HTMLElement | null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     dialogRef.current?.querySelector<HTMLElement>("button")?.focus();
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.preventDefault();
-        dialogGeneration.current += 1;
         onClose();
       } else if (event.key === "Tab") {
         const controls = Array.from(dialogRef.current?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex='0']") ?? []).filter(element => element.getClientRects().length > 0);
@@ -413,9 +390,9 @@ export default function BulkEditModal({
       document.removeEventListener("keydown", onKeyDown);
       document.body.style.overflow = previousOverflow;
       if (previousFocus?.isConnected) previousFocus.focus();
-      else if (previousFocus?.id) document.getElementById(previousFocus.id)?.focus();
+      else document.getElementById("bulk-edit-job-control")?.focus();
     };
-  }, [open, onClose]);
+  }, [open, onClose, returnFocusRef]);
 
   useEffect(() => {
     if (!open) {
@@ -554,26 +531,8 @@ export default function BulkEditModal({
     supportDataLoaded,
   ]);
 
-  if (!open) {
-    if (!job) return null;
-    const card = (
-      <div className="pointer-events-auto order-first w-full rounded-lg border border-blue-200 bg-white p-3 shadow-lg" data-bulk-edit-result-card>
-        <ActionProgressBar
-          label={job.status === "CANCELLED" ? "Bulk edit cancelled" : job.status === "CANCELLING" ? "Cancelling bulk edit" : isActiveJob(job) ? "Bulk edit in progress" : job.status === "FAILED" ? "Bulk edit failed" : "Bulk edit finished"}
-          percent={getProgressPercent(job)}
-          detail={`${job.processed}/${job.total} processed (${job.succeeded} succeeded, ${job.failed} failed)`}
-          tone="green"
-        />
-        <div className="mt-2 flex items-center justify-between gap-3">
-          <button id="bulk-edit-view-job" type="button" onClick={event => { openingControl.current = event.currentTarget; onOpen(); }} className="text-xs font-semibold text-blue-700 hover:underline">
-            {isActiveJob(job) ? "View progress" : "View results"}
-          </button>
-          {isTerminalJob(job) && <button type="button" onClick={dismiss} className="text-xs font-semibold text-gray-500 hover:text-gray-800">Dismiss</button>}
-        </div>
-      </div>
-    );
-    return notificationContainer ? createPortal(card, notificationContainer) : null;
-  }
+  if (!open) return null;
+
   function addField(field: BulkEditField) {
     if (requestInFlight.current) return;
     const definition = FIELD_DEFINITIONS.find((item) => item.field === field);
@@ -582,6 +541,7 @@ export default function BulkEditModal({
     }
 
     requestIdRef.current = null;
+    setSubmissionError(null);
     setItems((current) => [...current, makeItem(field)]);
     setMenuOpen(false);
     setFieldSearch("");
@@ -590,6 +550,7 @@ export default function BulkEditModal({
   function updateItem(id: string, patch: Partial<BulkEditItem>) {
     if (requestInFlight.current) return;
     requestIdRef.current = null;
+    setSubmissionError(null);
     setItems((current) =>
       current.map((item) => (item.id === id ? { ...item, ...patch } : item))
     );
@@ -598,6 +559,7 @@ export default function BulkEditModal({
   function removeItem(id: string) {
     if (requestInFlight.current) return;
     requestIdRef.current = null;
+    setSubmissionError(null);
     setItems((current) => current.filter((item) => item.id !== id));
   }
 
@@ -621,7 +583,7 @@ export default function BulkEditModal({
     }
 
     requestInFlight.current = true;
-    const submittedDialog = dialogGeneration.current;
+    setSubmissionError(null);
     setSubmitting(true);
 
     try {
@@ -657,10 +619,13 @@ export default function BulkEditModal({
       if (!trackJob(data.job, data.skipped ?? [])) throw new Error("Bulk edit returned a job for a different store.");
       setRetryError(null);
       requestIdRef.current = null;
-      if (dialogGeneration.current === submittedDialog) onOpen();
-      onToast(data.message || "Bulk edit queued.", "success");
+      onClose();
     } catch (error) {
-      if (!requestScope.cancelled) onToast(error instanceof Error ? error.message : "Bulk edit failed.", "error");
+      if (!requestScope.cancelled) {
+        const message = error instanceof Error ? error.message : "Bulk edit failed.";
+        setSubmissionError(message);
+        onToast(message, "error");
+      }
     } finally {
       if (!requestScope.cancelled) { requestInFlight.current = false; setSubmitting(false); }
     }
@@ -677,7 +642,7 @@ export default function BulkEditModal({
       if (requestScope.cancelled) return;
       if (!response.ok || !data.job) throw new Error(data.error || "Unable to retry failed items.");
       if (!trackJob(data.job)) throw new Error("Retry returned a job for a different store.");
-      onToast("Failed listings were queued again.", "success");
+      onClose();
     } catch (error) {
       if (!requestScope.cancelled) setRetryError(error instanceof Error ? error.message : "Unable to retry failed items.");
     } finally {
@@ -876,21 +841,15 @@ export default function BulkEditModal({
   }
 
   const progressPercent = getProgressPercent(job);
-  const activeJob = isActiveJob(job);
   const terminalJob = isTerminalJob(job);
 
   function closeModal() {
-    dialogGeneration.current += 1;
-    if (activeJob) {
-      onToast("Bulk edit is still running in the background.", "success");
-    }
-
     onClose();
   }
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/50 p-2 sm:p-4"
+      className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center bg-black/50 p-2 sm:p-4"
       onClick={closeModal}
     >
       <div
@@ -1015,6 +974,9 @@ export default function BulkEditModal({
                 {validationError}
               </div>
             )}
+            {submissionError && <div role="alert" className="mt-4 rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
+              {submissionError}
+            </div>}
             {restoring && <p className="mt-4 text-sm text-gray-500" role="status">Checking previous bulk edit…</p>}
           </>}
 
@@ -1099,6 +1061,8 @@ export default function BulkEditModal({
         </div>
 
         <div className="flex items-center justify-end gap-3 border-t border-gray-200 px-4 sm:px-6 py-3.5 sm:py-4 flex-shrink-0">
+          {detailsView && terminalJob && <button type="button" onClick={() => { dismiss(); onClose(); }}
+            className="rounded-md px-3 py-2 text-sm font-medium text-gray-600 hover:bg-gray-100">Dismiss results</button>}
           <button
             type="button"
             onClick={closeModal}
