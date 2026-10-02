@@ -49,7 +49,9 @@ try {
     $lines.Add($line)
   }
   $features=@($otherFeatures | ForEach-Object { $_.Trim() } | Where-Object { $_ -and $_ -ne 'delivery-state' } | Select-Object -Unique) + @('delivery-state')
-  $instance='pc-' + [guid]::NewGuid().ToString('N').Substring(0,10)
+  $savedInstance=@($existing | Where-Object { $_ -match '^\s*LISTFLOW_LOCAL_WORKER_INSTANCE_ID\s*=' } | ForEach-Object { ($_ -split '=',2)[1].Trim('"',"'",' ') } | Select-Object -Last 1)
+  $instance=if ($savedInstance.Count -gt 0 -and $savedInstance[0]) { [string]$savedInstance[0] } else { 'pc-' + [guid]::NewGuid().ToString('N').Substring(0,10) }
+  if ($instance -notmatch '^[a-z0-9][a-z0-9-]{0,31}$') { throw 'Existing worker installation ID is invalid.' }
   foreach ($setting in @(
     'LISTFLOW_WORKER_DATABASE_PROFILE=deployed',
     'LISTFLOW_LOCAL_WORKER_STORE_LOGIN_IDS=store-1,aussiewalmartonline,oz-metro',
