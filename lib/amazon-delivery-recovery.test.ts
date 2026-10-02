@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Page } from "playwright-core";
-import { applyAmazonDeliveryPostcode, AmazonDeliveryFailure, assertAmazonDeliveryPage } from "./amazon-delivery-recovery";
+import { applyAmazonDeliveryPostcode, AmazonDeliveryFailure, assertAmazonDeliveryPage, shouldDeferAmazonDeliveryFailure } from "./amazon-delivery-recovery";
 
 const html = '<input id="ASIN" value="B0G6CQ427S"><h1 id="productTitle">Test kettle</h1>';
 function pageFixture(status = 200, popupError = "Timeout 5000ms exceeded", pageHtml = html) {
@@ -60,6 +60,27 @@ test("navigation HTTP errors retain status and content type before submitting an
   assert.equal(fixture.calls.length, 0);
 });
 
+test("HTTP 404 is a product-specific technical failure, not a store-wide delivery outage", async () => {
+  const fixture = pageFixture(200, "", "<title>Page Not Found</title>");
+  await assert.rejects(assertAmazonDeliveryPage(fixture.page, "2217", { httpStatus: 404, contentType: "text/html" }),
+    (error: unknown) => {
+      assert.ok(error instanceof AmazonDeliveryFailure);
+      assert.equal(error.code, "TECHNICAL_ERROR");
+      assert.equal(error.details.technicalCode, "AMAZON_PRODUCT_PAGE_NOT_FOUND");
+      assert.equal(error.details.httpStatus, 404);
+      assert.equal(error.details.stage, "product-navigation");
+      assert.equal(shouldDeferAmazonDeliveryFailure(error), false);
+      assert.equal(error.permitsFreshContextRetry, true);
+      return true;
+    });
+  assert.equal(fixture.calls.length, 0);
+});
+
+test("HTTP 503 remains a store-wide delivery failure", async () => {
+  const fixture = pageFixture(200, "", "<title>Server Busy</title>");
+  await assert.rejects(assertAmazonDeliveryPage(fixture.page, "2217", { httpStatus: 503, contentType: "text/html" }),
+    (error: unknown) => error instanceof AmazonDeliveryFailure && shouldDeferAmazonDeliveryFailure(error));
+});
 for (const [title, kind] of [["Robot Check", "CHALLENGE"], ["Server Busy", "TEMPORARY_ERROR"], ["Unknown", "UNRECOGNIZED"]]) {
   test(`${kind} stops before address submission`, async () => {
     const fixture = pageFixture(200, "", `<title>${title}</title>`);

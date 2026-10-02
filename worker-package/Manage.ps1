@@ -70,6 +70,18 @@ try {
     }
     'Preflight' { Test-Manifest; Invoke-Admin 'preflight' }
     'Start' {
+      $supervisorLock = Join-Path $logsPath 'local-workers.supervisor.lock'
+      if (Test-Path -LiteralPath $supervisorLock) {
+        $runningPid = 0
+        [void][int]::TryParse((Get-Content -LiteralPath $supervisorLock -Raw).Trim(), [ref]$runningPid)
+        $running = if ($runningPid -gt 0) { Get-CimInstance Win32_Process -Filter "ProcessId = $runningPid" -ErrorAction SilentlyContinue } else { $null }
+        if ($running -and $running.Name -eq 'node.exe' -and $running.CommandLine -match 'listflow-local-workers\.ts') {
+          Write-Host 'This worker supervisor is already running; showing its current status.'
+          Show-LocalProcesses
+          Invoke-Admin 'status'
+          break
+        }
+      }
       Test-Manifest
       Invoke-Admin 'preflight'
       $out = Join-Path $logsPath 'local-workers-supervisor.out.log'

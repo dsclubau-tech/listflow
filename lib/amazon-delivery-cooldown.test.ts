@@ -200,6 +200,24 @@ test("version 2 leaves the incident product in retry wait; cancellation stops it
   assert.equal(job.status, "CANCELLED"); assert.equal(f.calls(), 1);
 });
 
+test("a product-page HTTP 404 completes only that product without store cooldown or a hold", async () => {
+  const f = await fixture(1);
+  f.setScrape(async () => { throw new f.api.AmazonDeliveryFailure("Amazon product page returned HTTP 404", {
+    technicalCode: "AMAZON_PRODUCT_PAGE_NOT_FOUND", stage: "product-navigation", httpStatus: 404,
+    requestedPostcode: "2217", pageClassification: "UNRECOGNIZED",
+  }); });
+  await f.api.runPriceCheckJob("job-a");
+  const job = f.tables.priceCheckJob[0];
+  assert.equal(f.calls(), 2, "one fresh-context retry is allowed");
+  assert.equal(job.status, "COMPLETED");
+  assert.equal(job.checked, 1);
+  assert.equal(job.failed, 1);
+  assert.deepEqual(job.completedProductIds, ["product-0"]);
+  assert.equal(await f.api.getAmazonDeliveryWait("store-a"), null);
+  assert.ok(f.tables.product[0].lastPriceCheck);
+  assert.equal(f.tables.product[0].priceCheckFailureCode, "TECHNICAL_ERROR");
+  assert.equal(f.tables.jobLease.length, 0);
+});
 test("verified product-specific unavailability recovers delivery before normal failure handling", async () => {
   const f = await fixture(1);
   await f.api.runPriceCheck({ storeId: "store-a", ignoreSchedule: true }); f.expire();

@@ -6,7 +6,7 @@ import { hasExactAmazonDeliveryPostcode } from "./amazon-delivery-state";
 import { PriceCheckFailure } from "./price-check-failures";
 
 export type DeliveryTechnicalCode = "AMAZON_DELIVERY_HTTP_ERROR" | "AMAZON_DELIVERY_RESPONSE_UNRECOGNIZED" |
-  "AMAZON_DELIVERY_POPUP_TIMEOUT" | "AMAZON_DELIVERY_POPUP_FAILED" | "AMAZON_DELIVERY_POSTCODE_UNVERIFIED" | "AMAZON_DELIVERY_PAGE_INVALID";
+  "AMAZON_DELIVERY_POPUP_TIMEOUT" | "AMAZON_DELIVERY_POPUP_FAILED" | "AMAZON_DELIVERY_POSTCODE_UNVERIFIED" | "AMAZON_DELIVERY_PAGE_INVALID" | "AMAZON_PRODUCT_PAGE_NOT_FOUND";
 export type DeliveryFailureDetails = {
   technicalCode: DeliveryTechnicalCode;
   stage: string;
@@ -43,6 +43,10 @@ export class AmazonDeliveryFailure extends PriceCheckFailure {
   }
 }
 
+export function shouldDeferAmazonDeliveryFailure(error: AmazonDeliveryFailure) {
+  return error.details.technicalCode !== "AMAZON_PRODUCT_PAGE_NOT_FOUND";
+}
+
 export async function readAmazonDeliveryText(page: Page) {
   return page.evaluate(() => ["#glow-ingress-line1", "#glow-ingress-line2", "#nav-global-location-data-modal-action"]
     .map(selector => document.querySelector(selector)?.textContent ?? "").join(" ").replace(/\s+/g, " ").trim());
@@ -61,10 +65,15 @@ export async function assertAmazonDeliveryPage(page: Page, postcode: string,
       deliveryText: title($("#glow-ingress-line1, #glow-ingress-line2, #nav-global-location-data-modal-action").map((_, element) => $(element).text()).get().join(" ")) ?? "",
       htmlBytes: Buffer.byteLength(html, "utf8") };
   };
-  if (response?.httpStatus && response.httpStatus >= 400) throw new AmazonDeliveryFailure(
-    `Amazon product navigation returned HTTP ${response.httpStatus}; delivery setup could not be verified.`,
-    { ...response, technicalCode: "AMAZON_DELIVERY_HTTP_ERROR", stage: "product-navigation", requestedPostcode: postcode,
-      pageClassification: quality.kind, pageEvidence: failureEvidence() });
+  if (response?.httpStatus && response.httpStatus >= 400) {
+    const productNotFound = response.httpStatus === 404 || response.httpStatus === 410;
+    throw new AmazonDeliveryFailure(
+      productNotFound ? `Amazon product page returned HTTP ${response.httpStatus}; this product could not be checked.`
+        : `Amazon product navigation returned HTTP ${response.httpStatus}; delivery setup could not be verified.`,
+      { ...response, technicalCode: productNotFound ? "AMAZON_PRODUCT_PAGE_NOT_FOUND" : "AMAZON_DELIVERY_HTTP_ERROR",
+        stage: "product-navigation", requestedPostcode: postcode,
+        pageClassification: quality.kind, pageEvidence: failureEvidence() });
+  }
   if (quality.kind !== "PRODUCT") throw new AmazonDeliveryFailure(
     `Amazon returned a ${quality.kind.toLowerCase().replaceAll("_", " ")} page; delivery setup could not be verified.`,
     { ...response, technicalCode: "AMAZON_DELIVERY_PAGE_INVALID", stage: "page-classification", requestedPostcode: postcode,

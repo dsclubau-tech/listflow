@@ -7,7 +7,7 @@ import {
   AmazonAvailability,
 } from "@/app/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
-import { AmazonDeliveryFailure } from "./amazon-delivery-recovery";
+import { AmazonDeliveryFailure, shouldDeferAmazonDeliveryFailure } from "./amazon-delivery-recovery";
 import { acquireDeliveryPermit, releaseDeliveryPermit, deferAmazonDelivery, confirmAmazonDelivery,
   type DeliveryPermit } from "./amazon-delivery-cooldown";
 import { resolveAmazonDeliveryPostcode } from "@/lib/amazon-delivery-postcode";
@@ -1537,7 +1537,7 @@ export async function runPriceCheck(
           }
         }
 
-        if (error instanceof AmazonDeliveryFailure && deliveryPermit) {
+        if (error instanceof AmazonDeliveryFailure && deliveryPermit && shouldDeferAmazonDeliveryFailure(error)) {
           result.checked -= 1;
           runOutcome = "deferred";
           const waiting = await deferAmazonDelivery(deliveryPermit, error.details.technicalCode);
