@@ -5,7 +5,11 @@ param(
 )
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
-$root=[IO.Path]::GetFullPath($WorkerRoot).TrimEnd('\')
+function Get-SourceHash([string]$path) {
+  $sha=[Security.Cryptography.SHA256]::Create()
+  try { return [BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($path))).Replace('-','') }
+  finally { $sha.Dispose() }
+}$root=[IO.Path]::GetFullPath($WorkerRoot).TrimEnd('\')
 if (!$root.Equals('D:\ListFlow-Workers',[StringComparison]::OrdinalIgnoreCase)) { throw 'Unexpected worker installation target.' }
 $repo=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 $package=(Resolve-Path -LiteralPath $PackageZip).Path
@@ -32,7 +36,7 @@ if (@($oldPaths | Where-Object { $newPaths -notcontains $_ }).Count) { throw 'Re
 foreach($file in $oldManifest.files) {
   $full=[IO.Path]::GetFullPath((Join-Path $root $file.path))
   if (!$full.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase) -or !(Test-Path -LiteralPath $full -PathType Leaf)) { throw "Installed source missing: $($file.path)" }
-  if ((Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash -ne $file.sha256) { throw "Installed source changed: $($file.path)" }
+  if ((Get-SourceHash $full) -ne $file.sha256) { throw "Installed source changed: $($file.path)" }
 }
 $changes=@($newManifest.files|Where-Object {
   $candidate=$_
@@ -53,7 +57,7 @@ Expand-Archive -LiteralPath $package -DestinationPath $stage
 foreach($file in $newManifest.files) {
   $full=[IO.Path]::GetFullPath((Join-Path $stage $file.path))
   if (!$full.StartsWith($stage+'\',[StringComparison]::OrdinalIgnoreCase) -or !(Test-Path -LiteralPath $full -PathType Leaf)) { throw "Package source missing: $($file.path)" }
-  if ((Get-FileHash -LiteralPath $full -Algorithm SHA256).Hash -ne $file.sha256) { throw "Package source checksum mismatch: $($file.path)" }
+  if ((Get-SourceHash $full) -ne $file.sha256) { throw "Package source checksum mismatch: $($file.path)" }
 }
 [IO.Directory]::CreateDirectory($backup)|Out-Null
 $backupAcl=Get-Acl -LiteralPath $backup
