@@ -14,6 +14,11 @@ This installation uses the deployed Supabase database and the deployed ListFlow 
 
 The package uses an installation-scoped worker ID. The three configured store logins are `store-1`, `aussiewalmartonline`, and `oz-metro`; the supervisor creates two replicas per store. The package enables `delivery-state` for all three stores and keeps normal production job selections unrestricted.
 
+## Upgrade after active jobs
+
+For a source-only replacement with the same file set or added files, first run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\complete-local-worker-upgrade.ps1 -Mode Verify -PackageZip <absolute ZIP path>` from the development checkout. The read-only check verifies the installed manifest and planned file changes.
+
+Run the same command with `-Mode Run` to request graceful stop and wait for active jobs to finish. It then backs up changed source and the private configuration under the ignored diagnostics directory, verifies the new ZIP, copies its changed source into `D:\ListFlow-Workers`, retains the installed `.env`, dependencies, and logs, and starts the six workers after old heartbeats clear. Keep the command running or launch it as a hidden one-time helper with its output redirected to a private log. If any step fails, inspect that log and the backup before retrying; the script does not restart the older source automatically.
 ## Replacement and rollback
 
 Retain the original ZIP, manifest, private `.env`, and logs. A new release is installed into an empty destination after the existing supervisor stops. Do not overwrite a running checkout. Preserve older logs before removing its runtime directory. If a new release fails, stop it gracefully and preserve its diagnostics; restart a prior known-good release only after its code and configuration are confirmed healthy. Never kill all Node processes, clear live leases, or delete another PC's files.
