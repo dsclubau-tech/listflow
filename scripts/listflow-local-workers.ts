@@ -264,7 +264,7 @@ async function loadWorkerDefinitions() {
       },
       select: { id: true, name: true, loginId: true },
     });
-    const definitions = buildLocalWorkerDefinitions(stores, requestedLoginIds);
+    const definitions = buildLocalWorkerDefinitions(stores, requestedLoginIds, process.env.LISTFLOW_LOCAL_WORKER_INSTANCE_ID);
     return { definitions, profile };
   } finally {
     await prisma.$disconnect();

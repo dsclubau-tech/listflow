@@ -35,7 +35,7 @@ async function main() {
       where: { isActive: true, loginId: { in: requestedLoginIds } },
       select: { id: true, name: true, loginId: true },
     });
-    const definitions = buildLocalWorkerDefinitions(stores, requestedLoginIds);
+    const definitions = buildLocalWorkerDefinitions(stores, requestedLoginIds, process.env.LISTFLOW_LOCAL_WORKER_INSTANCE_ID);
     const uniqueWorkerIds = new Set(definitions.map((item) => item.workerId));
 
     if (definitions.length !== requestedLoginIds.length * 2) {

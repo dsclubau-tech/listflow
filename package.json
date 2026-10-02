@@ -25,7 +25,12 @@
     "migration:preflight": "powershell -ExecutionPolicy Bypass -File scripts/database-migration/Invoke-ListFlowMigration.ps1 -Mode Preflight",
     "browser:install": "playwright install chromium",
     "store:reset-password": "tsx scripts/reset-store-password.ts",
-    "postinstall": "prisma generate"
+    "postinstall": "prisma generate",
+    "test:delivery-repair": "tsx --test lib/amazon-delivery-cooldown.test.ts lib/amazon-delivery-recovery.test.ts lib/amazon-delivery-state.test.ts lib/amazon-price-postcode.test.ts lib/amazon-delivery-postcode.test.ts lib/amazon-direct-scraper.test.ts lib/amazon-buybox-price.test.ts lib/amazon-shipping.test.ts lib/price-check-failures.test.ts lib/price-check-recovery-evidence.test.ts lib/price-check-progress.test.ts lib/price-check-scheduling-policy.test.ts scripts/test-amazon-delivery-reuse.ts scripts/test-amazon-delivery-setup.ts lib/amazon-delivery-diagnostic.test.ts lib/auth-config.test.ts lib/auth-navigation.test.ts lib/login-throttle-policy.test.ts lib/store-login-id.test.ts",
+    "test:delivery-ui": "playwright test tests/e2e/amazon-delivery-wait.spec.ts",
+    "test:local-db": "tsx --test scripts/test-local-live-database.ts",
+    "test:local-login": "playwright test tests/e2e/local-store-login.spec.ts",
+    "test:local-manual-check": "playwright test tests/e2e/local-manual-price-check.spec.ts"
   },
   "prisma": {
     "seed": "npx tsx prisma/seed.ts"
@@ -60,6 +65,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "esbuild": "0.27.4",
     "tailwindcss": "^4",
     "ts-node": "^10.9.2",
     "tsx": "^4.21.0",

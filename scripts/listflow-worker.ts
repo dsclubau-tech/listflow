@@ -794,17 +794,7 @@ async function main() {
           loggedOnlineStoreIds.add("__cleanup_done__");
           const staleCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
           await modules.prisma.workerHeartbeat.deleteMany({
-            where: {
-              OR: [
-                {
-                  workerId: { not: workerId },
-                  workerName,
-                },
-                {
-                  lastSeenAt: { lt: staleCutoff },
-                },
-              ],
-            },
+            where: { lastSeenAt: { lt: staleCutoff } },
           }).catch(() => undefined);
         }
 

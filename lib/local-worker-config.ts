@@ -43,6 +43,7 @@ export function parseLocalWorkerStoreLoginIds(value: string | undefined) {
 export function buildLocalWorkerDefinitions(
   stores: LocalWorkerStore[],
   requestedLoginIds: string[],
+  installationId?: string,
 ): LocalWorkerDefinition[] {
   const storesByLoginId = new Map(
     stores
@@ -59,13 +60,19 @@ export function buildLocalWorkerDefinitions(
     );
   }
 
+  const instance = installationId?.trim().toLowerCase();
+  if (instance && !/^[a-z0-9-]{1,32}$/.test(instance)) {
+    throw new Error("LISTFLOW_LOCAL_WORKER_INSTANCE_ID must use 1–32 lowercase letters, digits, or hyphens.");
+  }
+
   return requestedLoginIds.flatMap((loginId) => {
     const store = storesByLoginId.get(loginId)!;
     const sanitizedLoginId = sanitizeLocalWorkerId(loginId);
+    const prefix = instance ? `${instance}-` : "";
 
     return LOCAL_WORKER_REPLICA_SLOTS.map((slot) => {
-      const workerId = `local-${sanitizedLoginId}-${slot}`;
-      const workerName = `${store.name} Local Worker ${slot.toUpperCase()}`;
+      const workerId = `local-${prefix}${sanitizedLoginId}-${slot}`;
+      const workerName = `${store.name} Local Worker ${slot.toUpperCase()}${instance ? ` (${instance})` : ""}`;
 
       return {
         storeId: store.id,
@@ -74,7 +81,7 @@ export function buildLocalWorkerDefinitions(
         slot,
         workerId,
         workerName,
-        logFileName: `worker-${sanitizedLoginId}-${slot}.log`,
+        logFileName: `worker-${prefix}${sanitizedLoginId}-${slot}.log`,
         stopFileName: `${workerId}.stop`,
       };
     });

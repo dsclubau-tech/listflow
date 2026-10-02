@@ -50,3 +50,16 @@ test("restart backoff is capped at thirty seconds", () => {
   assert.equal(getLocalWorkerRestartDelay(2), 30_000);
   assert.equal(getLocalWorkerRestartDelay(10), 30_000);
 });
+
+test("a packaged installation has unique IDs and names without changing the legacy layout", () => {
+  const requested = parseLocalWorkerStoreLoginIds(undefined);
+  const first = buildLocalWorkerDefinitions(stores, requested, "pc-a1b2c3");
+  const second = buildLocalWorkerDefinitions(stores, requested, "pc-d4e5f6");
+  assert.equal(first.length, 6);
+  assert.equal(second.length, 6);
+  assert.equal(new Set([...first, ...second].map(item => item.workerId)).size, 12);
+  assert.equal(first[0].workerId, "local-pc-a1b2c3-store-1-a");
+  assert.equal(first[0].stopFileName, "local-pc-a1b2c3-store-1-a.stop");
+  assert.match(first[0].workerName, /pc-a1b2c3/);
+  assert.throws(() => buildLocalWorkerDefinitions(stores, requested, "invalid/slash"), /INSTANCE_ID/);
+});
