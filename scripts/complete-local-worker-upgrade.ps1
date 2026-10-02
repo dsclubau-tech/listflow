@@ -48,7 +48,7 @@ Write-Host "Current revision: $($oldManifest.revision)"
 Write-Host "Next revision: $($newManifest.revision); changed source files: $($changes.Count)"
 if ($Mode -eq 'Verify') { Write-Host 'Read-only upgrade verification passed.'; exit 0 }
 
-$stage=Join-Path $repo ('scratch\upgrade-stage-'+$newManifest.revision.Substring(0,12))
+$stage=Join-Path $repo ('scratch\upgrade-stage-'+$newManifest.revision.Substring(0,12)+'-'+[guid]::NewGuid().ToString('N').Substring(0,6))
 $backup=Join-Path $repo ('diagnostics\worker-upgrade-'+(Get-Date).ToUniversalTime().ToString('yyyyMMdd-HHmmss'))
 if (Test-Path -LiteralPath $stage) { throw "Staging folder exists: $stage" }
 if (Test-Path -LiteralPath $backup) { throw "Backup folder exists: $backup" }
@@ -77,7 +77,8 @@ foreach($file in $changes) {
 }
 Write-Host "Private rollback source preserved: $backup"
 Write-Host 'Requesting graceful shutdown. Active jobs will finish before workers exit.'
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'worker-package\Manage.ps1') -Action Stop
+$shellExe=Join-Path $PSHOME $(if ($PSVersionTable.PSVersion.Major -ge 7) { 'pwsh.exe' } else { 'powershell.exe' })
+& $shellExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'worker-package\Manage.ps1') -Action Stop
 if ($LASTEXITCODE -ne 0) { throw 'Graceful worker stop failed; no release files were changed.' }
 $env:DOTENV_CONFIG_PATH=Join-Path $root '.env'
 $env:DOTENV_CONFIG_OVERRIDE='true'
@@ -92,6 +93,6 @@ if (!$clear) { throw 'Worker heartbeats or leases did not clear; old source rema
 foreach($file in $changes) { Copy-Item -LiteralPath (Join-Path $stage $file.path) -Destination (Join-Path $root $file.path) -Force }
 Copy-Item -LiteralPath (Join-Path $stage 'worker-release-manifest.json') -Destination $oldManifestPath -Force
 Write-Host 'Source overlay installed; private configuration, dependencies, logs, and installation ID preserved.'
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'worker-package\Manage.ps1') -Action Start
+& $shellExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'worker-package\Manage.ps1') -Action Start
 if ($LASTEXITCODE -ne 0) { throw 'New supervisor did not pass startup verification. Workers were not restarted from the old release.' }
 Write-Host "Graceful upgrade completed at revision $($newManifest.revision)."
