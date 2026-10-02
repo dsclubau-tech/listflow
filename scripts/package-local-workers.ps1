@@ -25,13 +25,19 @@ try {
     $relative = $file.FullName.Substring($staging.Length + 1).Replace('\','/')
     [pscustomobject]@{ path=$relative; sha256=(Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash }
   }
+  $playwrightPackage=Get-Content -LiteralPath (Join-Path $repo 'node_modules\playwright\package.json') -Raw | ConvertFrom-Json
+  $browserCatalog=Get-Content -LiteralPath (Join-Path $repo 'node_modules\playwright-core\browsers.json') -Raw | ConvertFrom-Json
+  $chromiumRevision=($browserCatalog.browsers | Where-Object name -eq 'chromium' | Select-Object -First 1).revision
+  if (!$playwrightPackage.version -or !$chromiumRevision) { throw 'Playwright version or browser revision is missing.' }
+  $browserExecutable=Join-Path $env:LOCALAPPDATA "ms-playwright\chromium-$chromiumRevision\chrome-win64\chrome.exe"
   $manifest = [pscustomobject]@{
     format='listflow-local-workers-release-v1'
     revision=$revision
     builtAt=(Get-Date).ToUniversalTime().ToString('o')
     node=(node.exe --version)
-    playwright=(node.exe -e 'process.stdout.write(require("playwright/package.json").version)')
-    browserExecutable=(node.exe -e 'process.stdout.write(require("playwright").chromium.executablePath())')
+    playwright=$playwrightPackage.version
+    browserRevision=$chromiumRevision
+    browserExecutable=$browserExecutable
     files=@($files)
   }
   [IO.File]::WriteAllText((Join-Path $staging 'worker-release-manifest.json'),

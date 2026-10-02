@@ -48,8 +48,7 @@ try {
       Test-Manifest
       Invoke-Checked 'Installing exact dependencies' 'npm.cmd' @('ci','--include=dev')
       Invoke-Checked 'Generating Prisma client' 'npm.cmd' @('exec','prisma','generate')
-      $browserPath = & node.exe -e 'process.stdout.write(require("playwright").chromium.executablePath())'
-      if ($LASTEXITCODE -ne 0) { throw 'Could not resolve Playwright Chromium.' }
+      $browserPath = Join-Path $env:LOCALAPPDATA "ms-playwright\chromium-$($manifest.browserRevision)\chrome-win64\chrome.exe"
       if (!(Test-Path -LiteralPath $browserPath)) {
         Invoke-Checked 'Installing matching Chromium' 'npm.cmd' @('run','browser:install')
       }
