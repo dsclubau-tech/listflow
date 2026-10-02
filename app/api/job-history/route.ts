@@ -1,5 +1,7 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { getAmazonDeliveryWait, deliveryFailureCode } from "@/lib/amazon-delivery-cooldown";
+import { formatAmazonDeliveryWait } from "@/lib/amazon-delivery-wait";
 import { NextResponse } from "next/server";
 import { getCurrentStoreSession } from "@/lib/store-session";
 import {
@@ -60,6 +62,7 @@ export async function GET(request: Request) {
     }),
   ]);
 
+  const deliveryWait = await getAmazonDeliveryWait(storeSession.storeId);
   const jobs = [
     ...ebayJobs.map((j) => ({ ...j, jobCategory: "EBAY_ACTION" })),
     ...priceCheckJobs.map((j) => ({
@@ -67,6 +70,10 @@ export async function GET(request: Request) {
       jobCategory: "PRICE_CHECK",
       type: j.trigger === "AUTOMATIC" ? "AUTO_PRICE_CHECK" : "PRICE_CHECK",
       succeeded: j.checked,
+      ...(deliveryWait && (j.status === "QUEUED" || j.status === "RUNNING") ? {
+        ...deliveryWait, waitReason: formatAmazonDeliveryWait({ ...j, ...deliveryWait }),
+        technicalFailureCode: deliveryFailureCode(j.errorMessage),
+      } : {}),
     })),
   ]
     .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())

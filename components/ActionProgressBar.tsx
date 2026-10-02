@@ -7,6 +7,7 @@ interface ActionProgressBarProps {
   tone?: ProgressTone;
   compact?: boolean;
   indeterminate?: boolean;
+  wrapLabel?: boolean;
 }
 
 const toneClasses: Record<ProgressTone, string> = {
@@ -25,6 +26,7 @@ export default function ActionProgressBar({
   tone = "orange",
   compact = false,
   indeterminate = false,
+  wrapLabel = false,
 }: ActionProgressBarProps) {
   const normalizedPercent = Math.min(100, Math.max(0, Math.round(percent)));
   const heightClass = compact ? "h-1.5" : "h-2";
@@ -32,7 +34,7 @@ export default function ActionProgressBar({
   return (
     <div className={compact ? "min-w-0 w-full" : "w-full"} aria-live="polite">
       <div className="mb-1 flex items-center justify-between gap-3 text-xs">
-        <span className="truncate font-medium text-gray-700">{label}</span>
+        <span className={`${wrapLabel ? "whitespace-normal" : "truncate"} font-medium text-gray-700`}>{label}</span>
         {!indeterminate && (
           <span className="shrink-0 font-medium text-gray-500">
             {normalizedPercent}%

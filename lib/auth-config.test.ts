@@ -54,3 +54,23 @@ test("auth config leaves login public and sends signed-in stores to products", a
   assert.equal(location.origin, "https://listflow.local");
   assert.equal(location.pathname, "/products");
 });
+
+test("local port 3001 stays local for signed-out and signed-in store redirects", async () => {
+  const origin = "http://localhost:3001";
+  const signedOut = await authorized({
+    auth: null,
+    request: { nextUrl: new URL(origin + "/products?page=2") },
+  });
+  const login = new URL((signedOut as Response).headers.get("location") || "");
+  assert.equal(login.origin, origin);
+  assert.equal(login.pathname, "/login");
+  assert.equal(login.searchParams.get("callbackUrl"), "/products?page=2");
+
+  const signedIn = await authorized({
+    auth: { user: { storeId: "store-id" } },
+    request: { nextUrl: new URL(origin + "/login") },
+  });
+  const destination = new URL((signedIn as Response).headers.get("location") || "");
+  assert.equal(destination.origin, origin);
+  assert.equal(destination.pathname, "/products");
+});

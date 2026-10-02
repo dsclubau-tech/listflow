@@ -7,6 +7,7 @@ import {
   ProductStatus,
 } from "@/app/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
+import { getAmazonDeliveryWait, deliveryFailureCode, serializeDeliveryDeferral } from "./amazon-delivery-cooldown";
 import { logger } from "@/lib/logger";
 import { invalidateJobCaches } from "@/lib/cache-tags";
 import {
@@ -494,7 +495,7 @@ async function markPriceCheckJobCancelled(
   return serializePriceCheckJob(job);
 }
 
-async function runPriceCheckJobClaimed(jobId: string) {
+async function runPriceCheckJobClaimed(jobId: string, assertOwnership?: () => Promise<void>) {
   const job = await prisma.priceCheckJob.findUnique({ where: { id: jobId } });
 
   if (!job || !ACTIVE_JOB_STATUSES.includes(job.status)) {
@@ -565,6 +566,7 @@ async function runPriceCheckJobClaimed(jobId: string) {
       ),
       productIds: checkpoint.productIdsToCheck,
       ignoreSchedule: true,
+      assertOwnership,
       onProgress: (progress) =>
         updateJobProgress(
           job.id,
@@ -586,6 +588,17 @@ async function runPriceCheckJobClaimed(jobId: string) {
         jobId: job.id,
         result: aggregateResult,
       });
+      return;
+    }
+
+    if (result.deferred) {
+      await prisma.priceCheckJob.updateMany({ where: { id: job.id, status: PriceCheckJobStatus.RUNNING }, data: {
+        status: PriceCheckJobStatus.QUEUED, completedAt: null,
+        checked: aggregateResult.checked, changed: aggregateResult.changed, pendingReview: aggregateResult.pendingReview,
+        failed: aggregateResult.failed, skipped: aggregateResult.skipped,
+        reason: result.waitReason, errorMessage: serializeDeliveryDeferral(result.technicalFailureCode),
+      } });
+      invalidatePriceCheckJobCaches(job);
       return;
     }
 
@@ -616,6 +629,8 @@ async function runPriceCheckJobClaimed(jobId: string) {
   } catch (error) {
     const errorMessage = getErrorMessage(error);
     const shouldMarkCancelled = await shouldCancelPriceCheckJob(job.id);
+    try { await assertOwnership?.(); }
+    catch { logger.warn("price-check/jobs", "Job ownership lost; leaving checkpoints for the owning worker", { jobId: job.id }); return; }
 
     if (shouldMarkCancelled) {
       await markPriceCheckJobCancelled(job.id);
@@ -664,7 +679,12 @@ export async function runPriceCheckJob(jobId: string, worker?: WorkerContext) {
     return;
   }
 
-  await withJobLeases(leaseInput, () => runPriceCheckJobClaimed(job.id));
+  await withJobLeases(leaseInput, () => runPriceCheckJobClaimed(job.id, async () => {
+    const leases = await prisma.jobLease.count({ where: { storeId: leaseInput.storeId,
+      jobType: leaseInput.jobType, jobId: leaseInput.jobId, workerId: worker.workerId,
+      expiresAt: { gt: new Date() } } });
+    if (!leases) throw new Error("Price-check job lease was lost; refusing further writes.");
+  }));
 }
 
 export async function cancelPriceCheckJob(
@@ -969,6 +989,7 @@ export async function getCurrentPriceCheckJob(storeId: string) {
   return {
     ...serializePriceCheckJob(job),
     ...(job.schedulerVersion === 2 ? await getPriceCheckItemDiagnostics(storeId, job.id) : {}),
+    ...await getPriceCheckDeliveryWait(job),
   };
 }
 
@@ -985,6 +1006,7 @@ export async function getPriceCheckJobForStore(jobId: string, storeId: string) {
   return {
     ...serializePriceCheckJob(job),
     ...(job.schedulerVersion === 2 ? await getPriceCheckItemDiagnostics(storeId, job.id) : {}),
+    ...await getPriceCheckDeliveryWait(job),
   };
 }
 
@@ -1000,6 +1022,8 @@ export async function runNextPriceCheckJobForStore(
     : await findNextRunnablePriceCheckJob(storeId).then((job) => (job ? [job] : []));
 
   for (const job of jobs) {
+    const waiting = job.status !== PriceCheckJobStatus.CANCELLING ? await getAmazonDeliveryWait(storeId) : null;
+    if (waiting && new Date(waiting.retryAt).getTime() > Date.now()) continue;
     try {
       await runPriceCheckJob(job.id, worker);
       return true;
@@ -1013,6 +1037,15 @@ export async function runNextPriceCheckJobForStore(
   }
 
   return false;
+}
+
+export async function getPriceCheckDeliveryWait(job: {
+  storeId: string | null; status: PriceCheckJobStatus; checked: number; total: number; errorMessage: string | null;
+}) {
+  if (!job.storeId || ![PriceCheckJobStatus.QUEUED, PriceCheckJobStatus.RUNNING].includes(job.status as "QUEUED" | "RUNNING")) return {};
+  const waiting = await getAmazonDeliveryWait(job.storeId);
+  return waiting ? { ...waiting, technicalFailureCode: deliveryFailureCode(job.errorMessage),
+    waitReason: `${waiting.waitReason} Completed ${job.checked} of ${job.total}.` } : {};
 }
 
 export async function runNextManualPriceCheckItemForStore(

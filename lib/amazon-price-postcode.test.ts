@@ -13,7 +13,7 @@ for (const reuseDeliveryState of [false, true]) {
       route: async () => {},
       addInitScript: async () => {},
       goto: async () => {},
-      content: async () => '<div id="glow-ingress-line2">Sydney 2000</div>',
+      content: async () => '<input id="ASIN" value="B0G6CQ427S"><h1 id="productTitle">Test product</h1><div id="glow-ingress-line2">Sydney 2000</div>',
       evaluate: async (_fn: unknown, argument?: unknown) => argument
         ? { success: true, responseText: '{"isValidAddress":1}' }
         : "Sydney 2000",

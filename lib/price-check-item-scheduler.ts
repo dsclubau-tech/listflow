@@ -6,6 +6,7 @@ import {
   PriceCheckJobTrigger,
 } from "@/app/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
+import { serializeDeliveryDeferral, deliveryFailureCode, lockPriceCheckStore } from "./amazon-delivery-cooldown";
 import { logger } from "@/lib/logger";
 import { invalidateJobCaches } from "@/lib/cache-tags";
 import { runPriceCheck, type PriceCheckResult } from "@/lib/price-checker";
@@ -123,7 +124,7 @@ async function claimNextItem(
 ): Promise<ClaimedItem | null> {
   return prisma.$transaction(async (tx) => {
     // Serialize claims for this store. Other stores may still claim in parallel.
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`listflow-price-check:${storeId}`}))`;
+    await lockPriceCheckStore(tx, storeId);
     const now = new Date();
     // A worker may have sent an eBay request before dying. Mark that item for
     // review instead of replaying an update whose remote outcome is unknown.
@@ -175,7 +176,7 @@ async function claimNextItem(
     });
     if (cooldown.amazonBlockedUntil && cooldown.amazonBlockedUntil > now) return null;
     // After a cooldown, let a single check probe Amazon before both workers resume.
-    if (cooldown.consecutivePostcodeFailures >= 3 && activeCount > 0) return null;
+    if (cooldown.consecutivePostcodeFailures > 0 && activeCount > 0) return null;
     const activeProductLeases = await tx.jobLease.findMany({
       where: { storeId, resourceKey: { startsWith: CHECK_PREFIX },
         expiresAt: { gt: now } },
@@ -317,7 +318,7 @@ async function renew(item: ClaimedItem) {
 
 async function complete(item: ClaimedItem, result: PriceCheckResult, errorMessage?: string) {
   const completed = await prisma.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`listflow-price-check:${item.storeId}`}))`;
+    await lockPriceCheckStore(tx, item.storeId);
     const current = await tx.priceCheckJobItem.findFirst({
       where: { id: item.id, claimToken: item.token, status: "RUNNING",
         leaseExpiresAt: { gt: new Date() } },
@@ -331,7 +332,7 @@ async function complete(item: ClaimedItem, result: PriceCheckResult, errorMessag
     if (lease?.jobId !== item.id || lease.expiresAt <= new Date() ||
         (lease.details as { token?: string } | null)?.token !== item.token) return false;
     const parent = await tx.priceCheckJob.findUnique({
-      where: { id: item.jobId }, select: { status: true },
+      where: { id: item.jobId }, select: { status: true, errorMessage: true },
     });
     if (parent?.status !== PriceCheckJobStatus.RUNNING &&
         parent?.status !== PriceCheckJobStatus.CANCELLING) return false;
@@ -357,6 +358,8 @@ async function complete(item: ClaimedItem, result: PriceCheckResult, errorMessag
         pendingReview: { increment: result.pendingReview },
         failed: { increment: result.failed },
         skipped: { increment: result.skipped },
+        ...(parent.status !== PriceCheckJobStatus.CANCELLING && deliveryFailureCode(parent.errorMessage)
+          ? { errorMessage: null, reason: null } : {}),
       },
     });
     await tx.jobLease.deleteMany({
@@ -385,11 +388,40 @@ async function complete(item: ClaimedItem, result: PriceCheckResult, errorMessag
   return completed;
 }
 
+async function preserveUnfinishedItem(item: ClaimedItem, result: PriceCheckResult) {
+  await prisma.$transaction(async tx => {
+    await lockPriceCheckStore(tx, item.storeId);
+    const current = await tx.priceCheckJobItem.findFirst({ where: { id: item.id, claimToken: item.token,
+      status: "RUNNING", leaseExpiresAt: { gt: new Date() } } });
+    if (!current) return;
+    if (current.remoteWriteStarted) throw new Error("Cannot defer an uncertain marketplace write.");
+    const parent = await tx.priceCheckJob.findUniqueOrThrow({ where: { id: item.jobId } });
+    const cancelled = result.cancelled || parent.status === PriceCheckJobStatus.CANCELLING || parent.status === PriceCheckJobStatus.CANCELLED;
+    await tx.priceCheckJobItem.update({ where: { id: item.id }, data: {
+      status: cancelled ? "CANCELLED" : "RETRY_WAIT", claimToken: null, leaseExpiresAt: null,
+      workerId: null, workerName: null, attempts: Math.max(0, current.attempts - 1),
+      nextAttemptAt: result.retryAt ? new Date(result.retryAt) : new Date(),
+      completedAt: cancelled ? new Date() : null,
+      errorMessage: cancelled ? null : serializeDeliveryDeferral(result.technicalFailureCode),
+    } });
+    await tx.jobLease.deleteMany({ where: { storeId: item.storeId, jobType: "PRICE_CHECK_ITEM", jobId: item.id } });
+    if (cancelled) {
+      const running = await tx.priceCheckJobItem.count({ where: { jobId: item.jobId, status: "RUNNING" } });
+      if (!running) await tx.priceCheckJob.update({ where: { id: item.jobId }, data: {
+        status: PriceCheckJobStatus.CANCELLED, completedAt: new Date(), reason: "Price check cancelled." } });
+    } else {
+      await tx.priceCheckJob.update({ where: { id: item.jobId }, data: { completedAt: null,
+        reason: result.waitReason, errorMessage: serializeDeliveryDeferral(result.technicalFailureCode) } });
+    }
+  });
+  invalidateJobCaches(item.storeId);
+}
+
 export async function cancelItemScheduledJob(jobId: string, force: boolean) {
   return prisma.$transaction(async (tx) => {
     const initial = await tx.priceCheckJob.findUnique({ where: { id: jobId } });
     if (!initial?.storeId) return null;
-    await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`listflow-price-check:${initial.storeId}`}))`;
+    await lockPriceCheckStore(tx, initial.storeId);
     const job = await tx.priceCheckJob.findUnique({ where: { id: jobId } });
     const cancellableStatuses: PriceCheckJobStatus[] = [
       PriceCheckJobStatus.QUEUED,
@@ -496,62 +528,38 @@ export async function runNextPriceCheckItemForStore(
       },
       shouldCancel: async () => {
         await guard();
-        return false;
+        const parent = await prisma.priceCheckJob.findUnique({ where: { id: item.jobId }, select: { status: true } });
+        return parent?.status === PriceCheckJobStatus.CANCELLING || parent?.status === PriceCheckJobStatus.CANCELLED;
       },
     });
     await guard();
+    if (result.deferred || result.cancelled) {
+      await preserveUnfinishedItem(item, result);
+      return true;
+    }
     const normalized = result.checked === 0
       ? { ...result, checked: 1, skipped: result.skipped + 1 }
       : result;
-    const [product, observation] = await Promise.all([
+    const product = await
         prisma.product.findUnique({ where: { id: item.productId },
-          select: { priceCheckError: true } }),
-        prisma.amazonPriceObservation.findFirst({
-          where: { productId: item.productId, observedAt: { gte: item.startedAt } },
-          orderBy: { observedAt: "desc" }, select: { postcodeVerified: true },
-        }),
-    ]);
+          select: { priceCheckError: true } });
     if (await complete(item, normalized,
       normalized.failed > 0 ? product?.priceCheckError ?? "Price check failed." : undefined)) {
       try {
-      if (normalized.failed > 0 && /post\s*code|delivery location/i.test(product?.priceCheckError ?? "")) {
-        await prisma.$transaction(async (tx) => {
-          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`listflow-price-check:${storeId}`}))`;
-          const state = await tx.priceCheckScheduleState.findUniqueOrThrow({ where: { storeId } });
-          const failures = state.consecutivePostcodeFailures + 1;
-          const seconds = failures < 3 ? 0
-            : state.amazonCooldownSeconds === 0 ? 60
-              : Math.min(300, state.amazonCooldownSeconds * 2);
-          await tx.priceCheckScheduleState.update({ where: { storeId }, data: {
-            consecutivePostcodeFailures: failures,
-            amazonCooldownSeconds: seconds,
-            amazonBlockedUntil: seconds > 0
-              ? new Date(Date.now() + seconds * 1000) : null,
-          } });
+        const hold = await queuePriceCheckAutoHoldForRun({
+          userId: item.userId, storeId, productIds: [item.productId],
+          failedSince: item.startedAt,
+        }).catch((error) => {
+          logger.error("price-check/items", "Could not queue hold or recovery", error,
+            { storeId, itemId: item.id });
+          return null;
         });
-      } else if (observation?.postcodeVerified) {
-        await prisma.$transaction(async (tx) => {
-          await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`listflow-price-check:${storeId}`}))`;
-          await tx.priceCheckScheduleState.update({ where: { storeId }, data: {
-            consecutivePostcodeFailures: 0, amazonCooldownSeconds: 0,
-            amazonBlockedUntil: null,
+        if (hold?.queued) {
+          await prisma.priceCheckJob.update({ where: { id: item.jobId }, data: {
+            autoHoldQueued: { increment: hold.queued },
+            autoHoldActionJobId: hold.actionJobId,
           } });
-        });
-      }
-      const hold = await queuePriceCheckAutoHoldForRun({
-        userId: item.userId, storeId, productIds: [item.productId],
-        failedSince: item.startedAt,
-      }).catch((error) => {
-        logger.error("price-check/items", "Could not queue hold or recovery", error,
-          { storeId, itemId: item.id });
-        return null;
-      });
-      if (hold?.queued) {
-        await prisma.priceCheckJob.update({ where: { id: item.jobId }, data: {
-          autoHoldQueued: { increment: hold.queued },
-          autoHoldActionJobId: hold.actionJobId,
-        } });
-      }
+        }
       } catch (postCheckError) {
         logger.error("price-check/items", "Post-check processing failed", postCheckError,
           { storeId, itemId: item.id });

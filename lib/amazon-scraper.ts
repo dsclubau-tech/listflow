@@ -1,9 +1,7 @@
 import type { Browser, Page } from "playwright-core";
+import { applyAmazonDeliveryPostcode, AmazonDeliveryFailure, assertAmazonDeliveryPage, readAmazonDeliveryText, type DeliveryFailureDetails, type DeliverySetupDiagnostic } from "@/lib/amazon-delivery-recovery";
 import { load } from "cheerio";
-import {
-  extractAmazonPostcodeToken,
-  parseAmazonPostcodeResponse,
-} from "@/lib/amazon-direct-parse";
+
 import { extractLocalizedBuyboxPriceChoices, selectAmazonBuyboxPriceForMode } from "@/lib/amazon-buybox-price";
 import { parseAmazonShippingFeeFromText } from "@/lib/amazon-shipping";
 import { extractAmazonNewOfferStockLeft } from "@/lib/amazon-stock";
@@ -140,6 +138,7 @@ export type AmazonPriceScrapeOptions = {
   ) => void;
   captureImportPage?: boolean;
   signal?: AbortSignal;
+  onDeliverySetupDiagnostic?: (details: DeliverySetupDiagnostic) => void;
 };
 
 async function measureAmazonPriceStage<T>(
@@ -200,19 +199,7 @@ async function createAmazonPricePage(
 }
 
 async function getAmazonDeliveryLocationText(page: Page) {
-  return page
-    .evaluate(() =>
-      [
-        "#glow-ingress-line1",
-        "#glow-ingress-line2",
-        "#nav-global-location-data-modal-action",
-      ]
-        .map((selector) => document.querySelector(selector)?.textContent ?? "")
-        .join(" ")
-        .replace(/\s+/g, " ")
-        .trim(),
-    )
-    .catch(() => "");
+  return readAmazonDeliveryText(page);
 }
 
 async function verifyExactAmazonDeliveryPostcode(page: Page, postcode: string) {
@@ -456,159 +443,7 @@ function normalizeItemSpecificsForEbay(
  * Returns true when Amazon accepts the postcode change or the page already
  * shows the exact postcode. Callers verify the visible location after reload.
  */
-async function setAmazonDeliveryPostcode(
-  page: Page,
-  postcode: string
-): Promise<boolean> {
-  if (
-    hasExactAmazonDeliveryPostcode(
-      await getAmazonDeliveryLocationText(page),
-      postcode,
-    )
-  ) {
-    return true;
-  }
-
-  // Strategy 1: Call Amazon's AJAX address-change endpoint directly.
-  // This is what the location popup does under the hood — far more reliable
-  // than trying to click through the popup UI which changes frequently.
-  try {
-    const html = await page.content();
-    const token = extractAmazonPostcodeToken(load(html), html);
-    const ajaxResult = await page.evaluate(async ({ pc, csrfToken }) => {
-      const formData = new URLSearchParams({
-        locationType: "LOCATION_INPUT",
-        zipCode: pc,
-        storeContext: "pc",
-        deviceType: "web",
-        pageType: "Detail",
-        actionSource: "glow",
-      });
-      if (csrfToken) {
-        formData.set("anti-csrftoken-a2z", csrfToken);
-      }
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
-
-      try {
-        const response = await fetch(
-          "/gp/delivery/ajax/address-change.html",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/x-www-form-urlencoded",
-              Accept: "application/json, text/javascript, */*; q=0.01",
-              "X-Requested-With": "XMLHttpRequest",
-              ...(csrfToken
-                ? { "anti-csrftoken-a2z": csrfToken }
-                : {}),
-            },
-            body: formData.toString(),
-            signal: controller.signal,
-          }
-        );
-
-        if (!response.ok) {
-          return { success: false, reason: `HTTP ${response.status}` };
-        }
-
-        return { success: true, responseText: await response.text() };
-      } catch (fetchError) {
-        return {
-          success: false,
-          reason: fetchError instanceof Error ? fetchError.message : "fetch timed out or failed",
-        };
-      } finally {
-        clearTimeout(timeoutId);
-      }
-    }, { pc: postcode, csrfToken: token });
-
-    if (
-      ajaxResult.success &&
-      "responseText" in ajaxResult &&
-      typeof ajaxResult.responseText === "string" &&
-      parseAmazonPostcodeResponse(ajaxResult.responseText, postcode)
-    ) {
-      return true;
-    }
-
-    console.warn(
-      `[setAmazonDeliveryPostcode] AJAX method failed: ${
-        "reason" in ajaxResult ? ajaxResult.reason : "invalid address response"
-      }. Trying popup fallback.`
-    );
-  } catch {
-    console.warn(
-      "[setAmazonDeliveryPostcode] AJAX method threw. Trying popup fallback."
-    );
-  }
-
-  // Strategy 2: Fall back to the traditional popup interaction.
-  try {
-    // Check if the popup is already auto-shown by Amazon
-    let popupOpen = await page
-      .locator("#GLUXZipUpdateInput")
-      .isVisible({ timeout: 2000 })
-      .catch(() => false);
-
-    // If popup is NOT already open, click the location link
-    if (!popupOpen) {
-      const locationLink = page.locator("#nav-global-location-popover-link");
-      if (!(await locationLink.isVisible({ timeout: 3000 }).catch(() => false))) {
-        return false;
-      }
-      await locationLink.click({ timeout: 5000 }).catch(() => {});
-      popupOpen = await page
-        .locator("#GLUXZipUpdateInput")
-        .isVisible({ timeout: 5000 })
-        .catch(() => false);
-    }
-
-    if (!popupOpen) {
-      return false;
-    }
-
-    // Type the postcode
-    const zipInput = page.locator("#GLUXZipUpdateInput");
-    await zipInput.fill(postcode, { timeout: 5000 });
-
-    // Click Apply
-    const applyBtn = page.locator(
-      '#GLUXZipUpdate input[type="submit"], #GLUXZipUpdate .a-button-input, #GLUXZipUpdate .a-button'
-    );
-    await applyBtn.first().click({ timeout: 5000 });
-
-    // Wait for Amazon to process
-    await page.waitForTimeout(2000);
-
-    // If a city selection appears, pick the first option
-    const cityList = page.locator("#GLUXCityList select, #GLUXCityPopover select");
-    if (await cityList.isVisible({ timeout: 2000 }).catch(() => false)) {
-      await cityList.first().selectOption({ index: 1 }, { timeout: 5000 }).catch(() => {});
-      await page.waitForTimeout(1000);
-    }
-
-    // Click Done/Continue
-    const doneBtn = page.locator(
-      '[name="glowDoneButton"], #GLUXConfirmClose, .a-popover-footer .a-button-primary'
-    );
-    if (await doneBtn.isVisible({ timeout: 3000 }).catch(() => false)) {
-      await Promise.all([
-        page.waitForNavigation({ waitUntil: "domcontentloaded", timeout: 8000 }).catch(() => {}),
-        doneBtn.first().click({ timeout: 5000 }).catch(() => {}),
-      ]);
-    }
-
-    // Ensure page is stable after any reload
-    await page.waitForLoadState("domcontentloaded", { timeout: 8000 }).catch(() => {});
-    await page.waitForTimeout(1000);
-
-    return true;
-  } catch {
-    return false;
-  }
-}
+const setAmazonDeliveryPostcode = applyAmazonDeliveryPostcode;
 
 async function extractAmazonPriceFromPage(
   page: Page
@@ -816,6 +651,8 @@ export async function scrapeAmazonPrice(
   );
   let usedOriginalDeliverySetup = !reusedDeliveryState;
   let exactPostcodeVerified = false;
+  let freshContextRecoveryUsed = false;
+  let lastDeliverySetupDetails: DeliveryFailureDetails | undefined;
   let userAgent =
     (reusedDeliveryState ? deliveryState?.userAgent : null) ??
     deliveryState?.userAgent ??
@@ -833,6 +670,8 @@ export async function scrapeAmazonPrice(
   };
   const requireVerifiedPostcode = async () => {
     if (!postcode) return;
+    exactPostcodeVerified = false;
+    await assertAmazonDeliveryPage(page, postcode);
     exactPostcodeVerified = await measureAmazonPriceStage(
       options,
       "delivery-final-verification",
@@ -841,10 +680,9 @@ export async function scrapeAmazonPrice(
     if (!exactPostcodeVerified) {
       const reason = `Amazon did not verify configured postcode ${postcode} on the final product page.`;
       rejectDeliveryState(reason);
-      throw new PriceCheckFailure(
-        PriceCheckFailureCode.TECHNICAL_ERROR,
-        `${reason} Price and availability were not accepted.`,
-      );
+      throw new AmazonDeliveryFailure(`${reason} Price and availability were not accepted.`,
+        { ...lastDeliverySetupDetails, technicalCode: "AMAZON_DELIVERY_POSTCODE_UNVERIFIED", stage: "final-verification", requestedPostcode: postcode,
+          observedDeliveryText: await getAmazonDeliveryLocationText(page) });
     }
   };
   const abortScrape = () => { void context.close().catch(() => {}); };
@@ -852,12 +690,14 @@ export async function scrapeAmazonPrice(
 
   try {
     options?.signal?.throwIfAborted();
-    await measureAmazonPriceStage(options, "navigation", () =>
+    const navigationResponse = await measureAmazonPriceStage(options, "navigation", () =>
       page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
         waitUntil: "domcontentloaded",
         timeout: 20000,
       }),
     );
+    if (postcode) await assertAmazonDeliveryPage(page, postcode, {
+      httpStatus: navigationResponse?.status(), contentType: navigationResponse?.headers()["content-type"] });
 
     if (reusedDeliveryState && postcode && deliveryState) {
       exactPostcodeVerified = await measureAmazonPriceStage(
@@ -873,13 +713,14 @@ export async function scrapeAmazonPrice(
         await context.close().catch(() => {});
 
         reusedDeliveryState = false;
+        freshContextRecoveryUsed = true;
         usedOriginalDeliverySetup = true;
         userAgent = getRandomUserAgent();
         ({ context, page } = await createAmazonPricePage(
           ownedBrowser,
           userAgent,
         ));
-        await measureAmazonPriceStage(
+        const fallbackResponse = await measureAmazonPriceStage(
           options,
           "delivery-fallback-navigation",
           () =>
@@ -888,57 +729,28 @@ export async function scrapeAmazonPrice(
               timeout: 20000,
             }),
         );
+        await assertAmazonDeliveryPage(page, postcode, {
+          httpStatus: fallbackResponse?.status(), contentType: fallbackResponse?.headers()["content-type"] });
       }
     }
 
-    // Set delivery postcode so Amazon shows AU-local prices and availability.
-    // If the first attempt fails, retry — a failed postcode causes Amazon to
-    // geo-locate the server (often Singapore) and show "out of stock" for AU
-    // products that ARE actually available for Australian delivery.
+    // Inspect first. A matching location needs verification but no resubmission.
     if (postcode && !exactPostcodeVerified) {
-      const MAX_POSTCODE_ATTEMPTS = 3;
-      let postcodeApplied = false;
-
-      for (let attempt = 1; attempt <= MAX_POSTCODE_ATTEMPTS; attempt++) {
-        reportAmazonDeliveryStateEvent(options, "setup");
-        const success = await measureAmazonPriceStage(
-          options,
-          "postcode-setup",
-          () => setAmazonDeliveryPostcode(page, postcode),
-        );
-        if (success) {
-          postcodeApplied = true;
-          break;
-        }
-
-        console.warn(
-          `[scrapeAmazonPrice] Postcode attempt ${attempt}/${MAX_POSTCODE_ATTEMPTS} failed for ${normalizedAsin}. ${
-            attempt < MAX_POSTCODE_ATTEMPTS ? "Retrying..." : "Giving up."
-          }`
-        );
-
-        if (attempt < MAX_POSTCODE_ATTEMPTS) {
-          // Reload the page before retrying — Amazon sometimes needs a
-          // fresh page load to show the location popup again.
-          await measureAmazonPriceStage(options, "postcode-reload", () =>
-            page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
-              waitUntil: "domcontentloaded",
-              timeout: 20000,
-            }),
-          );
-        }
-      }
-
-      // Reload after postcode is set to get updated prices
-      if (postcodeApplied) {
-        await measureAmazonPriceStage(options, "postcode-reload", () =>
-          page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, {
-            waitUntil: "domcontentloaded",
-            timeout: 20000,
-          }),
-        );
-      }
-
+      exactPostcodeVerified = hasExactAmazonDeliveryPostcode(await getAmazonDeliveryLocationText(page), postcode);
+    }
+    // One address request and one popup recovery; the runner owns the bounded fresh context retry.
+    if (postcode && !exactPostcodeVerified) {
+      reportAmazonDeliveryStateEvent(options, "setup");
+      await measureAmazonPriceStage(options, "postcode-setup", () => setAmazonDeliveryPostcode(page, postcode, details => {
+        lastDeliverySetupDetails = details.technicalCode ? details as DeliveryFailureDetails : undefined;
+        options?.onDeliverySetupDiagnostic?.(details);
+      }));
+      options?.signal?.throwIfAborted();
+      const reloadResponse = await measureAmazonPriceStage(options, "postcode-reload", () =>
+        page.goto(`https://www.amazon.com.au/dp/${normalizedAsin}`, { waitUntil: "domcontentloaded", timeout: 20000 }),
+      );
+      await assertAmazonDeliveryPage(page, postcode, {
+        httpStatus: reloadResponse?.status(), contentType: reloadResponse?.headers()["content-type"] });
       // Verification is mandatory even when delivery-state reuse is disabled.
       exactPostcodeVerified = await measureAmazonPriceStage(
         options,
@@ -947,9 +759,10 @@ export async function scrapeAmazonPrice(
       );
       if (!exactPostcodeVerified) {
         rejectDeliveryState(`Amazon did not verify configured postcode ${postcode}.`);
-        throw new PriceCheckFailure(
-          PriceCheckFailureCode.TECHNICAL_ERROR,
+        throw new AmazonDeliveryFailure(
           `Amazon did not verify the configured delivery postcode ${postcode}; price and availability were not accepted.`,
+          { ...lastDeliverySetupDetails, technicalCode: "AMAZON_DELIVERY_POSTCODE_UNVERIFIED", stage: "postcode-verification", requestedPostcode: postcode,
+            observedDeliveryText: await getAmazonDeliveryLocationText(page) },
         );
       }
     }
@@ -1229,7 +1042,11 @@ export async function scrapeAmazonPrice(
             document.querySelector<HTMLInputElement>("#ASIN")?.value,
             document.querySelector<HTMLInputElement>("input[name='ASIN']")
               ?.value,
-            document.querySelector<HTMLElement>("[data-asin]")?.dataset.asin,
+            // Recommendations also have data-asin. Only identifiers in the
+            // selected product's Buy Box can contradict its ASIN inputs.
+            ...Array.from(document.querySelectorAll<HTMLElement>(
+              "#buybox [data-asin], #desktop_buybox [data-asin], #addToCart [data-asin], #buybox_feature_div [data-asin]",
+            )).map(element => element.dataset.asin),
           ],
         }))
         .catch(() => ({ canonicalUrl: null, pageAsins: [] }));
@@ -1296,6 +1113,15 @@ export async function scrapeAmazonPrice(
       acceptedPriceSource: selectedPrice?.selector ?? null,
       importPageHtml: options?.captureImportPage ? await page.content() : undefined,
     };
+  } catch (error) {
+    if (!(error instanceof PriceCheckFailure)) {
+      const failure = new PriceCheckFailure("TECHNICAL_ERROR", error instanceof Error ? error.message : "Amazon browser check failed.");
+      failure.postcodeVerified = exactPostcodeVerified;
+      throw failure;
+    }
+    if (error instanceof PriceCheckFailure) error.postcodeVerified = exactPostcodeVerified;
+    if (error instanceof AmazonDeliveryFailure) error.details.freshContextUsed = freshContextRecoveryUsed;
+    throw error;
   } finally {
     options?.signal?.removeEventListener("abort", abortScrape);
     await context.close().catch(() => {});

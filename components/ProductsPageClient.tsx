@@ -13,6 +13,7 @@ import {
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import Image from "next/image";
+import { formatAmazonDeliveryWait } from "@/lib/amazon-delivery-wait";
 import ActionProgressBar from "@/components/ActionProgressBar";
 import DraftsTable from "@/components/DraftsTable";
 import type { PromotedListingsJob } from "@/components/PromotedListingsModal";
@@ -330,6 +331,8 @@ interface PriceCheckJob {
   completedAt: string | null;
   dismissedAt: string | null;
   waitReason?: string | null;
+  retryAt?: string | null;
+  technicalFailureCode?: string;
   assignedWorkerNames?: string[];
   workerActivities?: Array<{ name: string; activity: string }>;
 }
@@ -371,6 +374,9 @@ function getPriceCheckJobSummary(job: PriceCheckJob) {
 }
 
 function getPriceCheckJobStatusText(job: PriceCheckJob) {
+  if ((job.status === "QUEUED" || job.status === "RUNNING") && job.retryAt) {
+    return formatAmazonDeliveryWait(job) ?? job.waitReason ?? "Waiting for Amazon delivery setup.";
+  }
   if (job.status === "QUEUED") {
     return job.waitReason ?? `Price check queued for ${job.total} product${job.total === 1 ? "" : "s"}.`;
   }
@@ -1834,6 +1840,7 @@ export default function ProductsPageClient({
             {isActivePriceCheckJob(priceCheckJob) ? (
               <ActionProgressBar
                 label={getPriceCheckJobStatusText(priceCheckJob)}
+                wrapLabel={Boolean(priceCheckJob.retryAt)}
                 percent={priceCheckProgressPercent}
                 detail={`${priceCheckJob.pendingReview} pending review, ${priceCheckJob.failed} failed, ${priceCheckJob.skipped} unchanged`}
                 tone={priceCheckJob.status === "CANCELLING" ? "amber" : "blue"}

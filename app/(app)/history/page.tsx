@@ -1,7 +1,8 @@
 import { prisma } from "@/lib/prisma";
+import { getAmazonDeliveryWait } from "@/lib/amazon-delivery-cooldown";
+import { formatAmazonDeliveryWait } from "@/lib/amazon-delivery-wait";
 import ClearHistoryButton from "@/components/ClearHistoryButton";
 import { getRenderCurrentStoreSession } from "@/lib/render-store-session";
-import { redirect } from "next/navigation";
 import Link from "next/link";
 import {
   getUploadHistoryPagination,
@@ -166,6 +167,10 @@ export default async function HistoryPage({
       : Promise.resolve([]),
   ]);
 
+  const deliveryWait = await getAmazonDeliveryWait(storeSession.storeId);
+  const waitingMessage = (job: { status: string; checked: number; total: number }) =>
+    deliveryWait && (job.status === "QUEUED" || job.status === "RUNNING")
+      ? formatAmazonDeliveryWait({ ...job, ...deliveryWait }) : null;
   const actionJobs = [
     ...ebayJobs.map((j) => ({
       id: j.id,
@@ -201,7 +206,7 @@ export default async function HistoryPage({
       startedAt: j.startedAt,
       completedAt: j.completedAt,
       status: j.status,
-      errorMessage: j.errorMessage || j.reason,
+      errorMessage: waitingMessage(j) || j.errorMessage || j.reason,
       createdAt: j.createdAt,
     })),
   ]
@@ -522,7 +527,7 @@ export default async function HistoryPage({
                       <td className="px-4 py-3">
                         {job.errorMessage ? (
                           <span
-                            className="text-xs text-red-600 max-w-xs block truncate"
+                            className={`text-xs text-red-600 max-w-xs block ${job.errorMessage.startsWith("Amazon delivery setup unavailable.") ? "whitespace-normal" : "truncate"}`}
                             title={job.errorMessage}
                           >
                             {job.errorMessage}
@@ -670,12 +675,12 @@ export default async function HistoryPage({
 
                       {/* Error / Summary */}
                       <td className="px-4 py-3">
-                        {job.errorMessage || job.reason ? (
+                        {waitingMessage(job) || job.errorMessage || job.reason ? (
                           <span
-                            className="text-xs text-red-600 max-w-xs block truncate"
-                            title={job.errorMessage || job.reason || ""}
+                            className="text-xs text-red-600 max-w-xs block whitespace-normal"
+                            title={waitingMessage(job) || job.errorMessage || job.reason || ""}
                           >
-                            {job.errorMessage || job.reason}
+                            {waitingMessage(job) || job.errorMessage || job.reason}
                           </span>
                         ) : (
                           <span className="text-gray-400 text-sm">—</span>

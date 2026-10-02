@@ -7,6 +7,9 @@ import {
   AmazonAvailability,
 } from "@/app/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
+import { AmazonDeliveryFailure } from "./amazon-delivery-recovery";
+import { acquireDeliveryPermit, releaseDeliveryPermit, deferAmazonDelivery, confirmAmazonDelivery,
+  type DeliveryPermit } from "./amazon-delivery-cooldown";
 import { resolveAmazonDeliveryPostcode } from "@/lib/amazon-delivery-postcode";
 import {
   scrapeAmazonPrice,
@@ -72,6 +75,10 @@ export interface PriceCheckResult {
   skipped: number;
   reason?: string;
   cancelled?: boolean;
+  deferred?: boolean;
+  retryAt?: string;
+  waitReason?: string;
+  technicalFailureCode?: string;
 }
 
 export type PriceCheckProgress = PriceCheckResult & { total: number };
@@ -414,7 +421,7 @@ export async function runPriceCheck(
     options.optimizationConfig ??
     resolvePriceCheckOptimizationConfig(options.storeId);
   const timing = new PriceCheckTimingRecorder(optimizationConfig.timingEnabled);
-  let runOutcome: "completed" | "cancelled" | "failed" = "completed";
+  let runOutcome: "completed" | "cancelled" | "failed" | "deferred" = "completed";
 
   if (optimizationConfig.unknown.length > 0) {
     logger.warn(
@@ -640,6 +647,7 @@ export async function runPriceCheck(
   await reportProgress();
 
   let sharedBrowser: Browser | null = null;
+  let deliveryPermit: DeliveryPermit | undefined;
   const getSharedBrowser = async () => {
     if (!sharedBrowser || !sharedBrowser.isConnected()) {
       if (deliveryState && sharedBrowser) {
@@ -670,9 +678,11 @@ export async function runPriceCheck(
     priceTrackingMode: AmazonPriceTrackingMode,
     variantHints?: VariantSelectionHints | null,
     shouldAbort: () => boolean = () => false,
+    signal?: AbortSignal,
   ) => {
     const scrapeWithBrowser = async (allowDeliveryStateReuse: boolean) => {
       const browser = await getSharedBrowser();
+      if (signal?.aborted) { await closeSharedBrowser(); signal.throwIfAborted(); }
       timing.increment("scrape-attempts");
       const sharedSnapshot = optimizationConfig.enabled.includes(
         "shared-snapshot",
@@ -683,31 +693,33 @@ export async function runPriceCheck(
         scrapePostcode,
         priceTrackingMode,
         variantHints,
-        timing.enabled || sharedSnapshot || deliveryState
-          ? {
-              ...(timing.enabled
-                ? {
-                    onTiming: (stage: string, durationMs: number) =>
-                      timing.record(stage, durationMs),
-                  }
-                : {}),
-              sharedSnapshot,
-              deliveryState,
-              allowDeliveryStateReuse,
-              onDeliveryStateEvent: (event, detail) => {
-                deliveryEvents[event] = (deliveryEvents[event] ?? 0) + 1;
-                timing.increment(`delivery-state-${event}`);
-                if (event === "disabled") {
-                  logger.warn("price-checker/delivery-state", "Postcode reuse disabled for the remaining run", {
-                    jobId: options.jobId,
-                    storeId: options.storeId,
-                    scrapePostcode,
-                    reason: detail?.reason ?? deliveryState?.disabledReason,
-                  });
-                }
-              },
+      {
+          signal,
+          onDeliverySetupDiagnostic: details => logger.info("price-checker/delivery-setup", "Amazon delivery setup attempt", {
+            jobId: options.jobId, storeId: options.storeId, productId, asin,
+            revision: process.env.LISTFLOW_REVISION ?? process.env.VERCEL_GIT_COMMIT_SHA, ...details }),
+          ...(timing.enabled
+            ? {
+                onTiming: (stage: string, durationMs: number) =>
+                  timing.record(stage, durationMs),
+              }
+            : {}),
+          sharedSnapshot,
+          deliveryState,
+          allowDeliveryStateReuse,
+          onDeliveryStateEvent: (event, detail) => {
+            deliveryEvents[event] = (deliveryEvents[event] ?? 0) + 1;
+            timing.increment(`delivery-state-${event}`);
+            if (event === "disabled") {
+              logger.warn("price-checker/delivery-state", "Postcode reuse disabled for the remaining run", {
+                jobId: options.jobId,
+                storeId: options.storeId,
+                scrapePostcode,
+                reason: detail?.reason ?? deliveryState?.disabledReason,
+              });
             }
-          : undefined,
+          },
+        },
       );
     };
 
@@ -717,7 +729,7 @@ export async function runPriceCheck(
       timing.increment("scrape-retries");
       await closeSharedBrowser();
 
-      if (shouldAbort()) {
+      if (shouldAbort() || signal?.aborted || (error instanceof AmazonDeliveryFailure && !error.permitsFreshContextRetry)) {
         throw error;
       }
 
@@ -735,6 +747,8 @@ export async function runPriceCheck(
       // Brief pause before retry — gives the OS time to release
       // browser process resources after a crash.
       await measureStage("retry-backoff", () => sleep(2000));
+      signal?.throwIfAborted();
+      if (shouldAbort()) throw error;
 
       try {
         return await scrapeWithBrowser(false);
@@ -803,6 +817,15 @@ export async function runPriceCheck(
       );
       const variantHints = extractVariantSelectionHints(product);
 
+      if (simulatedAmazonPrice === null) {
+        deliveryPermit = await acquireDeliveryPermit(product.storeId, options.jobId ?? `direct:${product.id}`, PRODUCT_CHECK_TIMEOUT_MS);
+        if (deliveryPermit.wait) {
+          result.checked -= 1;
+          runOutcome = "deferred";
+          return { ...result, ...deliveryPermit.wait, reason: deliveryPermit.wait.waitReason, deferred: true };
+        }
+      }
+
       try {
         let currentAmazonPrice: number | null;
         let scrapedAmazonStockLeft: number | null | undefined;
@@ -812,6 +835,16 @@ export async function runPriceCheck(
           currentAmazonPrice = simulatedAmazonPrice;
         } else {
           let scrapeTimedOut = false;
+          const controller = new AbortController();
+          let cancellationPollRunning = false;
+          const cancelTimer = setInterval(() => {
+            if (cancellationPollRunning || controller.signal.aborted) return;
+            cancellationPollRunning = true;
+            void (async () => {
+              await options.assertOwnership?.();
+              if (await checkCancelled()) controller.abort(new Error("Price check cancelled."));
+            })().catch(error => controller.abort(error)).finally(() => { cancellationPollRunning = false; });
+          }, 1000);
           const timeoutMessage =
             `Price check timed out after ${Math.round(PRODUCT_CHECK_TIMEOUT_MS / 1000)}s while scraping Amazon.`;
 
@@ -823,16 +856,35 @@ export async function runPriceCheck(
                 priceTrackingMode,
                 variantHints,
                 () => scrapeTimedOut,
+                controller.signal,
               ),
               PRODUCT_CHECK_TIMEOUT_MS,
               timeoutMessage,
             );
+            controller.signal.throwIfAborted();
+            await options.assertOwnership?.();
           } catch (error) {
             if (getErrorMessage(error) === timeoutMessage) {
               scrapeTimedOut = true;
+              controller.abort(error);
               await closeSharedBrowser();
             }
+            if (controller.signal.aborted && !scrapeTimedOut) throw controller.signal.reason;
+            if (!(error instanceof AmazonDeliveryFailure) && getPriceCheckFailureCode(error) === PriceCheckFailureCode.TECHNICAL_ERROR &&
+                !(error instanceof PriceCheckFailure && error.postcodeVerified)) {
+              throw new AmazonDeliveryFailure(getErrorMessage(error), {
+                technicalCode: "AMAZON_DELIVERY_PAGE_INVALID", stage: "navigation-or-extraction",
+                requestedPostcode: scrapePostcode, browserError: getErrorMessage(error).slice(0, 300) });
+            }
             throw error;
+          } finally {
+            clearInterval(cancelTimer);
+          }
+
+          if (scrapeResult.postcodeVerified && deliveryPermit) {
+            await confirmAmazonDelivery(deliveryPermit);
+            await releaseDeliveryPermit(deliveryPermit);
+            deliveryPermit = undefined;
           }
 
           currentAmazonPrice = scrapeResult.price;
@@ -1439,8 +1491,14 @@ export async function runPriceCheck(
           );
         }
       } catch (error) {
+        if (deliveryPermit && await checkCancelled()) {
+          result.checked -= 1;
+          return finishCancelled();
+        }
         const rawMessage = getErrorMessage(error);
-        const message = getBrowserLaunchUserMessage(error) ?? rawMessage;
+        const message = error instanceof AmazonDeliveryFailure
+          ? `[${error.details.technicalCode}] ${rawMessage}` : getBrowserLaunchUserMessage(error) ?? rawMessage;
+        await options.assertOwnership?.();
         const code = getPriceCheckFailureCode(error);
 
         if (options.storeId) {
@@ -1467,6 +1525,8 @@ export async function runPriceCheck(
                 failureCode: code,
                 message,
                 isSuccessful: false,
+                postcodeVerified: error instanceof PriceCheckFailure && error.postcodeVerified,
+                verifiedPostcode: error instanceof PriceCheckFailure && error.postcodeVerified ? scrapePostcode : null,
               },
             });
           } catch (observationError) {
@@ -1475,6 +1535,20 @@ export async function runPriceCheck(
               errorMessage: getErrorMessage(observationError),
             });
           }
+        }
+
+        if (error instanceof AmazonDeliveryFailure && deliveryPermit) {
+          result.checked -= 1;
+          runOutcome = "deferred";
+          const waiting = await deferAmazonDelivery(deliveryPermit, error.details.technicalCode);
+          logger.warn("price-checker/delivery-cooldown", "Amazon delivery setup deferred; product remains unfinished", {
+            storeId: product.storeId, jobId: options.jobId, productId: product.id, asin: product.asin,
+            revision: process.env.LISTFLOW_REVISION ?? process.env.VERCEL_GIT_COMMIT_SHA,
+            ...error.details, ...waiting });
+          return { ...result, ...waiting, reason: waiting.waitReason, deferred: true };
+        }
+        if (error instanceof PriceCheckFailure && error.postcodeVerified && deliveryPermit) {
+          await confirmAmazonDelivery(deliveryPermit);
         }
 
         await recordProductFailure({
@@ -1490,6 +1564,8 @@ export async function runPriceCheck(
           failureCode: code,
         });
       }
+
+      if (deliveryPermit) { await releaseDeliveryPermit(deliveryPermit); deliveryPermit = undefined; }
 
       await reportProductComplete(product.id);
 
@@ -1509,6 +1585,7 @@ export async function runPriceCheck(
     runOutcome = "failed";
     throw error;
   } finally {
+    if (deliveryPermit) await releaseDeliveryPermit(deliveryPermit);
     await closeSharedBrowser();
     invalidateRunCaches();
     if (deliveryState) {
