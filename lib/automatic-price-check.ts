@@ -1,15 +1,12 @@
 import "server-only";
 
 import {
-  PriceCheckJobScope,
   PriceCheckJobStatus,
   PriceCheckJobTrigger,
 } from "@/app/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
 import { logger } from "@/lib/logger";
 import {
-  assertNoPriceCheckStartConflict,
-  JobConflictError,
   type WorkerContext,
 } from "@/lib/job-coordination";
 import {
@@ -202,6 +199,7 @@ export async function getAutomaticPriceCheckStatus(
       where: {
         storeId: { in: storeIds },
         status: { in: [PriceCheckJobStatus.QUEUED, PriceCheckJobStatus.RUNNING] },
+        trigger: PriceCheckJobTrigger.AUTOMATIC,
         dismissedAt: null,
       },
       orderBy: { createdAt: "desc" },
@@ -272,29 +270,6 @@ export async function runAutomaticPriceCheckForStore(
     };
   }
 
-  // Check if a conflicting price check (e.g. manual full check or single check) is already active
-  try {
-    await assertNoPriceCheckStartConflict({
-      storeId,
-      scope: PriceCheckJobScope.ALL,
-      productIds: [],
-    });
-  } catch (error) {
-    if (error instanceof JobConflictError) {
-      logger.info(
-        "automatic-price-check/conflict",
-        "Automatic check deferred because a manual job is active",
-        { storeId, storeName: store.name, reason: error.message }
-      );
-      return {
-        skipped: true,
-        skippedConflict: true,
-        reason: error.message,
-      };
-    }
-    throw error;
-  }
-
   // Resolve a valid user ID for the job (foreign key requires a record in User table)
   let userId: string | null = null;
   if (store.autoCheckStartedBy) {
@@ -312,7 +287,7 @@ export async function runAutomaticPriceCheckForStore(
   }
 
   // Create an automatic full price check job
-  const { job } = await createPriceCheckJob({
+  const { job, reused } = await createPriceCheckJob({
     userId,
     storeId,
     all: true,
@@ -328,7 +303,7 @@ export async function runAutomaticPriceCheckForStore(
   });
 
   // Run the price check job
-  if (job.schedulerVersion !== 2) {
+  if (!reused && job.schedulerVersion !== 2) {
     await runPriceCheckJob(job.id, worker);
   }
 

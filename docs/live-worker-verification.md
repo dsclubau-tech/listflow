@@ -16,3 +16,14 @@ Run `npm run test:delivery-repair`, worker configuration and routing tests, the 
 Run the packaged preflight and status controls. Confirm six fresh heartbeats, one revision, two assigned workers per store, `delivery-state` effective for each store, exact saved postcodes, normal job progress, and no technical-error holds. An unverified technical observation must defer unfinished work. Confirm the first complete scheduled run for each store before declaring the replacement healthy.
 
 Live browser tests that save a manual check must be explicitly opted in and use selected products only; never retry those mutations automatically. The read-only diagnostic probe does not save products or call eBay. Keep error and timeout samples separately from real marketplace writes.
+
+## Concurrent check release
+
+Run `npm test`, `npx tsc --noEmit`, changed-file ESLint, `npm run build`, and the mocked browser checks in `tests/e2e/concurrent-price-checks.spec.ts`. These checks cover manual queue priority, overlapping jobs, per-job ownership, newer observation ordering, marketplace serialization, cancellation, and store/session isolation.
+
+The optional database regression is `node --import tsx --test scripts/test-concurrent-price-check-database.ts` with `LISTFLOW_RUN_CONCURRENT_DB_TEST=1` and the explicit installed worker environment file. It reads the three stores, inserts temporary leases and observations inside one transaction, and intentionally rolls everything back. It does not update products or call eBay.
+
+For live rollout, preserve existing jobs and gracefully finish old workers before installing the committed archive. Use at most a small selected sample per store to verify two job claims and independent sessions; do not enqueue full catalog scans for verification. Record the installed revision, six fresh heartbeats, observation times, accepted/stale decisions, checkpoints, and marketplace outcomes in the ignored evidence archive.
+
+
+Pre-release verification on October 3 obtained six fresh verified Amazon snapshots: two per configured store. Every snapshot verified the requested ASIN and saved delivery postcode; each store's second product reused its own seeded delivery state. The sample made no product or marketplace writes. The real database regression also passed for all three stores and rolled back its temporary records. Controlled browser tests displayed concurrent jobs with usable controls at desktop and mobile sizes. Raw evidence remains in ignored local storage.

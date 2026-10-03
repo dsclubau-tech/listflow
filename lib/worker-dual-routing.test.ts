@@ -113,23 +113,13 @@ test("all durable queues apply worker claim policy", () => {
   }
 });
 
-test("manual product checks run before imports, and imports before background actions", () => {
+test("imports and bulk actions retain priority over the price-check queue", () => {
   const source = readFileSync("scripts/listflow-worker.ts", "utf8");
-  const manualCheckIndex = source.indexOf(
-    "runNextManualPriceCheckItemForStore(store.id, worker)",
-  );
-  const amazonImportIndex = source.indexOf(
-    "runNextAmazonImportJobForStore(store.id, worker)",
-  );
-  const ebayActionIndex = source.indexOf(
-    "runNextEbayActionJobForStore(store.id, worker)",
-  );
-
-  assert.ok(manualCheckIndex >= 0);
-  assert.ok(amazonImportIndex >= 0);
-  assert.ok(ebayActionIndex >= 0);
-  assert.ok(manualCheckIndex < amazonImportIndex);
-  assert.ok(amazonImportIndex < ebayActionIndex);
+  const importIndex = source.indexOf("runNextAmazonImportJobForStore(store.id, worker)");
+  const actionIndex = source.indexOf("runNextEbayActionJobForStore(store.id, worker)");
+  const checkIndex = source.indexOf("runNextPriceCheckJobForStore(store.id, worker)");
+  assert.ok(importIndex >= 0 && actionIndex > importIndex && checkIndex > actionIndex);
+  assert.equal(source.includes("runNextManualPriceCheckItemForStore(store.id, worker)"), false);
 });
 
 test("peer Amazon retries exclude the previous worker in the atomic claim", () => {

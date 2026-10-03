@@ -402,7 +402,7 @@ async function preserveUnfinishedItem(item: ClaimedItem, result: PriceCheckResul
       workerId: null, workerName: null, attempts: Math.max(0, current.attempts - 1),
       nextAttemptAt: result.retryAt ? new Date(result.retryAt) : new Date(),
       completedAt: cancelled ? new Date() : null,
-      errorMessage: cancelled ? null : serializeDeliveryDeferral(result.technicalFailureCode),
+      errorMessage: cancelled ? null : (result.technicalFailureCode === "PRICE_CHECK_RESULT_WAIT" ? null : serializeDeliveryDeferral(result.technicalFailureCode)),
     } });
     await tx.jobLease.deleteMany({ where: { storeId: item.storeId, jobType: "PRICE_CHECK_ITEM", jobId: item.id } });
     if (cancelled) {
@@ -411,7 +411,7 @@ async function preserveUnfinishedItem(item: ClaimedItem, result: PriceCheckResul
         status: PriceCheckJobStatus.CANCELLED, completedAt: new Date(), reason: "Price check cancelled." } });
     } else {
       await tx.priceCheckJob.update({ where: { id: item.jobId }, data: { completedAt: null,
-        reason: result.waitReason, errorMessage: serializeDeliveryDeferral(result.technicalFailureCode) } });
+        reason: result.waitReason, errorMessage: (result.technicalFailureCode === "PRICE_CHECK_RESULT_WAIT" ? null : serializeDeliveryDeferral(result.technicalFailureCode)) } });
     }
   });
   invalidateJobCaches(item.storeId);

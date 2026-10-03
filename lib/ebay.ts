@@ -1361,7 +1361,7 @@ export async function callEbayReviseItem(
 export async function callEbayReviseInventoryStatus(
   xmlBody: string,
   storeNumber: 1 | 2 | 3
-): Promise<{ success: boolean; errorMessage?: string }> {
+): Promise<{ success: boolean; errorMessage?: string; outcomeUncertain?: boolean }> {
   const creds = getStoreCredentials(storeNumber);
 
   let accessToken: string;
@@ -1415,7 +1415,7 @@ export async function callEbayReviseInventoryStatus(
 
     const reviseInventoryStatusResponse = parsed.ReviseInventoryStatusResponse;
     if (!reviseInventoryStatusResponse) {
-      return { success: false, errorMessage: "Invalid response from eBay API" };
+      return { success: false, errorMessage: "Invalid response from eBay API", outcomeUncertain: true };
     }
 
     const ack = reviseInventoryStatusResponse.Ack;
@@ -1437,7 +1437,7 @@ export async function callEbayReviseInventoryStatus(
   } catch (err) {
     await recordStoreEbayBackoff(await getStoreIdForStoreNumber(storeNumber), "TRADING", err);
     const message = err instanceof Error ? err.message : "Unknown error";
-    return { success: false, errorMessage: message };
+    return { success: false, errorMessage: message, outcomeUncertain: true };
   }
 }
 

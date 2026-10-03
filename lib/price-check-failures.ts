@@ -68,6 +68,8 @@ function amazonUrlContainsAsin(url: string, asin: string) {
 
 export class PriceCheckFailure extends Error {
   postcodeVerified = false;
+  observedAt?: Date;
+  identityVerified = false;
   readonly code: PriceCheckFailureCode;
   readonly detectedAsin: string | null;
 

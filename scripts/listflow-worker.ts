@@ -142,8 +142,6 @@ async function loadWorkerModules() {
     runNextEbayActionJobForStore: ebayActionJobs.runNextEbayActionJobForStore,
     runEbayResearchQueueForStore: ebayResearch.runEbayResearchQueueForStore,
     runNextPriceCheckJobForStore: priceCheckJobs.runNextPriceCheckJobForStore,
-    runNextManualPriceCheckItemForStore:
-      priceCheckJobs.runNextManualPriceCheckItemForStore,
     runStockReplenishmentForStore: stockReplenishment.runStockReplenishmentForStore,
     runAutomaticPriceCheckForStore:
       automaticPriceCheck.runAutomaticPriceCheckForStore,
@@ -399,12 +397,6 @@ async function processStore(store: {
       );
       return false;
     }
-  }
-
-  // Let a short manual check use either free worker, even while an automatic
-  // store scan is still processing other products.
-  if (await modules.runNextManualPriceCheckItemForStore(store.id, worker)) {
-    return true;
   }
 
   if (await modules.runNextAmazonImportJobForStore(store.id, worker)) {

@@ -1,3 +1,4 @@
+import { acquirePriceCheckResultLease, assertAmazonObservationCurrent, runObservedPriceWrite } from "@/lib/price-check-result-application";
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { Prisma } from "@/app/generated/prisma/client";
@@ -114,7 +115,9 @@ export async function POST(request: Request) {
       .filter((item) => item.createdAt.getTime() < newestCreatedAtMs)
       .map((item) => item.id);
 
+    let resultLease: Awaited<ReturnType<typeof acquirePriceCheckResultLease>> | undefined;
     try {
+      resultLease = await acquirePriceCheckResultLease({ storeId: storeSession.storeId, productId });
       const product = await prisma.product.findUnique({
         where: { id: productId },
         include: {
@@ -173,6 +176,13 @@ export async function POST(request: Request) {
         continue;
       }
 
+      await resultLease.assertOwnership();
+      if (product.lastPriceCheck && product.lastPriceCheck.getTime() > newestCreatedAtMs) {
+        skipped += 1;
+        continue;
+      }
+      await assertAmazonObservationCurrent({ storeId: product.storeId, productId: product.id,
+        observedAt: new Date(newestCreatedAtMs) });
       const reviewedAt = new Date();
       const historyIds = historyItems.map((item) => item.id);
 
@@ -180,13 +190,17 @@ export async function POST(request: Request) {
       let reviseResult: Awaited<ReturnType<typeof reviseProductPrice>>;
 
       try {
-        reviseResult = await reviseProductPrice(
+        reviseResult = await runObservedPriceWrite({
+          storeId: product.storeId, productId: product.id, observedAt: new Date(newestCreatedAtMs),
+          observationKey: `review:${product.id}:${new Date(newestCreatedAtMs).toISOString()}`,
+          assertOwnership: resultLease.assertOwnership,
+        }, () => reviseProductPrice(
           {
             ...product,
             price: primaryHistory!.newSellPrice,
           },
           nextPrimarySellPrice
-        );
+        ));
       } catch (error) {
         reviseResult = {
           success: false,
@@ -282,6 +296,8 @@ export async function POST(request: Request) {
         error: errorMessage,
       });
       failed += 1;
+    } finally {
+      await resultLease?.release();
     }
   }
 

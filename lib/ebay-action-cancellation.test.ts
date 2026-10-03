@@ -28,6 +28,7 @@ let duringSync: (() => Promise<void>) | null;
 let duringDelete: (() => Promise<void>) | null;
 let campaignCreates: number;
 let writes: Array<{ operation: string; ids: string[] }>;
+let newerObservation = false;
 let authenticated = true;
 let sessionStoreId = "store-1";
 
@@ -39,6 +40,7 @@ function matches(where: Where) {
 }
 
 const prisma = {
+  amazonPriceObservation: { async findFirst() { return newerObservation ? {id: "newer"} : null; } },
   ebayActionJob: {
     async findFirst({ where }: { where: Where }) {
       return matches(where) ? structuredClone(job) : null;
@@ -72,6 +74,7 @@ const prisma = {
     },
   },
   product: {
+    async findFirst() { return { id: "product-0", title: "Product", storeId: job.storeId, lastPriceCheck: new Date(0) }; },
     async findMany({ where }: { where: { id: { in: string[] } } }) {
       return where.id.in.map((id) => ({ id, title: id, ebayItemId: id, status: "IMPORTED" }));
     },
@@ -136,6 +139,7 @@ beforeEach(() => {
   beforeClaim = beforeComplete = duringSync = duringDelete = null;
   campaignCreates = 0;
   writes = [];
+  newerObservation = false;
   authenticated = true;
   sessionStoreId = "store-1";
 });
@@ -258,6 +262,7 @@ test("cancel endpoint rejects unauthenticated and cross-store requests", async (
   authenticated = false;
   assert.equal((await POST(request, { params })).status, 401);
   assert.equal(job.status, "QUEUED");
+  newerObservation = false;
   authenticated = true;
   sessionStoreId = "another-store";
   assert.equal((await POST(request, { params })).status, 404);
@@ -294,3 +299,18 @@ test("Action Center renders cancellation controls for both running and queued eB
   assert.match(markup, /<button[^>]*disabled=""[^>]*>Cancelling\.\.\.<\/button>/);
   assert.match(markup, /Cancelling - finishing current operation/);
 });
+
+
+for (const [type, kind] of [["HOLD", "price-check-auto-hold"], ["RESUME", "price-check-auto-resume"]]) {
+  test(`a delayed automatic ${type.toLowerCase()} cannot act on superseded Amazon evidence`, async () => {
+    job.type = type;
+    job.metadata = {kind};
+    job.productIds = ["product-0"];
+    job.total = 1;
+    newerObservation = true;
+    await runWorker();
+    assert.equal(job.status, "COMPLETED");
+    assert.equal(job.processed, 1);
+    assert.deepEqual(writes, []);
+  });
+}

@@ -1,3 +1,4 @@
+import { acquirePriceCheckResultLease, assertAmazonObservationCurrent, runObservedPriceWrite } from "@/lib/price-check-result-application";
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { Prisma } from "@/app/generated/prisma/client";
@@ -107,209 +108,229 @@ export async function POST(request: Request) {
     );
   }
 
-  const [product, historyItems] = await Promise.all([
-    prisma.product.findUnique({
-      where: { id: target.productId },
-      include: {
-        store: true,
-        variants: {
-          orderBy: { createdAt: "asc" },
-        },
-      },
-    }),
-    prisma.priceHistory.findMany({
-      where: {
-        productId: target.productId,
-        createdAt: target.createdAt,
-        appliedAt: null,
-        product: { storeId: storeSession.storeId },
-      },
-    }),
-  ]);
-
-  if (!product || product.storeId !== storeSession.storeId) {
-    return NextResponse.json({ error: "Product not found" }, { status: 404 });
-  }
-
-  if (!isPriceCheckTrackableStatus(product.status)) {
-    return NextResponse.json(
-      { error: "Only imported or on-hold products can have price changes applied" },
-      { status: 400 }
-    );
-  }
-
-  if (historyItems.length === 0) {
-    return NextResponse.json(
-      { error: "The pending price change has already been reviewed" },
-      { status: 409 }
-    );
-  }
-
-  const historyByVariantId = new Map(
-    historyItems
-      .filter((item) => item.variantId)
-      .map((item) => [item.variantId as string, item])
-  );
-  const variantsToUpdate = product.variants.filter((variant) =>
-    historyByVariantId.has(variant.id)
-  );
-
-  if (variantsToUpdate.length === 0) {
-    return NextResponse.json(
-      { error: "No active variants match this pending price change" },
-      { status: 400 }
-    );
-  }
-
-  const primaryVariant = product.variants[0] ?? null;
-  const primaryHistory =
-    (primaryVariant ? historyByVariantId.get(primaryVariant.id) : null) ??
-    historyByVariantId.get(variantsToUpdate[0].id);
-  const nextPrimarySellPrice = decimalToNumber(primaryHistory?.newSellPrice);
-
-  if (nextPrimarySellPrice === null) {
-    return NextResponse.json(
-      { error: "Pending price change is missing a valid eBay sell price" },
-      { status: 400 }
-    );
-  }
-
-  if (nextPrimarySellPrice < EBAY_MIN_PRICE) {
-    return NextResponse.json(
-      {
-        error:
-          `Calculated sell price A$${nextPrimarySellPrice.toFixed(2)} is below ` +
-          `eBay's minimum of A$${EBAY_MIN_PRICE.toFixed(2)}.`,
-      },
-      { status: 400 }
-    );
-  }
-
-  const reviewedAt = new Date();
-  const historyIds = historyItems.map((item) => item.id);
-
-  let reviseResult: Awaited<ReturnType<typeof reviseProductPrice>>;
-
+  const resultLease = await acquirePriceCheckResultLease({ storeId: storeSession.storeId, productId: target.productId });
   try {
-    reviseResult = await reviseProductPrice(
-      {
-        ...product,
-        price: primaryHistory!.newSellPrice,
-      },
-      nextPrimarySellPrice,
-    );
-  } catch (error) {
-    reviseResult = {
-      success: false,
-      errorMessage: getErrorMessage(error),
-    };
-  }
+    const [product, historyItems] = await Promise.all([
+      prisma.product.findUnique({
+        where: { id: target.productId },
+        include: {
+          store: true,
+          variants: {
+            orderBy: { createdAt: "asc" },
+          },
+        },
+      }),
+      prisma.priceHistory.findMany({
+        where: {
+          productId: target.productId,
+          createdAt: target.createdAt,
+          appliedAt: null,
+          product: { storeId: storeSession.storeId },
+        },
+      }),
+    ]);
 
-  if (!reviseResult.success) {
-    const errorMessage =
-      reviseResult.errorMessage || "Failed to revise eBay listing.";
+    if (!product || product.storeId !== storeSession.storeId) {
+      return NextResponse.json({ error: "Product not found" }, { status: 404 });
+    }
+
+    if (!isPriceCheckTrackableStatus(product.status)) {
+      return NextResponse.json(
+        { error: "Only imported or on-hold products can have price changes applied" },
+        { status: 400 }
+      );
+    }
+
+    if (historyItems.length === 0) {
+      return NextResponse.json(
+        { error: "The pending price change has already been reviewed" },
+        { status: 409 }
+      );
+    }
+
+    const historyByVariantId = new Map(
+      historyItems
+        .filter((item) => item.variantId)
+        .map((item) => [item.variantId as string, item])
+    );
+    const variantsToUpdate = product.variants.filter((variant) =>
+      historyByVariantId.has(variant.id)
+    );
+
+    if (variantsToUpdate.length === 0) {
+      return NextResponse.json(
+        { error: "No active variants match this pending price change" },
+        { status: 400 }
+      );
+    }
+
+    const primaryVariant = product.variants[0] ?? null;
+    const primaryHistory =
+      (primaryVariant ? historyByVariantId.get(primaryVariant.id) : null) ??
+      historyByVariantId.get(variantsToUpdate[0].id);
+    const nextPrimarySellPrice = decimalToNumber(primaryHistory?.newSellPrice);
+
+    if (nextPrimarySellPrice === null) {
+      return NextResponse.json(
+        { error: "Pending price change is missing a valid eBay sell price" },
+        { status: 400 }
+      );
+    }
+
+    if (nextPrimarySellPrice < EBAY_MIN_PRICE) {
+      return NextResponse.json(
+        {
+          error:
+            `Calculated sell price A$${nextPrimarySellPrice.toFixed(2)} is below ` +
+            `eBay's minimum of A$${EBAY_MIN_PRICE.toFixed(2)}.`,
+        },
+        { status: 400 }
+      );
+    }
+
+    await resultLease.assertOwnership();
+    if (product.lastPriceCheck && product.lastPriceCheck > target.createdAt) {
+      return NextResponse.json({ error: "A newer Amazon check replaced this price change. Refresh and review the current result." }, { status: 409 });
+    }
+    try {
+      await assertAmazonObservationCurrent({ storeId: product.storeId, productId: product.id, observedAt: target.createdAt });
+    } catch {
+      return NextResponse.json({ error: "A newer Amazon observation is available. Refresh before applying this change." }, { status: 409 });
+    }
+    const reviewedAt = new Date();
+    const historyIds = historyItems.map((item) => item.id);
+
+    let reviseResult: Awaited<ReturnType<typeof reviseProductPrice>>;
+
+    try {
+      await resultLease.assertOwnership();
+      reviseResult = await runObservedPriceWrite({
+        storeId: product.storeId, productId: product.id, observedAt: target.createdAt,
+        observationKey: `review:${product.id}:${target.createdAt.toISOString()}`,
+        assertOwnership: resultLease.assertOwnership,
+      }, () => reviseProductPrice(
+        {
+          ...product,
+          price: primaryHistory!.newSellPrice,
+        },
+        nextPrimarySellPrice,
+      ));
+    } catch (error) {
+      reviseResult = {
+        success: false,
+        errorMessage: getErrorMessage(error),
+      };
+    }
+
+    if (!reviseResult.success) {
+      const errorMessage =
+        reviseResult.errorMessage || "Failed to revise eBay listing.";
+
+      await prisma.$transaction(async (tx) => {
+        await tx.priceHistory.updateMany({
+          where: { id: { in: historyIds } },
+          data: {
+            ebayRevised: false,
+            errorMessage,
+            status: "FAILED",
+          },
+        });
+
+        await tx.product.update({
+          where: { id: product.id },
+          data: { priceCheckError: errorMessage },
+        });
+      });
+
+      log.error(
+        "price-check/apply",
+        "Local price change applied, but eBay revise failed",
+        undefined,
+        {
+          productId: product.id,
+          ebayItemId: product.ebayItemId,
+          errorMessage,
+        }
+      );
+
+      invalidatePriceCaches(storeSession.storeId);
+
+      return NextResponse.json(
+        {
+          error: `eBay revise failed; local prices were left unchanged: ${errorMessage}`,
+          applied: 0,
+          ebayRevised: false,
+        },
+        { status: 502 }
+      );
+    }
 
     await prisma.$transaction(async (tx) => {
-      await tx.priceHistory.updateMany({
-        where: { id: { in: historyIds } },
+      await Promise.all(
+        variantsToUpdate.map((variant) => {
+          const history = historyByVariantId.get(variant.id)!;
+          return tx.variant.update({
+            where: { id: variant.id },
+            data: { buyPrice: history.newPrice, sellPrice: history.newSellPrice },
+          });
+        }),
+      );
+
+      await tx.product.update({
+        where: { id: product.id },
         data: {
+          price: primaryHistory!.newSellPrice,
+          priceCheckError: null,
+          priceCheckFailureCode: null,
+        },
+      });
+
+      await tx.priceHistory.updateMany({
+        where: { id: { in: historyIds }, appliedAt: null },
+        data: {
+          ebayRevised: true,
+          errorMessage: null,
+          appliedAt: reviewedAt,
+          status: "APPLIED",
+        },
+      });
+
+      await tx.priceHistory.updateMany({
+        where: {
+          productId: product.id,
+          id: { notIn: historyIds },
+          appliedAt: null,
+          product: { storeId: storeSession.storeId },
+        },
+        data: {
+          appliedAt: reviewedAt,
           ebayRevised: false,
-          errorMessage,
-          status: "FAILED",
+          errorMessage: null,
+          status: "SUPERSEDED",
         },
       });
 
       await tx.product.update({
         where: { id: product.id },
-        data: { priceCheckError: errorMessage },
+        data: { priceCheckError: null, priceCheckFailureCode: null },
       });
     });
 
-    log.error(
-      "price-check/apply",
-      "Local price change applied, but eBay revise failed",
-      undefined,
-      {
-        productId: product.id,
-        ebayItemId: product.ebayItemId,
-        errorMessage,
-      }
-    );
+    log.info("price-check/apply", "Pending price change applied", {
+      productId: product.id,
+      priceHistoryIds: historyIds,
+      ebayItemId: product.ebayItemId,
+    });
 
     invalidatePriceCaches(storeSession.storeId);
 
-    return NextResponse.json(
-      {
-        error: `eBay revise failed; local prices were left unchanged: ${errorMessage}`,
-        applied: 0,
-        ebayRevised: false,
-      },
-      { status: 502 }
-    );
+    return NextResponse.json({
+      success: true,
+      applied: historyIds.length,
+      ebayRevised: true,
+    });
+  } finally {
+    await resultLease.release();
   }
 
-  await prisma.$transaction(async (tx) => {
-    await Promise.all(
-      variantsToUpdate.map((variant) => {
-        const history = historyByVariantId.get(variant.id)!;
-        return tx.variant.update({
-          where: { id: variant.id },
-          data: { buyPrice: history.newPrice, sellPrice: history.newSellPrice },
-        });
-      }),
-    );
-
-    await tx.product.update({
-      where: { id: product.id },
-      data: {
-        price: primaryHistory!.newSellPrice,
-        priceCheckError: null,
-        priceCheckFailureCode: null,
-      },
-    });
-
-    await tx.priceHistory.updateMany({
-      where: { id: { in: historyIds }, appliedAt: null },
-      data: {
-        ebayRevised: true,
-        errorMessage: null,
-        appliedAt: reviewedAt,
-        status: "APPLIED",
-      },
-    });
-
-    await tx.priceHistory.updateMany({
-      where: {
-        productId: product.id,
-        id: { notIn: historyIds },
-        appliedAt: null,
-        product: { storeId: storeSession.storeId },
-      },
-      data: {
-        appliedAt: reviewedAt,
-        ebayRevised: false,
-        errorMessage: null,
-        status: "SUPERSEDED",
-      },
-    });
-
-    await tx.product.update({
-      where: { id: product.id },
-      data: { priceCheckError: null, priceCheckFailureCode: null },
-    });
-  });
-
-  log.info("price-check/apply", "Pending price change applied", {
-    productId: product.id,
-    priceHistoryIds: historyIds,
-    ebayItemId: product.ebayItemId,
-  });
-
-  invalidatePriceCaches(storeSession.storeId);
-
-  return NextResponse.json({
-    success: true,
-    applied: historyIds.length,
-    ebayRevised: true,
-  });
 }

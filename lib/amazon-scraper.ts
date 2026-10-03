@@ -78,6 +78,8 @@ export interface ScrapedProduct {
 }
 
 export interface ScrapedAmazonPrice {
+  /** Time the accepted final Amazon price/stock evidence was obtained. */
+  observedAt?: Date;
   price: number | null;
   rawPrice?: number | null;
   shippingPrice?: number | null;
@@ -651,6 +653,7 @@ export async function scrapeAmazonPrice(
   );
   let usedOriginalDeliverySetup = !reusedDeliveryState;
   let exactPostcodeVerified = false;
+  let unavailableObservedAt: Date | undefined;
   let freshContextRecoveryUsed = false;
   let lastDeliverySetupDetails: DeliveryFailureDetails | undefined;
   let userAgent =
@@ -820,6 +823,7 @@ export async function scrapeAmazonPrice(
       .catch(() => "unknown");
 
     if (stockStatus === "out_of_stock") {
+      unavailableObservedAt = new Date();
       await requireVerifiedPostcode();
       // Check if the delivery location is still non-AU — that means
       // the postcode setter failed and "out of stock" is a geo-location
@@ -983,6 +987,8 @@ export async function scrapeAmazonPrice(
     }
 
     const observedBuyBoxOutcome = await getNormalBuyBoxOutcome(page);
+    const observedAt = new Date();
+    if (observedBuyBoxOutcome === "UNAVAILABLE") unavailableObservedAt = observedAt;
     const buyBoxOutcome =
       price !== null && observedBuyBoxOutcome !== "UNAVAILABLE"
         ? "AVAILABLE"
@@ -1093,6 +1099,7 @@ export async function scrapeAmazonPrice(
 
     return {
       price,
+      observedAt,
       rawPrice: selectedPrice?.itemPrice ?? price,
       shippingPrice: selectedPrice?.shippingFee ?? null,
       stockLeft,
@@ -1119,7 +1126,14 @@ export async function scrapeAmazonPrice(
       failure.postcodeVerified = exactPostcodeVerified;
       throw failure;
     }
-    if (error instanceof PriceCheckFailure) error.postcodeVerified = exactPostcodeVerified;
+    if (error instanceof PriceCheckFailure) {
+      error.postcodeVerified = exactPostcodeVerified;
+      if (exactPostcodeVerified && (error.code === PriceCheckFailureCode.AMAZON_OUT_OF_STOCK ||
+          error.code === PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE)) {
+        error.identityVerified = await extractPageAsin(page) === normalizedAsin;
+        if (error.identityVerified) error.observedAt = unavailableObservedAt;
+      }
+    }
     if (error instanceof AmazonDeliveryFailure) error.details.freshContextUsed = freshContextRecoveryUsed;
     throw error;
   } finally {

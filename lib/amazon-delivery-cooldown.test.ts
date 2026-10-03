@@ -6,21 +6,23 @@ import { build } from "esbuild";
 import { Prisma } from "@/app/generated/prisma/client";
 import type * as Cooldown from "./amazon-delivery-cooldown";
 import type { runPriceCheck } from "./price-checker";
-import type { runPriceCheckJob } from "./price-check-jobs";
+import type { runPriceCheckJob, runNextPriceCheckJobForStore, createPriceCheckJob } from "./price-check-jobs";
 import type { runNextPriceCheckItemForStore, cancelItemScheduledJob } from "./price-check-item-scheduler";
+import type { PriceCheckFailure } from "./price-check-failures";
 import type { AmazonDeliveryFailure } from "./amazon-delivery-recovery";
 
 type Row = Record<string, unknown>;
-type Query = { where?: Row; data?: Row; orderBy?: Row; take?: number };
+type Query = { where?: Row; data?: Row; orderBy?: Row | Row[]; take?: number };
 const compiled = build({ stdin: { resolveDir: process.cwd(), contents: `
   export * from "./lib/amazon-delivery-cooldown";
+  export { PriceCheckFailure } from "./lib/price-check-failures";
   export { AmazonDeliveryFailure } from "./lib/amazon-delivery-recovery";
   export { runPriceCheck } from "./lib/price-checker";
-  export { runPriceCheckJob } from "./lib/price-check-jobs";
+  export { runPriceCheckJob, runNextPriceCheckJobForStore, createPriceCheckJob } from "./lib/price-check-jobs";
   export { runNextPriceCheckItemForStore, cancelItemScheduledJob } from "./lib/price-check-item-scheduler";
 ` }, bundle: true, platform: "node", format: "cjs", write: false, packages: "external",
   plugins: [{ name: "isolated-database", setup(builder) {
-    builder.onResolve({ filter: /^(server-only|(?:@\/lib\/|\.\/)(?:prisma|cache-tags|logger|amazon-scraper|scraper-browser|price-check-auto-hold)|@\/app\/generated\/prisma\/client)$/ }, args => ({ path: args.path, namespace: "fixture" }));
+    builder.onResolve({ filter: /^(server-only|(?:@\/lib\/|\.\/)(?:prisma|cache-tags|logger|amazon-scraper|scraper-browser|price-check-auto-hold|ebay|worker-claim-policy)|@\/app\/generated\/prisma\/client)$/ }, args => ({ path: args.path, namespace: "fixture" }));
     builder.onLoad({ filter: /.*/, namespace: "fixture" }, args => ({ contents:
       args.path === "server-only" ? "" : args.path.endsWith("/prisma") ? "export const prisma = globalThis.database;"
       : args.path.endsWith("/client") ? "export const Prisma = globalThis.Prisma;"
@@ -28,6 +30,8 @@ const compiled = build({ stdin: { resolveDir: process.cwd(), contents: `
       : args.path.endsWith("logger") ? "export const logger = { info(){}, warn(){}, error(){}, debug(){} };"
       : args.path.endsWith("amazon-scraper") ? "export const scrapeAmazonPrice = (...args) => globalThis.scrape(...args);"
       : args.path.endsWith("scraper-browser") ? "export const launchScraperBrowser = async () => ({isConnected:()=>true,close:async()=>{}}); export const getBrowserLaunchUserMessage = () => null;"
+       : args.path.endsWith("ebay") ? "export const getStoreNumber = async () => '1'; export const callEbayReviseInventoryStatus = (...args) => globalThis.ebay(...args);"
+      : args.path.endsWith("worker-claim-policy") ? "export const getWorkerClaimPolicy = async () => ({}); export const filterRunnableJobsForWorker = jobs => jobs;"
       : "export const finalizePriceCheckAutoHoldForJob = async () => ({queued:0,actionJobId:null}); export const queuePriceCheckAutoHoldForRun = async () => ({queued:0});"
     }));
   } }],
@@ -41,6 +45,7 @@ function matches(row: Row, where: Row = {}): boolean {
     const actual = row[key];
     if (condition && typeof condition === "object" && !(condition instanceof Date)) {
       const comparison = condition as Row;
+      if ("not" in comparison) return actual !== comparison.not;
       if ("in" in comparison) return (comparison.in as unknown[]).includes(actual);
       if ("gt" in comparison) return actual != null && Number(actual) > Number(comparison.gt);
       if ("gte" in comparison) return actual != null && Number(actual) >= Number(comparison.gte);
@@ -50,7 +55,7 @@ function matches(row: Row, where: Row = {}): boolean {
       if ("has" in comparison) return (actual as unknown[]).includes(comparison.has);
       return !!actual && typeof actual === "object" && matches(actual as Row, comparison);
     }
-    return actual === condition;
+    return actual instanceof Date && condition instanceof Date ? actual.getTime() === condition.getTime() : actual === condition;
   });
 }
 function update(row: Row, data: Row) {
@@ -69,11 +74,11 @@ async function fixture(count = 809, version = 1, finished = 0) {
   const now = new Date();
   const ids = Array.from({ length: count }, (_, i) => `product-${i}`);
   const tables: Record<string, Row[]> = {
-    priceCheckScheduleState: [], jobLease: [], amazonPriceObservation: [],
+    priceCheckScheduleState: [], jobLease: [], amazonPriceObservation: [], priceHistory: [], listingOperation: [], variant: [], user: [{id:"user-a"}],
     store: [{ id: "store-a", priceCheckItemSchedulerEnabled: version === 2 }],
     supplierSettings: [{ storeId: "store-a", supplierName: "Amazon AU", scrapePostcode: "2217", minProductQuantity: 1, priceTrackingEnabled: true }],
     product: ids.map(id => ({ id, storeId: "store-a", asin: "B0G6CQ427S", status: "IMPORTED", amazonPriceTrackingMode: "REGULAR",
-      variants: [{ id: `${id}-variant`, buyPrice: 100, sellPrice: 120 }], store: {}, lastPriceCheck: null, itemSpecifics: {} })),
+      variants: [{ id: `${id}-variant`, buyPrice: 100, sellPrice: 120 }], store: {}, amazonPrice: 100, price: 120, ebayItemId: "123456789012", quantity: 1, holdLastObservationId: null, lastPriceCheck: null, itemSpecifics: {}, _count: {variants: 1} })),
     priceCheckJob: [{ id: "job-a", storeId: "store-a", userId: "user-a", status: "QUEUED", schedulerVersion: version,
       productIds: ids, completedProductIds: ids.slice(0, finished), total: count, checked: finished, changed: 0, pendingReview: 0,
       failed: 0, skipped: finished, startedAt: null, completedAt: null, reason: null, errorMessage: null,
@@ -82,17 +87,32 @@ async function fixture(count = 809, version = 1, finished = 0) {
       status: position < finished ? "COMPLETED" : "PENDING", nextAttemptAt: now, attempts: 0, remoteWriteStarted: false, leaseExpiresAt: null,
       checked: position < finished ? 1 : 0, failed: 0, skipped: 0, changed: 0, pendingReview: 0, completedAt: null, claimToken: null })) : [],
   };
+  tables.variant = tables.product.flatMap(row => row.variants as Row[]);
   let idCounter = 0;
   const model = (name: string) => {
     const all = (query: Query = {}) => tables[name].filter(row => matches(name === "priceCheckJobItem"
-      ? { ...row, job: tables.priceCheckJob.find(job => job.id === row.jobId) } : row, query.where));
+      ? { ...row, job: tables.priceCheckJob.find(job => job.id === row.jobId) } : row, query.where)).sort((a,b) => {
+      for (const order of [query.orderBy ?? {}].flat()) for (const [key, direction] of Object.entries(order)) {
+        // PostgreSQL enum order is MANUAL, AUTOMATIC.
+        const left = key === "trigger" ? (a[key] === "MANUAL" ? 0 : 1) : a[key];
+        const right = key === "trigger" ? (b[key] === "MANUAL" ? 0 : 1) : b[key];
+        const comparison = left! < right! ? -1 : left! > right! ? 1 : 0;
+        if (comparison) return direction === "desc" ? -comparison : comparison;
+      }
+      return 0;
+    });
     return {
       findUnique: async (query: Query) => all(query)[0] ?? null,
       findUniqueOrThrow: async (query: Query) => { const row = all(query)[0]; if (!row) throw new Error("Missing row"); return row; },
       findFirst: async (query: Query) => all(query)[0] ?? null,
       findMany: async (query: Query = {}) => all(query).slice(0, query.take),
       count: async (query: Query) => all(query).length,
-      create: async (query: Query) => { const row = { id: `created-${++idCounter}`, observedAt: new Date(), ...query.data }; tables[name].push(row); return row; },
+      create: async (query: Query) => { const row = { id: `created-${++idCounter}`, acquiredAt: new Date(), renewedAt: new Date(), observedAt: new Date(),
+        ...(name === "priceCheckJob" ? { completedProductIds: [], checked: 0, failed: 0, skipped: 0, changed: 0, pendingReview: 0, createdAt: new Date(), updatedAt: new Date(), dismissedAt: null } : {}), ...query.data }; tables[name].push(row); return row; },
+      createMany: async (query: { data: Row[] }) => {
+        for (const data of query.data) tables[name].push({ id: `created-${++idCounter}`, acquiredAt: new Date(), renewedAt: new Date(), ...data });
+        return { count: query.data.length };
+      },
       upsert: async (query: Query & { create: Row; update: Row }) => {
         let row = all(query)[0];
         if (!row) { row = { id: `created-${++idCounter}`, consecutivePostcodeFailures: 0, amazonBlockedUntil: null, amazonCooldownSeconds: 0, ...query.create }; tables[name].push(row); }
@@ -112,27 +132,39 @@ async function fixture(count = 809, version = 1, finished = 0) {
       let release = () => {};
       lock = new Promise<void>(resolve => { release = resolve; });
       await previous;
-      const before = structuredClone(tables);
+      const clone = (value: unknown): unknown => {
+        if (value instanceof Date) return new Date(value.getTime());
+        if (Prisma.Decimal.isDecimal(value)) return Number(value);
+        if (Array.isArray(value)) return value.map(clone);
+        if (value && typeof value === "object") return Object.fromEntries(Object.entries(value).map(([key,item]) => [key,clone(item)]));
+        return value;
+      };
+      const before = clone(tables) as typeof tables;
       try { return await operation({ ...database, $queryRaw: async () => [] }); }
       catch (error) { Object.assign(tables, before); throw error; }
       finally { release(); }
     },
   };
+  let ebay: (...args: unknown[]) => Promise<{ success: boolean; errorMessage?: string; outcomeUncertain?: boolean }> = async () => ({ success: true });
   let scrapeCalls = 0;
-  let scrape: (signal?: AbortSignal) => Promise<unknown>;
+  let scrape: (signal?: AbortSignal, options?: Record<string,unknown>) => Promise<unknown>;
+  let clock: (() => number) | undefined;
+  class FixtureDate extends Date {
+    static now() { return clock ? clock() : Date.now(); }
+  }
   const fixtureModule = { exports: {} };
   vm.runInNewContext(await compiled, { module: fixtureModule, exports: fixtureModule.exports, require: createRequire(import.meta.url),
-    globalThis: { database, Prisma, scrape: (...args: unknown[]) => {
-      scrapeCalls++; return scrape((args[5] as { signal?: AbortSignal })?.signal);
-    } }, process, console, Buffer, URL, URLSearchParams, Date, AbortController,
+    globalThis: { database, Prisma, ebay: (...args: unknown[]) => ebay(...args), scrape: (...args: unknown[]) => {
+      scrapeCalls++; return scrape((args[5] as { signal?: AbortSignal })?.signal, args[5] as Record<string,unknown>);
+    } }, process, console, Buffer, URL, URLSearchParams, Date: FixtureDate, AbortController,
     setTimeout, clearTimeout, setInterval, clearInterval, fetch: () => { throw new Error("Unexpected marketplace or network write"); },
   });
-  const api = fixtureModule.exports as typeof Cooldown & { runPriceCheck: typeof runPriceCheck; runPriceCheckJob: typeof runPriceCheckJob;
-    AmazonDeliveryFailure: typeof AmazonDeliveryFailure; runNextPriceCheckItemForStore: typeof runNextPriceCheckItemForStore;
+  const api = fixtureModule.exports as typeof Cooldown & { runPriceCheck: typeof runPriceCheck; runPriceCheckJob: typeof runPriceCheckJob; runNextPriceCheckJobForStore: typeof runNextPriceCheckJobForStore; createPriceCheckJob: typeof createPriceCheckJob;
+    PriceCheckFailure: typeof PriceCheckFailure; AmazonDeliveryFailure: typeof AmazonDeliveryFailure; runNextPriceCheckItemForStore: typeof runNextPriceCheckItemForStore;
     cancelItemScheduledJob: typeof cancelItemScheduledJob };
   scrape = async () => { throw new api.AmazonDeliveryFailure("HTTP 503; popup recovery timed out", {
     technicalCode: "AMAZON_DELIVERY_HTTP_ERROR", stage: "popup-input", httpStatus: 503, requestedPostcode: "2217" }); };
-  return { api, tables, calls: () => scrapeCalls, setScrape: (value: typeof scrape) => { scrape = value; },
+  return { api, tables, database, setClock: (value: () => number) => { clock = value; }, setEbay: (value: typeof ebay) => { ebay = value; }, calls: () => scrapeCalls, setScrape: (value: typeof scrape) => { scrape = value; },
     expire: () => {
       tables.priceCheckScheduleState.forEach(row => { row.amazonBlockedUntil = new Date(0); });
       tables.priceCheckJobItem.filter(row => row.status === "RETRY_WAIT").forEach(row => { row.nextAttemptAt = new Date(0); });
@@ -214,7 +246,7 @@ test("a product-page HTTP 404 completes only that product without store cooldown
   assert.equal(job.failed, 1);
   assert.deepEqual(job.completedProductIds, ["product-0"]);
   assert.equal(await f.api.getAmazonDeliveryWait("store-a"), null);
-  assert.ok(f.tables.product[0].lastPriceCheck);
+  assert.equal(f.tables.product[0].lastPriceCheck, null, "technical attempts cannot advance observation freshness");
   assert.equal(f.tables.product[0].priceCheckFailureCode, "TECHNICAL_ERROR");
   assert.equal(f.tables.jobLease.length, 0);
 });
@@ -314,4 +346,285 @@ test("an expired recovery owner cannot clear, extend, or release a newer worker'
   await f.api.releaseDeliveryPermit(newProbe);
   assert.equal(await f.api.getAmazonDeliveryWait("store-a"), null);
   assert.equal(f.tables.jobLease.length, 0);
+});
+
+const workerA = { workerId: "worker-a", workerName: "Worker A", workerRole: "store-specific" as const };
+const workerB = { workerId: "worker-b", workerName: "Worker B", workerRole: "store-specific" as const };
+function promiseGate<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(done => { resolve = done; });
+  return { promise, resolve };
+}
+function verified(price: number, observedAt: Date, stockLeft = 10) {
+  return { price, observedAt, stockLeft, postcodeVerified: true, detectedAsin: "B0G6CQ427S",
+    identityOutcome: "MATCH", buyBoxOutcome: "AVAILABLE", acceptedPriceSource: "#buybox" };
+}
+function addJob(f: Awaited<ReturnType<typeof fixture>>, id: string, trigger: "MANUAL" | "AUTOMATIC") {
+  const job = { ...f.tables.priceCheckJob[0], id, trigger, status: "QUEUED", checked: 0,
+    completedProductIds: [], startedAt: null, createdAt: new Date(), updatedAt: new Date() };
+  f.tables.priceCheckJob.push(job);
+  return job;
+}
+
+for (const newestFirst of [true, false]) {
+  test(`overlapping jobs apply observation time when the first job obtains its result ${newestFirst ? "last" : "first"}`, async () => {
+    const f = await fixture(1);
+    f.tables.priceCheckJob[0].trigger = "AUTOMATIC";
+    addJob(f, "manual-job", "MANUAL");
+    const entered = promiseGate<void>();
+    const firstResponse = promiseGate<unknown>();
+    let calls = 0;
+    const earlier = new Date(Date.now() + 1000);
+    const later = new Date(earlier.getTime() + 1000);
+    f.setScrape(async () => { if (++calls === 1) { entered.resolve(); return firstResponse.promise; }
+      return verified(90, newestFirst ? earlier : later); });
+    const running = f.api.runPriceCheckJob("job-a", workerA);
+    await Promise.race([entered.promise, new Promise((_, reject) => setTimeout(() => reject(new Error(JSON.stringify(f.tables.priceCheckJob))), 3000))]);
+    const duplicate = f.api.runPriceCheckJob("job-a", workerB);
+    await assert.rejects(duplicate, /claimed|overlapping/i);
+    await f.api.runPriceCheckJob("manual-job", workerB);
+    assert.equal(f.tables.priceCheckJob[1].status, "COMPLETED", "manual finishes while automatic still scraping");
+    assert.equal(f.tables.priceCheckJob[0].status, "RUNNING");
+    firstResponse.resolve(verified(80, newestFirst ? later : earlier));
+    await running;
+    assert.equal(Number(f.tables.product[0].amazonPrice), newestFirst ? 80 : 90);
+    assert.equal((f.tables.product[0].lastPriceCheck as Date).getTime(), later.getTime());
+    assert.equal(f.tables.amazonPriceObservation.length, 2, "both snapshots remain diagnostic evidence");
+    assert.equal(f.tables.priceCheckJob[0].changed, newestFirst ? 1 : 0);
+    assert.equal(f.tables.jobLease.length, 0);
+    assert.ok(f.tables.priceCheckJob.every(job => (job.completedProductIds as string[]).length === 1));
+  });
+}
+
+test("manual selection is not hidden behind more than ten older automatic jobs", async () => {
+  const f = await fixture(1);
+  f.tables.priceCheckJob[0].trigger = "AUTOMATIC";
+  for (let i=0;i<15;i++) addJob(f, `auto-${i}`, "AUTOMATIC");
+  const manual = addJob(f, "manual-last", "MANUAL");
+  f.setScrape(async () => verified(100, new Date()));
+  await f.api.runNextPriceCheckJobForStore("store-a", workerA);
+  assert.equal(manual.status, "COMPLETED");
+  assert.ok(f.tables.priceCheckJob.filter(job => job.trigger === "AUTOMATIC").every(job => job.status === "QUEUED"));
+});
+
+test("equal observation times retain the already accepted snapshot", async () => {
+  const f = await fixture(1);
+  const observedAt = new Date();
+  f.setScrape(async () => verified(90, observedAt));
+  await f.api.runPriceCheck({ storeId: "store-a", ignoreSchedule: true });
+  f.setScrape(async () => verified(80, observedAt));
+  const second = await f.api.runPriceCheck({ storeId: "store-a", ignoreSchedule: true });
+  assert.equal(second.changed, 0);
+  assert.equal(Number(f.tables.product[0].amazonPrice), 90);
+});
+
+test("new verified unavailability wins and an older available snapshot cannot restore stock", async () => {
+  const f = await fixture(1);
+  const earlier = new Date(Date.now()-1000), later = new Date();
+  f.setScrape(async () => ({ ...verified(100,later), price: null, stockLeft: 0, buyBoxOutcome: "UNAVAILABLE" }));
+  await f.api.runPriceCheck({ storeId: "store-a", ignoreSchedule: true });
+  f.setScrape(async () => verified(100, earlier));
+  const stale = await f.api.runPriceCheck({ storeId: "store-a", ignoreSchedule: true });
+  assert.equal(stale.failed, 0);
+  assert.equal(f.tables.product[0].amazonAvailability, "OUT_OF_STOCK");
+  assert.equal(f.tables.product[0].amazonStockLeft, 0);
+  assert.equal(f.tables.product[0].priceCheckFailureCode, "AMAZON_BUYBOX_UNAVAILABLE");
+});
+
+test("new verified availability replaces an unavailable observation and its stale reviews", async () => {
+  const f = await fixture(1);
+  const earlier = new Date(Date.now()-1000), later = new Date();
+  f.setScrape(async () => ({ ...verified(100,earlier), price: null, stockLeft: 0, buyBoxOutcome: "UNAVAILABLE" }));
+  await f.api.runPriceCheck({ storeId: "store-a", ignoreSchedule: true });
+  f.tables.priceHistory.push({ productId: "product-0", createdAt: earlier, appliedAt: null });
+  f.setScrape(async () => verified(100,later));
+  await f.api.runPriceCheck({ storeId: "store-a", ignoreSchedule: true });
+  assert.equal(f.tables.product[0].amazonAvailability, "IN_STOCK");
+  assert.equal(f.tables.product[0].priceCheckFailureCode, null);
+  assert.equal(f.tables.priceHistory[0].status, "SUPERSEDED");
+});
+
+test("concurrent automatic enqueue requests reuse the same active automatic job", async () => {
+  const f = await fixture(1);
+  const requests = Array.from({length: 4}, () => f.api.createPriceCheckJob({
+    storeId: "store-a", userId: "user-a", all: true, trigger: "AUTOMATIC",
+  }));
+  const results = await Promise.all(requests);
+  assert.equal(new Set(results.map(result => result.job.id)).size, 1);
+  assert.equal(f.tables.priceCheckJob.filter(job => job.trigger === "AUTOMATIC").length, 1);
+  assert.equal(f.tables.priceCheckJob.filter(job => job.trigger === "MANUAL").length, 1);
+});
+
+for (const storeId of ["seed-store-1", "cmryiv1u1000wmsumt3z8qla5", "seed-store-2"]) {
+  test(`both workers can run overlapping checks with isolated delivery sessions for ${storeId}`, async () => {
+    const f = await fixture(1);
+    for (const rows of Object.values(f.tables)) for (const row of rows) if (row.storeId === "store-a") row.storeId = storeId;
+    f.tables.store[0].id = storeId;
+    addJob(f,"job-b","MANUAL");
+    const oldFeatures = process.env.LISTFLOW_PRICE_CHECK_OPTIMIZATIONS;
+    const oldMode = process.env.LISTFLOW_PRICE_CHECK_DELIVERY_STATE_MODE;
+    process.env.LISTFLOW_PRICE_CHECK_OPTIMIZATIONS = "delivery-state";
+    process.env.LISTFLOW_PRICE_CHECK_DELIVERY_STATE_MODE = "all";
+    const sessions: unknown[] = [];
+    const both = promiseGate<void>();
+    let calls = 0;
+    f.setScrape(async (_,options) => {
+      sessions.push(options?.deliveryState);
+      if (++calls === 2) both.resolve();
+      await both.promise;
+      return verified(100,new Date());
+    });
+    try {
+      await Promise.all([f.api.runPriceCheckJob("job-a",workerA), f.api.runPriceCheckJob("job-b",workerB)]);
+      assert.equal(sessions.length,2);
+      assert.ok(sessions[0] && sessions[1] && sessions[0] !== sessions[1]);
+      assert.ok(f.tables.priceCheckJob.every(job => job.status === "COMPLETED"));
+      assert.equal(f.tables.jobLease.length,0);
+    } finally {
+      if (oldFeatures === undefined) delete process.env.LISTFLOW_PRICE_CHECK_OPTIMIZATIONS; else process.env.LISTFLOW_PRICE_CHECK_OPTIMIZATIONS = oldFeatures;
+      if (oldMode === undefined) delete process.env.LISTFLOW_PRICE_CHECK_DELIVERY_STATE_MODE; else process.env.LISTFLOW_PRICE_CHECK_DELIVERY_STATE_MODE = oldMode;
+    }
+  });
+}
+
+test("a delayed older eBay write settles before the newest observation is applied", async () => {
+  const f = await fixture(1);
+  addJob(f,"job-b","MANUAL");
+  const firstWrite = promiseGate<void>();
+  const releaseWrite = promiseGate<void>();
+  const xmlWrites: string[] = [];
+  f.setEbay(async xml => {
+    xmlWrites.push(String(xml));
+    if (xmlWrites.length === 1) { firstWrite.resolve(); await releaseWrite.promise; }
+    return { success: true };
+  });
+  let calls = 0;
+  const firstAt = new Date(Date.now()+1000), secondAt = new Date(firstAt.getTime()+1000);
+  f.setScrape(async () => verified(++calls === 1 ? 110 : 120, calls === 1 ? firstAt : secondAt));
+  const first = f.api.runPriceCheckJob("job-a",workerA);
+  await firstWrite.promise;
+  const second = f.api.runPriceCheckJob("job-b",workerB);
+  while (f.tables.amazonPriceObservation.length < 2) await new Promise(resolve => setTimeout(resolve,10));
+  assert.equal(xmlWrites.length,1, "newer request waits for the older request to settle");
+  releaseWrite.resolve();
+  await Promise.all([first,second]);
+  assert.equal(xmlWrites.length,2);
+  assert.equal(Number(f.tables.product[0].amazonPrice),120);
+  assert.equal((f.tables.product[0].lastPriceCheck as Date).getTime(),secondAt.getTime());
+  assert.ok(f.tables.listingOperation.every(row => row.stage === "COMPLETED"));
+  assert.equal(f.tables.jobLease.length,0);
+});
+
+test("an ambiguous eBay response blocks automatic replay while fresh Amazon observations continue", async () => {
+  const f = await fixture(1);
+  let writes = 0;
+  f.setEbay(async () => { writes++; return {success:false,errorMessage:"Request timed out",outcomeUncertain:true}; });
+  const firstAt = new Date();
+  f.setScrape(async () => verified(110,firstAt));
+  await f.api.runPriceCheck({storeId:"store-a",ignoreSchedule:true});
+  assert.equal(f.tables.listingOperation[0].stage,"RECONCILIATION");
+  f.setScrape(async () => verified(120,new Date(firstAt.getTime()+1000)));
+  await f.api.runPriceCheck({storeId:"store-a",ignoreSchedule:true});
+  assert.equal(writes,1);
+  assert.equal(Number(f.tables.product[0].amazonPrice),120);
+});
+
+test("another job's lastPriceCheck is never inferred as this job's completion", async () => {
+  const f = await fixture(1);
+  f.tables.priceCheckJob[0].startedAt = new Date(Date.now()-1000);
+  f.tables.product[0].lastPriceCheck = new Date();
+  f.setScrape(async () => verified(100,new Date(Date.now()+1000)));
+  await f.api.runPriceCheckJob("job-a",workerA);
+  assert.equal(f.calls(),1);
+  assert.deepEqual(f.tables.priceCheckJob[0].completedProductIds,["product-0"]);
+});
+
+
+test("a busy marketplace lane defers without a failed product or Amazon cooldown", async () => {
+  const f = await fixture(1);
+  f.tables.jobLease.push({ storeId: "store-a", resourceKey: "ebay-api-write", jobType: "EBAY_ACTION",
+    jobId: "bulk-edit", workerId: "other-worker", workerName: "Bulk worker",
+    acquiredAt: new Date(), renewedAt: new Date(), expiresAt: new Date("2099-01-01") });
+  f.setScrape(async () => {
+    let now = Date.now();
+    f.setClock(() => now += 120_001);
+    return verified(100, new Date());
+  });
+  await f.api.runPriceCheckJob("job-a", workerA);
+  const job = f.tables.priceCheckJob[0];
+  assert.equal(job.status, "QUEUED");
+  assert.equal(job.checked, 0);
+  assert.equal(job.failed, 0);
+  assert.deepEqual(job.completedProductIds, []);
+  assert.match(String(job.reason), /marketplace update/);
+  assert.equal(job.errorMessage, null);
+  assert.equal(f.tables.product[0].lastPriceCheck, null);
+  assert.equal(await f.api.getAmazonDeliveryWait("store-a"), null);
+});
+
+test("losing job ownership prevents product changes and checkpoint writes", async () => {
+  const f = await fixture(1);
+  const entered = promiseGate<void>(), release = promiseGate<void>();
+  f.setScrape(async () => { entered.resolve(); await release.promise; return verified(90, new Date()); });
+  const running = f.api.runPriceCheckJob("job-a", workerA);
+  await entered.promise;
+  f.tables.jobLease.length = 0;
+  release.resolve();
+  await running;
+  assert.equal(Number(f.tables.product[0].amazonPrice), 100);
+  assert.deepEqual(f.tables.priceCheckJob[0].completedProductIds, []);
+  assert.equal(f.tables.priceCheckJob[0].checked, 0);
+});
+
+test("a manual job waits for either busy worker to finish without interrupting them", async () => {
+  const f = await fixture(1);
+  f.tables.priceCheckJob[0].trigger = "AUTOMATIC";
+  addJob(f, "job-b", "AUTOMATIC");
+  const entered = promiseGate<void>(), release = promiseGate<void>();
+  let calls = 0;
+  f.setScrape(async () => {
+    if (++calls === 2) entered.resolve();
+    await release.promise;
+    return verified(100, new Date());
+  });
+  const busy = [f.api.runPriceCheckJob("job-a", workerA), f.api.runPriceCheckJob("job-b", workerB)];
+  await entered.promise;
+  const manual = addJob(f, "manual-waiting", "MANUAL");
+  assert.equal(manual.status, "QUEUED");
+  assert.equal(f.tables.priceCheckJob.filter(job => job.status === "RUNNING").length, 2);
+  release.resolve();
+  await Promise.all(busy);
+  await f.api.runNextPriceCheckJobForStore("store-a", workerA);
+  assert.equal(f.tables.priceCheckJob.find(job => job.id === manual.id)?.status, "COMPLETED");
+  assert.equal(calls, 3);
+});
+
+
+test("a wrong-ASIN response retains the accepted price, stock, and freshness timestamp", async () => {
+  const f = await fixture(1);
+  const observedAt = new Date(Date.now()-1000);
+  f.setScrape(async () => verified(100, observedAt));
+  await f.api.runPriceCheck({storeId: "store-a", ignoreSchedule: true});
+  f.setScrape(async () => ({...verified(1, new Date()), stockLeft: 0,
+    detectedAsin: "B0OTHERASIN", identityOutcome: "MISMATCH"}));
+  await f.api.runPriceCheck({storeId: "store-a", ignoreSchedule: true});
+  assert.equal(Number(f.tables.product[0].amazonPrice), 100);
+  assert.equal(f.tables.product[0].amazonStockLeft, 10);
+  assert.equal(f.tables.product[0].amazonAvailability, "IN_STOCK");
+  assert.equal((f.tables.product[0].lastPriceCheck as Date).getTime(), observedAt.getTime());
+  assert.equal(f.tables.amazonPriceObservation.filter(row => row.isSuccessful).length, 1);
+});
+
+
+test("a failed observation insert defers rather than applying an unrecorded snapshot", async () => {
+  const f = await fixture(1);
+  const observations = (f.database as unknown as {amazonPriceObservation: {create: () => Promise<never>}}).amazonPriceObservation;
+  observations.create = async () => { throw new Error("Database temporarily unavailable"); };
+  f.setScrape(async () => verified(90, new Date()));
+  await f.api.runPriceCheckJob("job-a", workerA);
+  assert.equal(f.tables.priceCheckJob[0].status, "QUEUED");
+  assert.equal(f.tables.priceCheckJob[0].checked, 0);
+  assert.equal(f.tables.priceCheckJob[0].failed, 0);
+  assert.equal(Number(f.tables.product[0].amazonPrice), 100);
+  assert.deepEqual(f.tables.priceCheckJob[0].completedProductIds, []);
 });

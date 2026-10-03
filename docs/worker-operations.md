@@ -24,3 +24,20 @@ Run the same command with `-Mode Run` to request graceful stop and wait for acti
 Retain the original ZIP, manifest, private `.env`, and logs. A new release is installed into an empty destination after the existing supervisor stops. Do not overwrite a running checkout. Preserve older logs before removing its runtime directory. If a new release fails, stop it gracefully and preserve its diagnostics; restart a prior known-good release only after its code and configuration are confirmed healthy. Never kill all Node processes, clear live leases, or delete another PC's files.
 
 The database schema and product listings are not changed by package installation. The website and worker should use the same reviewed repair revision. Pushing GitHub alone does not install or start this PC's workers.
+## Concurrent price checks
+
+Each store retains its own pair of workers. Imports and bulk actions retain priority;
+manual price-check jobs precede waiting automatic checks. Running jobs finish normally.
+Different jobs may scrape the same product concurrently; a job ownership lease prevents
+two workers from executing the same job. No store or selection-wide execution lock is used.
+
+Amazon snapshot timestamps determine freshness. Results and marketplace writes use a short
+application lease, with a fresh product/settings read before calculations. Older snapshots
+remain diagnostic observations and complete their own checkpoints without replacing newer
+results. Equal timestamps keep the accepted result. Technical attempts do not advance
+verified observation freshness. A marketplace timeout with an uncertain outcome is retained
+as a reconciliation operation and is not automatically replayed.
+
+Upgrade all six workers together after graceful shutdown. Keep the installed environment,
+instance identity, store assignments, and all-store delivery reuse. This release uses the
+existing job-based scheduler and requires no database migration.

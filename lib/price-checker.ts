@@ -1,3 +1,6 @@
+import { randomUUID } from "node:crypto";
+import { acquirePriceCheckResultLease, assertAmazonObservationCurrent, SupersededAmazonObservation, PriceCheckResultDeferred, runObservedPriceWrite } from "@/lib/price-check-result-application";
+import type { WorkerContext } from "@/lib/job-coordination";
 import type { Browser } from "playwright-core";
 import { getPriceCheckProductDelayMs, resolvePriceCheckProductPacing } from "@/lib/price-check-pacing";
 import { Prisma } from "@/app/generated/prisma/client";
@@ -92,6 +95,7 @@ export type PriceCheckProductFailure = {
 
 interface RunPriceCheckOptions {
   jobId?: string;
+  worker?: WorkerContext;
   optimizationConfig?: PriceCheckOptimizationConfig;
   completionIncludesProgress?: boolean;
   storeId?: string;
@@ -518,10 +522,15 @@ export async function runPriceCheck(
     failed: 0,
     skipped: 0,
   };
+  let applicationLease: Awaited<ReturnType<typeof acquirePriceCheckResultLease>> | undefined;
+  const assertApplicationOwnership = async () => {
+    await options.assertOwnership?.();
+    await applicationLease?.assertOwnership();
+  };
   const measureStage = async <T>(stage: string, operation: () => Promise<T>) => {
     const startedAt = Date.now();
     try {
-      if (stage === "database-write") await options.assertOwnership?.();
+      if (stage === "database-write") await assertApplicationOwnership();
       return await operation();
     } finally {
       timing.record(stage, Date.now() - startedAt);
@@ -579,7 +588,9 @@ export async function runPriceCheck(
       }
     }
   };
-  const recordProductFailure = async (input: PriceCheckProductFailure) => {
+  const recordProductFailure = async (input: PriceCheckProductFailure & {
+    observationId?: string | null; stockLeft?: number | null;
+  }) => {
     const persisted = await measureStage("database-write", () =>
       prisma.product.updateMany({
         where: {
@@ -587,13 +598,15 @@ export async function runPriceCheck(
           OR: [{ lastPriceCheck: null }, { lastPriceCheck: { lt: input.checkedAt } }],
         },
         data: {
-          lastPriceCheck: input.checkedAt,
+          ...(input.observationId ? { lastPriceCheck: input.checkedAt } : {}),
           priceCheckError: input.message,
           priceCheckFailureCode: input.code,
-          amazonAvailability:
-            input.code === PriceCheckFailureCode.AMAZON_OUT_OF_STOCK
-              ? AmazonAvailability.OUT_OF_STOCK
-              : AmazonAvailability.UNKNOWN,
+          ...(input.observationId ? { holdLastObservationId: input.observationId } : {}),
+          ...(input.stockLeft !== undefined ? getAmazonStockUpdate(input.stockLeft) : {}),
+          ...(input.observationId ? {
+            amazonAvailability: [PriceCheckFailureCode.AMAZON_OUT_OF_STOCK, PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE]
+              .includes(input.code as "AMAZON_OUT_OF_STOCK") ? AmazonAvailability.OUT_OF_STOCK : AmazonAvailability.UNKNOWN,
+          } : {}),
         },
       }),
     );
@@ -633,6 +646,13 @@ export async function runPriceCheck(
       invalidatePriceCaches(options.storeId);
     }
   };
+  const finishResultWait = (error: PriceCheckResultDeferred) => {
+    result.checked -= 1;
+    runOutcome = "deferred";
+    return { ...result, deferred: true, retryAt: new Date(Date.now() + 5_000).toISOString(),
+      reason: error.message, waitReason: error.message, technicalFailureCode: "PRICE_CHECK_RESULT_WAIT" };
+  };
+
   const finishCancelled = () => {
     runOutcome = "cancelled";
     invalidateRunCaches();
@@ -768,15 +788,16 @@ export async function runPriceCheck(
   };
 
   try {
-    for (const [index, product] of products.entries()) {
+    for (const [index, initialProduct] of products.entries()) {
     if (await checkCancelled()) {
       return finishCancelled();
     }
 
+    let product = initialProduct;
     result.checked += 1;
     productStartedAt.set(product.id, Date.now());
 
-      const checkedAt = new Date();
+      let checkedAt = new Date();
 
       const prerequisiteIssue = getPriceCheckPrerequisiteIssue(product);
 
@@ -826,6 +847,7 @@ export async function runPriceCheck(
         }
       }
 
+      let observationId: string | null = null;
       try {
         let currentAmazonPrice: number | null;
         let scrapedAmazonStockLeft: number | null | undefined;
@@ -881,23 +903,36 @@ export async function runPriceCheck(
             clearInterval(cancelTimer);
           }
 
+          if (!scrapeResult.postcodeVerified) {
+            throw new AmazonDeliveryFailure("The final Amazon delivery postcode was not verified.", {
+              technicalCode: "AMAZON_DELIVERY_POSTCODE_UNVERIFIED", stage: "final-verification",
+              requestedPostcode: scrapePostcode,
+            });
+          }
+          if (scrapeResult.identityOutcome !== "MATCH" || scrapeResult.detectedAsin !== product.asin) {
+            const failure = new PriceCheckFailure(PriceCheckFailureCode.AMAZON_ASIN_REDIRECT,
+              "The final Amazon page did not match the requested ASIN.", scrapeResult.detectedAsin);
+            failure.postcodeVerified = true;
+            throw failure;
+          }
           if (scrapeResult.postcodeVerified && deliveryPermit) {
             await confirmAmazonDelivery(deliveryPermit);
             await releaseDeliveryPermit(deliveryPermit);
             deliveryPermit = undefined;
           }
 
+          checkedAt = scrapeResult.observedAt ?? new Date();
           currentAmazonPrice = scrapeResult.price;
           scrapedAmazonStockLeft = scrapeResult.stockLeft;
         }
 
-        let observationId: string | null = null;
+        if (simulatedAmazonPrice !== null) checkedAt = new Date();
         const observationFailureCode =
           scrapeResult?.buyBoxOutcome === "UNAVAILABLE"
             ? PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE
             : scrapeResult?.variantSelectionFailed
               ? PriceCheckFailureCode.AMAZON_VARIANT_SELECTION_REQUIRED
-              : null;
+              : currentAmazonPrice === null ? PriceCheckFailureCode.AMAZON_PRICE_UNAVAILABLE : null;
         const amazonAvailabilityUpdate = getAmazonAvailabilityUpdate({
           price: currentAmazonPrice,
           stockLeft: scrapedAmazonStockLeft,
@@ -940,6 +975,7 @@ export async function runPriceCheck(
                   observationFailureCode === PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE
                     ? "The normal Amazon Buy Box is unavailable."
                     : scrapeResult?.variantSelectionReason ?? null,
+                observedAt: checkedAt,
                 isSuccessful:
                   currentAmazonPrice !== null &&
                   scrapeResult?.buyBoxOutcome !== "UNAVAILABLE" &&
@@ -952,9 +988,39 @@ export async function runPriceCheck(
               productId: product.id,
               errorMessage: getErrorMessage(error),
             });
+            throw new PriceCheckResultDeferred("Could not persist the verified Amazon observation. Retrying; remaining products preserved.");
           }
         }
 
+        applicationLease = await acquirePriceCheckResultLease({
+          storeId: product.storeId, productId: product.id, worker: options.worker,
+          assertOwnership: options.assertOwnership, shouldCancel: options.shouldCancel,
+        });
+        await assertApplicationOwnership();
+        const refreshed = await prisma.product.findUnique({ where: { id: product.id },
+          include: { store: true, variants: { orderBy: { createdAt: "asc" } } } });
+        if (!refreshed || ![ProductStatus.IMPORTED, ProductStatus.ON_HOLD].includes(refreshed.status as "IMPORTED")) {
+          result.skipped += 1;
+          await reportProductComplete(product.id);
+          continue;
+        }
+        product = refreshed;
+        await assertAmazonObservationCurrent({ storeId: product.storeId, productId: product.id, observedAt: checkedAt });
+        const acceptedObservation = product.holdLastObservationId ? await prisma.amazonPriceObservation.findUnique({
+          where: { id: product.holdLastObservationId },
+        }) : null;
+        const acceptedAt = acceptedObservation?.observedAt ??
+          (product.priceCheckFailureCode === PriceCheckFailureCode.TECHNICAL_ERROR ? null : product.lastPriceCheck);
+        if (acceptedAt && acceptedAt >= checkedAt) throw new SupersededAmazonObservation();
+        // Use the current settings and variant state, rather than the run-start snapshot.
+        const refreshedSettings = await prisma.supplierSettings.findUnique({ where: {
+          storeId_supplierName: { storeId: product.storeId, supplierName: SUPPLIER_NAME },
+        } });
+        if (refreshedSettings) Object.assign(supplierSettings, refreshedSettings);
+        await measureStage("database-write", () => prisma.priceHistory.updateMany({
+          where: { productId: product.id, appliedAt: null, createdAt: { lt: checkedAt } },
+          data: { appliedAt: checkedAt, ebayRevised: false, status: "SUPERSEDED" },
+        }));
         const amazonStockUpdate = getAmazonStockUpdate(scrapedAmazonStockLeft);
         const lowStockResolvedUpdate = getLowStockResolvedUpdate(
           product,
@@ -989,9 +1055,10 @@ export async function runPriceCheck(
 
           await recordProductFailure({
             productId: product.id,
-            code: PriceCheckFailureCode.AMAZON_PRICE_UNAVAILABLE,
-            message: getAmazonPriceUnavailableMessage(priceTrackingMode),
-            checkedAt,
+            code: scrapeResult?.buyBoxOutcome === "UNAVAILABLE" ? PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE : PriceCheckFailureCode.AMAZON_PRICE_UNAVAILABLE,
+            message: scrapeResult?.buyBoxOutcome === "UNAVAILABLE"
+              ? "The normal Amazon Buy Box is unavailable." : getAmazonPriceUnavailableMessage(priceTrackingMode),
+            checkedAt, observationId, stockLeft: scrapedAmazonStockLeft,
           });
 
           logger.warn("price-checker/run", "Amazon price unavailable", {
@@ -1005,6 +1072,10 @@ export async function runPriceCheck(
           continue;
         }
 
+        const guardedExternalWrite: NonNullable<RunPriceCheckOptions["withExternalWrite"]> = write =>
+          runObservedPriceWrite({ storeId: product.storeId, productId: product.id, observedAt: checkedAt,
+            observationKey: observationId ?? `${options.jobId ?? randomUUID()}:${checkedAt.toISOString()}`,
+            assertOwnership: assertApplicationOwnership }, write);
         const previousAmazonPrice =
           decimalToNumber(product.amazonPrice) ??
           decimalToNumber(product.variants[0]?.buyPrice);
@@ -1023,7 +1094,7 @@ export async function runPriceCheck(
             const claim = await tx.product.updateMany({
               where: {
                 id: product.id,
-                OR: [{ lastPriceCheck: null }, { lastPriceCheck: { lt: checkedAt } }],
+                lastPriceCheck: product.lastPriceCheck,
               },
               data: { lastPriceCheck: checkedAt },
             });
@@ -1071,7 +1142,7 @@ export async function runPriceCheck(
             productId: product.id,
             code: PriceCheckFailureCode.MISSING_BASELINE,
             message: "Tracked product has no baseline Amazon buy price.",
-            checkedAt,
+            checkedAt, observationId, stockLeft: scrapedAmazonStockLeft,
           });
 
           logger.warn("price-checker/run", "Missing baseline Amazon price", {
@@ -1104,7 +1175,7 @@ export async function runPriceCheck(
             await measureStage("database-write", () => prisma.product.updateMany({
               where: {
                 id: product.id,
-                OR: [{ lastPriceCheck: null }, { lastPriceCheck: { lt: checkedAt } }],
+                lastPriceCheck: product.lastPriceCheck,
               },
               data: {
                 amazonPrice: toMoneyDecimal(currentAmazonPrice),
@@ -1176,7 +1247,7 @@ export async function runPriceCheck(
             const claim = await tx.product.updateMany({
               where: {
                 id: product.id,
-                OR: [{ lastPriceCheck: null }, { lastPriceCheck: { lt: checkedAt } }],
+                lastPriceCheck: product.lastPriceCheck,
               },
               data: { lastPriceCheck: checkedAt },
             });
@@ -1249,9 +1320,9 @@ export async function runPriceCheck(
                 variants: mismatchVariants,
                 nextPrimarySellPrice: mismatchPrimarySellPrice,
                 checkedAt,
-                assertOwnership: options.assertOwnership,
+                assertOwnership: assertApplicationOwnership,
                 beforeExternalWrite: options.beforeExternalWrite,
-                withExternalWrite: options.withExternalWrite,
+                withExternalWrite: guardedExternalWrite,
                 recordTiming: (stage, durationMs) => timing.record(stage, durationMs),
               });
 
@@ -1369,7 +1440,7 @@ export async function runPriceCheck(
           const claim = await tx.product.updateMany({
             where: {
               id: product.id,
-              OR: [{ lastPriceCheck: null }, { lastPriceCheck: { lt: checkedAt } }],
+              lastPriceCheck: product.lastPriceCheck,
             },
             data: { lastPriceCheck: checkedAt },
           });
@@ -1438,9 +1509,9 @@ export async function runPriceCheck(
             variants: nextVariants,
             nextPrimarySellPrice,
             checkedAt,
-            assertOwnership: options.assertOwnership,
+            assertOwnership: assertApplicationOwnership,
             beforeExternalWrite: options.beforeExternalWrite,
-            withExternalWrite: options.withExternalWrite,
+            withExternalWrite: guardedExternalWrite,
             recordTiming: (stage, durationMs) => timing.record(stage, durationMs),
           });
 
@@ -1491,7 +1562,16 @@ export async function runPriceCheck(
           );
         }
       } catch (error) {
-        if (deliveryPermit && await checkCancelled()) {
+        if (error instanceof PriceCheckResultDeferred) return finishResultWait(error);
+        if (error instanceof SupersededAmazonObservation) {
+          result.skipped += 1;
+          logger.info("price-checker/run", "Older Amazon observation preserved without applying", {
+            productId: product.id, jobId: options.jobId, observedAt: checkedAt.toISOString(),
+          });
+          await reportProductComplete(product.id);
+          continue;
+        }
+        if (await checkCancelled()) {
           result.checked -= 1;
           return finishCancelled();
         }
@@ -1500,26 +1580,32 @@ export async function runPriceCheck(
           ? `[${error.details.technicalCode}] ${rawMessage}` : getBrowserLaunchUserMessage(error) ?? rawMessage;
         await options.assertOwnership?.();
         const code = getPriceCheckFailureCode(error);
+        checkedAt = error instanceof PriceCheckFailure && error.observedAt ? error.observedAt : checkedAt;
 
         if (options.storeId) {
           try {
             await options.assertOwnership?.();
-            await prisma.amazonPriceObservation.create({
+            const failedObservation = await prisma.amazonPriceObservation.create({
               data: {
                 productId: product.id,
                 storeId: options.storeId,
                 requestedAsin: product.asin,
                 selectedAsin:
-                  error instanceof PriceCheckFailure ? error.detectedAsin : null,
+                  error instanceof PriceCheckFailure ? (error.identityVerified ? product.asin : error.detectedAsin) : null,
                 identityOutcome:
                   code === PriceCheckFailureCode.AMAZON_ASIN_REDIRECT
                     ? "MISMATCH"
-                    : "UNKNOWN",
+                    : error instanceof PriceCheckFailure && error.identityVerified ? "MATCH" : "UNKNOWN",
                 buyBoxOutcome:
-                  code === PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE
+                  [PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE, PriceCheckFailureCode.AMAZON_OUT_OF_STOCK].includes(code as "AMAZON_OUT_OF_STOCK")
                     ? "UNAVAILABLE"
                     : "UNKNOWN",
-                availability: AmazonAvailability.UNKNOWN,
+                observedAt: checkedAt,
+                availability: error instanceof PriceCheckFailure && error.identityVerified &&
+                  (code === PriceCheckFailureCode.AMAZON_OUT_OF_STOCK || code === PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE)
+                    ? AmazonAvailability.OUT_OF_STOCK : AmazonAvailability.UNKNOWN,
+                stockLeft: error instanceof PriceCheckFailure && error.identityVerified &&
+                  (code === PriceCheckFailureCode.AMAZON_OUT_OF_STOCK || code === PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE) ? 0 : null,
                 eligibleOffer: false,
                 priceMode: priceTrackingMode,
                 failureCode: code,
@@ -1529,6 +1615,7 @@ export async function runPriceCheck(
                 verifiedPostcode: error instanceof PriceCheckFailure && error.postcodeVerified ? scrapePostcode : null,
               },
             });
+            observationId = failedObservation.id;
           } catch (observationError) {
             logger.warn("price-checker/run", "Could not persist failed Amazon observation", {
               productId: product.id,
@@ -1551,18 +1638,48 @@ export async function runPriceCheck(
           await confirmAmazonDelivery(deliveryPermit);
         }
 
-        await recordProductFailure({
-          productId: product.id,
-          code,
-          message,
-          checkedAt,
-        });
+        if (!applicationLease) {
+          try {
+            applicationLease = await acquirePriceCheckResultLease({
+              storeId: product.storeId, productId: product.id, worker: options.worker,
+              assertOwnership: options.assertOwnership, shouldCancel: options.shouldCancel,
+            });
+          } catch (leaseError) {
+            if (leaseError instanceof PriceCheckResultDeferred) return finishResultWait(leaseError);
+            throw leaseError;
+          }
+        }
+        const refreshed = await prisma.product.findUnique({ where: { id: product.id },
+          include: { store: true, variants: true } });
+        if (refreshed) product = refreshed;
+        if (product.lastPriceCheck && product.lastPriceCheck >= checkedAt) {
+          result.skipped += 1;
+        } else {
+          await assertApplicationOwnership();
+          const newer = await prisma.amazonPriceObservation.findFirst({ where: {
+            storeId: product.storeId, productId: product.id, observedAt: { gt: checkedAt },
+            identityOutcome: "MATCH", postcodeVerified: true,
+            OR: [{ isSuccessful: true }, { buyBoxOutcome: "UNAVAILABLE" }],
+          } });
+          if (newer) result.skipped += 1;
+          else await recordProductFailure({ productId: product.id, code, message, checkedAt,
+            observationId: error instanceof PriceCheckFailure && error.identityVerified ? observationId : undefined,
+            stockLeft: error instanceof PriceCheckFailure && error.identityVerified && error.postcodeVerified &&
+              (code === PriceCheckFailureCode.AMAZON_OUT_OF_STOCK || code === PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE) ? 0 : undefined,
+          });
+        }
 
         logger.error("price-checker/run", "Price check failed", error, {
           productId: product.id,
           asin: product.asin,
           failureCode: code,
         });
+      } finally {
+        if (deliveryPermit) { await releaseDeliveryPermit(deliveryPermit); deliveryPermit = undefined; }
+        if (applicationLease) {
+          await applicationLease.release();
+          applicationLease = undefined;
+        }
       }
 
       if (deliveryPermit) { await releaseDeliveryPermit(deliveryPermit); deliveryPermit = undefined; }

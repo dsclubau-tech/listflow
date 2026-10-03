@@ -1,3 +1,4 @@
+import { assertAmazonObservationCurrent, SupersededAmazonObservation } from "@/lib/price-check-result-application";
 import "server-only";
 
 import { createBulkEditJobWithItems } from "@/lib/bulk-edit-job-creation";
@@ -1257,6 +1258,19 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
     };
   }
 
+  const automaticObservationIsCurrent = async () => {
+    if (!(automaticPriceCheckHold || automaticLowStockHold || automaticPriceCheckResume) ||
+        !product.lastPriceCheck) return true;
+    try {
+      await assertAmazonObservationCurrent({ storeId: product.storeId, productId,
+        observedAt: product.lastPriceCheck });
+      return true;
+    } catch (error) {
+      if (error instanceof SupersededAmazonObservation) return false;
+      throw error;
+    }
+  };
+
   if (job.type === EbayActionJobType.UPLOAD_LISTING) {
     const result = await uploadProductToEbay({
       productId,
@@ -1552,6 +1566,8 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
   }
 
   if (job.type === EbayActionJobType.HOLD) {
+    if (!await automaticObservationIsCurrent()) return { ok: true, failure: null };
+
     const settings = await prisma.supplierSettings.findUnique({
       where: { storeId_supplierName: { storeId: product.storeId, supplierName: "Amazon AU" } },
       select: { minProductQuantity: true, autoHoldOnPriceCheckFailure: true },
@@ -1612,6 +1628,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
     }
 
     const storeNumber = await getStoreNumber(product.storeId);
+    if (!await automaticObservationIsCurrent()) return { ok: true, failure: null };
     const result = await callEbayReviseItem(
       buildReviseQuantityXML(product.ebayItemId, 0),
       storeNumber
@@ -1685,6 +1702,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
   }
 
   if (job.type === EbayActionJobType.RESUME) {
+    if (!await automaticObservationIsCurrent()) return { ok: true, failure: null };
     if (automaticPriceCheckResume) {
       const settings = await prisma.supplierSettings.findUnique({
         where: { storeId_supplierName: { storeId: product.storeId, supplierName: "Amazon AU" } },
@@ -1716,6 +1734,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
     // Manual and automatic restores always start at one, regardless of the
     // pre-hold snapshot. Older holds do not need a quantity snapshot to recover.
     const restoreQty = 1;
+    if (!await automaticObservationIsCurrent()) return { ok: true, failure: null };
     const result = await callEbayReviseItem(
       buildReviseQuantityXML(product.ebayItemId, restoreQty),
       storeNumber

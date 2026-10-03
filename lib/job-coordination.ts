@@ -20,7 +20,6 @@ export const JOB_LEASE_RENEW_MS = Math.max(
   Math.floor(JOB_LEASE_TTL_MS / 3)
 );
 
-const PRICE_CHECK_GATE_KEY = "price-check-products:gate";
 const PRICE_CHECK_ALL_KEY = "price-check-products:all";
 const PRICE_CHECK_PRODUCT_PREFIX = "price-check-products:product:";
 const EBAY_GATE_KEY = "ebay-api:gate";
@@ -241,9 +240,11 @@ async function acquireJobLeases(input: LeaseInput) {
       throw error;
     }
 
-    throw new JobConflictError(
-      "Another worker claimed an overlapping job at the same time."
-    );
+    const code = error && typeof error === "object" && "code" in error ? error.code : null;
+    if (code === "P2002" || code === "23505" || code === "P2034") {
+      throw new JobConflictError("Another worker claimed an overlapping job at the same time.");
+    }
+    throw error;
   }
 }
 
@@ -309,12 +310,14 @@ async function renewJobLeases(
       jobType,
       jobId,
       workerId: worker.workerId,
+      expiresAt: { gt: now },
     },
     data: {
       renewedAt: now,
       expiresAt: leaseExpiresAt(),
     },
   });
+  if (!renewed.count) throw new Error("Worker job lease expired or was lost.");
   logger.debug("worker/lease", "Worker renewed job resources", {
     storeId,
     jobType,
@@ -325,45 +328,48 @@ async function renewJobLeases(
   });
 }
 
+export async function acquireOwnedJobLease(input: LeaseInput) {
+  await acquireJobLeases(input);
+  let renewalFailure: unknown;
+  const renewal = setInterval(() => {
+    void renewJobLeases(input.storeId, input.jobType, input.jobId, input.worker)
+      .catch(error => { renewalFailure = error; });
+  }, JOB_LEASE_RENEW_MS);
+  return {
+    async assertOwnership() {
+      if (renewalFailure) throw renewalFailure;
+      const count = await prisma.jobLease.count({ where: {
+        storeId: input.storeId, jobType: input.jobType, jobId: input.jobId,
+        workerId: input.worker.workerId, resourceKey: { in: input.resources },
+        expiresAt: { gt: new Date() },
+      } });
+      if (count !== unique(input.resources).length) {
+        throw new Error("Worker job lease was lost; refusing further writes.");
+      }
+    },
+    async release() {
+      clearInterval(renewal);
+      try {
+        await releaseJobLeases(input.storeId, input.jobType, input.jobId, input.worker);
+      } catch (error) {
+        logger.error("worker/lease", "Worker failed to release job resources", error, {
+          storeId: input.storeId, jobId: input.jobId, workerId: input.worker.workerId,
+        });
+      }
+    },
+  };
+}
+
 export async function withJobLeases<T>(
   input: LeaseInput,
-  run: () => Promise<T>
+  run: (assertOwnership: () => Promise<void>) => Promise<T>,
 ) {
-  await acquireJobLeases(input);
-
-  const renewal = setInterval(() => {
-    void renewJobLeases(
-      input.storeId,
-      input.jobType,
-      input.jobId,
-      input.worker
-    ).catch((error) => {
-      logger.error("worker/lease", "Worker failed to renew job resources", error, {
-        storeId: input.storeId,
-        jobType: input.jobType,
-        jobId: input.jobId,
-        workerId: input.worker.workerId,
-      });
-    });
-  }, JOB_LEASE_RENEW_MS);
-
+  const lease = await acquireOwnedJobLease(input);
   try {
-    return await run();
+    await lease.assertOwnership();
+    return await run(lease.assertOwnership);
   } finally {
-    clearInterval(renewal);
-    try {
-      await releaseJobLeases(
-        input.storeId,
-        input.jobType,
-        input.jobId,
-        input.worker
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      process.stderr.write(
-        `[WORKER LEASE RELEASE ERROR] ${message}\n`
-      );
-    }
+    await lease.release();
   }
 }
 
@@ -379,37 +385,17 @@ export function getPriceCheckLeaseInput(job: {
     return null;
   }
 
-  if (job.scope === PriceCheckJobScope.ALL) {
-    return {
-      storeId: job.storeId,
-      jobType: "PRICE_CHECK",
-      jobId: job.id,
-      worker,
-      gateKey: PRICE_CHECK_GATE_KEY,
-      resources: [PRICE_CHECK_ALL_KEY],
-      conflictWhere: {
-        OR: [
-          { resourceKey: PRICE_CHECK_ALL_KEY },
-          { resourceKey: { startsWith: PRICE_CHECK_PRODUCT_PREFIX } },
-        ],
-      },
-      details: {
-        label: "Product price check",
-        scope: job.scope,
-        total: job.total,
-      },
-      queuedAt: job.createdAt,
-    };
-  }
-
   return {
     storeId: job.storeId,
     jobType: "PRICE_CHECK",
     jobId: job.id,
     worker,
-    gateKey: PRICE_CHECK_GATE_KEY,
-    resources: job.productIds.map((id) => `${PRICE_CHECK_PRODUCT_PREFIX}${id}`),
-    conflictWhere: { resourceKey: PRICE_CHECK_ALL_KEY },
+    resources: [`price-check-job:${job.id}`],
+    // Finish old exclusive scans before accepting work during a mixed deployment.
+    conflictWhere: { OR: [
+      { resourceKey: PRICE_CHECK_ALL_KEY },
+      { resourceKey: { startsWith: PRICE_CHECK_PRODUCT_PREFIX } },
+    ] },
     details: {
       label: "Product price check",
       scope: job.scope,
