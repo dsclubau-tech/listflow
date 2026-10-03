@@ -1,6 +1,8 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
+import AmazonPriceTrackingLabel from "@/components/AmazonPriceTrackingLabel";
+
 import {
   Fragment,
   type MouseEvent,
@@ -24,7 +26,6 @@ import {
 } from "@/lib/price-check-eligibility";
 import { getProductDisplayProfitBreakdown } from "@/lib/product-profit";
 import {
-  getAmazonPriceTrackingLabel,
   normalizeAmazonPriceTrackingMode,
 } from "@/lib/amazon-price-tracking";
 import { getStoreBadgeClass } from "@/lib/store-badge";
@@ -380,7 +381,7 @@ function PriceCell({ product }: { product: SerializedProductRow }) {
       </div>
       {hasAmazonTracking && (
         <div className="text-[11px] font-medium text-gray-500">
-          {getAmazonPriceTrackingLabel(amazonPriceTrackingMode)}
+          <AmazonPriceTrackingLabel mode={amazonPriceTrackingMode} selection={product.amazonPriceSelection} />
         </div>
       )}
       <div className="max-w-full whitespace-normal break-words">

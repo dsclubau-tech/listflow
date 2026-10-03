@@ -1,5 +1,6 @@
 import "server-only";
 import { resolveCurrentHoldReason } from "@/lib/current-hold-reason";
+import { getAmazonPriceSelection } from "@/lib/amazon-price-selection";
 
 import type { Prisma } from "@/app/generated/prisma/client";
 import { cacheLife, cacheTag } from "next/cache";
@@ -132,6 +133,13 @@ const productRowSelect = {
       identityOutcome: true,
       buyBoxOutcome: true,
       acceptedPriceSource: true,
+      postcodeVerified: true,
+      isSuccessful: true,
+      eligibleOffer: true,
+      priceMode: true,
+      price: true,
+      regularPrice: true,
+      dealPrice: true,
       observedAt: true,
     },
   },
@@ -233,6 +241,13 @@ function serializeProductSelection(
 }
 
 function serializeProducts(products: ProductRowPayload[], minimumProductQuantity: number): SerializedProductRow[] {
+  const serializeObservation = (observation: ProductRowPayload["amazonPriceObservations"][number]) => ({
+    ...observation,
+    price: observation.price?.toString() ?? null,
+    regularPrice: observation.regularPrice?.toString() ?? null,
+    dealPrice: observation.dealPrice?.toString() ?? null,
+    observedAt: observation.observedAt.toISOString(),
+  });
   // Editor-only fields are loaded from the product detail endpoint on expansion.
   return products.map(({ uploadLogs, ...product }) => {
     const uploadedAt = getProductUploadedAt({
@@ -264,6 +279,8 @@ function serializeProducts(products: ProductRowPayload[], minimumProductQuantity
     return ({
       ...product,
       ...holdExplanation,
+      amazonPriceSelection: getAmazonPriceSelection(product, currentObservation),
+      amazonPriceObservations: product.amazonPriceObservations.map(serializeObservation),
       price: product.price.toString(),
       amazonPrice: product.amazonPrice?.toString() ?? null,
       lastPriceCheck: product.lastPriceCheck?.toISOString() ?? null,
@@ -286,10 +303,7 @@ function serializeProducts(products: ProductRowPayload[], minimumProductQuantity
         createdAt: entry.createdAt.toISOString(),
       })),
       amazonVerification: (currentObservation ?? product.amazonPriceObservations[0])
-        ? {
-            ...(currentObservation ?? product.amazonPriceObservations[0]),
-            observedAt: (currentObservation ?? product.amazonPriceObservations[0]).observedAt.toISOString(),
-          }
+        ? serializeObservation(currentObservation ?? product.amazonPriceObservations[0])
         : null,
       store: product.store,
       createdBy: product.createdBy,

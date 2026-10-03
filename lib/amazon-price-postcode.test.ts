@@ -29,7 +29,8 @@ for (const reuseDeliveryState of [false, true]) {
 
     await assert.rejects(
       scrapeAmazonPrice("B0G6CQ427S", browser, "2217", "REGULAR", null,
-        reuseDeliveryState ? { deliveryState: createAmazonDeliveryStateSession("2217") } : undefined),
+        { allowDealPriceFallback: true,
+          ...(reuseDeliveryState ? { deliveryState: createAmazonDeliveryStateSession("2217") } : {}) }),
       (error: unknown) => error instanceof PriceCheckFailure &&
         error.code === "TECHNICAL_ERROR" && /postcode 2217/.test(error.message),
     );

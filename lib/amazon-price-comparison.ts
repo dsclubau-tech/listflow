@@ -22,6 +22,7 @@ export function normalizeAmazonPriceComparisonOutcome(
     shippingPrice: outcome.value.shippingPrice ?? null,
     stockLeft: outcome.value.stockLeft,
     priceMode: outcome.value.priceMode ?? null,
+    selectedPriceMode: outcome.value.selectedPriceMode ?? null,
     priceChoices: outcome.value.priceChoices ?? null,
     variantSelectionFailed: outcome.value.variantSelectionFailed ?? false,
     variantSelectionReason: outcome.value.variantSelectionReason ?? null,

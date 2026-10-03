@@ -2,7 +2,7 @@ import type { Browser, Page } from "playwright-core";
 import { applyAmazonDeliveryPostcode, AmazonDeliveryFailure, assertAmazonDeliveryPage, readAmazonDeliveryText, type DeliveryFailureDetails, type DeliverySetupDiagnostic } from "@/lib/amazon-delivery-recovery";
 import { load } from "cheerio";
 
-import { extractLocalizedBuyboxPriceChoices, selectAmazonBuyboxPriceForMode } from "@/lib/amazon-buybox-price";
+import { extractLocalizedBuyboxPriceChoices, selectAmazonBuyboxPriceForMode, selectAmazonBuyboxPriceForTracking } from "@/lib/amazon-buybox-price";
 import { parseAmazonShippingFeeFromText } from "@/lib/amazon-shipping";
 import { extractAmazonNewOfferStockLeft } from "@/lib/amazon-stock";
 import { extractAmazonPriceSnapshot } from "@/lib/amazon-price-snapshot";
@@ -85,6 +85,8 @@ export interface ScrapedAmazonPrice {
   shippingPrice?: number | null;
   stockLeft: number | null;
   priceMode?: AmazonPriceTrackingMode;
+  /** Actual offer used; priceMode remains the requested tracking preference. */
+  selectedPriceMode?: AmazonPriceTrackingMode | null;
   priceChoices?: {
     regular: number | null;
     deal: number | null;
@@ -130,6 +132,8 @@ async function getNormalBuyBoxOutcome(page: Page): Promise<"AVAILABLE" | "UNAVAI
 }
 
 export type AmazonPriceScrapeOptions = {
+  /** Ongoing tracking only. Uploads require their explicitly selected offer. */
+  allowDealPriceFallback?: boolean;
   onTiming?: (stage: string, durationMs: number) => void;
   sharedSnapshot?: boolean;
   deliveryState?: AmazonDeliveryStateSession;
@@ -879,7 +883,10 @@ export async function scrapeAmazonPrice(
         () => extractAmazonBuyboxPriceChoicesFromPage(page, normalizedAsin),
       );
     }
-    let selectedPrice = selectAmazonBuyboxPriceForMode(priceChoices, priceTrackingMode);
+    const selectPrice = options?.allowDealPriceFallback === true
+      ? selectAmazonBuyboxPriceForTracking
+      : selectAmazonBuyboxPriceForMode;
+    let selectedPrice = selectPrice(priceChoices, priceTrackingMode);
     let price = selectedPrice?.price ?? null;
 
     let variantSwatchSelected = false;
@@ -898,6 +905,7 @@ export async function scrapeAmazonPrice(
             price: null,
             stockLeft: null,
             priceMode: priceTrackingMode,
+            selectedPriceMode: null,
             priceChoices: { regular: null, deal: null },
             variantSelectionFailed: true,
             variantSelectionReason:
@@ -934,7 +942,7 @@ export async function scrapeAmazonPrice(
               () => extractAmazonBuyboxPriceChoicesFromPage(page, normalizedAsin),
             );
           }
-          selectedPrice = selectAmazonBuyboxPriceForMode(priceChoices, priceTrackingMode);
+          selectedPrice = selectPrice(priceChoices, priceTrackingMode);
           price = selectedPrice?.price ?? null;
 
           if (price !== null) {
@@ -954,6 +962,7 @@ export async function scrapeAmazonPrice(
               price: null,
               stockLeft: null,
               priceMode: priceTrackingMode,
+              selectedPriceMode: null,
               priceChoices: { regular: null, deal: null },
               variantSelectionFailed: true,
               variantSelectionReason: `Selected variation (${variantResult.selectedDimensions?.join(", ") || "saved variant"}) on Amazon, but no buybox price became available.`,
@@ -1104,6 +1113,7 @@ export async function scrapeAmazonPrice(
       shippingPrice: selectedPrice?.shippingFee ?? null,
       stockLeft,
       priceMode: priceTrackingMode,
+      selectedPriceMode: selectedPrice?.mode ?? null,
       priceChoices: {
         regular: priceChoices.regular?.price ?? null,
         deal: priceChoices.deal?.price ?? null,

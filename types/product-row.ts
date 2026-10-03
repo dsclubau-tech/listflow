@@ -1,5 +1,6 @@
 import type { Product, Store, User } from "@/app/generated/prisma/client";
 import type { AmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
+import type { AmazonPriceSelection } from "@/lib/amazon-price-selection";
 
 export interface SerializedPriceHistorySummary {
   id: string;
@@ -50,6 +51,7 @@ export type SerializedProductRow = Omit<
 > & {
   price: string;
   amazonPrice?: string | null;
+  amazonPriceSelection?: AmazonPriceSelection | null;
   lastPriceCheck?: string | null;
   promotedAdSyncedAt?: string | null;
   internalNote?: string | null;

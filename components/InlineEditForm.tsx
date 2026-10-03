@@ -69,10 +69,12 @@ import {
 import Button from "@/components/ui/Button";
 import ActionProgressBar from "@/components/ActionProgressBar";
 import { useTimedActionProgress } from "@/hooks/useTimedActionProgress";
+import type { AmazonPriceSelection } from "@/lib/amazon-price-selection";
+import AmazonPriceTrackingLabel from "@/components/AmazonPriceTrackingLabel";
 
 // ----- Types -----
 
-type ProductWithRelations = Product & { store: Store; createdBy: User };
+type ProductWithRelations = Product & { store: Store; createdBy: User; amazonPriceSelection?: AmazonPriceSelection | null };
 
 interface PolicyEntry {
   profileId: string;
@@ -2626,7 +2628,8 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
               </div>
               <p className="mt-1 text-xs text-gray-500">
                 Updated by Add Product, Regrab, or price check. Tracking:{" "}
-                {getAmazonPriceTrackingLabel(amazonPriceTrackingMode)}.
+                <AmazonPriceTrackingLabel mode={amazonPriceTrackingMode}
+                  selection={amazonPriceUpdatePending ? null : product.amazonPriceSelection} />
               </p>
             </div>
 

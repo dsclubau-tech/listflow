@@ -5,7 +5,37 @@ import {
   extractLocalizedBuyboxPrice,
   extractLocalizedBuyboxPriceChoices,
   extractLocalizedBuyboxPriceForMode,
+  selectAmazonBuyboxPriceForTracking,
+  selectAmazonBuyboxPriceForMode,
 } from "@/lib/amazon-buybox-price";
+
+test("Deal tracking follows deal, regular fallback, and returning deal without changing strict selection", () => {
+  const regularHtml = '<div id="corePrice_feature_div"><span class="a-price"><span class="a-offscreen">$749.00</span></span></div>';
+  const dealHtml = `<div id="buybox"><div>Deal price <span class="a-price"><span class="a-offscreen">$429.00</span></span></div>
+    <div>Regular Price <span class="a-price"><span class="a-offscreen">$749.00</span></span></div></div>`;
+  for (const [html, expected, mode] of [[dealHtml, 429, "DEAL"], [regularHtml, 749, "REGULAR"], [dealHtml, 429, "DEAL"]] as const) {
+    const choices = extractLocalizedBuyboxPriceChoices(load(html), "B0TEST1234");
+    const selected = selectAmazonBuyboxPriceForTracking(choices, "DEAL");
+    assert.equal(selected?.price, expected);
+    assert.equal(selected?.mode, mode);
+    assert.equal(selectAmazonBuyboxPriceForTracking(choices, "REGULAR")?.price, 749);
+    if (mode === "REGULAR") assert.equal(selectAmazonBuyboxPriceForMode(choices, "DEAL"), null);
+  }
+  const missing = extractLocalizedBuyboxPriceChoices(load('<span class="a-price a-text-price">$749.00</span>'), "B0TEST1234");
+  assert.equal(selectAmazonBuyboxPriceForTracking(missing, "DEAL"), null);
+  assert.equal(selectAmazonBuyboxPriceForTracking(missing, "REGULAR"), null);
+});
+
+test("tracking fallback retains the complete shipping-inclusive offer", () => {
+  const choices = extractLocalizedBuyboxPriceChoices(load(`<div id="corePrice_feature_div">
+    <span class="a-price"><span class="a-offscreen">$749.00</span></span></div>
+    <div id="deliveryBlockMessage">$4.95 delivery</div>`), "B0TEST1234");
+  const selected = selectAmazonBuyboxPriceForTracking(choices, "DEAL");
+  assert.equal(selected, choices.regular);
+  assert.equal(selected?.price, 753.95);
+  assert.equal(selected?.itemPrice, 749);
+  assert.equal(selected?.shippingFee, 4.95);
+});
 
 test("extractLocalizedBuyboxPrice prefers buybox price over hidden widget prices", () => {
   const $ = load(`

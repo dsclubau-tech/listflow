@@ -710,6 +710,14 @@ export function selectAmazonBuyboxPriceForMode(
   return mode === "DEAL" ? choices.deal : choices.regular;
 }
 
+/** Tracking may temporarily use the regular offer without changing the preference. */
+export function selectAmazonBuyboxPriceForTracking(
+  choices: AmazonBuyboxPriceChoices,
+  mode: AmazonPriceTrackingMode,
+): AmazonBuyboxPriceResult | null {
+  return mode === "DEAL" ? choices.deal ?? choices.regular : choices.regular;
+}
+
 export function extractLocalizedBuyboxPriceForMode(
   $: CheerioAPI,
   asin: string,

@@ -134,7 +134,7 @@ async function main() {
             input.postcode,
             mode,
             product.variantHints,
-            { onTiming, signal: controller.signal },
+            { allowDealPriceFallback: true, onTiming, signal: controller.signal },
           ),
         );
       const runExperiment = () =>
@@ -146,6 +146,7 @@ async function main() {
             mode,
             product.variantHints,
             {
+              allowDealPriceFallback: true,
               sharedSnapshot: optimizations.includes("shared-snapshot"),
               deliveryState: optimizations.includes("delivery-state") ? deliveryState : undefined,
               onTiming,

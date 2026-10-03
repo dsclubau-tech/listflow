@@ -31,6 +31,9 @@ test("comparison includes price, shipping, stock, mode, variant, and identity", 
   assert.equal(amazonPriceComparisonOutcomesMatch(base, {
     ...base, value: { ...base.value, postcodeVerified: true },
   }), false);
+  assert.equal(amazonPriceComparisonOutcomesMatch(base, {
+    ...base, value: { ...base.value, selectedPriceMode: "REGULAR" },
+  }), false);
 });
 
 test("comparison normalizes missing optional result fields", () => {

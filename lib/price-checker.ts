@@ -270,6 +270,7 @@ async function automaticallyApplyPriceIncrease(input: {
         });
         const currentVariants = new Map(current?.variants.map((variant) => [variant.id, variant]));
         if (!current || current.lastPriceCheck?.getTime() !== input.checkedAt.getTime() ||
+            current.amazonPriceTrackingMode !== input.product.amazonPriceTrackingMode ||
             current.status !== input.product.status ||
             Number(current.price) !== Number(input.product.price) ||
             input.variants.some((variant) => {
@@ -714,6 +715,7 @@ export async function runPriceCheck(
         priceTrackingMode,
         variantHints,
       {
+          allowDealPriceFallback: true,
           signal,
           onDeliverySetupDiagnostic: details => logger.info("price-checker/delivery-setup", "Amazon delivery setup attempt", {
             jobId: options.jobId, storeId: options.storeId, productId, asin,
@@ -969,7 +971,8 @@ export async function runPriceCheck(
                 dealPrice: scrapeResult?.priceChoices?.deal == null
                   ? null
                   : toMoneyDecimal(scrapeResult.priceChoices.deal),
-                priceMode: priceTrackingMode,
+                priceMode: scrapeResult?.selectedPriceMode ??
+                  (currentAmazonPrice !== null ? priceTrackingMode : null),
                 failureCode: observationFailureCode,
                 message:
                   observationFailureCode === PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE
@@ -1004,7 +1007,24 @@ export async function runPriceCheck(
           await reportProductComplete(product.id);
           continue;
         }
+        if (normalizeAmazonPriceTrackingMode(refreshed.amazonPriceTrackingMode) !== priceTrackingMode) {
+          // The observation belongs to the old preference. Never apply it to the new one.
+          if (observationId) {
+            await prisma.amazonPriceObservation.update({ where: { id: observationId },
+              data: { isSuccessful: false, eligibleOffer: false, failureCode: null,
+                message: "Tracking preference changed during this check; observation discarded." } });
+          }
+          result.skipped += 1;
+          await reportProductComplete(product.id);
+          continue;
+        }
         product = refreshed;
+        logger.info("price-checker/run", "Amazon tracking price selected", {
+          productId: product.id, asin: product.asin, requestedMode: priceTrackingMode,
+          selectedMode: scrapeResult?.selectedPriceMode ?? (currentAmazonPrice !== null ? priceTrackingMode : null),
+          isFallback: priceTrackingMode === "DEAL" && scrapeResult?.selectedPriceMode === "REGULAR",
+          price: currentAmazonPrice,
+        });
         await assertAmazonObservationCurrent({ storeId: product.storeId, productId: product.id, observedAt: checkedAt });
         const acceptedObservation = product.holdLastObservationId ? await prisma.amazonPriceObservation.findUnique({
           where: { id: product.holdLastObservationId },

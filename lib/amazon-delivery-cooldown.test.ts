@@ -10,6 +10,10 @@ import type { runPriceCheckJob, runNextPriceCheckJobForStore, createPriceCheckJo
 import type { runNextPriceCheckItemForStore, cancelItemScheduledJob } from "./price-check-item-scheduler";
 import type { PriceCheckFailure } from "./price-check-failures";
 import type { AmazonDeliveryFailure } from "./amazon-delivery-recovery";
+import type { queuePriceCheckAutoResumeForRun } from "./price-check-auto-resume";
+import { isRecoveredPriceCheckAutoHold, selectPriceCheckAutoHoldProductIds } from "./price-check-failures";
+import { getPriceCheckRecoveryEvidence } from "./price-check-recovery-evidence";
+import { getAmazonPriceSelection } from "./amazon-price-selection";
 
 type Row = Record<string, unknown>;
 type Query = { where?: Row; data?: Row; orderBy?: Row | Row[]; take?: number };
@@ -18,6 +22,7 @@ const compiled = build({ stdin: { resolveDir: process.cwd(), contents: `
   export { PriceCheckFailure } from "./lib/price-check-failures";
   export { AmazonDeliveryFailure } from "./lib/amazon-delivery-recovery";
   export { runPriceCheck } from "./lib/price-checker";
+  export { queuePriceCheckAutoResumeForRun } from "./lib/price-check-auto-resume";
   export { runPriceCheckJob, runNextPriceCheckJobForStore, createPriceCheckJob } from "./lib/price-check-jobs";
   export { runNextPriceCheckItemForStore, cancelItemScheduledJob } from "./lib/price-check-item-scheduler";
 ` }, bundle: true, platform: "node", format: "cjs", write: false, packages: "external",
@@ -53,6 +58,7 @@ function matches(row: Row, where: Row = {}): boolean {
       if ("lt" in comparison) return actual != null && Number(actual) < Number(comparison.lt);
       if ("startsWith" in comparison) return String(actual).startsWith(String(comparison.startsWith));
       if ("has" in comparison) return (actual as unknown[]).includes(comparison.has);
+      if ("hasSome" in comparison) return (actual as unknown[]).some(item => (comparison.hasSome as unknown[]).includes(item));
       return !!actual && typeof actual === "object" && matches(actual as Row, comparison);
     }
     return actual instanceof Date && condition instanceof Date ? actual.getTime() === condition.getTime() : actual === condition;
@@ -74,7 +80,7 @@ async function fixture(count = 809, version = 1, finished = 0) {
   const now = new Date();
   const ids = Array.from({ length: count }, (_, i) => `product-${i}`);
   const tables: Record<string, Row[]> = {
-    priceCheckScheduleState: [], jobLease: [], amazonPriceObservation: [], priceHistory: [], listingOperation: [], variant: [], user: [{id:"user-a"}],
+    priceCheckScheduleState: [], jobLease: [], amazonPriceObservation: [], priceHistory: [], listingOperation: [], ebayActionJob: [], variant: [], user: [{id:"user-a"}],
     store: [{ id: "store-a", priceCheckItemSchedulerEnabled: version === 2 }],
     supplierSettings: [{ storeId: "store-a", supplierName: "Amazon AU", scrapePostcode: "2217", minProductQuantity: 1, priceTrackingEnabled: true }],
     product: ids.map(id => ({ id, storeId: "store-a", asin: "B0G6CQ427S", status: "IMPORTED", amazonPriceTrackingMode: "REGULAR",
@@ -161,7 +167,7 @@ async function fixture(count = 809, version = 1, finished = 0) {
   });
   const api = fixtureModule.exports as typeof Cooldown & { runPriceCheck: typeof runPriceCheck; runPriceCheckJob: typeof runPriceCheckJob; runNextPriceCheckJobForStore: typeof runNextPriceCheckJobForStore; createPriceCheckJob: typeof createPriceCheckJob;
     PriceCheckFailure: typeof PriceCheckFailure; AmazonDeliveryFailure: typeof AmazonDeliveryFailure; runNextPriceCheckItemForStore: typeof runNextPriceCheckItemForStore;
-    cancelItemScheduledJob: typeof cancelItemScheduledJob };
+    cancelItemScheduledJob: typeof cancelItemScheduledJob; queuePriceCheckAutoResumeForRun: typeof queuePriceCheckAutoResumeForRun };
   scrape = async () => { throw new api.AmazonDeliveryFailure("HTTP 503; popup recovery timed out", {
     technicalCode: "AMAZON_DELIVERY_HTTP_ERROR", stage: "popup-input", httpStatus: 503, requestedPostcode: "2217" }); };
   return { api, tables, database, setClock: (value: () => number) => { clock = value; }, setEbay: (value: typeof ebay) => { ebay = value; }, calls: () => scrapeCalls, setScrape: (value: typeof scrape) => { scrape = value; },
@@ -627,4 +633,148 @@ test("a failed observation insert defers rather than applying an unrecorded snap
   assert.equal(f.tables.priceCheckJob[0].failed, 0);
   assert.equal(Number(f.tables.product[0].amazonPrice), 100);
   assert.deepEqual(f.tables.priceCheckJob[0].completedProductIds, []);
+});
+
+function dealTrackingProduct(f: Awaited<ReturnType<typeof fixture>>, held = false) {
+  const product = f.tables.product[0];
+  Object.assign(product, { amazonPriceTrackingMode: "DEAL", amazonPrice: 429, price: 449,
+    status: held ? "ON_HOLD" : "IMPORTED", holdOrigin: held ? "PRICE_CHECK_PRICE_UNAVAILABLE" : null,
+    holdReason: held ? "Automatic hold after failed price check: Deal price is no longer available on Amazon." : null,
+    priceCheckError: held ? "Deal price is no longer available on Amazon." : null,
+    priceCheckFailureCode: held ? "AMAZON_PRICE_UNAVAILABLE" : null });
+  Object.assign(f.tables.variant[0], { buyPrice: 429, sellPrice: 449 });
+  return product;
+}
+function selectedOffer(amount: number | null, mode: "REGULAR" | "DEAL" | null, observedAt: Date) {
+  return { ...verified(amount ?? 0, observedAt), price: amount, priceMode: "DEAL", selectedPriceMode: mode,
+    priceChoices: { regular: mode ? 749 : null, deal: mode === "DEAL" ? amount : null } };
+}
+function refreshRecoveryRelations(f: Awaited<ReturnType<typeof fixture>>) {
+  const product = f.tables.product[0];
+  product.amazonPriceObservations = f.tables.amazonPriceObservation;
+  product._count = { variants: 1, priceHistory: f.tables.priceHistory.filter(row => row.appliedAt == null).length };
+}
+
+test("Deal tracking applies $429 -> $749 -> $429, preserves preference, and never holds for a missing deal", async () => {
+  const f = await fixture(1);
+  const product = dealTrackingProduct(f);
+  const revisions: string[] = [];
+  f.setEbay(async xml => { revisions.push(String(xml)); return { success: true }; });
+  const start = Date.now();
+  for (const [index, amount, mode] of [[0, 429, "DEAL"], [1, 749, "REGULAR"], [2, 429, "DEAL"]] as const) {
+    f.setScrape(async (_signal, options) => {
+      assert.equal(options?.allowDealPriceFallback, true);
+      return selectedOffer(amount, mode, new Date(start + index * 1000));
+    });
+    const result = await f.api.runPriceCheck({ storeId: "store-a", ignoreSchedule: true });
+    assert.equal(result.failed, 0);
+    assert.equal(product.amazonPriceTrackingMode, "DEAL");
+    assert.equal(Number(product.amazonPrice), amount);
+    assert.equal(Number(f.tables.variant[0].buyPrice), amount);
+    assert.equal(Number(f.tables.variant[0].sellPrice), amount + 20);
+    assert.equal(product.status, "IMPORTED");
+    assert.equal(product.priceCheckFailureCode, null);
+    const observation = f.tables.amazonPriceObservation.at(-1)!;
+    assert.equal(observation.priceMode, mode);
+    assert.equal(observation.isSuccessful, true);
+    assert.equal(getAmazonPriceSelection(product as unknown as Parameters<typeof getAmazonPriceSelection>[0],
+      observation as unknown as Parameters<typeof getAmazonPriceSelection>[1])?.isFallback, mode === "REGULAR");
+    assert.deepEqual(selectPriceCheckAutoHoldProductIds({ enabled: true,
+      products: [product as unknown as Parameters<typeof selectPriceCheckAutoHoldProductIds>[0]["products"][number]] }), []);
+  }
+  assert.equal(revisions.length, 2);
+  assert.match(revisions[0], /769\.00/);
+  assert.match(revisions[1], /449\.00/);
+  assert.ok(f.tables.priceHistory.every(row => row.amazonPriceTrackingMode === "DEAL" && row.ebayRevised === true));
+  f.setScrape(async () => selectedOffer(429, "DEAL", new Date(start + 2000)));
+  const repeat = await f.api.runPriceCheck({ storeId: "store-a", ignoreSchedule: true });
+  assert.equal(repeat.changed, 0);
+  assert.equal(revisions.length, 2);
+});
+
+test("equal-price fallback refreshes source without revising the marketplace", async () => {
+  const f = await fixture(1);
+  const product = dealTrackingProduct(f);
+  Object.assign(product, { amazonPrice: 749, price: 769 });
+  Object.assign(f.tables.variant[0], { buyPrice: 749, sellPrice: 769 });
+  let revisions = 0;
+  f.setEbay(async () => { revisions++; return { success: true }; });
+  f.setScrape(async () => selectedOffer(749, "REGULAR", new Date()));
+  const result = await f.api.runPriceCheck({ storeId: "store-a", ignoreSchedule: true });
+  assert.equal(result.changed, 0);
+  assert.equal(revisions, 0);
+  assert.equal(f.tables.amazonPriceObservation[0].priceMode, "REGULAR");
+  assert.equal(product.holdLastObservationId, f.tables.amazonPriceObservation[0].id);
+  assert.equal(product.amazonPriceTrackingMode, "DEAL");
+});
+
+test("existing missing-deal holds queue recovery after verified Regular fallback and successful repricing", async () => {
+  const f = await fixture(1);
+  const product = dealTrackingProduct(f, true);
+  const checkedAt = new Date();
+  f.setScrape(async () => selectedOffer(749, "REGULAR", checkedAt));
+  const result = await f.api.runPriceCheck({ storeId: "store-a", ignoreSchedule: true });
+  assert.equal(result.failed, 0);
+  refreshRecoveryRelations(f);
+  const recovery = await f.api.queuePriceCheckAutoResumeForRun({ userId: "user-a", storeId: "store-a",
+    productIds: [String(product.id)], checkedSince: checkedAt });
+  assert.equal(recovery.queued, 1);
+  assert.equal(f.tables.ebayActionJob[0].type, "RESUME");
+  assert.equal(product.status, "ON_HOLD", "only the resume worker may restore the listing");
+  assert.equal(product.amazonPriceTrackingMode, "DEAL");
+  const evidence = getPriceCheckRecoveryEvidence(product as unknown as Parameters<typeof getPriceCheckRecoveryEvidence>[0]);
+  const candidate = { ...product, ...evidence } as Parameters<typeof isRecoveredPriceCheckAutoHold>[0];
+  assert.equal(isRecoveredPriceCheckAutoHold(candidate), true);
+  assert.equal(isRecoveredPriceCheckAutoHold({ ...candidate, holdOrigin: "MANUAL" }), false);
+  assert.equal(isRecoveredPriceCheckAutoHold({ ...candidate, holdOrigin: "PRICE_CHECK_UNSAFE_PRICE" }), false);
+  assert.equal(isRecoveredPriceCheckAutoHold({ ...candidate, hasUnappliedPriceChange: true }), false);
+});
+
+test("failed or uncertain fallback repricing never queues recovery", async () => {
+  for (const outcomeUncertain of [false, true]) {
+    const f = await fixture(1);
+    const product = dealTrackingProduct(f, true);
+    const checkedAt = new Date();
+    f.setScrape(async () => selectedOffer(749, "REGULAR", checkedAt));
+    f.setEbay(async () => ({ success: false, errorMessage: "Fixture marketplace failure", outcomeUncertain }));
+    await f.api.runPriceCheck({ storeId: "store-a", ignoreSchedule: true });
+    refreshRecoveryRelations(f);
+    const recovery = await f.api.queuePriceCheckAutoResumeForRun({ userId: "user-a", storeId: "store-a",
+      productIds: [String(product.id)], checkedSince: checkedAt });
+    assert.equal(recovery.queued, 0);
+    assert.ok(f.tables.priceHistory.some(row => row.appliedAt == null));
+    assert.equal(product.status, "ON_HOLD");
+  }
+});
+
+test("no usable price keeps the existing unavailable-price hold behavior", async () => {
+  const f = await fixture(1);
+  const product = dealTrackingProduct(f);
+  f.setScrape(async () => selectedOffer(null, null, new Date()));
+  const result = await f.api.runPriceCheck({ storeId: "store-a", ignoreSchedule: true });
+  assert.equal(result.failed, 1);
+  assert.equal(product.priceCheckFailureCode, "AMAZON_PRICE_UNAVAILABLE");
+  assert.equal(Number(product.amazonPrice), 429);
+  assert.equal(product.amazonPriceTrackingMode, "DEAL");
+  assert.equal(selectPriceCheckAutoHoldProductIds({ enabled: true,
+    products: [product as unknown as Parameters<typeof selectPriceCheckAutoHoldProductIds>[0]["products"][number]] }).length, 1);
+});
+
+test("a preference edited during scraping discards the old selection before applying it", async () => {
+  const f = await fixture(1);
+  const product = dealTrackingProduct(f);
+  let revisions = 0;
+  f.setEbay(async () => { revisions++; return { success: true }; });
+  f.setScrape(async () => {
+    product.amazonPriceTrackingMode = "REGULAR";
+    return selectedOffer(749, "REGULAR", new Date());
+  });
+  const result = await f.api.runPriceCheck({ storeId: "store-a", ignoreSchedule: true });
+  assert.equal(result.skipped, 1);
+  assert.equal(Number(product.amazonPrice), 429);
+  assert.equal(product.lastPriceCheck, null);
+  assert.equal(revisions, 0);
+  assert.equal(f.tables.priceHistory.length, 0);
+  assert.equal(f.tables.amazonPriceObservation[0].isSuccessful, false);
+  assert.equal(f.tables.amazonPriceObservation[0].eligibleOffer, false);
 });

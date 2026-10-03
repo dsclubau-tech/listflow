@@ -1,5 +1,6 @@
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
+import { getAmazonPriceSelection } from "@/lib/amazon-price-selection";
 import { NextResponse } from "next/server";
 import { createRequestLogger } from "@/lib/logger";
 import { applyKeywordFilter } from "@/lib/keyword-filter";
@@ -49,7 +50,10 @@ export async function GET(
           amazonPriceObservations: {
             orderBy: { observedAt: "desc" },
             take: 5,
-            select: { id: true, requestedAsin: true, identityOutcome: true, stockLeft: true, observedAt: true },
+            select: { id: true, requestedAsin: true, selectedAsin: true, identityOutcome: true,
+              stockLeft: true, observedAt: true, buyBoxOutcome: true, postcodeVerified: true,
+              isSuccessful: true, eligibleOffer: true, priceMode: true, price: true,
+              regularPrice: true, dealPrice: true },
           },
         },
       }),
@@ -83,6 +87,9 @@ export async function GET(
     return NextResponse.json({
       ...product,
       ...holdExplanation,
+      amazonPriceSelection: getAmazonPriceSelection(product, product.amazonPriceObservations.find(
+        (observation) => observation.id === product.holdLastObservationId,
+      )),
       price: product.price.toString(),
       amazonPrice: product.amazonPrice?.toString() ?? null,
       lastPriceCheck: product.lastPriceCheck?.toISOString() ?? null,

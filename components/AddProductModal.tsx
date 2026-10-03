@@ -460,6 +460,11 @@ export default function AddProductModal({
                   </label>
                 )}
               </div>
+              {dealChoice && (
+                <p className="text-xs text-gray-500">
+                  Deal Price tracking uses Regular Price if the deal ends, then switches back when the deal returns.
+                </p>
+              )}
             </div>
           )}
 
