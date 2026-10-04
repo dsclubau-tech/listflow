@@ -12,6 +12,8 @@ import {
 } from "@/lib/price-check-failures";
 import { invalidateJobCaches } from "@/lib/cache-tags";
 import { logger } from "@/lib/logger";
+import { evaluateAmazonShipping, getCommittedShippingEvidence } from "./amazon-shipping-evidence";
+import { resolveAmazonDeliveryPostcode } from "./amazon-delivery-postcode";
 import { getMinimumProductQuantity } from "@/lib/low-stock-products";
 import { getPriceCheckRecoveryEvidence, priceCheckRecoveryRelations } from "@/lib/price-check-recovery-evidence";
 import {
@@ -278,4 +280,26 @@ export async function queuePriceCheckAutoHoldForRun(input: {
   }
 
   return result;
+}
+
+/** Queue promptly after a committed observation; product locking serializes duplicate queues. */
+export async function queueAmazonShippingHold(storeId: string, productId: string) {
+  const queued = await prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT "id" FROM "Product" WHERE "id" = ${productId} AND "storeId" = ${storeId} FOR UPDATE`;
+    const product = await tx.product.findFirst({ where: { id: productId, storeId } });
+    if (!product || product.status !== 'IMPORTED' || !product.ebayItemId) return false;
+    const settings = await tx.supplierSettings.findUnique({ where: { storeId_supplierName: { storeId, supplierName: SUPPLIER_NAME } },
+      select: { maxShippingDays: true, scrapePostcode: true } });
+    const evidence = getCommittedShippingEvidence(product, product.holdLastObservationId ? await tx.amazonPriceObservation.findUnique({ where: { id: product.holdLastObservationId } }) : null,
+      resolveAmazonDeliveryPostcode(settings?.scrapePostcode));
+    if (evaluateAmazonShipping(evidence, settings?.maxShippingDays ?? 25, new Date(), true).outcome !== 'OVER_LIMIT') return false;
+    const active = await tx.ebayActionJob.findFirst({ where: { storeId, type: EbayActionJobType.HOLD,
+      status: { in: ACTIVE_HOLD_STATUSES }, productIds: { has: productId } } });
+    if (active) return false;
+    await tx.ebayActionJob.create({ data: { storeId, userId: product.createdById, type: EbayActionJobType.HOLD, status: EbayActionJobStatus.QUEUED,
+      productIds: [productId], total: 1, metadata: { kind: 'amazon-shipping-hold', observationId: product.holdLastObservationId } } });
+    return true;
+  });
+  if (queued) invalidateJobCaches(storeId);
+  return queued;
 }

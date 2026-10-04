@@ -56,7 +56,7 @@ async function resolveCandidateIds(
 
   const settings = await tx.supplierSettings.findUnique({
     where: { storeId_supplierName: { storeId: input.storeId, supplierName: "Amazon AU" } },
-    select: { minProductQuantity: true },
+    select: { minProductQuantity: true, maxShippingDays: true, scrapePostcode: true },
   });
   const minimum = getMinimumProductQuantity(settings?.minProductQuantity);
   const products = await tx.product.findMany({
@@ -75,6 +75,7 @@ async function resolveCandidateIds(
               ProductHoldOrigin.PRICE_CHECK_OUT_OF_STOCK,
               ProductHoldOrigin.PRICE_CHECK_PRICE_UNAVAILABLE,
               ProductHoldOrigin.PRICE_CHECK_IDENTITY,
+              ProductHoldOrigin.AMAZON_SHIPPING_DELAY,
             ],
           },
           amazonAvailability: AmazonAvailability.IN_STOCK,
@@ -112,6 +113,7 @@ async function resolveCandidateIds(
       status: true,
       ebayItemId: true,
       amazonPriceTrackingMode: true,
+      asin: true,
       amazonPrice: true,
       holdReason: true,
       priceCheckError: true,
@@ -127,7 +129,7 @@ async function resolveCandidateIds(
   });
   const candidates = products.map((product) => ({
     ...product,
-    ...getPriceCheckRecoveryEvidence(product),
+    ...getPriceCheckRecoveryEvidence(product, settings ?? { maxShippingDays: 25, scrapePostcode: '2217' }),
     minimumProductQuantity: minimum,
   }));
   const candidateIds = selectPriceCheckAutoResumeProductIds({ products: candidates });
@@ -300,5 +302,19 @@ export async function queuePriceCheckAutoResumeForRun(
   });
 
   reportQueuedResumes(result, { storeId: input.storeId });
+  return result;
+}
+
+/** Recover while evidence is fresh, even when a full-catalog run takes hours. */
+export async function queuePriceCheckAutoResumeForProduct(storeId: string, productId: string) {
+  const result = await prisma.$transaction(async tx => {
+    await tx.$queryRaw`SELECT "id" FROM "Product" WHERE "id" = ${productId} AND "storeId" = ${storeId} FOR UPDATE`;
+    const product = await tx.product.findFirst({ where: { id: productId, storeId }, select: { status: true, createdById: true, lastPriceCheck: true } });
+    if (product?.status !== ProductStatus.ON_HOLD || !product.lastPriceCheck) return { actionJobId: null, queued: 0 };
+    const productIds = await resolveCandidateIds(tx, { storeId, productIds: [productId], checkedSince: product.lastPriceCheck });
+    const action = await createAutoResumeAction(tx, { storeId, userId: product.createdById, productIds });
+    return { actionJobId: action?.id ?? null, queued: productIds.length };
+  });
+  reportQueuedResumes(result, { storeId });
   return result;
 }

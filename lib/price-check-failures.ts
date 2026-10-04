@@ -206,6 +206,7 @@ export function selectPriceCheckAutoHoldProductIds(input: {
 }
 
 type AutoResumeCandidate = {
+  shippingWithinLimit?: boolean;
   id: string;
   status: string;
   ebayItemId: string | null;
@@ -247,6 +248,7 @@ export function isRecoveredDealPriceAutoHold(product: AutoResumeCandidate) {
         ProductHoldOrigin.PRICE_CHECK_PRICE_UNAVAILABLE,
         ProductHoldOrigin.PRICE_CHECK_OUT_OF_STOCK,
         ProductHoldOrigin.PRICE_CHECK_IDENTITY,
+        ProductHoldOrigin.AMAZON_SHIPPING_DELAY,
       ].map(String).includes(String(product.holdOrigin)) &&
       product.amazonAvailability === AmazonAvailability.IN_STOCK &&
       hasValidRecoveredPrice(product.amazonPrice) &&
@@ -274,6 +276,7 @@ export function isRecoveredRegularPriceAutoHold(product: AutoResumeCandidate) {
         ProductHoldOrigin.PRICE_CHECK_PRICE_UNAVAILABLE,
         ProductHoldOrigin.PRICE_CHECK_OUT_OF_STOCK,
         ProductHoldOrigin.PRICE_CHECK_IDENTITY,
+        ProductHoldOrigin.AMAZON_SHIPPING_DELAY,
       ].map(String).includes(String(product.holdOrigin)) &&
       product.amazonAvailability === AmazonAvailability.IN_STOCK &&
       hasValidRecoveredPrice(product.amazonPrice) &&
@@ -331,6 +334,7 @@ export function isRecoveredPriceCheckAutoHold(product: AutoResumeCandidate) {
     product.amazonAvailability !== AmazonAvailability.IN_STOCK ||
     !product.ebayItemId ||
     product.hasUnappliedPriceChange ||
+    product.shippingWithinLimit !== true ||
     isAmazonStockLow(product.amazonStockLeft, product.minimumProductQuantity ?? 2)
   ) {
     return false;

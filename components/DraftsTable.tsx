@@ -1,6 +1,8 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
+import ShippingUploadPrompt from "./ShippingUploadPrompt";
+import type { UploadShippingConfirmation } from "@/lib/amazon-upload-shipping-policy";
 import AmazonPriceTrackingLabel from "@/components/AmazonPriceTrackingLabel";
 
 import {
@@ -75,6 +77,7 @@ interface DraftsTableProps {
 }
 
 type UploadJobError = {
+  shippingConfirmation?: UploadShippingConfirmation;
   productId: string;
   title: string;
   error: string;
@@ -384,6 +387,7 @@ function PriceCell({ product }: { product: SerializedProductRow }) {
           <AmazonPriceTrackingLabel mode={amazonPriceTrackingMode} selection={product.amazonPriceSelection} />
         </div>
       )}
+      {product.amazonShippingStatus && product.amazonShippingStatus.outcome !== "WITHIN_LIMIT" && <p className="text-[11px] text-amber-800">{product.amazonShippingStatus.message}</p>}
       <div className="max-w-full whitespace-normal break-words">
         <span className="text-gray-500">SELL</span>{" "}
         <span className="font-semibold text-gray-900">
@@ -2196,6 +2200,14 @@ export default function DraftsTable({
 
   return (
     <>
+      {isDraftsView && uploadJobs
+        .flatMap(job => job.errors)
+        .filter(error => error.shippingConfirmation && products.some(product => product.id === error.productId) &&
+          !activeUploadJobs.some(job => job.productIds.includes(error.productId)))
+        .filter((error, index, all) => all.findIndex(other => other.productId === error.productId) === index)
+        .map(error => <ShippingUploadPrompt key={error.shippingConfirmation!.nonce} title={error.title}
+          confirmation={error.shippingConfirmation!}
+          onComplete={async () => { await loadUploadJobs(); router.refresh(); }} />)}
       {isDraftsView && activeUploadJobs.length > 0 && (
         <div className="mb-4 space-y-3" aria-live="polite">
           {activeUploadJobs.map((job) => {

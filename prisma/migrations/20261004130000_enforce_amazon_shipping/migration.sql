@@ -1,0 +1,2 @@
+ALTER TYPE "ProductHoldOrigin" ADD VALUE IF NOT EXISTS 'AMAZON_SHIPPING_DELAY';
+ALTER TABLE "AmazonPriceObservation" ADD COLUMN "shippingEvidence" JSONB;

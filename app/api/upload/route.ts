@@ -6,12 +6,13 @@ import { createRequestLogger } from "@/lib/logger";
 import { getCurrentStoreSession, getInternalUserId } from "@/lib/store-session";
 import { invalidateJobCaches } from "@/lib/cache-tags";
 import { prisma } from "@/lib/prisma";
+import { readShippingConfirmation } from "@/lib/amazon-upload-shipping";
 import { uploadProductToEbay } from "@/lib/ebay-upload";
 import { assertWorkerOnlineForStore } from "@/lib/worker-heartbeat";
 
 function getErrorStatus(error: unknown) {
   return error instanceof Error &&
-    (error.name === "WorkerOfflineError" || error.name === "JobConflictError")
+    (error.name === "WorkerOfflineError" || error.name === "JobConflictError" || error.name === "ShippingConfirmationError")
     ? 409
     : 500;
 }
@@ -106,13 +107,16 @@ export async function POST(request: Request) {
 
     const userId = await getInternalUserId();
 
-    if (background) {
+    const shippingConfirmation = readShippingConfirmation(body.shippingConfirmation);
+    if (body.shippingConfirmation && !shippingConfirmation) return NextResponse.json({ error: "Invalid shipping confirmation" }, { status: 400 });
+    if (background || shippingConfirmation) {
       await assertWorkerOnlineForStore(storeSession.storeId);
       const result = await createEbayActionJob({
         userId,
         storeId: storeSession.storeId,
         type: EbayActionJobType.UPLOAD_LISTING,
         productIds: uploadProductIds,
+        shippingConfirmation: shippingConfirmation ?? undefined,
       });
 
       invalidateJobCaches(storeSession.storeId);

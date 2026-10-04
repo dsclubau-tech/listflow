@@ -10,6 +10,9 @@ import {
   AmazonAvailability,
 } from "@/app/generated/prisma/enums";
 import { prisma } from "@/lib/prisma";
+import { queuePriceCheckAutoResumeForProduct } from "@/lib/price-check-auto-resume";
+import { queueAmazonShippingHold } from "./price-check-auto-hold";
+import { evaluateAmazonShipping } from "./amazon-shipping-evidence";
 import { AmazonDeliveryFailure, shouldDeferAmazonDeliveryFailure } from "./amazon-delivery-recovery";
 import { acquireDeliveryPermit, releaseDeliveryPermit, deferAmazonDelivery, confirmAmazonDelivery,
   type DeliveryPermit } from "./amazon-delivery-cooldown";
@@ -555,6 +558,15 @@ export async function runPriceCheck(
   };
   const reportProductComplete = async (productId: string) => {
     try {
+      if (options.storeId) {
+        try {
+          await queueAmazonShippingHold(options.storeId, productId);
+          if (products.find(product => product.id === productId)?.status === ProductStatus.ON_HOLD) await queuePriceCheckAutoResumeForProduct(options.storeId, productId);
+        }
+        catch (error) {
+          logger.error("price-checker/shipping", "Could not queue the automatic shipping action; it will be retried on the next check", error, { productId, storeId: options.storeId });
+        }
+      }
       await reportCompletedProductCallbacks({
         completionIncludesProgress:
           options.completionIncludesProgress === true,
@@ -746,7 +758,16 @@ export async function runPriceCheck(
     };
 
     try {
-      return await scrapeWithBrowser(true);
+      const initial = await scrapeWithBrowser(true);
+      if (initial.price === null || evaluateAmazonShipping(initial.shippingEvidence, supplierSettings.maxShippingDays).outcome !== "UNKNOWN" || shouldAbort() || signal?.aborted) return initial;
+      await closeSharedBrowser();
+      timing.increment("shipping-verification-retries");
+      try { return await scrapeWithBrowser(false); }
+      catch (error) {
+        if (shouldAbort() || signal?.aborted) throw error;
+        logger.warn("price-checker/shipping", "Fresh shipping verification failed; preserving the verified initial price", { productId, errorMessage: getErrorMessage(error) });
+        return initial;
+      }
     } catch (error) {
       timing.increment("scrape-retries");
       await closeSharedBrowser();
@@ -979,6 +1000,7 @@ export async function runPriceCheck(
                     ? "The normal Amazon Buy Box is unavailable."
                     : scrapeResult?.variantSelectionReason ?? null,
                 observedAt: checkedAt,
+                shippingEvidence: scrapeResult?.shippingEvidence ?? undefined,
                 isSuccessful:
                   currentAmazonPrice !== null &&
                   scrapeResult?.buyBoxOutcome !== "UNAVAILABLE" &&

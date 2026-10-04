@@ -1,6 +1,9 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
+import type { AmazonShippingStatus } from "@/lib/amazon-shipping-evidence";
+import ShippingUploadPrompt from "./ShippingUploadPrompt";
+import type { UploadShippingConfirmation } from "@/lib/amazon-upload-shipping-policy";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -74,7 +77,7 @@ import AmazonPriceTrackingLabel from "@/components/AmazonPriceTrackingLabel";
 
 // ----- Types -----
 
-type ProductWithRelations = Product & { store: Store; createdBy: User; amazonPriceSelection?: AmazonPriceSelection | null };
+type ProductWithRelations = Product & { store: Store; createdBy: User; amazonPriceSelection?: AmazonPriceSelection | null; amazonShippingStatus?: AmazonShippingStatus | null };
 
 interface PolicyEntry {
   profileId: string;
@@ -112,7 +115,7 @@ type InlineUploadJob = {
   processed: number;
   succeeded: number;
   failed: number;
-  errors?: Array<{ productId: string; error: string }>;
+  errors?: Array<{ productId: string; error: string; shippingConfirmation?: UploadShippingConfirmation }>;
 };
 
 function isActiveInlineUploadJob(job: InlineUploadJob | null) {
@@ -545,6 +548,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
   const [importPhase, setImportPhase] = useState<
     "preparing" | "saving" | "queueing" | null
   >(null);
+  const [shippingConfirmation, setShippingConfirmation] = useState<UploadShippingConfirmation | null>(null);
   const [inlineUploadJob, setInlineUploadJob] = useState<InlineUploadJob | null>(null);
   const saveAndImportGuardRef = useRef(false);
   const [isRegrabbing, setIsRegrabbing] = useState(false);
@@ -564,6 +568,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
     let cancelled = false;
     saveAndImportGuardRef.current = false;
     setInlineUploadJob(null);
+    setShippingConfirmation(null);
 
     if (isListed) {
       return () => {
@@ -584,6 +589,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
             isActiveInlineUploadJob(job) && job.productIds.includes(product.id),
         );
 
+        if (!cancelled && response.ok) setShippingConfirmation(activeJob ? null : data.jobs?.flatMap(job => job.errors ?? []).find(error => error.productId === product.id && error.shippingConfirmation)?.shippingConfirmation ?? null);
         if (!cancelled && response.ok && activeJob) {
           setInlineUploadJob(activeJob);
         }
@@ -621,6 +627,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
 
           if (!isActiveInlineUploadJob(nextJob)) {
             if (nextJob.failed > 0) {
+              setShippingConfirmation(nextJob.errors?.find(error => error.productId === product.id)?.shippingConfirmation ?? null);
               setSaveMessage({
                 title: "Import failed",
                 text:
@@ -1578,9 +1585,11 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
       } else {
         const data = (await res.json().catch(() => ({}))) as {
           error?: string;
+          shippingConfirmation?: UploadShippingConfirmation;
           missingItemSpecifics?: string[];
           requiredItemSpecifics?: RequiredItemSpecific[];
         };
+        setShippingConfirmation(data.shippingConfirmation ?? null);
         const missingNames = data.missingItemSpecifics ?? [];
 
         if (data.requiredItemSpecifics && data.requiredItemSpecifics.length > 0) {
@@ -1977,6 +1986,16 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
         ref={editorContainerRef}
         className="border-t border-gray-200 bg-gray-50"
       >
+      {product.amazonShippingStatus && product.amazonShippingStatus.outcome !== "WITHIN_LIMIT" && <p role="status" className="m-3 text-sm text-amber-800">{product.amazonShippingStatus.message}</p>}
+      {shippingConfirmation && <ShippingUploadPrompt confirmation={shippingConfirmation} onComplete={async () => {
+        setShippingConfirmation(null);
+        const response = await fetch("/api/upload/jobs/current", { cache: "no-store" });
+        if (response.ok) {
+          const data = await response.json() as { jobs?: InlineUploadJob[] };
+          setInlineUploadJob(data.jobs?.find(job => isActiveInlineUploadJob(job) && job.productIds.includes(product.id)) ?? null);
+        }
+        router.refresh();
+      }} />}
       {/* ===== Header bar ===== */}
       <div className="flex flex-col gap-4 border-b border-gray-200 bg-white px-4 py-4 md:px-6 xl:flex-row xl:items-center xl:justify-between">
         {/* Left side */}

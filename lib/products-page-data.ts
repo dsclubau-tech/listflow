@@ -1,5 +1,7 @@
 import "server-only";
 import { resolveCurrentHoldReason } from "@/lib/current-hold-reason";
+import { evaluateAmazonShipping, getCommittedShippingEvidence } from "./amazon-shipping-evidence";
+import { resolveAmazonDeliveryPostcode } from "./amazon-delivery-postcode";
 import { getAmazonPriceSelection } from "@/lib/amazon-price-selection";
 
 import type { Prisma } from "@/app/generated/prisma/client";
@@ -140,7 +142,7 @@ const productRowSelect = {
       price: true,
       regularPrice: true,
       dealPrice: true,
-      observedAt: true,
+      observedAt: true, shippingEvidence: true, verifiedPostcode: true,
     },
   },
   _count: {
@@ -240,7 +242,7 @@ function serializeProductSelection(
   }));
 }
 
-function serializeProducts(products: ProductRowPayload[], minimumProductQuantity: number): SerializedProductRow[] {
+function serializeProducts(products: ProductRowPayload[], minimumProductQuantity: number, shippingSettings: { maxShippingDays: number; scrapePostcode: string } | null): SerializedProductRow[] {
   const serializeObservation = (observation: ProductRowPayload["amazonPriceObservations"][number]) => ({
     ...observation,
     price: observation.price?.toString() ?? null,
@@ -260,7 +262,9 @@ function serializeProducts(products: ProductRowPayload[], minimumProductQuantity
     const currentObservation = product.amazonPriceObservations.find(
       (observation) => observation.id === product.holdLastObservationId,
     ) ?? null;
+    const amazonShippingStatus = product.asin ? evaluateAmazonShipping(getCommittedShippingEvidence(product, currentObservation, resolveAmazonDeliveryPostcode(shippingSettings?.scrapePostcode)), shippingSettings?.maxShippingDays ?? 25, new Date(), true) : undefined;
     const holdExplanation = resolveCurrentHoldReason({
+      amazonShippingStatus,
       status: product.status,
       holdOrigin: product.holdOrigin,
       holdReason: product.holdReason,
@@ -280,6 +284,7 @@ function serializeProducts(products: ProductRowPayload[], minimumProductQuantity
       ...product,
       ...holdExplanation,
       amazonPriceSelection: getAmazonPriceSelection(product, currentObservation),
+      amazonShippingStatus,
       amazonPriceObservations: product.amazonPriceObservations.map(serializeObservation),
       price: product.price.toString(),
       amazonPrice: product.amazonPrice?.toString() ?? null,
@@ -391,7 +396,7 @@ export async function getCachedProductsSelectionData(
 
   const settings = await prisma.supplierSettings.findUnique({
     where: { storeId_supplierName: { storeId, supplierName: "Amazon AU" } },
-    select: { minProductQuantity: true },
+    select: { minProductQuantity: true, maxShippingDays: true, scrapePostcode: true },
   });
   const where = buildProductsWhere(storeId, query, settings?.minProductQuantity ?? 2);
 
@@ -432,7 +437,7 @@ export async function getCachedProductsPageData(
 
   const settings = await prisma.supplierSettings.findUnique({
     where: { storeId_supplierName: { storeId, supplierName: "Amazon AU" } },
-    select: { minProductQuantity: true },
+    select: { minProductQuantity: true, maxShippingDays: true, scrapePostcode: true },
   });
   const where = buildProductsWhere(storeId, query, settings?.minProductQuantity ?? 2);
   const supplierOptions = [{ id: storeId, name: storeName }];
@@ -449,7 +454,7 @@ export async function getCachedProductsPageData(
         take: query.pageSize, skip: (page - 1) * query.pageSize })).ids;
     const products = await getProductRowsByIds(storeId, ids);
     return {
-      products: serializeProducts(products, settings?.minProductQuantity ?? 2),
+      products: serializeProducts(products, settings?.minProductQuantity ?? 2, settings),
       totalCount: requested.totalCount,
       page, pageSize: query.pageSize, sortBy: query.sortBy,
       sortOrder: query.sortOrder, importedFilter: query.importedFilter,
@@ -471,7 +476,7 @@ export async function getCachedProductsPageData(
     const products = await getProductRowsByIds(storeId, pageIds);
 
     return {
-      products: serializeProducts(products, settings?.minProductQuantity ?? 2),
+      products: serializeProducts(products, settings?.minProductQuantity ?? 2, settings),
       totalCount,
       page,
       pageSize: query.pageSize,
@@ -508,7 +513,7 @@ export async function getCachedProductsPageData(
         });
 
   return {
-    products: serializeProducts(products, settings?.minProductQuantity ?? 2),
+    products: serializeProducts(products, settings?.minProductQuantity ?? 2, settings),
     totalCount,
     page,
     pageSize: query.pageSize,

@@ -1,4 +1,6 @@
 import "server-only";
+import { guardAmazonUploadShipping, assertUploadShippingContext } from './amazon-upload-shipping';
+import type { UploadShippingContext, UploadShippingConfirmation } from './amazon-upload-shipping-policy';
 
 import { ProductStatus } from "@/app/generated/prisma/enums";
 import { buildAddItemXML } from "@/lib/ebay-xml";
@@ -31,9 +33,14 @@ import {
   type PackageVerificationStatus,
 } from "@/lib/package-data-sync";
 
+class ShippingUploadBlocked extends Error {
+  constructor(readonly decision: { status: number; message: string; confirmation?: UploadShippingConfirmation }) { super(decision.message); }
+}
+
 type UploadLogger = Pick<typeof logger, "info" | "warn" | "error">;
 
 type UploadResponseBody = {
+  shippingConfirmation?: UploadShippingConfirmation;
   success: boolean;
   itemId?: string;
   reconciled?: boolean;
@@ -281,6 +288,8 @@ export async function uploadProductToEbay(input: {
   storeId: string;
   userId: string;
   log?: UploadLogger;
+  jobId?: string;
+  shippingApproval?: UploadShippingContext | null;
 }): Promise<ProductUploadResult> {
   const log = input.log ?? logger;
   const { productId, storeId, userId } = input;
@@ -299,6 +308,7 @@ export async function uploadProductToEbay(input: {
     };
   }
 
+  const uploadProduct = product;
   try {
     const existingEbayItemId = product.ebayItemId?.trim();
     if (existingEbayItemId) {
@@ -523,6 +533,9 @@ export async function uploadProductToEbay(input: {
       productForXml: typeof productWithResolvedDesc,
       options: typeof addItemOptions & { itemSpecificMaxCount?: number },
     ) {
+      const shipping = await guardAmazonUploadShipping({ product: uploadProduct, userId, jobId: input.jobId, approval: input.shippingApproval });
+      if (!shipping.allowed) throw new ShippingUploadBlocked(shipping);
+      if (shipping.context) await assertUploadShippingContext(productId, storeId, shipping.context);
       let xml = buildAddItemXML(productForXml, overrideStartPrice, options);
       let result = await callEbayAddItem(xml, storeNumber);
 
@@ -537,6 +550,9 @@ export async function uploadProductToEbay(input: {
           ...options,
           itemSpecificMaxCount: 12,
         });
+        const retryShipping = await guardAmazonUploadShipping({ product: uploadProduct, userId, jobId: input.jobId, approval: input.shippingApproval });
+        if (!retryShipping.allowed) throw new ShippingUploadBlocked(retryShipping);
+        if (retryShipping.context) await assertUploadShippingContext(productId, storeId, retryShipping.context);
         result = await callEbayAddItem(xml, storeNumber);
       }
 
@@ -740,6 +756,12 @@ export async function uploadProductToEbay(input: {
       },
     };
   } catch (error) {
+    if (error instanceof ShippingUploadBlocked) {
+      await prisma.product.updateMany({ where: { id: productId, storeId, ebayItemId: null, status: { in: ['DRAFT', 'FAILED'] } }, data: { status: 'DRAFT', errorMessage: error.message } });
+      invalidateProductCaches(storeId);
+      return { ok: false, status: error.decision.status, productTitle: product.title,
+        body: { success: false, error: error.message, shippingConfirmation: error.decision.confirmation } };
+    }
     const message = error instanceof Error ? error.message : "Unknown error";
 
     log.error("upload/product", "Unhandled error while uploading product", error, {

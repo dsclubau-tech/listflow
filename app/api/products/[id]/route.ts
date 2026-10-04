@@ -1,3 +1,5 @@
+import { evaluateAmazonShipping, getCommittedShippingEvidence } from "@/lib/amazon-shipping-evidence";
+import { resolveAmazonDeliveryPostcode } from "@/lib/amazon-delivery-postcode";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { getAmazonPriceSelection } from "@/lib/amazon-price-selection";
@@ -53,13 +55,13 @@ export async function GET(
             select: { id: true, requestedAsin: true, selectedAsin: true, identityOutcome: true,
               stockLeft: true, observedAt: true, buyBoxOutcome: true, postcodeVerified: true,
               isSuccessful: true, eligibleOffer: true, priceMode: true, price: true,
-              regularPrice: true, dealPrice: true },
+              regularPrice: true, dealPrice: true, shippingEvidence: true, verifiedPostcode: true },
           },
         },
       }),
       prisma.supplierSettings.findUnique({
         where: { storeId_supplierName: { storeId: storeSession.storeId, supplierName: SUPPLIER_NAME } },
-        select: { minProductQuantity: true },
+        select: { minProductQuantity: true, maxShippingDays: true, scrapePostcode: true },
       }),
     ]);
 
@@ -67,7 +69,9 @@ export async function GET(
       return NextResponse.json({ error: "Product not found" }, { status: 404 });
     }
 
+    const amazonShippingStatus = product.asin ? evaluateAmazonShipping(getCommittedShippingEvidence(product, product.amazonPriceObservations.find(row => row.id === product.holdLastObservationId), resolveAmazonDeliveryPostcode(settings?.scrapePostcode)), settings?.maxShippingDays ?? 25, new Date(), true) : undefined;
     const holdExplanation = resolveCurrentHoldReason({
+      amazonShippingStatus,
       status: product.status,
       holdOrigin: product.holdOrigin,
       holdReason: product.holdReason,
@@ -87,6 +91,7 @@ export async function GET(
     return NextResponse.json({
       ...product,
       ...holdExplanation,
+      amazonShippingStatus,
       amazonPriceSelection: getAmazonPriceSelection(product, product.amazonPriceObservations.find(
         (observation) => observation.id === product.holdLastObservationId,
       )),

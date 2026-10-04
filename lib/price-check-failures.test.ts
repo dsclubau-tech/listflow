@@ -239,6 +239,7 @@ test("automatic resume metadata identifies recovered price-check actions", () =>
 
 test("automatic resume candidates only include recovered false deal-price holds", () => {
   const recovered = {
+    shippingWithinLimit: true,
     id: "recovered",
     status: "ON_HOLD",
     ebayItemId: "123",
@@ -284,6 +285,7 @@ test("automatic resume candidates only include recovered false deal-price holds"
 
 test("automatic resume candidates include resolved low-stock holds but exclude unsafe holds", () => {
   const recoveredStock = {
+    shippingWithinLimit: true,
     id: "stock-recovered",
     status: "ON_HOLD",
     ebayItemId: "123",
@@ -332,6 +334,7 @@ test("automatic resume candidates include resolved low-stock holds but exclude u
 
 test("automatic resume candidates include recovered regular-price holds", () => {
   const recoveredRegular = {
+    shippingWithinLimit: true,
     id: "recovered-regular",
     status: "ON_HOLD",
     ebayItemId: "123",

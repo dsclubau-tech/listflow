@@ -6,6 +6,8 @@ import { extractLocalizedBuyboxPriceChoices, selectAmazonBuyboxPriceForMode, sel
 import { parseAmazonShippingFeeFromText } from "@/lib/amazon-shipping";
 import { extractAmazonNewOfferStockLeft } from "@/lib/amazon-stock";
 import { extractAmazonPriceSnapshot } from "@/lib/amazon-price-snapshot";
+import { extractAmazonShippingEvidenceFromHtml } from "./amazon-shipping-extraction";
+import type { AmazonShippingEvidence } from "./amazon-shipping-evidence";
 import { launchScraperBrowser } from "@/lib/scraper-browser";
 import { isUsefulItemSpecificCandidate } from "@/lib/item-specifics";
 import {
@@ -78,6 +80,7 @@ export interface ScrapedProduct {
 }
 
 export interface ScrapedAmazonPrice {
+  shippingEvidence?: AmazonShippingEvidence;
   /** Time the accepted final Amazon price/stock evidence was obtained. */
   observedAt?: Date;
   price: number | null;
@@ -891,9 +894,9 @@ export async function scrapeAmazonPrice(
 
     let variantSwatchSelected = false;
 
-    // If price is not available on initial page load, check if Amazon presents variations
-    // and attempt to select the exact saved colour/size in safe order
-    if (price === null) {
+    // Verify saved variations even when the initial page already has a price.
+    // Shipping and price must describe the same selected variant.
+    if (price === null || variantSelectionHints) {
       const variantResult = await attemptVariantSelection(
         page,
         variantSelectionHints ?? null
@@ -1109,6 +1112,9 @@ export async function scrapeAmazonPrice(
     return {
       price,
       observedAt,
+      shippingEvidence: selectedPrice && exactPostcodeVerified && finalPageAsin === normalizedAsin && buyBoxOutcome === "AVAILABLE"
+        ? extractAmazonShippingEvidenceFromHtml(await page.content(), selectedPrice, postcode ?? "", observedAt)
+        : undefined,
       rawPrice: selectedPrice?.itemPrice ?? price,
       shippingPrice: selectedPrice?.shippingFee ?? null,
       stockLeft,

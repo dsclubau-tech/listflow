@@ -1,3 +1,4 @@
+import { parseAmazonShippingEvidence } from "./amazon-shipping-evidence";
 import assert from "node:assert/strict";
 import test from "node:test";
 import vm from "node:vm";
@@ -16,7 +17,7 @@ import { getPriceCheckRecoveryEvidence } from "./price-check-recovery-evidence";
 import { getAmazonPriceSelection } from "./amazon-price-selection";
 
 type Row = Record<string, unknown>;
-type Query = { where?: Row; data?: Row; orderBy?: Row | Row[]; take?: number };
+type Query = { where?: Row; data?: Row; orderBy?: Row | Row[]; take?: number; select?: Row };
 const compiled = build({ stdin: { resolveDir: process.cwd(), contents: `
   export * from "./lib/amazon-delivery-cooldown";
   export { PriceCheckFailure } from "./lib/price-check-failures";
@@ -28,7 +29,7 @@ const compiled = build({ stdin: { resolveDir: process.cwd(), contents: `
 ` }, bundle: true, platform: "node", format: "cjs", write: false, packages: "external",
   plugins: [{ name: "isolated-database", setup(builder) {
     builder.onResolve({ filter: /^(server-only|(?:@\/lib\/|\.\/)(?:prisma|cache-tags|logger|amazon-scraper|scraper-browser|price-check-auto-hold|ebay|worker-claim-policy)|@\/app\/generated\/prisma\/client)$/ }, args => ({ path: args.path, namespace: "fixture" }));
-    builder.onLoad({ filter: /.*/, namespace: "fixture" }, args => ({ contents:
+    builder.onLoad({ filter: /.*/, namespace: "fixture" }, args => ({ resolveDir: process.cwd(), contents:
       args.path === "server-only" ? "" : args.path.endsWith("/prisma") ? "export const prisma = globalThis.database;"
       : args.path.endsWith("/client") ? "export const Prisma = globalThis.Prisma;"
       : args.path.endsWith("cache-tags") ? "export const invalidatePriceCaches = () => {}; export const invalidateJobCaches = () => {};"
@@ -37,7 +38,7 @@ const compiled = build({ stdin: { resolveDir: process.cwd(), contents: `
       : args.path.endsWith("scraper-browser") ? "export const launchScraperBrowser = async () => ({isConnected:()=>true,close:async()=>{}}); export const getBrowserLaunchUserMessage = () => null;"
        : args.path.endsWith("ebay") ? "export const getStoreNumber = async () => '1'; export const callEbayReviseInventoryStatus = (...args) => globalThis.ebay(...args);"
       : args.path.endsWith("worker-claim-policy") ? "export const getWorkerClaimPolicy = async () => ({}); export const filterRunnableJobsForWorker = jobs => jobs;"
-      : "export const finalizePriceCheckAutoHoldForJob = async () => ({queued:0,actionJobId:null}); export const queuePriceCheckAutoHoldForRun = async () => ({queued:0});"
+      : "export const finalizePriceCheckAutoHoldForJob = async () => ({queued:0,actionJobId:null}); export const queuePriceCheckAutoHoldForRun = async () => ({queued:0}); export { queueAmazonShippingHold } from " + JSON.stringify(process.cwd().replaceAll("\\", "/") + "/lib/price-check-auto-hold.ts")
     }));
   } }],
 }).then(result => result.outputFiles[0].text);
@@ -111,7 +112,7 @@ async function fixture(count = 809, version = 1, finished = 0) {
       findUnique: async (query: Query) => all(query)[0] ?? null,
       findUniqueOrThrow: async (query: Query) => { const row = all(query)[0]; if (!row) throw new Error("Missing row"); return row; },
       findFirst: async (query: Query) => all(query)[0] ?? null,
-      findMany: async (query: Query = {}) => all(query).slice(0, query.take),
+      findMany: async (query: Query = {}) => all(query).slice(0, query.take).map(row => name === "product" && query.select?.amazonPriceObservations ? { ...row, amazonPriceObservations: tables.amazonPriceObservation.filter(observation => observation.productId === row.id), _count: {priceHistory: tables.priceHistory.filter(history => history.productId === row.id && history.appliedAt == null).length} } : row),
       count: async (query: Query) => all(query).length,
       create: async (query: Query) => { const row = { id: `created-${++idCounter}`, acquiredAt: new Date(), renewedAt: new Date(), observedAt: new Date(),
         ...(name === "priceCheckJob" ? { completedProductIds: [], checked: 0, failed: 0, skipped: 0, changed: 0, pendingReview: 0, createdAt: new Date(), updatedAt: new Date(), dismissedAt: null } : {}), ...query.data }; tables[name].push(row); return row; },
@@ -161,7 +162,12 @@ async function fixture(count = 809, version = 1, finished = 0) {
   const fixtureModule = { exports: {} };
   vm.runInNewContext(await compiled, { module: fixtureModule, exports: fixtureModule.exports, require: createRequire(import.meta.url),
     globalThis: { database, Prisma, ebay: (...args: unknown[]) => ebay(...args), scrape: (...args: unknown[]) => {
-      scrapeCalls++; return scrape((args[5] as { signal?: AbortSignal })?.signal, args[5] as Record<string,unknown>);
+      scrapeCalls++;
+      return Promise.resolve(scrape((args[5] as { signal?: AbortSignal })?.signal, args[5] as Record<string,unknown>)).then(result => {
+        if (!result || typeof result !== 'object' || 'shippingEvidence' in result) return result;
+        const value = result as Record<string, unknown>;
+        return { ...value, shippingEvidence: parseAmazonShippingEvidence({ asin: String(args[0]), mode: value.selectedPriceMode === 'DEAL' ? 'DEAL' : 'REGULAR', postcode: '2217', source: 'fixture', arrivalText: 'delivery tomorrow', associated: true, observedAt: value.observedAt instanceof Date ? value.observedAt : new Date() }) };
+      });
     } }, process, console, Buffer, URL, URLSearchParams, Date: FixtureDate, AbortController,
     setTimeout, clearTimeout, setInterval, clearInterval, fetch: () => { throw new Error("Unexpected marketplace or network write"); },
   });
@@ -718,11 +724,12 @@ test("existing missing-deal holds queue recovery after verified Regular fallback
   refreshRecoveryRelations(f);
   const recovery = await f.api.queuePriceCheckAutoResumeForRun({ userId: "user-a", storeId: "store-a",
     productIds: [String(product.id)], checkedSince: checkedAt });
-  assert.equal(recovery.queued, 1);
+  assert.equal(recovery.queued, 0, "completion already queued recovery while evidence was fresh");
+  assert.equal(f.tables.ebayActionJob.length, 1);
   assert.equal(f.tables.ebayActionJob[0].type, "RESUME");
   assert.equal(product.status, "ON_HOLD", "only the resume worker may restore the listing");
   assert.equal(product.amazonPriceTrackingMode, "DEAL");
-  const evidence = getPriceCheckRecoveryEvidence(product as unknown as Parameters<typeof getPriceCheckRecoveryEvidence>[0]);
+  const evidence = getPriceCheckRecoveryEvidence(product as unknown as Parameters<typeof getPriceCheckRecoveryEvidence>[0], {maxShippingDays:25,scrapePostcode:"2217"});
   const candidate = { ...product, ...evidence } as Parameters<typeof isRecoveredPriceCheckAutoHold>[0];
   assert.equal(isRecoveredPriceCheckAutoHold(candidate), true);
   assert.equal(isRecoveredPriceCheckAutoHold({ ...candidate, holdOrigin: "MANUAL" }), false);
@@ -777,4 +784,32 @@ test("a preference edited during scraping discards the old selection before appl
   assert.equal(f.tables.priceHistory.length, 0);
   assert.equal(f.tables.amazonPriceObservation[0].isSuccessful, false);
   assert.equal(f.tables.amazonPriceObservation[0].eligibleOffer, false);
+});
+
+test("verified slow shipping queues immediately even when price is unchanged and failure holds are disabled", async () => {
+  const f = await fixture(1);
+  Object.assign(f.tables.supplierSettings[0], {maxShippingDays:25,autoHoldOnPriceCheckFailure:false});
+  f.tables.product[0].createdById = "user-a";
+  f.setScrape(async () => {const observedAt = new Date(); return {...verified(100,observedAt), selectedPriceMode:"REGULAR", shippingEvidence:parseAmazonShippingEvidence({asin:"B0G6CQ427S",mode:"REGULAR",postcode:"2217",source:"fixture",observedAt,associated:true,arrivalText:"delivery in 26 days"})};});
+  let queuedAtCompletion = false;
+  const result = await f.api.runPriceCheck({storeId:"store-a",ignoreSchedule:true,onProductComplete:()=>{queuedAtCompletion=f.tables.ebayActionJob.length===1;}});
+  assert.equal(result.failed,0); assert.equal(result.changed,0); assert.equal(queuedAtCompletion,true);
+  assert.equal(f.tables.ebayActionJob[0].type,"HOLD");
+  assert.equal(f.tables.product[0].status,"IMPORTED","eBay confirmation is required before changing status");
+  const observation = f.tables.amazonPriceObservation[0];
+  assert.ok(observation.shippingEvidence);
+});
+test("missing arrival evidence retries once, preserves price, and creates no shipping hold", async () => {
+  const f=await fixture(1);
+  f.setScrape(async()=>{const observedAt=new Date();return {...verified(100,observedAt),shippingEvidence:parseAmazonShippingEvidence({asin:"B0G6CQ427S",mode:"REGULAR",postcode:"2217",observedAt,source:"fixture",associated:true})};});
+  const result=await f.api.runPriceCheck({storeId:"store-a",ignoreSchedule:true});
+  assert.equal(result.failed,0);assert.equal(f.calls(),2);assert.equal(f.tables.ebayActionJob.length,0);assert.equal(f.tables.product[0].status,"IMPORTED");
+});
+test("unknown delivery cannot recover an existing shipping hold", async () => {
+  const f=await fixture(1);const product=f.tables.product[0];
+  Object.assign(product,{status:"ON_HOLD",holdOrigin:"AMAZON_SHIPPING_DELAY",quantity:0});
+  f.setScrape(async()=>{const observedAt=new Date();return {...verified(100,observedAt),shippingEvidence:parseAmazonShippingEvidence({asin:"B0G6CQ427S",mode:"REGULAR",postcode:"2217",observedAt,source:"fixture",associated:true})};});
+  const checkedSince=new Date();await f.api.runPriceCheck({storeId:"store-a",ignoreSchedule:true});refreshRecoveryRelations(f);
+  const recovery=await f.api.queuePriceCheckAutoResumeForRun({userId:"user-a",storeId:"store-a",productIds:[String(product.id)],checkedSince});
+  assert.equal(recovery.queued,0);assert.equal(product.status,"ON_HOLD");
 });

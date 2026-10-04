@@ -1,3 +1,4 @@
+import { evaluateAmazonShipping, getCommittedShippingEvidence } from './amazon-shipping-evidence';
 // Used by both queue selection and the worker's final recovery check.
 export const priceCheckRecoveryRelations = {
   amazonPriceObservations: {
@@ -10,6 +11,12 @@ export const priceCheckRecoveryRelations = {
       postcodeVerified: true,
       stockLeft: true,
       observedAt: true,
+      requestedAsin: true,
+      selectedAsin: true,
+      verifiedPostcode: true,
+      isSuccessful: true,
+      priceMode: true,
+      shippingEvidence: true,
     },
   },
   _count: {
@@ -25,11 +32,19 @@ export function getPriceCheckRecoveryEvidence(product: {
     postcodeVerified: boolean;
     stockLeft: number | null;
     observedAt: Date;
+    requestedAsin?: string | null;
+    selectedAsin?: string | null;
+    verifiedPostcode?: string | null;
+    isSuccessful?: boolean;
+    priceMode?: string | null;
+    shippingEvidence?: unknown;
   }>;
   _count: { priceHistory: number };
   lastPriceCheck?: Date | null;
   holdLastObservationId?: string | null;
-}) {
+  asin?: string | null;
+  amazonPriceTrackingMode?: string;
+}, shippingSettings?: { maxShippingDays: number; scrapePostcode: string }, now = new Date()) {
   const latest = product.amazonPriceObservations.find(
     (observation) => observation.id === product.holdLastObservationId,
   );
@@ -42,5 +57,9 @@ export function getPriceCheckRecoveryEvidence(product: {
     verifiedStockLeft: current && latest?.identityOutcome === "MATCH"
       ? latest.stockLeft : null,
     hasUnappliedPriceChange: product._count.priceHistory > 0,
+    shippingWithinLimit: Boolean(shippingSettings && evaluateAmazonShipping(
+      getCommittedShippingEvidence(product, latest, shippingSettings.scrapePostcode),
+      shippingSettings.maxShippingDays, now, true,
+    ).outcome === 'WITHIN_LIMIT'),
   };
 }

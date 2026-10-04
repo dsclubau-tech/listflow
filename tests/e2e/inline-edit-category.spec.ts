@@ -1,5 +1,6 @@
 import { expect, test as base, type Page } from "playwright/test";
 import { build } from "esbuild";
+import type { UploadShippingConfirmation } from "../../lib/amazon-upload-shipping-policy";
 import type { RequiredItemSpecific } from "../../components/draft-upload-response";
 
 const origin = "http://listflow.test";
@@ -16,8 +17,8 @@ const initialProduct = {
 };
 type FixtureProduct = Omit<typeof initialProduct, "itemSpecifics"> & { itemSpecifics: Record<string, string> };
 type SavedPayload = { category: string; categoryName: string; itemSpecifics: Record<string, string> };
-type UploadJob = { id: string; status: "QUEUED" | "RUNNING"; productIds: string[]; total: number;
-  processed: number; succeeded: number; failed: number; errors: [] };
+type UploadJob = { id: string; status: "QUEUED" | "RUNNING" | "COMPLETED"; productIds: string[]; total: number;
+  processed: number; succeeded: number; failed: number; errors: Array<{productId: string; error: string; shippingConfirmation?: UploadShippingConfirmation}> };
 const queuedJob = (): UploadJob => ({ id: "synthetic-upload", status: "QUEUED", productIds: [productId],
   total: 1, processed: 0, succeeded: 0, failed: 0, errors: [] });
 
@@ -354,4 +355,17 @@ test("a failed save preserves edits and prevents an upload until retry succeeds"
   await page.getByRole("button", { name: "Save & Import", exact: true }).click();
   await expect.poll(() => editor.requests.filter(request => request.path === "/api/upload").length).toBe(1);
   expect(editor.saves).toHaveLength(2);
+});
+
+
+test("reopening a draft restores shipping confirmation and retry starts the existing upload workflow", async ({page, editor}) => {
+  const shippingConfirmation = {sourceJobId: "previous-attempt", productId, nonce: "server-challenge", message: "Delivery unverified"};
+  editor.currentJobs = [{...queuedJob(), id: "previous-attempt", status: "COMPLETED", processed: 1, failed: 1, errors: [{productId, error: "Delivery unverified", shippingConfirmation}]}];
+  await editor.open();
+  await expect(page.getByRole("region", {name: "Shipping confirmation"})).toBeVisible();
+  await page.getByRole("button", {name: "Retry check", exact: true}).click();
+  await expect(page.getByRole("region", {name: "Shipping confirmation"})).toHaveCount(0);
+  await expect(page.getByRole("button", {name: "Save & Import", exact: true})).toBeDisabled();
+  expect(editor.saves).toHaveLength(0);
+  expect(editor.requests.filter(request => request.path === "/api/upload")).toHaveLength(1);
 });

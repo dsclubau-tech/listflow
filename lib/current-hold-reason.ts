@@ -1,4 +1,6 @@
+import type { AmazonShippingStatus } from "./amazon-shipping-evidence";
 export interface CurrentHoldReasonInput {
+  amazonShippingStatus?: AmazonShippingStatus;
   status: string;
   holdOrigin?: string | null;
   holdReason?: string | null;
@@ -72,6 +74,8 @@ export function resolveCurrentHoldReason(input: CurrentHoldReasonInput) {
       currentHoldReason = "Price change awaiting review; listing remains on hold.";
     } else if (input.holdOrigin === "LOW_STOCK" && verifiedStock === null && latestCheckAt) {
       currentHoldReason = "Amazon stock could not be verified; low-stock hold remains.";
+    } else if (input.amazonShippingStatus && input.amazonShippingStatus.outcome !== "WITHIN_LIMIT") {
+      currentHoldReason = `${input.amazonShippingStatus.message} The hold remains.`;
     } else if (latestCheckAt) {
       currentHoldReason = "Latest Amazon check passed; restoration on eBay is pending.";
     } else {

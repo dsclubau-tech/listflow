@@ -156,6 +156,7 @@ enum ProductHoldOrigin {
   PRICE_CHECK_IDENTITY
   PRICE_CHECK_UNSAFE_PRICE
   LOW_STOCK
+  AMAZON_SHIPPING_DELAY
   UNKNOWN
 }
 
@@ -442,6 +443,7 @@ model AmazonPriceObservation {
   message               String?            @db.Text
   observedAt            DateTime           @default(now())
   isSuccessful          Boolean            @default(false)
+  shippingEvidence      Json?
 
   product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)

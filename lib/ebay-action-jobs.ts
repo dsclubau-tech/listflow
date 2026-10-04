@@ -7,6 +7,7 @@ import {
   EbayActionJobStatus,
   EbayActionJobType,
   ProductStatus,
+  ProductHoldOrigin,
   PriceCheckFailureCode,
 } from "@/app/generated/prisma/enums";
 import { Prisma } from "@/app/generated/prisma/client";
@@ -71,6 +72,8 @@ import {
 import { resolveDescriptionTemplate } from "@/lib/template-resolver";
 import { deleteProductFromListflow } from "@/lib/product-removal";
 import { uploadProductToEbay } from "@/lib/ebay-upload";
+import { clearPendingShippingChallenges, resolveShippingApproval, getUploadShippingApproval, readShippingConfirmation } from './amazon-upload-shipping';
+import type { ShippingConfirmation, UploadShippingConfirmation } from './amazon-upload-shipping-policy';
 import { partitionUploadProductIds } from "@/lib/ebay-upload-job-policy";
 import { createEbayImageFromUrl } from "@/lib/ebay-media";
 import {
@@ -85,6 +88,8 @@ import {
   isRecoveredPriceCheckAutoHold,
 } from "@/lib/price-check-failures";
 import { getMinimumProductQuantity, isAmazonStockLow, isLowStockHoldJobMetadata } from "@/lib/low-stock-products";
+import { evaluateAmazonShipping, getCommittedShippingEvidence } from "./amazon-shipping-evidence";
+import { resolveAmazonDeliveryPostcode } from "./amazon-delivery-postcode";
 import { getPriceCheckRecoveryEvidence, priceCheckRecoveryRelations } from "@/lib/price-check-recovery-evidence";
 import {
   captureHoldQuantities,
@@ -107,6 +112,7 @@ const ACTIVE_ACTION_JOB_STATUSES: EbayActionJobStatus[] = [
 ];
 
 type ProductFailure = {
+  shippingConfirmation?: UploadShippingConfirmation;
   productId: string;
   title: string;
   error: string;
@@ -146,6 +152,7 @@ type CreateEbayActionJobInput = {
   type: EbayActionJobType;
   productIds: unknown[];
   metadata?: Prisma.InputJsonValue;
+  shippingConfirmation?: ShippingConfirmation;
   requestId?: string;
   itemPayload?: Prisma.InputJsonValue;
 };
@@ -207,6 +214,7 @@ function normalizeErrors(errors: Prisma.JsonValue): ProductFailure[] {
             productId: String(record.productId ?? ""),
             title: String(record.title ?? ""),
             error: String(record.error ?? ""),
+            ...(readShippingConfirmation(record.shippingConfirmation) ? { shippingConfirmation: { ...readShippingConfirmation(record.shippingConfirmation)!, message: String(record.error ?? "") } } : {}),
           };
         })
         .filter((entry): entry is ProductFailure => Boolean(entry?.productId || entry?.error))
@@ -621,7 +629,13 @@ export function serializeEbayActionJob(job: EbayActionJobRecord) {
     processed: job.processed,
     succeeded: job.succeeded,
     failed: job.failed,
-    errors: normalizeErrors(job.errors),
+    errors: normalizeErrors(job.errors).map(error => {
+      if (!error.shippingConfirmation) return error;
+      const pending = job.metadata && typeof job.metadata === "object" && !Array.isArray(job.metadata) ? job.metadata.pendingShipping : null;
+      const challenge = pending && typeof pending === "object" && !Array.isArray(pending) ? pending[error.productId] : null;
+      if (challenge && typeof challenge === "object" && !Array.isArray(challenge) && !challenge.approvedJobId && challenge.nonce === error.shippingConfirmation.nonce) return error;
+      const cleared = { ...error }; delete cleared.shippingConfirmation; return cleared;
+    }),
     metadata: job.metadata,
     errorMessage: job.errorMessage,
     createdAt: job.createdAt.toISOString(),
@@ -1229,6 +1243,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
   const automaticPriceCheckHold =
     job.type === EbayActionJobType.HOLD &&
     isPriceCheckAutoHoldMetadata(job.metadata);
+  const automaticShippingHold = job.type === EbayActionJobType.HOLD && Boolean(job.metadata && typeof job.metadata === 'object' && !Array.isArray(job.metadata) && job.metadata.kind === 'amazon-shipping-hold');
   const automaticLowStockHold =
     job.type === EbayActionJobType.HOLD &&
     isLowStockHoldJobMetadata(job.metadata);
@@ -1242,13 +1257,13 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       variants: {
         orderBy: { createdAt: "asc" },
       },
-      ...(automaticPriceCheckResume || automaticPriceCheckHold || automaticLowStockHold
+      ...(automaticPriceCheckResume || automaticPriceCheckHold || automaticLowStockHold || automaticShippingHold
         ? priceCheckRecoveryRelations : {}),
     },
   });
 
   if (!product) {
-    if (automaticPriceCheckHold || automaticPriceCheckResume) {
+    if (automaticPriceCheckHold || automaticPriceCheckResume || automaticShippingHold) {
       return { ok: true, failure: null };
     }
 
@@ -1259,11 +1274,25 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
   }
 
   const automaticObservationIsCurrent = async () => {
-    if (!(automaticPriceCheckHold || automaticLowStockHold || automaticPriceCheckResume) ||
+    if (!(automaticPriceCheckHold || automaticLowStockHold || automaticPriceCheckResume || automaticShippingHold) ||
         !product.lastPriceCheck) return true;
     try {
       await assertAmazonObservationCurrent({ storeId: product.storeId, productId,
         observedAt: product.lastPriceCheck });
+      if (automaticShippingHold || automaticPriceCheckResume) {
+        const [currentSettings, currentProduct] = await Promise.all([
+          prisma.supplierSettings.findUnique({ where: { storeId_supplierName: { storeId: product.storeId, supplierName: "Amazon AU" } }, select: { minProductQuantity: true, maxShippingDays: true, scrapePostcode: true } }),
+          prisma.product.findFirst({ where: { id: productId, storeId: product.storeId }, include: priceCheckRecoveryRelations }),
+        ]);
+        if (!currentProduct || currentProduct.ebayItemId !== product.ebayItemId || currentProduct.holdLastObservationId !== product.holdLastObservationId) return false;
+        if (automaticShippingHold && (currentProduct.status !== ProductStatus.IMPORTED || currentProduct.holdOrigin === ProductHoldOrigin.MANUAL)) return false;
+        const settings = currentSettings ?? { minProductQuantity: 2, maxShippingDays: 25, scrapePostcode: "2217" };
+        const currentEvidence = getCommittedShippingEvidence(currentProduct, currentProduct.amazonPriceObservations.find(row => row.id === currentProduct.holdLastObservationId), resolveAmazonDeliveryPostcode(settings.scrapePostcode));
+        const shipping = evaluateAmazonShipping(currentEvidence, settings.maxShippingDays, new Date(), true);
+        if (shipping.outcome !== (automaticShippingHold ? "OVER_LIMIT" : "WITHIN_LIMIT")) return false;
+        if (automaticPriceCheckResume && !isRecoveredPriceCheckAutoHold({ ...currentProduct,
+          ...getPriceCheckRecoveryEvidence(currentProduct, settings), minimumProductQuantity: getMinimumProductQuantity(settings.minProductQuantity) })) return false;
+      }
       return true;
     } catch (error) {
       if (error instanceof SupersededAmazonObservation) return false;
@@ -1277,6 +1306,8 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       storeId: job.storeId,
       userId: job.userId,
       log: logger,
+      jobId: job.id,
+      shippingApproval: getUploadShippingApproval(job.metadata, productId),
     });
 
     return result.ok
@@ -1287,6 +1318,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
             productId,
             title: result.productTitle || product.title,
             error: result.body.error || "Upload failed.",
+            shippingConfirmation: result.body.shippingConfirmation,
           },
         };
   }
@@ -1570,9 +1602,11 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
 
     const settings = await prisma.supplierSettings.findUnique({
       where: { storeId_supplierName: { storeId: product.storeId, supplierName: "Amazon AU" } },
-      select: { minProductQuantity: true, autoHoldOnPriceCheckFailure: true },
+      select: { minProductQuantity: true, autoHoldOnPriceCheckFailure: true, maxShippingDays: true, scrapePostcode: true },
     });
     const minimum = getMinimumProductQuantity(settings?.minProductQuantity);
+    const shipping = evaluateAmazonShipping(getCommittedShippingEvidence(product, product.amazonPriceObservations?.find(row => row.id === product.holdLastObservationId), resolveAmazonDeliveryPostcode(settings?.scrapePostcode)), settings?.maxShippingDays ?? 25, new Date(), true);
+    if (automaticShippingHold && (product.status !== ProductStatus.IMPORTED || product.holdOrigin === ProductHoldOrigin.MANUAL || shipping.outcome !== 'OVER_LIMIT')) return { ok: true, failure: null };
     const verifiedStockLeft = automaticPriceCheckHold || automaticLowStockHold
       ? getPriceCheckRecoveryEvidence(product).verifiedStockLeft : null;
     if (automaticLowStockHold &&
@@ -1655,7 +1689,9 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
     let holdReason = product.quantity <= 0
       ? "Listing quantity was set to 0."
       : "Put on hold manually.";
-    if (priceCheckLowStockHold) {
+    if (automaticShippingHold) {
+      holdReason = shipping.message;
+    } else if (priceCheckLowStockHold) {
       holdReason = `Low Amazon stock (${verifiedStockLeft} left; minimum ${minimum}).`;
     } else if (automaticLowStockHold) {
       holdReason = `Low Amazon stock (${verifiedStockLeft} left; minimum ${minimum}).`;
@@ -1663,7 +1699,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       holdReason = getPriceCheckAutoHoldReason(product.priceCheckError);
     }
 
-    const holdOrigin = getProductHoldOrigin({
+    const holdOrigin = automaticShippingHold ? ProductHoldOrigin.AMAZON_SHIPPING_DELAY : getProductHoldOrigin({
       automaticPriceCheck: automaticPriceCheckHold && failureHold && !priceCheckLowStockHold,
       lowStock: automaticLowStockHold || priceCheckLowStockHold,
       failureCode: product.priceCheckFailureCode,
@@ -1682,7 +1718,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
           holdSavedQuantity: saved.savedQuantity,
           holdSavedVariantQuantities: saved.savedVariants,
           holdSourceJobId: job.id,
-          ...(automaticPriceCheckHold
+          ...(automaticPriceCheckHold || automaticShippingHold
             ? {}
             : { priceCheckError: null, priceCheckFailureCode: null }),
         },
@@ -1706,11 +1742,11 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
     if (automaticPriceCheckResume) {
       const settings = await prisma.supplierSettings.findUnique({
         where: { storeId_supplierName: { storeId: product.storeId, supplierName: "Amazon AU" } },
-        select: { minProductQuantity: true },
+        select: { minProductQuantity: true, maxShippingDays: true, scrapePostcode: true },
       });
       if (!isRecoveredPriceCheckAutoHold({
         ...product,
-        ...getPriceCheckRecoveryEvidence(product),
+        ...getPriceCheckRecoveryEvidence(product, settings ?? { maxShippingDays: 25, scrapePostcode: "2217" }),
         minimumProductQuantity: getMinimumProductQuantity(settings?.minProductQuantity),
       })) return { ok: true, failure: null };
     }
@@ -2673,6 +2709,11 @@ export async function createOrReuseEbayUploadJob(
       lockedProducts.push(...rows);
     }
 
+    const approval = input.shippingConfirmation ? await resolveShippingApproval(tx, input.storeId, productIds, input.shippingConfirmation) : null;
+    if (approval?.existingJobId) {
+      const existing = await tx.ebayActionJob.findFirstOrThrow({ where: { id: approval.existingJobId, storeId: input.storeId } });
+      return { job: serializeEbayActionJob(existing), queued: true, created: false, reused: true, activeProductIds: existing.productIds };
+    }
     const lockedProductIds = new Set(lockedProducts.map((product) => product.id));
     const validProductIds = productIds.filter((productId) =>
       lockedProductIds.has(productId),
@@ -2702,10 +2743,17 @@ export async function createOrReuseEbayUploadJob(
           status: EbayActionJobStatus.QUEUED,
           productIds: queueProductIds,
           total: queueProductIds.length,
-          metadata: input.metadata ?? {},
+          metadata: approval ? { shippingApprovals: { [productIds[0]]: approval.approvedContext } } : input.metadata ?? {},
         },
       });
-
+      await clearPendingShippingChallenges(tx, input.storeId, queueProductIds, approval?.source.id);
+      if (approval && input.shippingConfirmation) {
+        const previous = approval.source.metadata && typeof approval.source.metadata === 'object' && !Array.isArray(approval.source.metadata) ? approval.source.metadata : {};
+        const pending = previous.pendingShipping && typeof previous.pendingShipping === 'object' && !Array.isArray(previous.pendingShipping) ? previous.pendingShipping : {};
+        await tx.ebayActionJob.update({ where: { id: approval.source.id }, data: { metadata: { ...previous,
+          hasPendingShipping: Object.entries(pending).some(([id, value]) => id !== productIds[0] && value && typeof value === "object" && !Array.isArray(value) && !value.approvedJobId),
+          pendingShipping: { ...pending, [productIds[0]]: { nonce: input.shippingConfirmation.nonce, context: approval.approvedContext, approvedJobId: job.id } } } } });
+      }
       return {
         job: serializeEbayActionJob(job),
         queued: true,
@@ -2734,7 +2782,7 @@ export async function createOrReuseEbayUploadJob(
 }
 
 export async function getCurrentEbayActionJobs(storeId: string) {
-  const [activeJobs, recentTerminalJobs] = await Promise.all([
+  const [activeJobs, recentTerminalJobs, confirmationJobs] = await Promise.all([
     prisma.ebayActionJob.findMany({
       where: {
         storeId,
@@ -2752,8 +2800,12 @@ export async function getCurrentEbayActionJobs(storeId: string) {
       orderBy: { createdAt: "desc" },
       take: 5,
     }),
+    prisma.ebayActionJob.findMany({
+      where: { storeId, type: EbayActionJobType.UPLOAD_LISTING, metadata: { path: ["hasPendingShipping"], equals: true } },
+      orderBy: { createdAt: "desc" },
+    }),
   ]);
-  const jobs = [...activeJobs, ...recentTerminalJobs];
+  const jobs = [...new Map([...activeJobs, ...recentTerminalJobs, ...confirmationJobs].map(job => [job.id, job])).values()];
   const queuePositions = getEbayActionQueuePositions(jobs);
 
   return jobs.map((job) => ({

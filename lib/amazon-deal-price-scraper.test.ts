@@ -89,3 +89,32 @@ test("fallback never accepts a redirected ASIN, unavailable buy box, or challeng
       { allowDealPriceFallback: true }), error => error instanceof PriceCheckFailure && error.code === code);
   }
 });
+
+
+for (const sharedSnapshot of [false, true]) {
+  test(`shipping evidence follows the final accepted offer with shared snapshot ${sharedSnapshot}`, async () => {
+    const body = html(regular).replace('$4.95 delivery', 'FREE delivery in 26 days');
+    const result = await scrapeAmazonPrice(asin, offlineBrowser(body), '2217', 'DEAL', null, { allowDealPriceFallback: true, sharedSnapshot });
+    assert.equal(result.shippingEvidence?.mode, 'REGULAR');
+    assert.equal(result.shippingEvidence?.outcome, 'VERIFIED');
+    assert.equal(result.shippingEvidence?.asin, asin);
+    assert.equal(result.shippingEvidence?.postcode, '2217');
+    assert.equal(result.shippingEvidence?.observedAt, result.observedAt?.toISOString());
+    assert.equal(result.shippingEvidence?.arrivalText, 'FREE delivery in 26 days');
+  });
+  test(`shipping is extracted after saved variant selection with shared snapshot ${sharedSnapshot}`, async () => {
+    const extra = '<div id="variation_color_name"><span class="selection">Blue</span><button onclick="document.querySelector(\'#variation_color_name .selection\').textContent=\'Black\';document.getElementById(\'deliveryBlockMessage\').textContent=\'FREE delivery in 26 days\'">Black</button></div>';
+    const result = await scrapeAmazonPrice(asin, offlineBrowser(html(regular, extra).replace('$4.95 delivery', 'FREE delivery tomorrow')), '2217', 'REGULAR', { colour: 'Black' }, { sharedSnapshot });
+    assert.equal(result.shippingEvidence?.arrivalText, 'FREE delivery in 26 days');
+    assert.equal(result.shippingEvidence?.outcome, 'VERIFIED');
+  });
+  test(`separate offer delivery cannot leak across price choices with shared snapshot ${sharedSnapshot}`, async () => {
+    const offers = '<div id="buyBoxAccordion"><div id="dealAccordionRow" data-csa-c-buying-option-type="DEAL">Deal price ' + price(429) + '<div data-csa-c-delivery-time="deal">FREE delivery tomorrow</div></div><div id="newAccordionRow" data-csa-c-buying-option-type="NEW">Regular Price ' + price(749) + '<div data-csa-c-delivery-time="regular">FREE delivery in 26 days</div></div></div>';
+    for (const mode of ['REGULAR', 'DEAL'] as const) {
+      const result = await scrapeAmazonPrice(asin, offlineBrowser(html(offers)), '2217', mode, null, { sharedSnapshot });
+      assert.equal(result.shippingEvidence?.outcome, 'VERIFIED');
+      assert.equal(result.shippingEvidence?.mode, mode);
+      assert.equal(result.shippingEvidence?.arrivalText, mode === 'REGULAR' ? 'FREE delivery in 26 days' : 'FREE delivery tomorrow');
+    }
+  });
+}

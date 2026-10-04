@@ -1037,10 +1037,12 @@ export default function SupplierSettingsTab() {
                   <input
                     type="number"
                     min={1}
+                    aria-describedby="maximum-shipping-help"
                     value={settings.maxShippingDays}
                     onChange={(e) => updateField("maxShippingDays", Math.max(1, parseInt(e.target.value) || 1))}
                     className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-500"
                   />
+                  <p id="maximum-shipping-help" className="mt-1 text-xs text-gray-500">Latest estimated Amazon arrival, in calendar days. Listings exceeding this limit are held automatically.</p>
                 </div>
                 <div>
                   <label className="block text-xs text-gray-500 mb-1">Choose from Suppliers Table</label>
