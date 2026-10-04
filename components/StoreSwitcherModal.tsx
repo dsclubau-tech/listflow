@@ -38,6 +38,12 @@ const AVATAR_GRADIENTS = [
   },
 ];
 
+function setActiveStoreCookie(storeId: string) {
+  document.cookie = `listflow_active_store_id=${encodeURIComponent(
+    storeId
+  )}; path=/; max-age=${60 * 60 * 24 * 365}; SameSite=Lax`;
+}
+
 export default function StoreSwitcherModal({
   isOpen,
   onClose,
@@ -46,6 +52,7 @@ export default function StoreSwitcherModal({
 }: StoreSwitcherModalProps) {
   const [switchingStoreId, setSwitchingStoreId] = useState<string | null>(null);
   const [showAddInfo, setShowAddInfo] = useState(false);
+  const [previousIsOpen, setPreviousIsOpen] = useState(isOpen);
 
   // Password challenge state
   const [pendingUnlockStore, setPendingUnlockStore] = useState<StoreOption | null>(null);
@@ -56,17 +63,6 @@ export default function StoreSwitcherModal({
   const [unlockError, setUnlockError] = useState<string | null>(null);
   const [isShaking, setIsShaking] = useState(false);
   const passwordInputRef = useRef<HTMLInputElement>(null);
-
-  // Reset state when modal opens/closes
-  useEffect(() => {
-    if (!isOpen) {
-      setPendingUnlockStore(null);
-      setPassword("");
-      setUnlockError(null);
-      setShowAddInfo(false);
-      setSwitchingStoreId(null);
-    }
-  }, [isOpen]);
 
   // Focus password input when challenge view appears
   useEffect(() => {
@@ -100,6 +96,18 @@ export default function StoreSwitcherModal({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isOpen, showAddInfo, pendingUnlockStore, onClose]);
 
+  // Reset the existing close-only fields when the open state changes.
+  if (previousIsOpen !== isOpen) {
+    setPreviousIsOpen(isOpen);
+    if (!isOpen) {
+      setPendingUnlockStore(null);
+      setPassword("");
+      setUnlockError(null);
+      setShowAddInfo(false);
+      setSwitchingStoreId(null);
+    }
+  }
+
   if (!isOpen) return null;
 
   const handleSelectStore = (store: StoreOption) => {
@@ -123,9 +131,7 @@ export default function StoreSwitcherModal({
 
   const directSwitchToStore = (storeId: string) => {
     setSwitchingStoreId(storeId);
-    document.cookie = `listflow_active_store_id=${encodeURIComponent(
-      storeId
-    )}; path=/; max-age=${60 * 60 * 24 * 365}; SameSite=Lax`;
+    setActiveStoreCookie(storeId);
     window.location.reload();
   };
 
