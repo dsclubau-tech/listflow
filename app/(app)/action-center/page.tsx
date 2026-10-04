@@ -1,4 +1,3 @@
-import { redirect } from "next/navigation";
 import ActionCenterClient from "@/components/ActionCenterClient";
 import PageLoadErrorState from "@/components/PageLoadErrorState";
 import { getActionCenterData } from "@/lib/action-center";

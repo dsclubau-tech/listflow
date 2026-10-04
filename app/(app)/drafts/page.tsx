@@ -1,7 +1,6 @@
 import DraftsPageClient from "@/components/DraftsPageClient";
 import { getCachedDraftsPageData } from "@/lib/drafts-page-data";
 import { getRenderCurrentStoreSession } from "@/lib/render-store-session";
-import { redirect } from "next/navigation";
 
 export default async function DraftsPage() {
   const storeSession = await getRenderCurrentStoreSession();

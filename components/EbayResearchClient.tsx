@@ -586,7 +586,7 @@ export default function EbayResearchClient({
   const [favorites, setFavorites] = useState<FavoriteQuery[]>(initialFavorites);
   const [selectedFavoriteIds, setSelectedFavoriteIds] = useState<Set<string>>(new Set());
   const [favoriteSearchFilter, setFavoriteSearchFilter] = useState("");
-  const [togglingFavoriteQuery, setTogglingFavoriteQuery] = useState<string | null>(null);
+  const [, setTogglingFavoriteQuery] = useState<string | null>(null);
   const [selectedBatchId, setSelectedBatchId] = useState<string>("all");
   const [listFilterQuery, setListFilterQuery] = useState("");
   const [mode, setMode] = useState<ResearchMode>("BOTH");

@@ -2,6 +2,7 @@ import "dotenv/config";
 import fs from "node:fs";
 import path from "node:path";
 import { Client } from "pg";
+import { getErrorDetails } from "../lib/error-details";
 
 async function main() {
   const envPath = path.join(process.cwd(), ".env.listflow_app");
@@ -42,12 +43,13 @@ async function main() {
   let deniedSubscriptions = false;
   try {
     await client.query("SELECT * FROM public.subscriptions LIMIT 1;");
-  } catch (err: any) {
-    if (err.code === "42501") {
+  } catch (err: unknown) {
+    const { code, message } = getErrorDetails(err);
+    if (code === "42501") {
       deniedSubscriptions = true;
-      console.log(`[TEST_BOUNDARY] Access to public.subscriptions successfully DENIED (code 42501: ${err.message})`);
+      console.log(`[TEST_BOUNDARY] Access to public.subscriptions successfully DENIED (code 42501: ${message})`);
     } else {
-      throw new Error(`Expected 42501 on subscriptions, got ${err.code}: ${err.message}`);
+      throw new Error(`Expected 42501 on subscriptions, got ${code}: ${message}`);
     }
   }
 
@@ -59,12 +61,13 @@ async function main() {
   let deniedStores = false;
   try {
     await client.query("SELECT * FROM public.stores LIMIT 1;");
-  } catch (err: any) {
-    if (err.code === "42501") {
+  } catch (err: unknown) {
+    const { code, message } = getErrorDetails(err);
+    if (code === "42501") {
       deniedStores = true;
-      console.log(`[TEST_BOUNDARY] Access to public.stores successfully DENIED (code 42501: ${err.message})`);
+      console.log(`[TEST_BOUNDARY] Access to public.stores successfully DENIED (code 42501: ${message})`);
     } else {
-      throw new Error(`Expected 42501 on stores, got ${err.code}: ${err.message}`);
+      throw new Error(`Expected 42501 on stores, got ${code}: ${message}`);
     }
   }
 
@@ -76,12 +79,13 @@ async function main() {
   let deniedAuthUsers = false;
   try {
     await client.query("SELECT * FROM auth.users LIMIT 1;");
-  } catch (err: any) {
-    if (err.code === "42501") {
+  } catch (err: unknown) {
+    const { code, message } = getErrorDetails(err);
+    if (code === "42501") {
       deniedAuthUsers = true;
-      console.log(`[TEST_BOUNDARY] Access to auth.users successfully DENIED (code 42501: ${err.message})`);
+      console.log(`[TEST_BOUNDARY] Access to auth.users successfully DENIED (code 42501: ${message})`);
     } else {
-      throw new Error(`Expected 42501 on auth.users, got ${err.code}: ${err.message}`);
+      throw new Error(`Expected 42501 on auth.users, got ${code}: ${message}`);
     }
   }
 

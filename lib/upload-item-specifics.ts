@@ -29,6 +29,8 @@ function normalizeSpecificName(name: string) {
 export function shouldBlockUploadForRequiredSpecificsPreflight(_input: {
   missingItemSpecifics: string[];
 }): boolean {
+  // Let the first upload attempt proceed; eBay can request missing specifics.
+  void _input;
   return false;
 }
 

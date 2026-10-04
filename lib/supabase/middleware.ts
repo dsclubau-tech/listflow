@@ -1,9 +1,19 @@
 import { createServerClient } from "@supabase/ssr";
 import { type NextRequest, NextResponse } from "next/server";
+import { getErrorDetails } from "@/lib/error-details";
+
+type SupabaseUser = Awaited<ReturnType<ReturnType<typeof createServerClient>["auth"]["getUser"]>>["data"]["user"];
+
+function isRefreshTokenRace(error: unknown) {
+  const { code, message } = getErrorDetails(error);
+  return code === "refresh_token_already_used" ||
+    message.includes("refresh_token_already_used") ||
+    message.includes("already been used");
+}
 
 export type SessionUpdateResult = {
   response: NextResponse;
-  user: any | null;
+  user: SupabaseUser;
   isRaceCondition: boolean;
 };
 
@@ -36,7 +46,7 @@ export async function updateSession(request: NextRequest): Promise<SessionUpdate
     },
   });
 
-  let user = null;
+  let user: SupabaseUser = null;
   let isRaceCondition = false;
 
   try {
@@ -44,11 +54,7 @@ export async function updateSession(request: NextRequest): Promise<SessionUpdate
 
     if (error) {
       // Concurrency Guard: Check for concurrent token rotation race
-      isRaceCondition = Boolean(
-        error.code === "refresh_token_already_used" ||
-        error.message?.includes("refresh_token_already_used") ||
-        error.message?.includes("already been used")
-      );
+      isRaceCondition = isRefreshTokenRace(error);
 
       if (isRaceCondition) {
         // Do NOT delete cookies. A parallel browser request already rotated the token.
@@ -60,13 +66,8 @@ export async function updateSession(request: NextRequest): Promise<SessionUpdate
     } else {
       user = data.user;
     }
-  } catch (err: any) {
-    const isRace = Boolean(
-      err?.code === "refresh_token_already_used" ||
-      err?.message?.includes("refresh_token_already_used") ||
-      err?.message?.includes("already been used")
-    );
-    if (isRace) {
+  } catch (err: unknown) {
+    if (isRefreshTokenRace(err)) {
       isRaceCondition = true;
     }
   }

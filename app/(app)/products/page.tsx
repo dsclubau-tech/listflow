@@ -8,7 +8,6 @@ import {
 import { getRenderCurrentStoreSession } from "@/lib/render-store-session";
 import { logger } from "@/lib/logger";
 import { measureServerOperation } from "@/lib/perf-debug";
-import { redirect } from "next/navigation";
 
 export default async function ProductsPage({
   searchParams,

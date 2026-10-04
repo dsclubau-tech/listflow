@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { getErrorDetails, isObjectRecord } from "@/lib/error-details";
 
 export type EntitlementStatus = "ACTIVE" | "INACTIVE" | "UNAVAILABLE";
 
@@ -98,16 +99,16 @@ export async function fetchEntitlementFromAA(
 
       // 2. HTTP 404: Distinguish between explicit identity anomaly vs gateway/infrastructure 404
       if (response.status === 404) {
-        let errorBody: any = null;
+        let errorBody: unknown = null;
         try {
           errorBody = await response.json();
         } catch {
           // Non-JSON response (e.g. gateway HTML or plain text)
         }
 
-        const isUserNotFound =
-          errorBody?.error === "user_not_found" ||
-          errorBody?.message === "user_not_found";
+        const isUserNotFound = isObjectRecord(errorBody) && (
+          errorBody.error === "user_not_found" || errorBody.message === "user_not_found"
+        );
 
         if (isUserNotFound) {
           console.error(
@@ -121,7 +122,7 @@ export async function fetchEntitlementFromAA(
         }
 
         console.warn(
-          `[AA_ENTITLEMENT_GATEWAY_404] AA gateway returned HTTP 404 (${JSON.stringify(errorBody)}). Treating as transient UNAVAILABLE to protect active customer sessions.`
+          `[AA_ENTITLEMENT_GATEWAY_404] AA gateway returned HTTP 404 without an explicit user_not_found response. Treating as transient UNAVAILABLE to protect active customer sessions.`
         );
         return {
           status: "UNAVAILABLE",
@@ -181,9 +182,9 @@ export async function fetchEntitlementFromAA(
         status: "UNAVAILABLE",
         allowedStores: lastKnownSnapshot?.allowedStores ?? 0,
       };
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.warn(
-        `[AA_ENTITLEMENT_NETWORK_ERROR] Attempt ${attempts} failed: ${err.message}`
+        `[AA_ENTITLEMENT_NETWORK_ERROR] Attempt ${attempts} failed: ${getErrorDetails(err).message}`
       );
       if (attempts < maxAttempts) {
         // Jittered backoff on network error / timeout
@@ -289,9 +290,9 @@ export async function getOrRefreshEntitlement(
         checkedAt: saved.checkedAt,
         source: "live" as const,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error(
-        `[AA_ENTITLEMENT_REFRESH_FAILED] Failed to refresh entitlement for ${userId}: ${error.message}`
+        `[AA_ENTITLEMENT_REFRESH_FAILED] Failed to refresh entitlement for ${userId}: ${getErrorDetails(error).message}`
       );
       if (snapshot) {
         return {

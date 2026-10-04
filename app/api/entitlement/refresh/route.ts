@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { getOrRefreshEntitlement } from "@/lib/aa-entitlement";
+import { getErrorDetails } from "@/lib/error-details";
 
 export async function POST() {
   try {
@@ -52,9 +53,9 @@ export async function POST() {
       allowedStores: result.allowedStores,
       checkedAt: result.checkedAt,
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error(
-      `[ENTITLEMENT_REFRESH_API_ERROR] Failed to refresh entitlement: ${error.message}`
+      `[ENTITLEMENT_REFRESH_API_ERROR] Failed to refresh entitlement: ${getErrorDetails(error).message}`
     );
     return NextResponse.json(
       { error: "Failed to refresh subscription status. Please try again." },

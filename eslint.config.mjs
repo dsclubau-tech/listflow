@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local scratch work and archived diagnostics are not maintained source.
+    "scratch/**",
+    "diagnostics/**",
   ]),
 ]);
 

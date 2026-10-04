@@ -1,4 +1,3 @@
-import { redirect } from "next/navigation";
 import EbayResearchClient from "@/components/EbayResearchClient";
 import {
   getCurrentEbayResearchBatches,
