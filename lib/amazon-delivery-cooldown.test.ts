@@ -28,13 +28,14 @@ const compiled = build({ stdin: { resolveDir: process.cwd(), contents: `
   export { runNextPriceCheckItemForStore, cancelItemScheduledJob } from "./lib/price-check-item-scheduler";
 ` }, bundle: true, platform: "node", format: "cjs", write: false, packages: "external",
   plugins: [{ name: "isolated-database", setup(builder) {
-    builder.onResolve({ filter: /^(server-only|(?:@\/lib\/|\.\/)(?:prisma|cache-tags|logger|amazon-scraper|scraper-browser|price-check-auto-hold|ebay|worker-claim-policy)|@\/app\/generated\/prisma\/client)$/ }, args => ({ path: args.path, namespace: "fixture" }));
+    builder.onResolve({ filter: /^(server-only|(?:@\/lib\/|\.\/)(?:prisma|cache-tags|logger|amazon-scraper|scraper-browser|price-check-auto-hold|ebay|worker-claim-policy|price-check-pacing)|@\/app\/generated\/prisma\/client)$/ }, args => ({ path: args.path, namespace: "fixture" }));
     builder.onLoad({ filter: /.*/, namespace: "fixture" }, args => ({ resolveDir: process.cwd(), contents:
       args.path === "server-only" ? "" : args.path.endsWith("/prisma") ? "export const prisma = globalThis.database;"
       : args.path.endsWith("/client") ? "export const Prisma = globalThis.Prisma;"
       : args.path.endsWith("cache-tags") ? "export const invalidatePriceCaches = () => {}; export const invalidateJobCaches = () => {};"
       : args.path.endsWith("logger") ? "export const logger = { info(){}, warn(){}, error(){}, debug(){} };"
       : args.path.endsWith("amazon-scraper") ? "export const scrapeAmazonPrice = (...args) => globalThis.scrape(...args);"
+      : args.path.endsWith("price-check-pacing") ? "export const resolvePriceCheckProductPacing = () => ({minMs:0,maxMs:0}); export const getPriceCheckProductDelayMs = () => 0;"
       : args.path.endsWith("scraper-browser") ? "export const launchScraperBrowser = async () => ({isConnected:()=>true,close:async()=>{}}); export const getBrowserLaunchUserMessage = () => null;"
        : args.path.endsWith("ebay") ? "export const getStoreNumber = async () => '1'; export const callEbayReviseInventoryStatus = (...args) => globalThis.ebay(...args);"
       : args.path.endsWith("worker-claim-policy") ? "export const getWorkerClaimPolicy = async () => ({}); export const filterRunnableJobsForWorker = jobs => jobs;"
@@ -812,4 +813,53 @@ test("unknown delivery cannot recover an existing shipping hold", async () => {
   const checkedSince=new Date();await f.api.runPriceCheck({storeId:"store-a",ignoreSchedule:true});refreshRecoveryRelations(f);
   const recovery=await f.api.queuePriceCheckAutoResumeForRun({userId:"user-a",storeId:"store-a",productIds:[String(product.id)],checkedSince});
   assert.equal(recovery.queued,0);assert.equal(product.status,"ON_HOLD");
+});
+
+for (const version of [1, 2]) test(`version ${version} records a verified variation failure once and finishes the preserved 212-item job`, async () => {
+  const f = await fixture(212, version, 126);
+  const job = f.tables.priceCheckJob[0];
+  job.failed = 24; job.skipped = 102;
+  const product = f.tables.product[126];
+  const previousCheck = new Date(Date.now() - 3600000);
+  Object.assign(product, { lastPriceCheck: previousCheck, amazonStockLeft: 8 });
+  const reason = 'Amazon presents size variations, but could not select saved size "Full".';
+  let scrapeIndex = 0, revisions = 0;
+  f.setEbay(async () => { revisions++; return { success: true }; });
+  const permit = await f.api.acquireDeliveryPermit("store-a", "job-a", 120000);
+  await f.api.deferAmazonDelivery(permit, "AMAZON_DELIVERY_POSTCODE_UNVERIFIED");
+  await f.api.releaseDeliveryPermit(permit); f.expire();
+  f.setScrape(async () => {
+    if (++scrapeIndex === 1) return { price: null, stockLeft: null, priceMode: "REGULAR", selectedPriceMode: null,
+      priceChoices: {regular: null, deal: null}, variantSelectionFailed: true, variantSelectionReason: reason,
+      postcodeVerified: true, detectedAsin: "B0G6CQ427S", identityOutcome: "MATCH", buyBoxOutcome: "UNKNOWN", observedAt: new Date(), shippingEvidence: undefined };
+    if (scrapeIndex === 2) {
+      assert.equal(job.checked, 127); assert.equal(job.failed, 25);
+      assert.equal(await f.api.getAmazonDeliveryWait("store-a"), null);
+    }
+    return verified(100, new Date());
+  });
+  if (version === 1) await f.api.runPriceCheckJob("job-a", workerA);
+  else for (let index = 126; index < 212; index++) await f.api.runNextPriceCheckItemForStore("store-a", workerA);
+  assert.equal(job.status, "COMPLETED"); assert.equal(job.checked, 212); assert.equal(job.failed, 25);
+  assert.equal(scrapeIndex, 86); assert.equal(new Set(job.completedProductIds as string[]).size, 212);
+  assert.equal(product.priceCheckFailureCode, "AMAZON_VARIANT_SELECTION_REQUIRED"); assert.equal(product.priceCheckError, reason);
+  assert.equal(product.amazonPrice, 100); assert.equal(product.price, 120); assert.equal(product.amazonStockLeft, 8);
+  assert.equal((product.lastPriceCheck as Date).getTime(), previousCheck.getTime());
+  const failure = f.tables.amazonPriceObservation.find(row => row.productId === "product-126");
+  assert.equal(failure?.failureCode, "AMAZON_VARIANT_SELECTION_REQUIRED"); assert.equal(failure?.message, reason);
+  assert.equal(failure?.isSuccessful, false); assert.equal(failure?.eligibleOffer, false); assert.equal(failure?.price, null);
+  assert.equal(failure?.postcodeVerified, true); assert.equal(revisions, 0); assert.equal(f.tables.ebayActionJob.length, 0);
+  assert.equal(await f.api.getAmazonDeliveryWait("store-a"), null); assert.equal(f.tables.jobLease.length, 0);
+  if (version === 1) await f.api.runPriceCheckJob("job-a", workerB);
+  else assert.equal(await f.api.runNextPriceCheckItemForStore("store-a", workerB), false);
+  assert.equal(scrapeIndex, 86); assert.equal(job.failed, 25);
+});
+
+test("a variation flag with missing verification still defers instead of bypassing delivery safeguards", async () => {
+  const f = await fixture(1);
+  f.setScrape(async () => ({price:null,stockLeft:null,variantSelectionFailed:true,variantSelectionReason:"Unmatched size"}));
+  const result = await f.api.runPriceCheck({storeId:"store-a",ignoreSchedule:true});
+  assert.equal(result.deferred,true);assert.equal(result.checked,0);assert.equal(result.failed,0);
+  assert.equal(result.technicalFailureCode,"AMAZON_DELIVERY_POSTCODE_UNVERIFIED");
+  assert.equal(f.tables.product[0].priceCheckFailureCode,undefined);assert.equal(f.tables.product[0].lastPriceCheck,null);
 });

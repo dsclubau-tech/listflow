@@ -18,6 +18,7 @@ import {
   productsCacheTag,
 } from "@/lib/cache-tags";
 import { prisma } from "@/lib/prisma";
+import { getAmazonDeliveryWait, deliveryFailureCode } from "@/lib/amazon-delivery-cooldown";
 import { getPriceCheckItemDiagnostics } from "@/lib/price-check-item-scheduler";
 import { getEbayActionQueuePositions } from "@/lib/ebay-action-queue";
 import { isEbayResearchBatchResumable } from "@/lib/ebay-research-batch-state";
@@ -143,6 +144,8 @@ export interface ActionCenterPriceCheckJob {
   workerActivities?: Array<{ name: string; activity: string }>;
   lastProgressAt?: string | null;
   waitReason?: string | null;
+  retryAt?: string | null;
+  technicalFailureCode?: string | null;
   failedItems?: Array<{ productId: string; errorMessage: string | null }>;
 }
 
@@ -649,7 +652,11 @@ async function loadLiveActionCenterData(
       },
     }),
   ]);
-  const workers = await getWorkerStatusesForStore(storeId);
+  const [workers, deliveryWait] = await Promise.all([
+    getWorkerStatusesForStore(storeId),
+    priceCheckJobs.some(job => job.status === PriceCheckJobStatus.QUEUED || job.status === PriceCheckJobStatus.RUNNING)
+      ? getAmazonDeliveryWait(storeId) : Promise.resolve(null),
+  ]);
   const worker =
     workers.find((item) => item.online) ?? workers[0] ?? getOfflineWorkerStatus();
 
@@ -671,6 +678,8 @@ async function loadLiveActionCenterData(
         (job.status === PriceCheckJobStatus.QUEUED ||
          job.status === PriceCheckJobStatus.RUNNING || job.failed > 0)
         ? await getPriceCheckItemDiagnostics(storeId, job.id) : {}),
+      ...(deliveryWait && (job.status === PriceCheckJobStatus.QUEUED || job.status === PriceCheckJobStatus.RUNNING)
+        ? { ...deliveryWait, technicalFailureCode: deliveryFailureCode(job.errorMessage) } : {}),
     };
   }));
   const serializedImportJobs = ebayImportJobs.map((job) => {

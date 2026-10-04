@@ -1087,6 +1087,8 @@ export async function runPriceCheck(
               {
                 productId: product.id,
                 asin: product.asin,
+                jobId: options.jobId,
+                storeId: product.storeId,
                 reason: scrapeResult.variantSelectionReason,
               }
             );

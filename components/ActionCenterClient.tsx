@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import ActionProgressBar from "@/components/ActionProgressBar";
 import AsinLink from "@/components/AsinLink";
 import Toast from "@/components/Toast";
 import { useTimedActionProgress } from "@/hooks/useTimedActionProgress";
 import { useToast } from "@/hooks/useToast";
+import { getPriceCheckDeliveryPresentation } from "@/lib/amazon-delivery-wait";
 import { useAdaptivePolling } from "@/hooks/useAdaptivePolling";
 import {
   buildActiveJobAssignmentIndex,
@@ -547,6 +548,22 @@ function JobWorkerAssignment({
           ? "Waiting for worker"
           : "Worker assignment pending"}
     </span>
+  );
+}
+
+// Server and initial hydration use the same text; local time is shown once
+// the browser hydrates. Live job polling already refreshes due/retrying states.
+const subscribeToBrowserReady = () => () => {};
+function PriceCheckDeliveryMessage({ job, assigned }: { job: ActionCenterPriceCheckJob; assigned: boolean }) {
+  const browserReady = useSyncExternalStore(subscribeToBrowserReady, () => true, () => false);
+  const presentation = getPriceCheckDeliveryPresentation(job, assigned);
+  if (!presentation) return null;
+  return (
+    <div role="status" className="mt-1 max-w-xl whitespace-normal break-words text-xs text-amber-800">
+      {browserReady ? presentation.message : assigned && job.status === "RUNNING"
+        ? "Retrying Amazon delivery verification."
+        : `Amazon delivery setup unavailable. Completed ${job.checked} of ${job.total}; remaining products preserved.`}
+    </div>
   );
 }
 
@@ -2543,7 +2560,11 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                   </div>
                 ) : (
                   <>
-                    {currentPriceJobs.map((job) => (
+                    {currentPriceJobs.map((job) => {
+                      const assignment = getActiveJobAssignment(activeJobAssignments, "PRICE_CHECK", job.id);
+                      const assigned = Boolean(assignment || job.assignedWorkerNames?.length);
+                      const delivery = getPriceCheckDeliveryPresentation(job, assigned);
+                      return (
                       <div
                         key={`current-price-${job.id}`}
                         className="flex flex-wrap items-center justify-between gap-3 px-4 py-3"
@@ -2567,7 +2588,11 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                             >
                               {job.status === "CANCELLED" ? "PAUSED" : job.status}
                             </span>
-                            {job.schedulerVersion === 2 ? (
+                            {delivery?.badge ? (
+                              <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800">
+                                {delivery.badge}
+                              </span>
+                            ) : job.schedulerVersion === 2 ? (
                               <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-medium text-indigo-700">
                                 {job.assignedWorkerNames?.length
                                   ? `Worker: ${job.assignedWorkerNames.join(", ")}`
@@ -2575,9 +2600,7 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                               </span>
                             ) : (
                               <JobWorkerAssignment
-                                assignment={getActiveJobAssignment(
-                                  activeJobAssignments, "PRICE_CHECK", job.id,
-                                )}
+                                assignment={assignment}
                                 status={job.status}
                               />
                             )}
@@ -2594,6 +2617,7 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                             {job.schedulerVersion === 2
                               ? `, ${job.pendingItems ?? 0} queued, ${job.runningItems ?? 0} running` : ""}
                           </div>
+                          <PriceCheckDeliveryMessage job={job} assigned={assigned} />
                           {job.schedulerVersion === 2 && job.lastProgressAt && (
                             <div className="mt-1 text-xs text-gray-500">
                               Last progress: {new Date(job.lastProgressAt).toLocaleString()}
@@ -2685,7 +2709,8 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                           </Link>
                         </div>
                       </div>
-                    ))}
+                    );
+                    })}
                     {activeImportJobs.map((job) => (
                       <div
                         key={`current-import-${job.id}`}

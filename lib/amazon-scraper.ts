@@ -893,6 +893,7 @@ export async function scrapeAmazonPrice(
     let price = selectedPrice?.price ?? null;
 
     let variantSwatchSelected = false;
+    let variantSelectionReason: string | undefined;
 
     // Verify saved variations even when the initial page already has a price.
     // Shipping and price must describe the same selected variant.
@@ -904,20 +905,9 @@ export async function scrapeAmazonPrice(
 
       if (variantResult.hasVariations) {
         if (!variantResult.matched) {
-          return {
-            price: null,
-            stockLeft: null,
-            priceMode: priceTrackingMode,
-            selectedPriceMode: null,
-            priceChoices: { regular: null, deal: null },
-            variantSelectionFailed: true,
-            variantSelectionReason:
-              variantResult.reason ||
-              "Amazon presents product variations, but the saved colour/size could not be selected.",
-          };
-        }
-
-        if (variantResult.selected) {
+          variantSelectionReason = variantResult.reason ||
+            "Amazon presents product variations, but the saved colour/size could not be selected.";
+        } else if (variantResult.selected) {
           variantSwatchSelected = true;
           // Re-evaluate buybox price after variation selection
           await page
@@ -961,15 +951,7 @@ export async function scrapeAmazonPrice(
               );
             }
           } else {
-            return {
-              price: null,
-              stockLeft: null,
-              priceMode: priceTrackingMode,
-              selectedPriceMode: null,
-              priceChoices: { regular: null, deal: null },
-              variantSelectionFailed: true,
-              variantSelectionReason: `Selected variation (${variantResult.selectedDimensions?.join(", ") || "saved variant"}) on Amazon, but no buybox price became available.`,
-            };
+            variantSelectionReason = `Selected variation (${variantResult.selectedDimensions?.join(", ") || "saved variant"}) on Amazon, but no buybox price became available.`;
           }
         }
       }
@@ -996,6 +978,25 @@ export async function scrapeAmazonPrice(
         PriceCheckFailureCode.TECHNICAL_ERROR,
         `Amazon did not expose a verifiable selected ASIN for ${normalizedAsin}.`,
       );
+    }
+
+    if (variantSelectionReason) {
+      // A verified page can still lack the requested variation. Preserve that
+      // product failure without accepting another variation's offer or stock.
+      return {
+        price: null,
+        stockLeft: null,
+        priceMode: priceTrackingMode,
+        selectedPriceMode: null,
+        priceChoices: { regular: null, deal: null },
+        variantSelectionFailed: true,
+        variantSelectionReason,
+        detectedAsin: finalPageAsin,
+        identityOutcome: "MATCH",
+        postcodeVerified: exactPostcodeVerified,
+        observedAt: new Date(),
+        buyBoxOutcome: "UNKNOWN",
+      };
     }
 
     const observedBuyBoxOutcome = await getNormalBuyBoxOutcome(page);
