@@ -263,31 +263,6 @@ function prepareRequiredSpecificRows(input: {
   return { rows, missingNames };
 }
 
-function pruneObsoleteCategorySpecifics(
-  rows: DraftItemSpecificRow[],
-  newCategoryName: string,
-): DraftItemSpecificRow[] {
-  const isBookCategory = /book|fiction|literature|magazine|comic/i.test(newCategoryName);
-  const bookOnlyKeys = new Set([
-    "author",
-    "book title",
-    "isbn",
-    "publication year",
-    "publisher",
-    "narrator",
-    "literary movement",
-    "book series",
-  ]);
-
-  return rows.filter((row) => {
-    const key = row.key.trim().toLowerCase();
-    if (!isBookCategory && bookOnlyKeys.has(key)) {
-      return false;
-    }
-    return true;
-  });
-}
-
 // ----- VERO keywords -----
 
 const VERO_KEYWORDS = [
@@ -726,16 +701,11 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
   useEffect(() => {
     const specs = product.itemSpecifics as Record<string, string> | null;
     if (specs && typeof specs === "object") {
-      // Restore visible specs (exclude internal _-prefixed metadata), pruning obsolete specs
-      const rawRows = Object.entries(specs)
+      // Restore every visible spec; category changes do not remove user fields.
+      const visibleRows = Object.entries(specs)
         .filter(([key]) => !key.startsWith("_"))
         .map(([key, value]) => ({ key, value }));
-      setItemSpecifics(
-        pruneObsoleteCategorySpecifics(
-          rawRows,
-          product.categoryName || categoryName || ""
-        )
-      );
+      setItemSpecifics(visibleRows);
       const inferredBrand = inferBrandItemSpecific({
         itemSpecifics: specs,
         brand: specs.Brand,
@@ -2358,9 +2328,6 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                         setCategoryName(s.categoryName);
                         setShowCatDropdown(false);
                         setSaveMessage(null);
-                        setItemSpecifics((current) =>
-                          pruneObsoleteCategorySpecifics(current, s.categoryName)
-                        );
                       }}
                       className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-orange-50 hover:text-orange-700 transition-colors"
                     >
