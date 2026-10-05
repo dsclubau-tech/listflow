@@ -1,3 +1,4 @@
+import { deliveryBlock } from "../tests/fixtures/amazon-shipping-offers";
 import assert from "node:assert/strict";
 import test, { before, after } from "node:test";
 import { chromium, type Browser } from "playwright-core";
@@ -116,5 +117,44 @@ for (const sharedSnapshot of [false, true]) {
       assert.equal(result.shippingEvidence?.mode, mode);
       assert.equal(result.shippingEvidence?.arrivalText, mode === 'REGULAR' ? 'FREE delivery in 26 days' : 'FREE delivery tomorrow');
     }
+  });
+}
+
+for (const sharedSnapshot of [false, true]) {
+  test(`nested ordinary and faster promises pass through the real scraper with shared snapshot ${sharedSnapshot}`, async () => {
+    const body = html(regular).replace('$4.95 delivery', deliveryBlock('FREE delivery tomorrow', 'Or fastest delivery today'));
+    const result = await scrapeAmazonPrice(asin, offlineBrowser(body), '2217', 'REGULAR', null, { sharedSnapshot });
+    assert.equal(result.shippingEvidence?.arrivalText, 'FREE delivery tomorrow');
+    assert.equal(result.shippingEvidence?.outcome, 'VERIFIED');
+    assert.equal(result.price, 749);
+    assert.equal(result.shippingPrice, 0);
+    assert.equal(result.identityOutcome, 'MATCH');
+    assert.equal(result.postcodeVerified, true);
+  });
+  test(`nested card promises follow Regular, Deal and fallback with shared snapshot ${sharedSnapshot}`, async () => {
+    for (const [mode, includeDeal, expected] of [['REGULAR',true,'FREE delivery tomorrow'],['DEAL',true,'FREE delivery in 2 days'],['DEAL',false,'FREE delivery tomorrow']] as const) {
+      const offers = '<div id="buyBoxAccordion">' +
+        (includeDeal ? '<div id="dealAccordionRow" data-csa-c-buying-option-type="DEAL">Deal price ' + price(429) + deliveryBlock('FREE delivery in 2 days','Or fastest delivery today') + '</div>' : '') +
+        '<div id="newAccordionRow" data-csa-c-buying-option-type="NEW">Regular Price ' + price(749) + deliveryBlock('FREE delivery tomorrow','Or fastest delivery today') + '</div></div>';
+      const body = html(offers).replace('<div id="deliveryBlockMessage">$4.95 delivery</div>','');
+      const result = await scrapeAmazonPrice(asin, offlineBrowser(body), '2217', mode, null, { sharedSnapshot, allowDealPriceFallback:true });
+      assert.equal(result.shippingEvidence?.arrivalText,expected);
+      assert.equal(result.shippingEvidence?.outcome,'VERIFIED');
+      assert.equal(result.selectedPriceMode,mode==='DEAL'&&includeDeal?'DEAL':'REGULAR');
+      assert.equal(result.price,mode==='DEAL'&&includeDeal?429:749);
+      assert.equal(result.shippingPrice,0);
+    }
+  });
+}
+
+for (const sharedSnapshot of [false, true]) {
+  test(`nested primary arrival is reread after variant selection with shared snapshot ${sharedSnapshot}`,async()=>{
+    const extra = '<div id="variation_color_name"><span class="selection">Blue</span><button onclick="document.querySelector(\'#variation_color_name .selection\').textContent=\'Black\';document.querySelector(\'[id^=mir-layout-DELIVERY_BLOCK-slot-PRIMARY_DELIVERY_MESSAGE_]\').textContent=\'FREE delivery in 26 days\'">Black</button></div>';
+    const body=html(regular,extra).replace('$4.95 delivery',deliveryBlock('FREE delivery tomorrow','Or fastest delivery today'));
+    const result=await scrapeAmazonPrice(asin,offlineBrowser(body),'2217','REGULAR',{colour:'Black'},{sharedSnapshot});
+    assert.equal(result.variantSelectionFailed,undefined);
+    assert.equal(result.shippingEvidence?.arrivalText,'FREE delivery in 26 days');
+    assert.equal(result.shippingEvidence?.outcome,'VERIFIED');
+    assert.equal(result.price,749);
   });
 }

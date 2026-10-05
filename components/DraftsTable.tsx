@@ -2,6 +2,7 @@
 "use client";
 
 import ShippingUploadPrompt from "./ShippingUploadPrompt";
+import { getUploadOutcomeSummary, readUploadShippingConfirmation } from "@/lib/upload-shipping-presentation";
 import type { UploadShippingConfirmation } from "@/lib/amazon-upload-shipping-policy";
 import AmazonPriceTrackingLabel from "@/components/AmazonPriceTrackingLabel";
 
@@ -681,7 +682,10 @@ export default function DraftsTable({
   onDraftImported,
 }: DraftsTableProps) {
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  const uploadJobsRequest = useRef(0);
+  const appliedUploadJobsRequest = useRef(0);
   const [uploadJobs, setUploadJobs] = useState<UploadJob[]>([]);
+  const [directShippingConfirmations, setDirectShippingConfirmations] = useState<Record<string, UploadShippingConfirmation>>({});
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [endingId, setEndingId] = useState<string | null>(null);
   const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
@@ -937,6 +941,7 @@ export default function DraftsTable({
   }, [onSelectionChange, selectedIds]);
 
   const loadUploadJobs = useCallback(async () => {
+    const request = ++uploadJobsRequest.current;
     try {
       const response = await fetch("/api/upload/jobs/current", {
         cache: "no-store",
@@ -945,8 +950,13 @@ export default function DraftsTable({
         jobs?: UploadJob[];
       };
 
-      if (response.ok && Array.isArray(data.jobs)) {
+      if (request > appliedUploadJobsRequest.current && response.ok && Array.isArray(data.jobs)) {
+        appliedUploadJobsRequest.current = request;
         setUploadJobs(data.jobs);
+        const jobs = data.jobs;
+        setDirectShippingConfirmations(current => Object.fromEntries(Object.entries(current).filter(([productId]) =>
+          !jobs.some(job => (isActiveUploadJob(job) && job.productIds.includes(productId)) || job.errors.some(error =>
+            error.productId === productId && readUploadShippingConfirmation(error.shippingConfirmation, productId))))));
       }
     } catch {
       // Draft editing remains available if progress polling is temporarily unavailable.
@@ -993,15 +1003,16 @@ export default function DraftsTable({
         continue;
       }
 
-      if (completedJob.failed > 0) {
-        const firstError = completedJob.errors[0]?.error;
+      const summary = getUploadOutcomeSummary(completedJob);
+      if (summary.failed > 0) {
+        const firstError = completedJob.errors.find(error =>
+          !readUploadShippingConfirmation(error.shippingConfirmation, error.productId))?.error;
+        const pendingDetail = summary.awaitingDecision ? ` ${summary.awaitingDecision} awaiting decision.` : "";
         onToast(
-          firstError
-            ? `eBay upload finished with ${completedJob.failed} failure(s): ${firstError}`
-            : `eBay upload finished with ${completedJob.failed} failure(s).`,
+          `eBay upload finished with ${summary.failed} failure(s).${firstError ? ` ${firstError}` : ""}${pendingDetail}`,
           "error",
         );
-      } else {
+      } else if (!summary.awaitingDecision && completedJob.status === "COMPLETED" && completedJob.succeeded > 0) {
         onToast(
           `Successfully uploaded ${completedJob.succeeded} listing(s) to eBay.`,
           "success",
@@ -1215,6 +1226,7 @@ export default function DraftsTable({
   }
 
   async function handleImport(productId: string) {
+    appliedUploadJobsRequest.current = ++uploadJobsRequest.current;
     setLoadingId(productId);
 
     try {
@@ -1227,10 +1239,12 @@ export default function DraftsTable({
         error?: string;
         message?: string;
         missingItemSpecifics?: string[];
+        shippingConfirmation?: UploadShippingConfirmation;
         job?: UploadJob;
       };
 
       if (res.ok) {
+        appliedUploadJobsRequest.current = ++uploadJobsRequest.current;
         if (data.job) {
           setUploadJobs((current) => [
             data.job as UploadJob,
@@ -1241,6 +1255,13 @@ export default function DraftsTable({
         setSelectedIds((prev) => prev.filter((id) => id !== productId));
         router.refresh();
       } else {
+        const confirmation = readUploadShippingConfirmation(data.shippingConfirmation, productId);
+        if (confirmation) {
+          setDirectShippingConfirmations(current => ({ ...current, [productId]: confirmation }));
+          await loadUploadJobs();
+          router.refresh();
+          return;
+        }
         if (hasMissingItemSpecifics(data)) {
           setExpandedProductId(productId);
         }
@@ -2197,24 +2218,43 @@ export default function DraftsTable({
   }
 
   const columnCount = isProductsView ? 12 : 8;
+  const pendingUploadErrors = [...uploadJobs.flatMap(job => job.errors), ...Object.entries(directShippingConfirmations).map(([productId, shippingConfirmation]) => ({
+    productId, shippingConfirmation, title: products.find(product => product.id === productId)?.title ?? "", error: shippingConfirmation.message,
+  }))];
+  const visibleUploadJobs = uploadJobs.filter(job => isActiveUploadJob(job) || getUploadOutcomeSummary(job).awaitingDecision > 0);
 
   return (
     <>
-      {isDraftsView && uploadJobs
-        .flatMap(job => job.errors)
-        .filter(error => error.shippingConfirmation && products.some(product => product.id === error.productId) &&
+      {isDraftsView && pendingUploadErrors
+        .filter(error => readUploadShippingConfirmation(error.shippingConfirmation, error.productId) &&
+          products.some(product => product.id === error.productId) && error.productId !== expandedProductId &&
           !activeUploadJobs.some(job => job.productIds.includes(error.productId)))
         .filter((error, index, all) => all.findIndex(other => other.productId === error.productId) === index)
         .map(error => <ShippingUploadPrompt key={error.shippingConfirmation!.nonce} title={error.title}
           confirmation={error.shippingConfirmation!}
-          onComplete={async () => { await loadUploadJobs(); router.refresh(); }} />)}
-      {isDraftsView && activeUploadJobs.length > 0 && (
+          onComplete={async (action, queuedJob) => {
+            appliedUploadJobsRequest.current = ++uploadJobsRequest.current;
+            setDirectShippingConfirmations(current => Object.fromEntries(Object.entries(current).filter(([id]) => id !== error.productId)));
+            setUploadJobs(current => {
+              const jobs = current.map(job => ({ ...job, errors: job.errors.map(item =>
+                item.productId === error.productId ? { ...item, shippingConfirmation: undefined } : item) }));
+              if (action === "cancel" || !queuedJob) return jobs;
+              const previous = jobs.find(job => job.id === queuedJob.id);
+              const progress: UploadJob = { ...queuedJob, type: previous?.type ?? "UPLOAD",
+                completedProductIds: previous?.completedProductIds ?? [], queuePosition: previous?.queuePosition ?? null,
+                errors: (queuedJob.errors ?? []).map(item => ({ ...item, title: products.find(product => product.id === item.productId)?.title ?? "" })) };
+              return [progress, ...jobs.filter(job => job.id !== progress.id)];
+            });
+            await loadUploadJobs(); router.refresh();
+          }} />)}
+      {isDraftsView && visibleUploadJobs.length > 0 && (
         <div className="mb-4 space-y-3" aria-live="polite">
-          {activeUploadJobs.map((job) => {
+          {visibleUploadJobs.map((job) => {
+            const summary = getUploadOutcomeSummary(job);
             const indeterminate = job.total === 1 && job.processed === 0;
             const statusLabel =
               job.status === "CANCELLING" ? "Cancelling - finishing current upload" :
-                job.status === "QUEUED" ? "Queued for eBay" : "Uploading to eBay";
+                job.status === "QUEUED" ? "Queued for eBay" : job.status === "RUNNING" ? "Uploading to eBay" : "Shipping confirmation required";
             const queueDetail =
               job.status === "QUEUED" && job.queuePosition
                 ? `Queue position ${job.queuePosition}. `
@@ -2229,8 +2269,8 @@ export default function DraftsTable({
                   label={statusLabel}
                   percent={getUploadJobPercent(job)}
                   indeterminate={indeterminate || job.status === "QUEUED"}
-                  tone="blue"
-                  detail={`${queueDetail}${job.processed}/${job.total} processed, ${job.succeeded} succeeded, ${job.failed} failed.`}
+                  tone={isActiveUploadJob(job) ? "blue" : "amber"}
+                  detail={`${queueDetail}${job.processed}/${job.total} processed, ${job.succeeded} succeeded, ${summary.awaitingDecision ? `${summary.awaitingDecision} awaiting decision, ` : ""}${summary.failed} failed.`}
                 />
               </div>
             );
@@ -2537,6 +2577,7 @@ export default function DraftsTable({
               const isSelectable = pageSelectableIdSet.has(product.id);
               const uploadJob = uploadJobByProductId.get(product.id) ?? null;
               const isUploadQueued = Boolean(uploadJob);
+              const uploadConfirmation = readUploadShippingConfirmation(uploadJob?.errors.find(error => error.productId === product.id)?.shippingConfirmation, product.id);
               const isFailedDraft =
                 isDraftsView && product.status === "FAILED";
               const trackingState = isProductsView
@@ -3167,7 +3208,7 @@ export default function DraftsTable({
                               <div className="min-w-0 rounded-lg bg-white/70 px-3 py-2 xl:w-44">
                                 <ActionProgressBar
                                   label={
-                                    uploadJob.completedProductIds.includes(product.id)
+                                    uploadConfirmation ? "Shipping confirmation required" : uploadJob.completedProductIds.includes(product.id)
                                       ? "Processed"
                                       : uploadJob.status === "QUEUED"
                                         ? "Queued"
@@ -3176,7 +3217,7 @@ export default function DraftsTable({
                                   percent={uploadJob.completedProductIds.includes(product.id) ? 100 : 0}
                                   indeterminate={!uploadJob.completedProductIds.includes(product.id)}
                                   tone={
-                                    uploadJob.errors.some((error) => error.productId === product.id)
+                                    uploadConfirmation ? "amber" : uploadJob.errors.some((error) => error.productId === product.id)
                                       ? "red"
                                       : "blue"
                                   }
@@ -3331,6 +3372,7 @@ export default function DraftsTable({
                               product={expandedProduct as never}
                               onCollapse={() => setExpandedProductId(null)}
                               onImported={onDraftImported}
+                              onUploadDecision={() => { void loadUploadJobs(); }}
                             />
                           ) : productDetailError ? (
                             <div className="flex min-h-28 items-center justify-between gap-4 border-t border-red-100 bg-red-50 px-6 py-5">

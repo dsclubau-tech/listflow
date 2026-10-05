@@ -6,6 +6,9 @@ import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 import { parseAmazonShippingEvidence } from './amazon-shipping-evidence';
+import { extractAmazonShippingEvidenceFromHtml } from './amazon-shipping-extraction';
+import { extractAmazonPriceSnapshot } from './amazon-price-snapshot';
+import { normalShippingOffer, accordionShippingOffers } from '../tests/fixtures/amazon-shipping-offers';
 import type { guardAmazonUploadShipping, resolveShippingApproval } from './amazon-upload-shipping';
 import type { uploadProductToEbay } from './ebay-upload';
 import type { createOrReuseEbayUploadJob } from './ebay-action-jobs';
@@ -108,11 +111,18 @@ async function fixture(arrivalText:string|null='delivery tomorrow') {
   let beforeStoreNumber:()=>void=()=>{};
   let scrapeOverrides:Row={};
   let currentArrival=arrivalText;
+  let shippingHtml:string|null=null;
   let failScrape:Error|null=null;
   let reviseSuccess=true, addSuccess=true;
   const operations:Row[]=[];
-  const observed=()=>{const at=new Date();return {price:96.75,stockLeft:4,detectedAsin:'B0TEST1234',identityOutcome:'MATCH',buyBoxOutcome:'AVAILABLE',postcodeVerified:true,selectedPriceMode:'REGULAR',observedAt:at,
-    priceChoices:{regular:96.75,deal:null},shippingEvidence:parseAmazonShippingEvidence({asin:'B0TEST1234',mode:'REGULAR',postcode:'2217',observedAt:at,source:'fixture',arrivalText:currentArrival,associated:true})};};
+  const observed=()=>{
+    const at=new Date(), selected=shippingHtml ? extractAmazonPriceSnapshot(shippingHtml,'B0TEST1234').priceChoices.regular : null;
+    if(shippingHtml)assert.ok(selected,'Fixture must have an accepted Regular offer');
+    const price=selected?.price ?? 96.75;
+    return {price,stockLeft:4,detectedAsin:'B0TEST1234',identityOutcome:'MATCH',buyBoxOutcome:'AVAILABLE',postcodeVerified:true,selectedPriceMode:'REGULAR',observedAt:at,
+      priceChoices:{regular:price,deal:null},shippingEvidence:shippingHtml && selected ? extractAmazonShippingEvidenceFromHtml(shippingHtml,selected,'2217',at) :
+        parseAmazonShippingEvidence({asin:'B0TEST1234',mode:'REGULAR',postcode:'2217',observedAt:at,source:'fixture',arrivalText:currentArrival,associated:true})};
+  };
   const fixtureModule={exports:{}};
   vm.runInNewContext(await compiled,{module:fixtureModule,exports:fixtureModule.exports,require:createRequire(import.meta.url),process,console,Buffer,URL,URLSearchParams,Date,Intl,Response,Request,AbortController,setTimeout,clearTimeout,setInterval,clearInterval,
     fetch:()=>{throw Error('Unexpected network call');},globalThis:{database,operations,Prisma,beforeStoreNumber:()=>beforeStoreNumber(),authenticate:()=>authenticated?{user:{id:"user"}}:null,sessionStore:()=>sessionStore,
@@ -122,7 +132,7 @@ async function fixture(arrivalText:string|null='delivery tomorrow') {
     queueAmazonShippingHold:typeof queueAmazonShippingHold;queuePriceCheckAutoResumeForRun:typeof queuePriceCheckAutoResumeForRun;requestUpload:typeof POST;cancelShippingConfirmation:typeof DELETE;getCurrentEbayActionJobs:(storeId:string)=>Promise<Array<{id:string;errors:Array<{shippingConfirmation?:unknown}>}>>;resolveShippingApproval:typeof resolveShippingApproval;processProduct:(job:Row,id:string)=>Promise<{ok:boolean;failure:Row|null}>};
   return {api,product,settings,tables,operations,input:{product:product as unknown as Parameters<typeof guardAmazonUploadShipping>[0]['product'],userId:'user'},counts:()=>({scrapes,adds,revisions}),
     beforeMarketplaceWrite:(callback:()=>void)=>{beforeStoreNumber=callback;},setAuthenticated:(value:boolean)=>{authenticated=value;},setStore:(value:string)=>{sessionStore=value;},setScrapeOverrides:(value:Row)=>{scrapeOverrides=value;},
-    setArrival:(text:string|null)=>{currentArrival=text;},setScrapeError:(error:Error)=>{failScrape=error;},setAddSuccess:(value:boolean)=>{addSuccess=value;},setReviseSuccess:(value:boolean)=>{reviseSuccess=value;},
+    setHtml:(html:string)=>{shippingHtml=html.replaceAll('B0FPQNVHG8','B0TEST1234');},setArrival:(text:string|null)=>{currentArrival=text;},setScrapeError:(error:Error)=>{failScrape=error;},setAddSuccess:(value:boolean)=>{addSuccess=value;},setReviseSuccess:(value:boolean)=>{reviseSuccess=value;},
     commit(){const value=observed();const row={id:'committed',productId:'product',storeId:'store',requestedAsin:'B0TEST1234',selectedAsin:'B0TEST1234',verifiedPostcode:'2217',postcodeVerified:true,isSuccessful:true,priceMode:'REGULAR',stockLeft:4,identityOutcome:'MATCH',buyBoxOutcome:'AVAILABLE',observedAt:value.observedAt,shippingEvidence:value.shippingEvidence};tables.amazonPriceObservation.push(row);Object.assign(product,{holdLastObservationId:row.id,lastPriceCheck:row.observedAt,amazonPriceObservations:tables.amazonPriceObservation,_count:{priceHistory:0}});return row;},
   };
 }
@@ -304,4 +314,41 @@ test('conflicting arrival stays unverified for uploads, holds and automatic reco
   await existing.api.processProduct({ id: 'resume', storeId: 'store', userId: 'user', type: 'RESUME', metadata: { kind: 'price-check-auto-resume' } }, 'product');
   assert.equal(existing.counts().revisions, 0);
   assert.equal(existing.product.status, 'ON_HOLD');
+});
+
+test('real extraction feeds the actual uploader and background worker without false confirmation',async()=>{
+  for(const html of [normalShippingOffer('FREE delivery tomorrow','Or fastest delivery today'),accordionShippingOffers().replace(/Saturday, 10 October/g,'tomorrow')]){
+    for(const background of [false,true]){
+      const f=await fixture();f.setHtml(html);
+      const result=background ? await f.api.processProduct((await f.api.createOrReuseEbayUploadJob({storeId:'store',userId:'user',productIds:['product']})).job,'product') :
+        await f.api.uploadProductToEbay({productId:'product',storeId:'store',userId:'user'});
+      assert.equal(result.ok,true);assert.equal(f.counts().adds,1);assert.equal(f.product.status,'IMPORTED');
+    }
+  }
+});
+test('real extraction preserves over-limit blocking and durable unknown confirmations',async()=>{
+  for(const [html,status,scrapes] of [
+    [normalShippingOffer('FREE delivery in 26 days','Or fastest delivery tomorrow'),422,1],
+    [normalShippingOffer('','Or fastest delivery tomorrow'),409,2],
+    [normalShippingOffer().replace('Saturday, 10 October','tomorrow').replace('<div id="availability">','<div id="mir-layout-DELIVERY_BLOCK-slot-PRIMARY_DELIVERY_MESSAGE_SMALL">FREE delivery in 26 days</div><div id="availability">'),409,2],
+  ] as const){
+    const f=await fixture();f.setHtml(html);
+    const result=await f.api.uploadProductToEbay({productId:'product',storeId:'store',userId:'user'});
+    assert.equal(result.ok,false);assert.equal(result.status,status,JSON.stringify(result.body));assert.equal(f.counts().adds,0);assert.equal(f.product.status,'DRAFT');assert.equal(f.counts().scrapes,scrapes);
+    if(status===409)assert.ok(result.body.shippingConfirmation);
+  }
+});
+
+test('improved real shipping extraction never bypasses other recovery safeguards',async()=>{
+  for(const scenario of ['unknown-stock','identity','manual','review','pending-price'] as const){
+    const f=await fixture();f.setHtml(normalShippingOffer('FREE delivery tomorrow','Or fastest delivery today'));
+    Object.assign(f.product,{status:'ON_HOLD',ebayItemId:'123456789012',quantity:0,holdOrigin:scenario==='manual'?'MANUAL':scenario==='review'?'UNKNOWN':'AMAZON_LOW_STOCK'});
+    const observation=f.commit();
+    assert.equal((observation.shippingEvidence as Row).outcome,'VERIFIED');
+    if(scenario==='unknown-stock')Object.assign(observation,{stockLeft:null});
+    if(scenario==='identity')observation.identityOutcome='MISMATCH';
+    if(scenario==='pending-price')f.product._count={priceHistory:1};
+    await f.api.processProduct({id:'resume',storeId:'store',userId:'user',type:'RESUME',metadata:{kind:'price-check-auto-resume'}},'product');
+    assert.equal(f.counts().revisions,0,scenario);assert.equal(f.product.status,'ON_HOLD',scenario);
+  }
 });

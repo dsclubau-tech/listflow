@@ -92,5 +92,5 @@ test("Save and Import locks before its first asynchronous preparation step", () 
   assert.ok(requirementsFetch > guardWrite);
   assert.match(handler, /setImportPhase\("preparing"\)/);
   assert.match(source, /Boolean\(activeInlineUploadJobId\)/);
-  assert.match(source, /job\.productIds\.includes\(product\.id\)/);
+  assert.match(source, /findCurrentProductUploadJob\(data\.jobs \?\? \[\], product\.id\)/);
 });

@@ -3,6 +3,7 @@
 
 import type { AmazonShippingStatus } from "@/lib/amazon-shipping-evidence";
 import ShippingUploadPrompt from "./ShippingUploadPrompt";
+import { findCurrentProductUploadJob, getUploadOutcomeSummary, readUploadShippingConfirmation } from "@/lib/upload-shipping-presentation";
 import type { UploadShippingConfirmation } from "@/lib/amazon-upload-shipping-policy";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
@@ -105,6 +106,7 @@ interface InlineEditFormProps {
   product: ProductWithRelations;
   onCollapse: () => void;
   onImported?: (productId: string) => void;
+  onUploadDecision?: () => void;
 }
 
 type InlineUploadJob = {
@@ -119,7 +121,7 @@ type InlineUploadJob = {
 };
 
 function isActiveInlineUploadJob(job: InlineUploadJob | null) {
-  return job?.status === "QUEUED" || job?.status === "RUNNING";
+  return job?.status === "QUEUED" || job?.status === "RUNNING" || job?.status === "CANCELLING";
 }
 
 interface SaveMessage {
@@ -371,7 +373,7 @@ const tabs = ["Product", "Description", "Variants", "Images", "Item Specificatio
 
 // ===== Component =====
 
-export default function InlineEditForm({ product, onImported }: InlineEditFormProps) {
+export default function InlineEditForm({ product, onImported, onUploadDecision }: InlineEditFormProps) {
   const router = useRouter();
   const [activeTab, setActiveTab] = useState(0);
   const [mountedTabs, setMountedTabs] = useState<Set<number>>(
@@ -548,6 +550,9 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
   const [importPhase, setImportPhase] = useState<
     "preparing" | "saving" | "queueing" | null
   >(null);
+  const uploadGeneration = useRef(0);
+  const uploadRequest = useRef(0);
+  const appliedUploadRequest = useRef(0);
   const [shippingConfirmation, setShippingConfirmation] = useState<UploadShippingConfirmation | null>(null);
   const [inlineUploadJob, setInlineUploadJob] = useState<InlineUploadJob | null>(null);
   const saveAndImportGuardRef = useRef(false);
@@ -566,6 +571,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
 
   useEffect(() => {
     let cancelled = false;
+    const generation = ++uploadGeneration.current;
     saveAndImportGuardRef.current = false;
     setInlineUploadJob(null);
     setShippingConfirmation(null);
@@ -577,6 +583,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
     }
 
     async function restoreActiveUploadJob() {
+      const request = ++uploadRequest.current;
       try {
         const response = await fetch("/api/upload/jobs/current", {
           cache: "no-store",
@@ -584,14 +591,12 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
         const data = (await response.json().catch(() => ({}))) as {
           jobs?: InlineUploadJob[];
         };
-        const activeJob = data.jobs?.find(
-          (job) =>
-            isActiveInlineUploadJob(job) && job.productIds.includes(product.id),
-        );
-
-        if (!cancelled && response.ok) setShippingConfirmation(activeJob ? null : data.jobs?.flatMap(job => job.errors ?? []).find(error => error.productId === product.id && error.shippingConfirmation)?.shippingConfirmation ?? null);
-        if (!cancelled && response.ok && activeJob) {
-          setInlineUploadJob(activeJob);
+        if (!cancelled && generation === uploadGeneration.current && request > appliedUploadRequest.current && response.ok) {
+          appliedUploadRequest.current = request;
+          const currentJob = findCurrentProductUploadJob(data.jobs ?? [], product.id);
+          setInlineUploadJob(currentJob);
+          setShippingConfirmation(isActiveInlineUploadJob(currentJob) ? null :
+            readUploadShippingConfirmation(currentJob?.errors?.find(error => error.productId === product.id)?.shippingConfirmation, product.id));
         }
       } catch {
         // The server still rejects duplicate active uploads if this lookup fails.
@@ -611,8 +616,10 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
     }
 
     let cancelled = false;
+    const generation = uploadGeneration.current;
 
     async function refreshInlineUploadJob() {
+      const request = ++uploadRequest.current;
       try {
         const response = await fetch("/api/upload/jobs/current", {
           cache: "no-store",
@@ -622,26 +629,30 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
         };
         const nextJob = data.jobs?.find((job) => job.id === activeInlineUploadJobId);
 
-        if (!cancelled && response.ok && nextJob) {
+        if (!cancelled && generation === uploadGeneration.current && request > appliedUploadRequest.current && response.ok && nextJob) {
+          appliedUploadRequest.current = request;
           setInlineUploadJob(nextJob);
 
           if (!isActiveInlineUploadJob(nextJob)) {
-            if (nextJob.failed > 0) {
-              setShippingConfirmation(nextJob.errors?.find(error => error.productId === product.id)?.shippingConfirmation ?? null);
-              setSaveMessage({
-                title: "Import failed",
-                text:
-                  nextJob.errors?.find((error) => error.productId === product.id)?.error ||
-                  "The eBay upload failed. You can retry from this draft.",
-                variant: "error",
-              });
-            } else {
+            const confirmation = readUploadShippingConfirmation(
+              nextJob.errors?.find(error => error.productId === product.id)?.shippingConfirmation, product.id);
+            setShippingConfirmation(confirmation);
+            if (confirmation) {
+              setSaveMessage(null);
+            } else if (nextJob.status === "COMPLETED" && nextJob.failed === 0 && nextJob.succeeded > 0) {
               setSaveMessage({
                 title: "Import complete",
                 text: "The listing was uploaded to eBay successfully.",
                 variant: "success",
               });
               onImported?.(product.id);
+            } else {
+              setSaveMessage({
+                title: "Import failed",
+                text: nextJob.errors?.find(error => error.productId === product.id)?.error ||
+                  "The eBay upload did not complete. You can retry from this draft.",
+                variant: "error",
+              });
             }
             router.refresh();
           }
@@ -1078,6 +1089,7 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
   const isOnHold = product.status === "ON_HOLD" && Boolean(product.ebayItemId);
   const inlineSuccessMessage =
     saveMessage?.variant === "success" && !saveMessage.title ? saveMessage : null;
+  const inlineUploadSummary = inlineUploadJob ? getUploadOutcomeSummary(inlineUploadJob) : { awaitingDecision: 0, failed: 0 };
   const bannerMessage =
     saveMessage && (saveMessage.variant === "error" || Boolean(saveMessage.title))
       ? saveMessage
@@ -1512,6 +1524,8 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
     }
 
     saveAndImportGuardRef.current = true;
+    uploadGeneration.current++;
+    setShippingConfirmation(null);
     setIsImporting(true);
     setImportPhase("preparing");
 
@@ -1589,7 +1603,13 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
           missingItemSpecifics?: string[];
           requiredItemSpecifics?: RequiredItemSpecific[];
         };
-        setShippingConfirmation(data.shippingConfirmation ?? null);
+        const confirmation = readUploadShippingConfirmation(data.shippingConfirmation, product.id);
+        setShippingConfirmation(confirmation);
+        if (confirmation) {
+          setSaveMessage(null);
+          router.refresh();
+          return;
+        }
         const missingNames = data.missingItemSpecifics ?? [];
 
         if (data.requiredItemSpecifics && data.requiredItemSpecifics.length > 0) {
@@ -1987,12 +2007,27 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
         className="border-t border-gray-200 bg-gray-50"
       >
       {product.amazonShippingStatus && product.amazonShippingStatus.outcome !== "WITHIN_LIMIT" && <p role="status" className="m-3 text-sm text-amber-800">{product.amazonShippingStatus.message}</p>}
-      {shippingConfirmation && <ShippingUploadPrompt confirmation={shippingConfirmation} onComplete={async () => {
+      {shippingConfirmation && <ShippingUploadPrompt confirmation={shippingConfirmation} onComplete={async (action, queuedJob) => {
+        const generation = ++uploadGeneration.current;
+        onUploadDecision?.();
         setShippingConfirmation(null);
-        const response = await fetch("/api/upload/jobs/current", { cache: "no-store" });
-        if (response.ok) {
+        setSaveMessage(null);
+        setInlineUploadJob(action !== "cancel" && queuedJob?.productIds.includes(product.id) ? queuedJob : null);
+        const request = ++uploadRequest.current;
+        try {
+          const response = await fetch("/api/upload/jobs/current", { cache: "no-store" });
           const data = await response.json() as { jobs?: InlineUploadJob[] };
-          setInlineUploadJob(data.jobs?.find(job => isActiveInlineUploadJob(job) && job.productIds.includes(product.id)) ?? null);
+          if (response.ok && generation === uploadGeneration.current && request > appliedUploadRequest.current) {
+            appliedUploadRequest.current = request;
+            const currentJob = findCurrentProductUploadJob(data.jobs ?? [], product.id);
+            if (currentJob) {
+              setInlineUploadJob(currentJob);
+              setShippingConfirmation(isActiveInlineUploadJob(currentJob) ? null :
+                readUploadShippingConfirmation(currentJob.errors?.find(error => error.productId === product.id)?.shippingConfirmation, product.id));
+            }
+          }
+        } catch {
+          // The queued response remains usable if progress refresh is temporarily unavailable.
         }
         router.refresh();
       }} />}
@@ -2122,9 +2157,14 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                   ? "Queued for eBay"
                   : inlineUploadJob?.status === "RUNNING"
                     ? "Uploading to eBay"
-                    : inlineUploadJob?.failed
+                    : inlineUploadJob?.status === "CANCELLING"
+                      ? "Cancelling - finishing current upload"
+                    : shippingConfirmation
+                      ? "Shipping confirmation required"
+                      : inlineUploadJob?.failed
                       ? "eBay upload failed"
-                      : "eBay upload complete"
+                      : inlineUploadJob?.status === "COMPLETED" && inlineUploadJob.succeeded > 0
+                        ? "eBay upload complete" : "eBay upload stopped"
             }
             percent={
               isImporting
@@ -2134,12 +2174,12 @@ export default function InlineEditForm({ product, onImported }: InlineEditFormPr
                   : 0
             }
             indeterminate={!isImporting && isActiveInlineUploadJob(inlineUploadJob)}
-            tone={inlineUploadJob?.failed ? "red" : inlineUploadJob?.status === "COMPLETED" ? "green" : "orange"}
+            tone={shippingConfirmation ? "amber" : inlineUploadJob?.failed ? "red" : inlineUploadJob?.status === "COMPLETED" && inlineUploadJob.succeeded > 0 ? "green" : "orange"}
             detail={
               isImporting
                 ? "Your changes are being saved before the listing is sent to the upload queue."
                 : inlineUploadJob
-                  ? `${inlineUploadJob.processed} of ${inlineUploadJob.total} processed${inlineUploadJob.failed ? `, ${inlineUploadJob.failed} failed` : ""}.`
+                  ? `${inlineUploadJob.processed} of ${inlineUploadJob.total} processed${inlineUploadSummary.awaitingDecision ? `, ${inlineUploadSummary.awaitingDecision} awaiting decision` : ""}${inlineUploadSummary.failed ? `, ${inlineUploadSummary.failed} failed` : ""}.`
                   : undefined
             }
           />
