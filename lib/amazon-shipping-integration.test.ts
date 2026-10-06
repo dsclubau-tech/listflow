@@ -5,10 +5,11 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import { createRequire } from 'node:module';
 import { build } from 'esbuild';
+import { getProductShippingPresentation, type ShippingDisplayObservation } from "./amazon-shipping-display";
 import { parseAmazonShippingEvidence } from './amazon-shipping-evidence';
 import { extractAmazonShippingEvidenceFromHtml } from './amazon-shipping-extraction';
 import { extractAmazonPriceSnapshot } from './amazon-price-snapshot';
-import { normalShippingOffer, accordionShippingOffers } from '../tests/fixtures/amazon-shipping-offers';
+import { normalShippingOffer, accordionShippingOffers, newAndUsedShippingOffers } from '../tests/fixtures/amazon-shipping-offers';
 import type { guardAmazonUploadShipping, resolveShippingApproval } from './amazon-upload-shipping';
 import type { uploadProductToEbay } from './ebay-upload';
 import type { createOrReuseEbayUploadJob } from './ebay-action-jobs';
@@ -132,7 +133,7 @@ async function fixture(arrivalText:string|null='delivery tomorrow') {
     queueAmazonShippingHold:typeof queueAmazonShippingHold;queuePriceCheckAutoResumeForRun:typeof queuePriceCheckAutoResumeForRun;requestUpload:typeof POST;cancelShippingConfirmation:typeof DELETE;getCurrentEbayActionJobs:(storeId:string)=>Promise<Array<{id:string;errors:Array<{shippingConfirmation?:unknown}>}>>;resolveShippingApproval:typeof resolveShippingApproval;processProduct:(job:Row,id:string)=>Promise<{ok:boolean;failure:Row|null}>};
   return {api,product,settings,tables,operations,input:{product:product as unknown as Parameters<typeof guardAmazonUploadShipping>[0]['product'],userId:'user'},counts:()=>({scrapes,adds,revisions}),
     beforeMarketplaceWrite:(callback:()=>void)=>{beforeStoreNumber=callback;},setAuthenticated:(value:boolean)=>{authenticated=value;},setStore:(value:string)=>{sessionStore=value;},setScrapeOverrides:(value:Row)=>{scrapeOverrides=value;},
-    setHtml:(html:string)=>{shippingHtml=html.replaceAll('B0FPQNVHG8','B0TEST1234');},setArrival:(text:string|null)=>{currentArrival=text;},setScrapeError:(error:Error)=>{failScrape=error;},setAddSuccess:(value:boolean)=>{addSuccess=value;},setReviseSuccess:(value:boolean)=>{reviseSuccess=value;},
+    setHtml:(html:string)=>{shippingHtml=html.replaceAll('B0FPQNVHG8','B0TEST1234').replaceAll('B0FPKSQ4WW','B0TEST1234');},setArrival:(text:string|null)=>{currentArrival=text;},setScrapeError:(error:Error)=>{failScrape=error;},setAddSuccess:(value:boolean)=>{addSuccess=value;},setReviseSuccess:(value:boolean)=>{reviseSuccess=value;},
     commit(){const value=observed();const row={id:'committed',productId:'product',storeId:'store',requestedAsin:'B0TEST1234',selectedAsin:'B0TEST1234',verifiedPostcode:'2217',postcodeVerified:true,isSuccessful:true,priceMode:'REGULAR',stockLeft:4,identityOutcome:'MATCH',buyBoxOutcome:'AVAILABLE',observedAt:value.observedAt,shippingEvidence:value.shippingEvidence};tables.amazonPriceObservation.push(row);Object.assign(product,{holdLastObservationId:row.id,lastPriceCheck:row.observedAt,amazonPriceObservations:tables.amazonPriceObservation,_count:{priceHistory:0}});return row;},
   };
 }
@@ -350,5 +351,38 @@ test('improved real shipping extraction never bypasses other recovery safeguards
     if(scenario==='pending-price')f.product._count={priceHistory:1};
     await f.api.processProduct({id:'resume',storeId:'store',userId:'user',type:'RESUME',metadata:{kind:'price-check-auto-resume'}},'product');
     assert.equal(f.counts().revisions,0,scenario);assert.equal(f.product.status,'ON_HOLD',scenario);
+  }
+});
+
+test('real New/Used extraction reaches upload and supplies immediate quiet display without a tracking commit',async()=>{
+  for(const background of [false,true]){
+    const f=await fixture();f.setHtml(newAndUsedShippingOffers().replaceAll('Sunday, 11 October','tomorrow').replaceAll('Thursday, 15 October','in 9 days'));
+    const result=background ? await f.api.processProduct((await f.api.createOrReuseEbayUploadJob({storeId:'store',userId:'user',productIds:['product']})).job,'product') :
+      await f.api.uploadProductToEbay({productId:'product',storeId:'store',userId:'user'});
+    assert.equal(result.ok,true,JSON.stringify(result));assert.equal(f.counts().adds,1);assert.equal(f.product.status,'IMPORTED');
+    assert.equal(f.product.lastPriceCheck,undefined);assert.equal(f.product.holdLastObservationId,undefined);
+    const presentation=getProductShippingPresentation(f.product,[...f.tables.amazonPriceObservation] as unknown as ShippingDisplayObservation[],{maxShippingDays:25,scrapePostcode:'2217'});
+    assert.equal(presentation.amazonShippingDisplay?.state,'QUIET');
+    assert.equal(presentation.amazonShippingStatus?.outcome,'UNKNOWN');
+  }
+});
+
+test('quiet display of valid expired evidence cannot authorize either upload or restoration',async()=>{
+  for(const action of ['upload','restore'] as const){
+    const f=await fixture();const row=f.commit(), stale=new Date(Date.now()-16*60_000);
+    Object.assign(row,{observedAt:stale,price:96.75,regularPrice:96.75,dealPrice:null,eligibleOffer:true,
+      shippingEvidence:parseAmazonShippingEvidence({asin:'B0TEST1234',mode:'REGULAR',postcode:'2217',observedAt:stale,source:'fixture',arrivalText:'delivery tomorrow',associated:true})});
+    f.product.lastPriceCheck=stale;
+    const display=getProductShippingPresentation(f.product,[row] as unknown as ShippingDisplayObservation[],{maxShippingDays:25,scrapePostcode:'2217'});
+    assert.equal(display.amazonShippingDisplay?.state,'QUIET');assert.equal(display.amazonShippingStatus?.outcome,'UNKNOWN');
+    if(action==='upload'){
+      f.setArrival(null);
+      const result=await f.api.guardAmazonUploadShipping(f.input);
+      assert.equal(result.allowed,false);assert.equal(f.counts().scrapes,2);assert.equal(f.counts().adds,0);
+    }else{
+      Object.assign(f.product,{status:'ON_HOLD',quantity:0,ebayItemId:'123456789012',holdOrigin:'PRICE_CHECK_FAILURE'});
+      await f.api.processProduct({id:'resume',storeId:'store',userId:'user',type:'RESUME',metadata:{kind:'price-check-auto-resume'}},'product');
+      assert.equal(f.counts().revisions,0);assert.equal(f.product.status,'ON_HOLD');
+    }
   }
 });

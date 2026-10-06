@@ -1,6 +1,8 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
+import { getAmazonShippingDisplayMessage } from "@/lib/amazon-shipping-display";
+
 import ShippingUploadPrompt from "./ShippingUploadPrompt";
 import { getUploadOutcomeSummary, readUploadShippingConfirmation } from "@/lib/upload-shipping-presentation";
 import type { UploadShippingConfirmation } from "@/lib/amazon-upload-shipping-policy";
@@ -388,7 +390,7 @@ function PriceCell({ product }: { product: SerializedProductRow }) {
           <AmazonPriceTrackingLabel mode={amazonPriceTrackingMode} selection={product.amazonPriceSelection} />
         </div>
       )}
-      {product.amazonShippingStatus && product.amazonShippingStatus.outcome !== "WITHIN_LIMIT" && <p className="text-[11px] text-amber-800">{product.amazonShippingStatus.message}</p>}
+      {getAmazonShippingDisplayMessage(product.amazonShippingDisplay, product.amazonShippingStatus) && <p className="text-[11px] text-amber-800">{getAmazonShippingDisplayMessage(product.amazonShippingDisplay, product.amazonShippingStatus)}</p>}
       <div className="max-w-full whitespace-normal break-words">
         <span className="text-gray-500">SELL</span>{" "}
         <span className="font-semibold text-gray-900">

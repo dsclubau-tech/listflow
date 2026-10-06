@@ -1,3 +1,4 @@
+import { parseAmazonShippingEvidence } from "./amazon-shipping-evidence";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -68,4 +69,14 @@ test("comparison command does not import persistence or eBay modules", () => {
     "utf8",
   );
   assert.doesNotMatch(source, /(?:prisma|price-check-jobs|from ["'][^"']*ebay)/i);
+});
+
+test("comparison detects shipping bounds, source and verification changes but ignores observation timestamps", () => {
+  const at = new Date("2026-10-06T10:00:00Z");
+  const evidence = parseAmazonShippingEvidence({asin:"B0FPKSQ4WW",mode:"REGULAR",postcode:"2217",observedAt:at,
+    source:"buybox:regular-accordion:primary-delivery",arrivalText:"FREE delivery 11 October",associated:true});
+  const base = {kind:"result" as const,value:{price:209,stockLeft:4,shippingEvidence:evidence}};
+  assert.equal(amazonPriceComparisonOutcomesMatch(base,{...base,value:{...base.value,shippingEvidence:{...evidence,observedAt:new Date(at.getTime()+1000).toISOString()}}}),true);
+  for(const update of [{arrivalLatest:"2026-10-12"},{source:"other"},{reason:"Unassociated"},{outcome:"UNKNOWN" as const},{dispatchLatest:"2026-11-06"}])
+    assert.equal(amazonPriceComparisonOutcomesMatch(base,{...base,value:{...base.value,shippingEvidence:{...evidence,...update}}}),false);
 });

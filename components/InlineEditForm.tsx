@@ -1,6 +1,8 @@
 /* eslint-disable @next/next/no-img-element */
 "use client";
 
+import { getAmazonShippingDisplayMessage, type AmazonShippingDisplay } from "@/lib/amazon-shipping-display";
+
 import type { AmazonShippingStatus } from "@/lib/amazon-shipping-evidence";
 import ShippingUploadPrompt from "./ShippingUploadPrompt";
 import { findCurrentProductUploadJob, getUploadOutcomeSummary, readUploadShippingConfirmation } from "@/lib/upload-shipping-presentation";
@@ -78,7 +80,7 @@ import AmazonPriceTrackingLabel from "@/components/AmazonPriceTrackingLabel";
 
 // ----- Types -----
 
-type ProductWithRelations = Product & { store: Store; createdBy: User; amazonPriceSelection?: AmazonPriceSelection | null; amazonShippingStatus?: AmazonShippingStatus | null };
+type ProductWithRelations = Product & { store: Store; createdBy: User; amazonPriceSelection?: AmazonPriceSelection | null; amazonShippingStatus?: AmazonShippingStatus | null; amazonShippingDisplay?: AmazonShippingDisplay | null };
 
 interface PolicyEntry {
   profileId: string;
@@ -2006,7 +2008,7 @@ export default function InlineEditForm({ product, onImported, onUploadDecision }
         ref={editorContainerRef}
         className="border-t border-gray-200 bg-gray-50"
       >
-      {product.amazonShippingStatus && product.amazonShippingStatus.outcome !== "WITHIN_LIMIT" && <p role="status" className="m-3 text-sm text-amber-800">{product.amazonShippingStatus.message}</p>}
+      {getAmazonShippingDisplayMessage(product.amazonShippingDisplay, product.amazonShippingStatus) && <p role="status" className="m-3 text-sm text-amber-800">{getAmazonShippingDisplayMessage(product.amazonShippingDisplay, product.amazonShippingStatus)}</p>}
       {shippingConfirmation && <ShippingUploadPrompt confirmation={shippingConfirmation} onComplete={async (action, queuedJob) => {
         const generation = ++uploadGeneration.current;
         onUploadDecision?.();

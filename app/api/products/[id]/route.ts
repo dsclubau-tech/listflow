@@ -1,5 +1,5 @@
-import { evaluateAmazonShipping, getCommittedShippingEvidence } from "@/lib/amazon-shipping-evidence";
-import { resolveAmazonDeliveryPostcode } from "@/lib/amazon-delivery-postcode";
+import { getProductShippingPresentation } from "@/lib/amazon-shipping-display";
+import { loadMissingCommittedShippingObservations } from "@/lib/product-shipping-observations";
 import { auth } from "@/auth";
 import { prisma } from "@/lib/prisma";
 import { getAmazonPriceSelection } from "@/lib/amazon-price-selection";
@@ -69,7 +69,10 @@ export async function GET(
       return NextResponse.json({ error: "Product not found" }, { status: 404 });
     }
 
-    const amazonShippingStatus = product.asin ? evaluateAmazonShipping(getCommittedShippingEvidence(product, product.amazonPriceObservations.find(row => row.id === product.holdLastObservationId), resolveAmazonDeliveryPostcode(settings?.scrapePostcode)), settings?.maxShippingDays ?? 25, new Date(), true) : undefined;
+    const committed = await loadMissingCommittedShippingObservations([product]);
+    const missingCommitted = product.holdLastObservationId ? committed.get(product.holdLastObservationId) : undefined;
+    const observations = missingCommitted ? [...product.amazonPriceObservations, missingCommitted] : product.amazonPriceObservations;
+    const { currentObservation, amazonShippingStatus, amazonShippingDisplay } = getProductShippingPresentation(product, observations, settings);
     const holdExplanation = resolveCurrentHoldReason({
       amazonShippingStatus,
       status: product.status,
@@ -84,17 +87,14 @@ export async function GET(
       minimumProductQuantity: settings?.minProductQuantity ?? 2,
       hasPendingReview: product._count.priceHistory > 0,
       asin: product.asin,
-      latestObservation: product.amazonPriceObservations.find(
-        (observation) => observation.id === product.holdLastObservationId,
-      ) ?? null,
+      latestObservation: currentObservation,
     });
     return NextResponse.json({
       ...product,
       ...holdExplanation,
       amazonShippingStatus,
-      amazonPriceSelection: getAmazonPriceSelection(product, product.amazonPriceObservations.find(
-        (observation) => observation.id === product.holdLastObservationId,
-      )),
+      amazonShippingDisplay,
+      amazonPriceSelection: getAmazonPriceSelection(product, currentObservation),
       price: product.price.toString(),
       amazonPrice: product.amazonPrice?.toString() ?? null,
       lastPriceCheck: product.lastPriceCheck?.toISOString() ?? null,

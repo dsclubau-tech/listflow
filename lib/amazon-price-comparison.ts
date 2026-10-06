@@ -32,6 +32,12 @@ export function normalizeAmazonPriceComparisonOutcome(
     buyBoxOutcome: outcome.value.buyBoxOutcome ?? null,
     postcodeVerified: outcome.value.postcodeVerified ?? false,
     acceptedPriceSource: outcome.value.acceptedPriceSource ?? null,
+    shippingEvidence: outcome.value.shippingEvidence ? {
+      outcome: outcome.value.shippingEvidence.outcome, arrivalEarliest: outcome.value.shippingEvidence.arrivalEarliest,
+      arrivalLatest: outcome.value.shippingEvidence.arrivalLatest, dispatchLatest: outcome.value.shippingEvidence.dispatchLatest,
+      source: outcome.value.shippingEvidence.source, reason: outcome.value.shippingEvidence.reason,
+      asin: outcome.value.shippingEvidence.asin, mode: outcome.value.shippingEvidence.mode, postcode: outcome.value.shippingEvidence.postcode,
+    } : null,
   };
 }
 

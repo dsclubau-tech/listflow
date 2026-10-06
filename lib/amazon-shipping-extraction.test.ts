@@ -5,7 +5,7 @@ import { extractLocalizedBuyboxPriceChoices, selectAmazonBuyboxPriceForTracking 
 import { extractAmazonPriceSnapshot } from "./amazon-price-snapshot";
 import { extractAmazonShippingEvidence, extractAmazonShippingEvidenceFromHtml } from "./amazon-shipping-extraction";
 import { evaluateAmazonShipping } from "./amazon-shipping-evidence";
-import { accordionShippingOffers, deliveryBlock, normalShippingOffer } from "../tests/fixtures/amazon-shipping-offers";
+import { accordionShippingOffers, deliveryBlock, normalShippingOffer, newAndUsedShippingOffers } from "../tests/fixtures/amazon-shipping-offers";
 
 const now = new Date("2026-10-05T01:00:00Z");
 function extract(html: string, mode: "REGULAR" | "DEAL" = "REGULAR", shared = false) {
@@ -87,4 +87,75 @@ test("shipping extraction leaves the original DOM and shipping fee untouched", (
   extractAmazonShippingEvidence(dom, offer, "2217", now);
   assert.equal(dom.html(), before);
   assert.equal(offer.price, 142.68); assert.equal(offer.itemPrice, 137.73); assert.equal(offer.shippingFee, 4.95);
+});
+
+test("Cuisinart New/Used cards and nested NEW nodes identify the ordinary new-offer arrival", () => {
+  for (const used of [true, false]) for (const shared of [true, false]) {
+    const html = newAndUsedShippingOffers(used);
+    const choices = shared ? extractAmazonPriceSnapshot(html, "B0FPKSQ4WW").priceChoices : extractLocalizedBuyboxPriceChoices(load(html), "B0FPKSQ4WW");
+    const offer = selectAmazonBuyboxPriceForTracking(choices, "REGULAR"); assert.ok(offer);
+    const at = new Date("2026-10-06T10:00:00Z");
+    const evidence = extractAmazonShippingEvidenceFromHtml(html, offer, "2217", at);
+    assert.equal(offer.price, 209);
+    assert.equal(evidence.arrivalLatest, "2026-10-11");
+    assert.equal(evaluateAmazonShipping(evidence, 25, at).arrivalDays, 5);
+  }
+});
+
+test("genuinely distinct new offers stay unassociated even when their prices match", () => {
+  const html = newAndUsedShippingOffers(false);
+  const $ = load(html);
+  const card = $("#newAccordionRow_0").clone().attr("id", "newAccordionRow_1");
+  $("#buyBoxAccordion").append(card);
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0FPKSQ4WW");
+  const selected = selectAmazonBuyboxPriceForTracking(choices, "REGULAR");
+  assert.ok(selected);
+  assert.equal(extractAmazonShippingEvidence($, selected, "2217", now).outcome, "UNKNOWN");
+});
+test("hidden and non-new offers cannot make an eligible new card ambiguous", () => {
+  const html = newAndUsedShippingOffers(false);
+  for (const condition of ["USED", "RENEWED", "REFURBISHED", "HIDDEN", "UNRELATED"]) {
+    const $ = load(html), card = $("#newAccordionRow_0").clone().attr("id", condition + "AccordionRow");
+    card.find("[data-csa-c-buying-option-type]").attr("data-csa-c-buying-option-type", condition === "HIDDEN" || condition === "UNRELATED" ? "NEW" : condition);
+    if (condition === "HIDDEN") card.attr("hidden", "");
+    if (condition === "UNRELATED") card.attr("id", "recommendations");
+    $("#buyBoxAccordion").append(card);
+    const selected = selectAmazonBuyboxPriceForTracking(extractLocalizedBuyboxPriceChoices($, "B0FPKSQ4WW"), "REGULAR");
+    assert.ok(selected);
+    assert.equal(extractAmazonShippingEvidence($, selected, "2217", now).outcome, "VERIFIED", condition);
+  }
+});
+test("final offer re-resolution rejects a changed root, price or mode", () => {
+  const html = newAndUsedShippingOffers(false);
+  const selected = selectAmazonBuyboxPriceForTracking(extractLocalizedBuyboxPriceChoices(load(html), "B0FPKSQ4WW"), "REGULAR");
+  assert.ok(selected);
+  for (const changed of [
+    html.replace('id="newAccordionRow_0"', 'id="newAccordionRow_1"'),
+    html.replaceAll("$209.00", "$210.00"),
+    html.replaceAll('buying-option-type="NEW"', 'buying-option-type="DEAL"').replace('id="newAccordionRow_0"', 'id="dealAccordionRow"'),
+  ]) assert.equal(extractAmazonShippingEvidenceFromHtml(changed, selected, "2217", now).outcome, "UNKNOWN");
+});
+
+test("a root-resolved Regular card preserves a separately labelled Deal option", () => {
+  const $ = load(newAndUsedShippingOffers(false));
+  $("#buyBoxAccordion").append('<div class="a-box">Deal price <span class="a-price"><span class="a-offscreen">$180.00</span></span></div>');
+  const choices = extractLocalizedBuyboxPriceChoices($, "B0FPKSQ4WW");
+  assert.equal(choices.regular?.itemPrice,209);
+  assert.equal(choices.deal?.itemPrice,180);
+});
+
+test("New/Used offer roots and shipping totals are equivalent in standard and shared extraction", () => {
+  const html=newAndUsedShippingOffers().replaceAll("FREE delivery","$4.95 delivery");
+  const direct=extractLocalizedBuyboxPriceChoices(load(html),"B0FPKSQ4WW");
+  const shared=extractAmazonPriceSnapshot(html,"B0FPKSQ4WW").priceChoices;
+  assert.deepEqual(direct.regular?.offerRoot,shared.regular?.offerRoot);
+  assert.equal(direct.regular?.itemPrice,209);assert.equal(direct.regular?.price,213.95);
+  assert.equal(shared.regular?.price,213.95);assert.equal(shared.regular?.shippingFee,4.95);
+});
+
+test("a root-resolved Regular card preserves a core-price Deal option", () => {
+  const html=newAndUsedShippingOffers(false).replace('<div id="corePrice_feature_div"><span', '<div id="corePrice_feature_div">Deal price <span').replace('<span class="a-offscreen">$209.00</span></span></div>','<span class="a-offscreen">$180.00</span></span></div>');
+  const choices=extractLocalizedBuyboxPriceChoices(load(html),"B0FPKSQ4WW");
+  assert.equal(choices.regular?.itemPrice,209);assert.equal(choices.deal?.itemPrice,180);
+  assert.ok(choices.regular?.offerRoot);
 });

@@ -11,8 +11,11 @@ const confirmation: UploadShippingConfirmation = { sourceJobId: "old-job", produ
 const product = {
   id: productId, title: "Synthetic butter maker", fullTitle: "Synthetic butter maker", description: "Useful appliance.",
   category: "267", categoryName: "Books", status: "DRAFT", condition: "New", price: 173.99, quantity: 1,
-  asin: null, ebayItemId: null, images: [], variants: [], templateId: null, policyTemplateId: null,
+  asin: null, ebayItemId: null as string | null, amazonPrice: 67.95,
+  currentHoldReason: undefined as string | undefined, images: [], variants: [], templateId: null, policyTemplateId: null,
   paymentPolicyId: "payment-test", shippingPolicyId: "shipping-test", returnPolicyId: "return-test",
+  amazonShippingStatus: undefined as import("../../lib/amazon-shipping-evidence").AmazonShippingStatus | undefined,
+  amazonShippingDisplay: undefined as {state:"QUIET"|"UNVERIFIED"|"OVER_LIMIT";message:string|null} | undefined,
   promotedAdPercent: 0, amazonPriceTrackingMode: "REGULAR", errorMessage: null,
   createdBy: {name:"Synthetic user"}, store: { id: "synthetic-store", name: "Test store" },
   itemSpecifics: { Brand: "Acme", _Country: "AU", _PostalCode: "3175", _Location: "Dandenong North, VIC" },
@@ -31,9 +34,9 @@ const bundle = build({
     import InlineEditForm from "./components/InlineEditForm"; import DraftsTable from "./components/DraftsTable";
     createRoot(document.getElementById("root")).render(<React.StrictMode>
       {window.fixtureMode === "editor" ? <InlineEditForm product={window.fixtureProducts[0]} onCollapse={() => {}} /> :
-      <DraftsTable products={window.fixtureProducts} onToast={(message, variant) => {
+      <DraftsTable view={window.fixtureMode.startsWith("products") ? "products" : "drafts"} products={window.fixtureProducts} onToast={(message, variant) => {
         window.fixtureToasts.push({message, variant});
-      }} autoExpandProductId={window.fixtureMode === "expanded" ? window.fixtureProducts[0].id : null} />}
+      }} autoExpandProductId={(window.fixtureMode === "expanded" || window.fixtureMode === "products-expanded") ? window.fixtureProducts[0].id : null} />}
     </React.StrictMode>);
   ` }, bundle: true, platform: "browser", format: "iife", write: false, jsx: "automatic",
   plugins: [{ name: "unrelated-integrations", setup(builder) {
@@ -50,7 +53,7 @@ const bundle = build({
 }).then(result=>result.outputFiles[0].text);
 
 type Fixture = {
-  jobs: Job[]; mode: "editor" | "drafts" | "expanded"; outcome: "queued" | "confirmation" | "error" | "malformed";
+  jobs: Job[]; mode: "editor" | "drafts" | "expanded" | "products" | "products-expanded"; outcome: "queued" | "confirmation" | "error" | "malformed";
   requests: { path: string; method: string; body: unknown }[]; nextJobsWait: Promise<void> | null;
   decisionWait: Promise<void> | null; saveFails: boolean; jobsFail: boolean; products: typeof product[];
   open(): Promise<void>;
@@ -63,7 +66,8 @@ const test = base.extend<{ shipping: Fixture }>({
       jobs: [], mode: "editor", outcome: "queued", requests: [], nextJobsWait: null, decisionWait: null, saveFails: false, jobsFail: false, products: [product],
       async open() {
         await page.goto(origin + "/shipping-editor");
-        await expect.poll(()=>state.requests.some(request=>request.path==="/api/upload/jobs/current")).toBe(true);
+        if (!state.mode.startsWith("products")) await expect.poll(()=>state.requests.some(request=>request.path==="/api/upload/jobs/current")).toBe(true);
+        else await expect(page.getByText(state.products[0].title,{exact:true}).filter({visible:true}).first()).toBeVisible();
         if (state.mode !== "drafts") await expect(page.getByRole("status",{name:"Loading payment policies"})).toHaveCount(0);
       },
     };
@@ -84,6 +88,7 @@ const test = base.extend<{ shipping: Fixture }>({
         const jobs=structuredClone(state.jobs),wait=state.nextJobsWait;state.nextJobsWait=null;await wait;
         await route.fulfill({status:state.jobsFail?503:200,json:{jobs}});
       }else if(method==="GET"&&url.pathname==="/api/ebay/category-aspects")await route.fulfill({json:{requiredItemSpecifics:[]}});
+      else if(method==="GET"&&url.pathname==="/api/products/"+productId) await route.fulfill({json:state.products[0]});
       else if(method==="PATCH"&&url.pathname==="/api/products/"+productId)await route.fulfill({status:state.saveFails?500:200,json:state.saveFails?{error:"Synthetic save failure"}:{id:productId}});
       else if(method==="POST"&&url.pathname==="/api/upload"){
         await state.decisionWait;
@@ -269,4 +274,38 @@ test("Drafts uses queued decision progress when the refresh is unavailable",asyn
   await expect(prompt(page)).toHaveCount(0);
   await expect(page.getByText("Queued for eBay",{exact:true})).toBeVisible();
   await expect(page.getByText("Shipping confirmation required",{exact:true})).toHaveCount(0);
+});
+
+for (const mode of ["editor", "drafts", "expanded", "products", "products-expanded"] as const) {
+  test(mode + " keeps verified post-upload and expired shipping results quiet", async ({page,shipping}) => {
+    shipping.mode = mode;
+    shipping.products = [{...product,asin:"B0DFL96H43",amazonShippingStatus:{
+      outcome:"UNKNOWN",maxShippingDays:25,arrivalDays:null,dispatchDays:null,observedAt:"2026-10-06T07:21:57Z",
+      message:"Amazon delivery time is unverified. Retry the shipping check.",
+    },amazonShippingDisplay:{state:"QUIET",message:null}}];
+    await shipping.open();
+    await expect(page.getByText("Amazon delivery time is unverified. Retry the shipping check.",{exact:true})).toHaveCount(0);
+  });
+}
+
+for (const state of ["UNVERIFIED", "OVER_LIMIT"] as const) {
+  test("actual product table and editor retain " + state + " warnings on mobile", async ({page,shipping}) => {
+    await page.setViewportSize({width:390,height:844});
+    shipping.mode="products-expanded";
+    const message=state==="UNVERIFIED" ? "Amazon delivery time is unverified. Retry the shipping check." : "Amazon delivery exceeds your 25-day limit.";
+    shipping.products=[{...product,asin:"B0DFL96H43",status:"IMPORTED",ebayItemId:"377547740480",amazonShippingDisplay:{state,message}}];
+    await shipping.open();
+    await expect(page.getByText(message,{exact:true}).filter({visible:true})).toHaveCount(2);
+    await expect(page.getByRole("button",{name:"Save & Update eBay",exact:true})).toBeEnabled();
+  });
+}
+test("shipping hold details explain stale operational evidence while the product price stays quiet",async({page,shipping})=>{
+  shipping.mode="products";
+  const message="Fresh delivery verification is required before stock can be restored. The hold remains.";
+  shipping.products=[{...product,asin:"B0DFL96H43",status:"ON_HOLD",ebayItemId:"377547740480",
+    currentHoldReason:message,amazonShippingDisplay:{state:"QUIET",message:null}}];
+  await shipping.open();
+  await page.getByText("Hold details",{exact:true}).filter({visible:true}).click();
+  await expect(page.getByText(message,{exact:true}).first()).toBeVisible();
+  await expect(page.getByText("Amazon delivery time is unverified. Retry the shipping check.",{exact:true})).toHaveCount(0);
 });

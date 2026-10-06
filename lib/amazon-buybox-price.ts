@@ -1,3 +1,7 @@
+import {
+  resolveAmazonOfferRoots, amazonOfferItemPrice, referenceAmazonOfferRoot,
+  AMAZON_HIDDEN_OFFER, AMAZON_NON_NEW_OFFER, type AmazonOfferRootReference,
+} from "./amazon-offer-roots";
 import type { CheerioAPI } from "cheerio";
 import type { AmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
 import { extractAmazonShippingFeeFromCheerio } from "@/lib/amazon-shipping";
@@ -50,6 +54,8 @@ const BUYBOX_PRICE_VALUE_SELECTORS = [
 ] as const;
 
 const NON_CURRENT_PRICE_ANCESTOR_SELECTOR = [
+  AMAZON_HIDDEN_OFFER,
+  AMAZON_NON_NEW_OFFER,
   ".a-text-price",
   ".basisPrice",
   ".coupon",
@@ -79,6 +85,7 @@ const REFERENCE_PRICE_SELECTORS = [
 export type AmazonBuyboxPriceResult = {
   asin: string | null;
   containerSelector: string;
+  offerRoot?: AmazonOfferRootReference;
   price: number;
   itemPrice?: number;
   shippingFee?: number | null;
@@ -368,28 +375,36 @@ function extractBuyboxPriceChoices(
           ? "#desktop_buybox"
           : "#buybox";
 
-    const primeCard = buybox
-      .find(
-        '#primeSavingsUpsellAccordionRow, [id*="primeSavingsUpsell" i], [data-csa-c-buying-option-type="PRIME_SAVINGS_UPSELL"], [id*="dealAccordion" i], [data-csa-c-buying-option-type="DEAL"]'
-      )
-      .filter((_, el) => $(el).find(".a-price").length > 0)
-      .first();
+    const dealRoots = resolveAmazonOfferRoots($, "DEAL");
+    const regularRoots = resolveAmazonOfferRoots($, "REGULAR");
+    const primeCard = dealRoots.length === 1 ? dealRoots : dealRoots.filter(() => false);
+    const regularCard = regularRoots.length === 1 ? regularRoots : regularRoots.filter(() => false);
+    let primePrice = primeCard.length ? amazonOfferItemPrice($, primeCard) : null;
+    let regularPrice = regularCard.length ? amazonOfferItemPrice($, regularCard) : null;
 
-    const regularCard = buybox
-      .find(
-        '[id*="newAccordionRow" i], [id*="regularPrice" i], [data-csa-c-buying-option-type="NEW"]'
-      )
-      .filter((_, el) => $(el).find(".a-price").length > 0)
-      .first();
-
-    let primePrice =
-      primeCard.length > 0 ? parseContainerBuyboxPrice($, primeCard) : null;
-    let regularPrice =
-      regularCard.length > 0 ? parseContainerBuyboxPrice($, regularCard) : null;
-
+    if (regularPrice !== null && regularRoots.length === 1) {
+      choices.regular = {
+        ...buildResult(normalizedAsin, accordionContainerSelector, "buybox:regular-accordion",
+          regularPrice, "REGULAR", "Regular price", shippingFee),
+        offerRoot: referenceAmazonOfferRoot(regularCard, "REGULAR"),
+      };
+    }
+    if (primePrice !== null && dealRoots.length === 1) {
+      const text = normalizeText(primeCard.text());
+      const label = LIGHTNING_DEAL_LABEL_PATTERN.test(text) ? "Lightning Deal" :
+        /prime/i.test(primeCard.attr("id") ?? "") || PRIME_MEMBER_PRICE_LABEL_PATTERN.test(text)
+          ? "Prime member price" : "Deal price";
+      choices.deal = {
+        ...buildResult(normalizedAsin, accordionContainerSelector, "buybox:deal-accordion",
+          primePrice, "DEAL", label, shippingFee),
+        offerRoot: referenceAmazonOfferRoot(primeCard, "DEAL"),
+      };
+    }
     // Also check labelled accordion rows / cards
     if (primePrice === null || regularPrice === null) {
-      buybox.find(".a-box, .a-accordion-row").each((_, el) => {
+      buybox.find(".a-box, .a-accordion-row")
+        .filter((_, el) => !$(el).closest(AMAZON_HIDDEN_OFFER + ", " + AMAZON_NON_NEW_OFFER).length)
+        .each((_, el) => {
         const row = $(el);
         const text = normalizeText(row.text());
         if (primePrice === null && DEAL_PRICE_LABEL_PATTERN.test(text)) {
@@ -428,7 +443,7 @@ function extractBuyboxPriceChoices(
             : "Deal price";
       }
 
-      choices.deal = buildResult(
+      choices.deal ??= buildResult(
         normalizedAsin,
         accordionContainerSelector,
         "buybox:deal-accordion",
@@ -437,7 +452,7 @@ function extractBuyboxPriceChoices(
         dealLabel,
         shippingFee,
       );
-      choices.regular = buildResult(
+      choices.regular ??= buildResult(
         normalizedAsin,
         accordionContainerSelector,
         "buybox:regular-accordion",
@@ -468,7 +483,7 @@ function extractBuyboxPriceChoices(
     );
     if (
       labelledDeal !== null &&
-      (!choices.deal || !isLabelledPriceResult(choices.deal))
+      (!choices.deal || (!choices.deal.offerRoot && !isLabelledPriceResult(choices.deal)))
     ) {
       choices.deal = buildResult(
         normalizedAsin,
@@ -492,7 +507,7 @@ function extractBuyboxPriceChoices(
     );
     if (
       labelledRegular !== null &&
-      (!choices.regular || !isLabelledPriceResult(choices.regular))
+      (!choices.regular || (!choices.regular.offerRoot && !isLabelledPriceResult(choices.regular)))
     ) {
       choices.regular = buildResult(
         normalizedAsin,

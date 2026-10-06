@@ -21,3 +21,13 @@ export function accordionShippingOffers(includeDeal = true) {
       ${deliveryBlock()}<input id="add-to-cart-button">
     </div></div></div>`;
 }
+
+// Sanitized structure from the Cuisinart New/Used audit, including nested price nodes.
+export function newAndUsedShippingOffers(includeUsed = true) {
+  const price = (amount: string, type: string) => `<div data-csa-c-buying-option-type="${type}"><span data-csa-c-buying-option-type="${type}"><span class="a-price"><span class="a-offscreen">$${amount}</span></span></span></div>`;
+  return `<input id="ASIN" value="B0FPKSQ4WW"><div id="corePrice_feature_div"><span class="a-price"><span class="a-offscreen">$209.00</span></span></div>
+    <div id="desktop_buybox"><div id="buybox"><div id="buyBoxAccordion">
+    <div id="newAccordionRow_0">Buy New ${price("209.00", "NEW")}${deliveryBlock("FREE delivery Sunday, 11 October", undefined, "MEDIUM")}<input id="add-to-cart-button"></div>
+    ${includeUsed ? `<div id="usedAccordionRow">Used – Very Good ${price("192.28", "USED")}${deliveryBlock("FREE delivery Thursday, 15 October")}</div>` : ""}
+    </div></div></div>`;
+}

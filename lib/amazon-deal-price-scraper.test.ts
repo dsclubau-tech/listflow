@@ -1,4 +1,5 @@
-import { deliveryBlock } from "../tests/fixtures/amazon-shipping-offers";
+import { evaluateAmazonShipping } from "./amazon-shipping-evidence";
+import { deliveryBlock, newAndUsedShippingOffers } from "../tests/fixtures/amazon-shipping-offers";
 import assert from "node:assert/strict";
 import test, { before, after } from "node:test";
 import { chromium, type Browser } from "playwright-core";
@@ -156,5 +157,18 @@ for (const sharedSnapshot of [false, true]) {
     assert.equal(result.shippingEvidence?.arrivalText,'FREE delivery in 26 days');
     assert.equal(result.shippingEvidence?.outcome,'VERIFIED');
     assert.equal(result.price,749);
+  });
+}
+
+for (const sharedSnapshot of [false, true]) {
+  test("real scraper associates nested New/Used delivery after final verification, snapshot " + sharedSnapshot, async () => {
+    const page = html(newAndUsedShippingOffers().replaceAll("B0FPKSQ4WW",asin).replace("Sunday, 11 October","tomorrow"));
+    const result = await scrapeAmazonPrice(asin,offlineBrowser(page),"2217","REGULAR",null,{sharedSnapshot});
+    assert.equal(result.rawPrice,209);assert.equal(result.shippingPrice,0);assert.equal(result.price,209);
+    assert.equal(result.identityOutcome,"MATCH");assert.equal(result.postcodeVerified,true);
+    assert.equal(result.buyBoxOutcome,"AVAILABLE");assert.equal(result.stockLeft,null); // Existing multi-offer stock classification stays unchanged.
+    assert.equal(result.shippingEvidence?.outcome,"VERIFIED");
+    assert.equal(evaluateAmazonShipping(result.shippingEvidence,25,result.observedAt).arrivalDays,1);
+    assert.equal(evaluateAmazonShipping(result.shippingEvidence,25,result.observedAt).outcome,"WITHIN_LIMIT");
   });
 }

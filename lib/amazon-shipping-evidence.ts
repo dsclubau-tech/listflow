@@ -143,7 +143,8 @@ export function evaluateAmazonShipping(value: unknown, maximum: number, now = ne
   const unknown = (): AmazonShippingStatus => ({ outcome: "UNKNOWN", maxShippingDays, arrivalDays: null, dispatchDays: null, observedAt, message: "Amazon delivery time is unverified. Retry the shipping check." });
   if (!evidence) return unknown();
   const age = now.getTime() - Date.parse(evidence.observedAt);
-  if (age < -5000 || (requireFresh && age > SHIPPING_EVIDENCE_MAX_AGE_MS)) return unknown();
+  if (age < -5000) return unknown();
+  if (requireFresh && age > SHIPPING_EVIDENCE_MAX_AGE_MS) return { ...unknown(), message: "Fresh delivery verification is required before stock can be restored." };
   const today = calendarDate(new Date(evidence.observedAt));
   const days = (date: string | null) => date ? Math.round((Date.parse(date) - today) / DAY) : null;
   const arrivalDays = days(evidence.arrivalLatest), dispatchDays = days(evidence.dispatchLatest);

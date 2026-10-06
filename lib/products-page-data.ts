@@ -1,7 +1,7 @@
 import "server-only";
 import { resolveCurrentHoldReason } from "@/lib/current-hold-reason";
-import { evaluateAmazonShipping, getCommittedShippingEvidence } from "./amazon-shipping-evidence";
-import { resolveAmazonDeliveryPostcode } from "./amazon-delivery-postcode";
+import { getProductShippingPresentation } from "./amazon-shipping-display";
+import { loadMissingCommittedShippingObservations } from "./product-shipping-observations";
 import { getAmazonPriceSelection } from "@/lib/amazon-price-selection";
 
 import type { Prisma } from "@/app/generated/prisma/client";
@@ -242,7 +242,8 @@ function serializeProductSelection(
   }));
 }
 
-function serializeProducts(products: ProductRowPayload[], minimumProductQuantity: number, shippingSettings: { maxShippingDays: number; scrapePostcode: string } | null): SerializedProductRow[] {
+async function serializeProducts(products: ProductRowPayload[], minimumProductQuantity: number, shippingSettings: { maxShippingDays: number; scrapePostcode: string } | null): Promise<SerializedProductRow[]> {
+  const committed = await loadMissingCommittedShippingObservations(products);
   const serializeObservation = (observation: ProductRowPayload["amazonPriceObservations"][number]) => ({
     ...observation,
     price: observation.price?.toString() ?? null,
@@ -259,10 +260,9 @@ function serializeProducts(products: ProductRowPayload[], minimumProductQuantity
       status: product.status,
     });
 
-    const currentObservation = product.amazonPriceObservations.find(
-      (observation) => observation.id === product.holdLastObservationId,
-    ) ?? null;
-    const amazonShippingStatus = product.asin ? evaluateAmazonShipping(getCommittedShippingEvidence(product, currentObservation, resolveAmazonDeliveryPostcode(shippingSettings?.scrapePostcode)), shippingSettings?.maxShippingDays ?? 25, new Date(), true) : undefined;
+    const missingCommitted = product.holdLastObservationId ? committed.get(product.holdLastObservationId) : undefined;
+    const observations = missingCommitted ? [...product.amazonPriceObservations, missingCommitted] : product.amazonPriceObservations;
+    const { currentObservation, amazonShippingStatus, amazonShippingDisplay } = getProductShippingPresentation(product, observations, shippingSettings);
     const holdExplanation = resolveCurrentHoldReason({
       amazonShippingStatus,
       status: product.status,
@@ -285,6 +285,7 @@ function serializeProducts(products: ProductRowPayload[], minimumProductQuantity
       ...holdExplanation,
       amazonPriceSelection: getAmazonPriceSelection(product, currentObservation),
       amazonShippingStatus,
+      amazonShippingDisplay,
       amazonPriceObservations: product.amazonPriceObservations.map(serializeObservation),
       price: product.price.toString(),
       amazonPrice: product.amazonPrice?.toString() ?? null,
@@ -454,7 +455,7 @@ export async function getCachedProductsPageData(
         take: query.pageSize, skip: (page - 1) * query.pageSize })).ids;
     const products = await getProductRowsByIds(storeId, ids);
     return {
-      products: serializeProducts(products, settings?.minProductQuantity ?? 2, settings),
+      products: await serializeProducts(products, settings?.minProductQuantity ?? 2, settings),
       totalCount: requested.totalCount,
       page, pageSize: query.pageSize, sortBy: query.sortBy,
       sortOrder: query.sortOrder, importedFilter: query.importedFilter,
@@ -476,7 +477,7 @@ export async function getCachedProductsPageData(
     const products = await getProductRowsByIds(storeId, pageIds);
 
     return {
-      products: serializeProducts(products, settings?.minProductQuantity ?? 2, settings),
+      products: await serializeProducts(products, settings?.minProductQuantity ?? 2, settings),
       totalCount,
       page,
       pageSize: query.pageSize,
@@ -513,7 +514,7 @@ export async function getCachedProductsPageData(
         });
 
   return {
-    products: serializeProducts(products, settings?.minProductQuantity ?? 2, settings),
+    products: await serializeProducts(products, settings?.minProductQuantity ?? 2, settings),
     totalCount,
     page,
     pageSize: query.pageSize,

@@ -1,3 +1,4 @@
+import { resolveAmazonOfferRoots, amazonOfferItemPrice, AMAZON_HIDDEN_OFFER, AMAZON_NON_NEW_OFFER, AMAZON_OFFER_CARDS } from "./amazon-offer-roots";
 import { load, type Cheerio, type CheerioAPI } from "cheerio";
 import type { AnyNode } from "domhandler";
 import type { AmazonBuyboxPriceResult } from "./amazon-buybox-price";
@@ -6,29 +7,28 @@ import { parseAmazonShippingEvidence } from "./amazon-shipping-evidence";
 const primary = '[id^="mir-layout-DELIVERY_BLOCK-slot-PRIMARY_DELIVERY_MESSAGE_"]';
 const containers = '#deliveryBlockMessage, #delivery-message';
 const secondary = '[id^="mir-layout-DELIVERY_BLOCK-slot-SECONDARY_DELIVERY_MESSAGE_"]';
-const unrelated = '#aod-container, [id*="usedAccordion" i], [data-csa-c-buying-option-type="USED"], #recommendations';
-const cards = '[data-csa-c-buying-option-type], [id*="AccordionRow"], [id*="dealAccordion"]';
-const hidden = '[hidden], [aria-hidden="true"], .aok-hidden, .a-hidden, [style*="display: none"], [style*="display:none"]';
+const unrelated = AMAZON_NON_NEW_OFFER;
+const cards = AMAZON_OFFER_CARDS;
+const hidden = AMAZON_HIDDEN_OFFER;
 
 /** Only the accepted offer's primary delivery promise can establish arrival. */
 export function extractAmazonShippingEvidence($: CheerioAPI, selected: AmazonBuyboxPriceResult, postcode: string, observedAt: Date) {
   const roots = $('#buybox, #desktop_buybox, #buybox_feature_div, #buyBoxAccordion');
   let scope = roots;
   let associated = roots.length > 0;
-  if (/accordion/i.test(selected.selector)) {
-    const selector = selected.mode === 'DEAL'
-      ? '[id*="dealAccordion" i], [id*="primeSavingsUpsell" i], [data-csa-c-buying-option-type="DEAL"], [data-csa-c-buying-option-type="PRIME_SAVINGS_UPSELL"]'
-      : '[id*="newAccordionRow" i], [id*="regularPrice" i], [data-csa-c-buying-option-type="NEW"]';
-    scope = roots.find(selector).filter((_, element) => $(element).find('.a-price').length > 0).first();
-    associated = scope.length === 1;
-  } else if (roots.find(cards).filter((_, element) => $(element).find('.a-price').length > 0).length > 1) {
-    // Label-based offers without a specific card do not establish which delivery promise applies.
-    associated = false;
+  const regularRoots = resolveAmazonOfferRoots($, "REGULAR"), dealRoots = resolveAmazonOfferRoots($, "DEAL");
+  const eligibleRoots = selected.mode === "REGULAR" ? regularRoots : dealRoots;
+  const hasCardContext = Boolean(selected.offerRoot || /accordion/i.test(selected.selector) || roots.find(cards).length);
+  if (hasCardContext) {
+    scope = eligibleRoots;
+    associated = eligibleRoots.length === 1 &&
+      (!selected.offerRoot || (selected.offerRoot.mode === selected.mode && (scope.attr("id") ?? null) === selected.offerRoot.id)) &&
+      amazonOfferItemPrice($, scope) === (selected.itemPrice ?? selected.price);
   }
   if (/^label:/.test(selected.selector) && /regular price/i.test(roots.text()) && /deal price|prime member price/i.test(roots.text())) associated = false;
   const allowed = (element: Parameters<CheerioAPI>[0]) => {
     const node = $(element);
-    return !node.closest(hidden).length && !node.closest('#aod-container, #usedAccordionRow, [data-csa-c-buying-option-type="USED"], #recommendations').length;
+    return !node.closest(hidden).length && !node.closest(AMAZON_NON_NEW_OFFER).length;
   };
   const ordinaryTexts = (nodes: Cheerio<AnyNode>) => [...new Set(nodes.toArray()
     .filter(element => allowed(element) && !$(element).closest(secondary).length)
@@ -47,7 +47,7 @@ export function extractAmazonShippingEvidence($: CheerioAPI, selected: AmazonBuy
     return ordinaryTexts(candidate.find('[data-csa-c-delivery-time]'));
   };
   let texts = deliveryTexts(scope);
-  if (!/accordion/i.test(selected.selector) && associated && texts.length === 0 &&
+  if (!hasCardContext && associated && texts.length === 0 &&
     !scope.find(primary + ', ' + containers + ', [data-csa-c-delivery-time]').filter((_, element) => allowed(element)).length) {
     // Only these product-scoped blocks can supply a promise outside a single Buy Box.
     const external = $(`${primary}, ${containers}`).filter((_, element) =>
@@ -59,7 +59,7 @@ export function extractAmazonShippingEvidence($: CheerioAPI, selected: AmazonBuy
   const dispatchNodes = scope.find('#availability, #availabilityInsideBuyBox_feature_div, [data-csa-c-availability]');
   const dispatchTexts = [...new Set(dispatchNodes.toArray().filter(allowed).map(element => $(element).text().replace(/\s+/g, ' ').trim()).filter(text => /dispatch|ships?\s+(?:within|in)/i.test(text)))];
   // The top-level availability block is also a product-scoped promise for a single offer.
-  if (!/accordion/i.test(selected.selector) && !dispatchTexts.length && associated) {
+  if (!hasCardContext && !dispatchTexts.length && associated) {
     $('#availability').filter((_, element) => allowed(element) && !$(element).closest(cards).length).each((_, element) => {
       const text = $(element).text().replace(/\s+/g, ' ').trim();
       if (/dispatch|ships?\s+(?:within|in)/i.test(text)) dispatchTexts.push(text);

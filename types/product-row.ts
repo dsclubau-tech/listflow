@@ -1,3 +1,4 @@
+import type { AmazonShippingDisplay } from "@/lib/amazon-shipping-display";
 import type { AmazonShippingStatus } from "@/lib/amazon-shipping-evidence";
 import type { Product, Store, User } from "@/app/generated/prisma/client";
 import type { AmazonPriceTrackingMode } from "@/lib/amazon-price-tracking";
@@ -54,6 +55,7 @@ export type SerializedProductRow = Omit<
   amazonPrice?: string | null;
   amazonPriceSelection?: AmazonPriceSelection | null;
   amazonShippingStatus?: AmazonShippingStatus;
+  amazonShippingDisplay?: AmazonShippingDisplay;
   lastPriceCheck?: string | null;
   promotedAdSyncedAt?: string | null;
   internalNote?: string | null;
