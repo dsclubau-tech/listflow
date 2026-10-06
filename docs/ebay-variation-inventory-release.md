@@ -85,3 +85,9 @@ Coverage includes exact and XML-sensitive SKUs, one remaining variation, indepen
 ### Remaining limits
 
 There are no unresolved local validation failures. Real listing mappings and marketplace values still require review during an authorized rollout. Ended listings need separate handling. Several distinct variations cannot recover automatically from one product-level Amazon observation. Uncertain readback mismatches remain pending verification or review, including differences caused by sales; they are not automatically reset. Independent Amazon checking, SKU renaming, variation creation/deletion and automatic remapping remain outside this change.
+
+## Live preflight parser correction
+
+A read-only GetItem preflight for De’Longhi exposed the parser’s default 1,000-entity limit on a long, ordinarily escaped listing description. No marketplace update was made. Two new regressions failed before the correction and now pass. Inventory parsing rejects document-defined entities and responses larger than 8 MiB before parsing, while scaling predefined-reference limits to the bounded response length. Exact SKU decoding and listing-step comparisons remain unchanged.
+
+After this correction: 1,028 unit tests and 112 mocked browser tests passed (10 credential-dependent tests skipped). TypeScript, normal lint, production build and diff checks passed. The pre-existing worker-log build warning remains.

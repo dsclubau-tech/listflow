@@ -176,3 +176,19 @@ test("confirmed listing step survives local failure without another listing writ
     assert.equal(listingWrites, 1);
     assert.equal(applies, 1);
 });
+
+test("GetItem accepts long safely escaped listing descriptions without losing inventory identity", () => {
+    const description = "&lt;p&gt;safe &amp; ordinary&lt;/p&gt;".repeat(400);
+    const xml = '<GetItemResponse><Ack>Success</Ack><Item><ItemID>304997589004</ItemID><Description>' + description + '</Description><SellingStatus><ListingStatus>Active</ListingStatus></SellingStatus><Variations><Variation><SKU>a&amp;B</SKU><StartPrice currencyID="AUD">209.00</StartPrice><Quantity>0</Quantity></Variation></Variations></Item></GetItemResponse>';
+    const s = parseInventorySnapshot(xml, "304997589004");
+    assert.equal(s.entries[0].sku, "a&B");
+    assert.equal(s.entries[0].price, 209);
+    assert.equal(s.entries[0].quantity, 0);
+    assert.equal(s.listing?.Description, "<p>safe & ordinary</p>".repeat(400));
+});
+test("inventory XML rejects document entity declarations and oversized input", () => {
+    const xml='<!DOCTYPE GetItemResponse [<!ENTITY x "expanded">]><GetItemResponse><Ack>Success</Ack></GetItemResponse>';
+    assert.throws(() => parseInventorySnapshot(xml,"item"), /Unsupported eBay XML/);
+    assert.equal(parseInventoryResponse(xml).outcomeUncertain,true);
+    assert.throws(() => parseInventorySnapshot(" ".repeat(8*1024*1024+1),"item"), /Unsupported eBay XML/);
+});

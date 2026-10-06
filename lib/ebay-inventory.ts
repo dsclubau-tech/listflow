@@ -77,7 +77,19 @@ export type InventoryResponse = {
     }>;
 };
 const list = <T>(v: T | T[] | undefined): T[] => v === undefined ? [] : Array.isArray(v) ? v : [v];
-const parser = () => new XMLParser({ ignoreAttributes: false, removeNSPrefix: true, parseTagValue: false, trimValues: false });
+function assertInventoryXml(xml: string) {
+    if (xml.length > 8 * 1024 * 1024 || /<!\s*(?:DOCTYPE|ENTITY)\b/i.test(xml))
+        throw new Error("Unsupported eBay XML response.");
+}
+function parseInventoryXml(xml: string) {
+    // Trading responses may contain long HTML descriptions escaped as ordinary XML.
+    // Reject document-defined entities and bound the input before scaling the limits
+    // for predefined/numeric references, whose decoded content cannot grow the input.
+    assertInventoryXml(xml);
+    return new XMLParser({ ignoreAttributes: false, removeNSPrefix: true, parseTagValue: false, trimValues: false,
+        processEntities: { enabled: true, maxTotalExpansions: Math.max(1000, xml.length), maxExpandedLength: Math.max(100000, xml.length) }
+    }).parse(xml);
+}
 function value(input: unknown): string {
     if (input && typeof input === "object")
         return String((input as Record<string, unknown>)["#text"] ?? "");
@@ -97,9 +109,11 @@ export function inventoryErrors(input: unknown): InventoryError[] {
     }));
 }
 export function parseInventoryResponse(xml: string): InventoryResponse {
+    try { assertInventoryXml(xml); } catch { return { success: false, outcomeUncertain: true, errorMessage: "Invalid eBay inventory response." }; }
     if (XMLValidator.validate(xml) !== true)
         return { success: false, outcomeUncertain: true, errorMessage: "Invalid eBay inventory response." };
-    const r = parser().parse(xml).ReviseInventoryStatusResponse;
+    let r;
+    try { r = parseInventoryXml(xml).ReviseInventoryStatusResponse; } catch { return { success: false, outcomeUncertain: true, errorMessage: "Invalid eBay inventory response." }; }
     if (!r)
         return { success: false, outcomeUncertain: true, errorMessage: "Missing eBay inventory response." };
     const errors = inventoryErrors(r.Errors), ack = value(r.Ack).trim();
@@ -108,9 +122,10 @@ export function parseInventoryResponse(xml: string): InventoryResponse {
         ...(ack !== "Success" && ack !== "Warning" ? { errorMessage: errors.map(e => e.message).join("; ") || "Unrecognized eBay response.", outcomeUncertain: !["Failure", "PartialFailure"].includes(ack) } : {}) };
 }
 export function parseInventorySnapshot(xml: string, expectedItemId: string): InventorySnapshot {
+    assertInventoryXml(xml);
     if (XMLValidator.validate(xml) !== true)
         throw new Error("Invalid eBay GetItem response.");
-    const response = parser().parse(xml).GetItemResponse;
+    const response = parseInventoryXml(xml).GetItemResponse;
     if (!response || !["Success", "Warning"].includes(value(response.Ack).trim()) || !response.Item)
         throw new Error(inventoryErrors(response?.Errors).map(e => e.message).join("; ") || "Cannot verify the eBay listing.");
     const item = response.Item;
@@ -215,7 +230,7 @@ export function matchesInventory(result: InventoryResult, snapshot: InventorySna
 export function verifyListingStep(xml: string, snapshot: InventorySnapshot): boolean {
     if (!snapshot.listing)
         return false;
-    const request = parser().parse(xml).ReviseItemRequest?.Item as Record<string, unknown> | undefined;
+    const request = parseInventoryXml(xml).ReviseItemRequest?.Item as Record<string, unknown> | undefined;
     if (!request || value(request.ItemID) !== snapshot.itemId)
         return false;
     const contains = (expected: unknown, actual: unknown): boolean => {
