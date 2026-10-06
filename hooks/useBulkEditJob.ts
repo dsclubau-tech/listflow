@@ -1,4 +1,5 @@
 "use client";
+import type { InventoryJobError } from "@/lib/ebay-inventory-job-results";
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -11,7 +12,7 @@ export type BulkEditJob = {
   processed: number;
   succeeded: number;
   failed: number;
-  errors: Array<{ productId: string; title: string; error: string }>;
+  errors: InventoryJobError[];
   errorMessage?: string | null;
   updatedAt?: string;
   completedAt: string | null;

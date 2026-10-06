@@ -37,7 +37,7 @@ const compiled = build({ stdin: { resolveDir: process.cwd(), contents: `
       : args.path.endsWith("amazon-scraper") ? "export const scrapeAmazonPrice = (...args) => globalThis.scrape(...args);"
       : args.path.endsWith("price-check-pacing") ? "export const resolvePriceCheckProductPacing = () => ({minMs:0,maxMs:0}); export const getPriceCheckProductDelayMs = () => 0;"
       : args.path.endsWith("scraper-browser") ? "export const launchScraperBrowser = async () => ({isConnected:()=>true,close:async()=>{}}); export const getBrowserLaunchUserMessage = () => null;"
-       : args.path.endsWith("ebay") ? "export const getStoreNumber = async () => '1'; export const callEbayReviseInventoryStatus = (...args) => globalThis.ebay(...args);"
+       : args.path.endsWith("ebay") ? "export const getStoreNumber = async () => '1'; export const callEbayReviseInventoryStatus = (...args) => globalThis.inventoryWrite(...args);export const callEbayGetItem=()=>globalThis.inventoryRead();export const callEbayReviseItem=async()=>{throw Error('Unexpected listing write');};"
       : args.path.endsWith("worker-claim-policy") ? "export const getWorkerClaimPolicy = async () => ({}); export const filterRunnableJobsForWorker = jobs => jobs;"
       : "export const finalizePriceCheckAutoHoldForJob = async () => ({queued:0,actionJobId:null}); export const queuePriceCheckAutoHoldForRun = async () => ({queued:0}); export { queueAmazonShippingHold } from " + JSON.stringify(process.cwd().replaceAll("\\", "/") + "/lib/price-check-auto-hold.ts")
     }));
@@ -154,6 +154,8 @@ async function fixture(count = 809, version = 1, finished = 0) {
     },
   };
   let ebay: (...args: unknown[]) => Promise<{ success: boolean; errorMessage?: string; outcomeUncertain?: boolean }> = async () => ({ success: true });
+  let remotePrice:number|null=null;
+  let remoteVariations:Array<{sku:string;price:number;quantity:number}>|null=null;
   let scrapeCalls = 0;
   let scrape: (signal?: AbortSignal, options?: Record<string,unknown>) => Promise<unknown>;
   let clock: (() => number) | undefined;
@@ -162,7 +164,11 @@ async function fixture(count = 809, version = 1, finished = 0) {
   }
   const fixtureModule = { exports: {} };
   vm.runInNewContext(await compiled, { module: fixtureModule, exports: fixtureModule.exports, require: createRequire(import.meta.url),
-    globalThis: { database, Prisma, ebay: (...args: unknown[]) => ebay(...args), scrape: (...args: unknown[]) => {
+    globalThis: { database, Prisma,
+      inventoryRead:async()=>'<GetItemResponse><Ack>Success</Ack><Item><ItemID>123456789012</ItemID><StartPrice currencyID="AUD">'+(remotePrice??Number(tables.product[0].price))+'</StartPrice><Quantity>1</Quantity><SellingStatus><ListingStatus>Active</ListingStatus><QuantitySold>0</QuantitySold></SellingStatus>'+(remoteVariations?'<Variations>'+remoteVariations.map(v=>'<Variation><SKU>'+v.sku+'</SKU><StartPrice currencyID="AUD">'+v.price+'</StartPrice><Quantity>'+v.quantity+'</Quantity><SellingStatus><QuantitySold>0</QuantitySold></SellingStatus></Variation>').join('')+'</Variations>':'')+'</Item></GetItemResponse>',
+      inventoryWrite:async(...args:unknown[])=>{const result=await ebay(...args);if(result.success){const match=String(args[0]).match(/<StartPrice>([0-9.]+)<\/StartPrice>/);if(match)remotePrice=Number(match[1]);if(remoteVariations)for(const row of String(args[0]).split("<InventoryStatus>").slice(1)){const sku=row.match(/<SKU>([^<]+)<\/SKU>/)?.[1],price=row.match(/<StartPrice>([0-9.]+)<\/StartPrice>/)?.[1];const target=remoteVariations.find(v=>v.sku===sku);if(target&&price)target.price=Number(price);}}
+        return result.success||result.outcomeUncertain?result:{...result,errors:[{severity:"Error",code:"219",message:result.errorMessage,system:false,parameters:{}}]};},
+      ebay: (...args: unknown[]) => ebay(...args), scrape: (...args: unknown[]) => {
       scrapeCalls++;
       return Promise.resolve(scrape((args[5] as { signal?: AbortSignal })?.signal, args[5] as Record<string,unknown>)).then(result => {
         if (!result || typeof result !== 'object' || 'shippingEvidence' in result) return result;
@@ -177,7 +183,7 @@ async function fixture(count = 809, version = 1, finished = 0) {
     cancelItemScheduledJob: typeof cancelItemScheduledJob; queuePriceCheckAutoResumeForRun: typeof queuePriceCheckAutoResumeForRun };
   scrape = async () => { throw new api.AmazonDeliveryFailure("HTTP 503; popup recovery timed out", {
     technicalCode: "AMAZON_DELIVERY_HTTP_ERROR", stage: "popup-input", httpStatus: 503, requestedPostcode: "2217" }); };
-  return { api, tables, database, setClock: (value: () => number) => { clock = value; }, setEbay: (value: typeof ebay) => { ebay = value; }, calls: () => scrapeCalls, setScrape: (value: typeof scrape) => { scrape = value; },
+  return { api, tables, database, setRemoteVariations:(values:NonNullable<typeof remoteVariations>)=>{remoteVariations=values;},remoteVariations:()=>remoteVariations,setClock: (value: () => number) => { clock = value; }, setEbay: (value: typeof ebay) => { ebay = value; }, calls: () => scrapeCalls, setScrape: (value: typeof scrape) => { scrape = value; },
     expire: () => {
       tables.priceCheckScheduleState.forEach(row => { row.amazonBlockedUntil = new Date(0); });
       tables.priceCheckJobItem.filter(row => row.status === "RETRY_WAIT").forEach(row => { row.nextAttemptAt = new Date(0); });
@@ -862,4 +868,20 @@ test("a variation flag with missing verification still defers instead of bypassi
   assert.equal(result.deferred,true);assert.equal(result.checked,0);assert.equal(result.failed,0);
   assert.equal(result.technicalFailureCode,"AMAZON_DELIVERY_POSTCODE_UNVERIFIED");
   assert.equal(f.tables.product[0].priceCheckFailureCode,undefined);assert.equal(f.tables.product[0].lastPriceCheck,null);
+});
+
+
+test("actual automatic repricing sends the full calculated variation map with its exact SKUs",async()=>{
+ const f=await fixture(1);const product=f.tables.product[0];
+ const variants=["B09682CXNR","B0CNCP33BQ","B0CNCRBRM1"].map((sku,i)=>({id:"auto-v"+i,sku,productId:String(product.id),buyPrice:100,sellPrice:120+i*5,quantity:i+1,feesPercent:0,feesFixed:0,profitPercent:20+i*10,profitFixed:0,roundCents:null}));
+ product.variants=variants;f.tables.variant=variants;product._count={variants:3};
+ f.setRemoteVariations(variants.map(v=>({sku:v.sku,price:v.sellPrice,quantity:v.quantity})));
+ const writes:string[]=[];f.setEbay(async xml=>{writes.push(String(xml));return {success:true};});
+ f.setScrape(async()=>verified(110,new Date()));
+ const result=await f.api.runPriceCheck({storeId:"store-a",ignoreSchedule:true});
+ assert.equal(result.failed,0,JSON.stringify(result));assert.equal(writes.length,1);
+ assert.equal(writes[0].match(/<InventoryStatus>/g)?.length,3);
+ for(const v of variants)assert.ok(writes[0].includes("<SKU>"+v.sku+"</SKU>"));
+ assert.deepEqual(f.remoteVariations()!.map(v=>v.price),[132,143,154]);
+ assert.deepEqual(f.remoteVariations()!.map(v=>v.quantity),[1,2,3]);
 });

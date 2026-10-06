@@ -1,3 +1,4 @@
+import { prepareInventoryJobRetry, type InventoryJobError } from "@/lib/ebay-inventory-job-results";
 import { EbayActionJobStatus } from "@/app/generated/prisma/enums";
 import { auth } from "@/auth";
 import { invalidateJobCaches } from "@/lib/cache-tags";
@@ -8,7 +9,7 @@ import { assertWorkerSupportsDurableBulkEdit } from "@/lib/worker-heartbeat";
 import { NextResponse } from "next/server";
 
 export async function POST(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const session = await auth();
@@ -27,16 +28,16 @@ export async function POST(
     if (!job || job.bulkEditItems.length === 0) {
       return NextResponse.json({ error: "No failed bulk-edit items are available to retry." }, { status: 409 });
     }
-    const retryIds = job.bulkEditItems.map((item) => item.productId);
-    const completed = job.completedProductIds.filter((productId) => !retryIds.includes(productId));
-    const errors = Array.isArray(job.errors)
-      ? job.errors.filter((entry) => {
-          if (!entry || typeof entry !== "object" || Array.isArray(entry)) return false;
-          return !retryIds.includes(String((entry as Record<string, unknown>).productId ?? ""));
-        })
-      : [];
+    if(!["COMPLETED","FAILED","CANCELLED"].includes(job.status))return NextResponse.json({error:"This job is already running or retrying."},{status:409});
+    const body=await request.json().catch(()=>({}));
+    const selectedIds=Array.isArray(body.productIds)?body.productIds.filter((id:unknown)=>typeof id==="string") as string[]:undefined;
+    const retry=prepareInventoryJobRetry({...job,errors:(Array.isArray(job.errors)?job.errors:[]) as unknown as InventoryJobError[]},job.bulkEditItems.map(item=>item.productId),selectedIds);
+    const retryIds=retry.ids,completed=retry.completed,errors=retry.errors;
+    if(!retryIds.length)return NextResponse.json({error:"No eligible failed items are available. Ended listings cannot be retried."},{status:409});
 
     const updated = await prisma.$transaction(async (tx) => {
+      const claimed=await tx.ebayActionJob.updateMany({where:{id:job.id,status:job.status,updatedAt:job.updatedAt},data:{status:EbayActionJobStatus.QUEUED}});
+      if(!claimed.count)throw new Error("This retry has already been queued.");
       await tx.bulkEditJobItem.updateMany({
         where: { jobId: job.id, productId: { in: retryIds } },
         data: { status: "PENDING", attempts: 0, error: null, appliedAt: null, completedAt: null },
@@ -48,8 +49,8 @@ export async function POST(
           completedProductIds: { set: completed },
           processed: completed.length,
           succeeded: job.succeeded,
-          failed: 0,
-          errors,
+          failed: retry.failed,
+          errors: JSON.parse(JSON.stringify(errors)),
           errorMessage: null,
           completedAt: null,
         },

@@ -1,9 +1,8 @@
 import "server-only";
 
 import { ProductStatus } from "@/app/generated/prisma/enums";
-import { buildReviseInventoryStatusXML } from "@/lib/ebay-xml";
+import { readEbayInventory,writeEbayInventory } from "./ebay-inventory-writer";
 import {
-  callEbayReviseInventoryStatus,
   getStoreNumber,
 } from "@/lib/ebay";
 import { fetchActiveEbayListingInventory } from "@/lib/ebay-import";
@@ -56,6 +55,7 @@ function getErrorMessage(error: unknown) {
 
 async function runStockReplenishmentClaimed(
   storeId: string,
+  assertOwnership?:()=>Promise<void>,
 ): Promise<StockReplenishmentResult> {
   const storeNumber = await getStoreNumber(storeId);
   const settings = await prisma.supplierSettings.findUnique({
@@ -112,19 +112,22 @@ async function runStockReplenishmentClaimed(
   };
 
   for (const candidate of candidates) {
-    const reviseResult = await callEbayReviseInventoryStatus(
-      buildReviseInventoryStatusXML(candidate.ebayItemId, {
-        quantity: candidate.targetQuantity,
-      }),
-      storeNumber,
-    );
+    try {
+    await assertOwnership?.();
+    const snapshot=await readEbayInventory(candidate.ebayItemId,storeNumber);
+    if(snapshot.variation&&snapshot.entries.length>1)continue;
+    const product=await prisma.product.findFirst({where:{id:candidate.productId,storeId},include:{variants:{orderBy:{createdAt:"asc"}}}});
+    if(!product||product.status!=="IMPORTED"||product.quantity!==candidate.targetQuantity)continue;
+    const reviseResult=await writeEbayInventory({productId:product.id,storeId,snapshot,
+      requestKey:"inventory:replenish:"+product.id+":"+Date.now(),
+      requests:[{variantId:product.variants[0]?.id,quantity:candidate.targetQuantity}],
+      assertCurrent:async()=>{await assertOwnership?.();const actual=await prisma.product.findFirst({where:{id:product.id,storeId},select:{status:true,quantity:true}});
+        if(actual?.status!=="IMPORTED"||actual.quantity!==candidate.targetQuantity)throw new Error("Stock replenishment context changed.");}
+    });
 
     if (reviseResult.success) {
       result.replenished += 1;
-      await prisma.product.update({
-        where: { id: candidate.productId },
-        data: { errorMessage: null },
-      });
+
       continue;
     }
 
@@ -137,10 +140,11 @@ async function runStockReplenishmentClaimed(
       title: candidate.title,
       error,
     });
-    await prisma.product.update({
-      where: { id: candidate.productId },
-      data: { errorMessage: error },
-    });
+    if(!product.errorMessage)await prisma.product.update({where:{id:candidate.productId},data:{errorMessage:error}});
+    }catch(error){
+      result.failed+=1;result.errors.push({productId:candidate.productId,ebayItemId:candidate.ebayItemId,title:candidate.title,error:getErrorMessage(error)});
+      await assertOwnership?.();
+    }
   }
 
   if (result.candidates > 0 || result.failed > 0) {
@@ -172,7 +176,7 @@ export async function runStockReplenishmentForStore(
         worker,
         "Stock replenish",
       ),
-      () => runStockReplenishmentClaimed(storeId),
+      assertOwnership => runStockReplenishmentClaimed(storeId,assertOwnership),
     );
   } catch (error) {
     if (error instanceof JobConflictError) {

@@ -1,3 +1,4 @@
+import { confirmInventoryPriceHistories } from "@/lib/price-checker";
 import { acquirePriceCheckResultLease, assertAmazonObservationCurrent, runObservedPriceWrite } from "@/lib/price-check-result-application";
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
@@ -197,6 +198,7 @@ export async function POST(request: Request) {
     } catch {
       return NextResponse.json({ error: "A newer Amazon observation is available. Refresh before applying this change." }, { status: 409 });
     }
+    const mayClearPriceError=(!product.priceCheckError&&!product.priceCheckFailureCode)||historyItems.some(h=>Boolean(h.errorMessage)&&(product.priceCheckError===h.errorMessage||product.priceCheckError==="Automatic price increase could not be applied to eBay: "+h.errorMessage));
     const reviewedAt = new Date();
     const historyIds = historyItems.map((item) => item.id);
 
@@ -214,6 +216,8 @@ export async function POST(request: Request) {
           price: primaryHistory!.newSellPrice,
         },
         nextPrimarySellPrice,
+        {prices:variantsToUpdate.map(v=>({variantId:v.id,price:Number(historyByVariantId.get(v.id)!.newSellPrice),buyPrice:Number(historyByVariantId.get(v.id)!.newPrice)})),
+         requestKey:"inventory:review:"+product.id+":"+target.createdAt.toISOString(),assertCurrent:resultLease.assertOwnership},
       ));
     } catch (error) {
       reviseResult = {
@@ -223,12 +227,13 @@ export async function POST(request: Request) {
     }
 
     if (!reviseResult.success) {
+        const confirmedIds=await confirmInventoryPriceHistories(reviseResult,product.id,historyItems,reviewedAt);
       const errorMessage =
         reviseResult.errorMessage || "Failed to revise eBay listing.";
 
       await prisma.$transaction(async (tx) => {
         await tx.priceHistory.updateMany({
-          where: { id: { in: historyIds } },
+          where: { id: { in: historyIds }, appliedAt:null },
           data: {
             ebayRevised: false,
             errorMessage,
@@ -236,15 +241,12 @@ export async function POST(request: Request) {
           },
         });
 
-        await tx.product.update({
-          where: { id: product.id },
-          data: { priceCheckError: errorMessage },
-        });
+        if(mayClearPriceError)await tx.product.update({where:{id:product.id},data:{priceCheckError:errorMessage}});
       });
 
       log.error(
         "price-check/apply",
-        "Local price change applied, but eBay revise failed",
+        "eBay variation update was not fully confirmed",
         undefined,
         {
           productId: product.id,
@@ -257,9 +259,12 @@ export async function POST(request: Request) {
 
       return NextResponse.json(
         {
-          error: `eBay revise failed; local prices were left unchanged: ${errorMessage}`,
-          applied: 0,
+          error: `eBay update was not fully confirmed; confirmed variation changes are preserved: ${errorMessage}`,
+          applied: confirmedIds.length,
           ebayRevised: false,
+          variationResults:reviseResult.variationResults,
+          outcomeUncertain:reviseResult.outcomeUncertain,
+          retryEligible:reviseResult.retryEligible,
         },
         { status: 502 }
       );
@@ -279,9 +284,7 @@ export async function POST(request: Request) {
       await tx.product.update({
         where: { id: product.id },
         data: {
-          price: primaryHistory!.newSellPrice,
-          priceCheckError: null,
-          priceCheckFailureCode: null,
+          ...(mayClearPriceError?{priceCheckError:null,priceCheckFailureCode:null}:{}),
         },
       });
 
@@ -299,6 +302,7 @@ export async function POST(request: Request) {
         where: {
           productId: product.id,
           id: { notIn: historyIds },
+          variantId:{in:variantsToUpdate.map(v=>v.id)},createdAt:{lte:target.createdAt},
           appliedAt: null,
           product: { storeId: storeSession.storeId },
         },
@@ -312,7 +316,7 @@ export async function POST(request: Request) {
 
       await tx.product.update({
         where: { id: product.id },
-        data: { priceCheckError: null, priceCheckFailureCode: null },
+        data: mayClearPriceError?{priceCheckError:null,priceCheckFailureCode:null}:{},
       });
     });
 

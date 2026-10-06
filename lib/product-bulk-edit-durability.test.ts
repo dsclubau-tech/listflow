@@ -12,15 +12,14 @@ test("bulk-edit requests queue durable work before any product mutation", () => 
   assert.match(route, /itemPayload/);
 });
 
-test("durable workers checkpoint originals and restore rejected changes", () => {
-  const jobs = readFileSync("lib/ebay-action-jobs.ts", "utf8");
-  assert.match(jobs, /captureBulkProductEditSnapshot/);
-  assert.match(jobs, /restoreBulkProductEditSnapshot\(snapshot, appliedAt\)/);
-  assert.match(jobs, /attempt <= 3/);
-  assert.match(jobs, /status: "SUCCEEDED"/);
-  assert.match(jobs, /status: "FAILED"/);
-  assert.match(jobs, /requestId: input\.requestId/);
-  assert.match(jobs, /error\.code === "P2002"/);
+test("durable workers use immutable per-target inventory operations instead of whole-product rollback", () => {
+ const jobs=readFileSync("lib/ebay-action-jobs.ts","utf8");
+ const writer=readFileSync("lib/ebay-inventory-writer.ts","utf8");
+ assert.match(jobs,/executeBulkInventoryEdit/);
+ assert.doesNotMatch(jobs,/restoreBulkProductEditSnapshot/);
+ assert.match(writer,/preparedPayload:\s*json\(plan\)/);
+ assert.match(jobs,/requestId: input\.requestId/);
+ assert.match(jobs,/error\.code === "P2002"/);
 });
 
 test("durable bulk-edit migration stores one checkpoint per job and product", () => {

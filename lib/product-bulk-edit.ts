@@ -50,6 +50,8 @@ type ApplyBulkProductEditsInput = {
   storeId: string;
   productIds: unknown[];
   operations: unknown;
+  prepareOnly?: boolean;
+  preparationSnapshot?: BulkEditProductSnapshot;
 };
 
 const TITLE_MAX_LENGTH = 80;
@@ -425,6 +427,14 @@ export async function applyBulkProductEdits(input: ApplyBulkProductEditsInput) {
       },
     },
   });
+  if(input.preparationSnapshot){
+    if(!input.prepareOnly)throw new Error("Historical snapshots can only prepare a read-only reconciliation.");
+    const saved=input.preparationSnapshot;
+    const product=products.find(p=>p.id===saved.product.id);
+    if(!product||product.variants.length!==saved.variants.length)throw new Error("Legacy variation structure changed; review is required.");
+    Object.assign(product,{...saved.product,price:new Prisma.Decimal(saved.product.price),updatedAt:new Date(saved.product.updatedAt)});
+    for(const variant of product.variants){const previous=saved.variants.find(v=>v.id===variant.id);if(!previous)throw new Error("Legacy variation identity cannot be verified.");Object.assign(variant,{...previous,sellPrice:new Prisma.Decimal(previous.sellPrice)});}
+  }
   const productById = new Map(products.map((product) => [product.id, product]));
   const skipped: BulkEditSkippedProduct[] = [];
   const updatedProductIds: string[] = [];
@@ -433,6 +443,7 @@ export async function applyBulkProductEdits(input: ApplyBulkProductEditsInput) {
     (operation) => operation.field === "templateId",
   );
   let updatedVariantCount = 0;
+  const preparedUpdates: Array<{ productId: string; productData: Prisma.ProductUpdateInput; variantData: Array<{ id:string; data:Prisma.VariantUpdateInput; sellPrice?:Prisma.VariantUpdateInput["sellPrice"] }> }> = [];
 
   for (const productId of productIds) {
     const product = productById.get(productId);
@@ -591,6 +602,9 @@ export async function applyBulkProductEdits(input: ApplyBulkProductEditsInput) {
         }
       }
 
+      const variantData = product.variants.map(v => ({id:v.id,...buildVariantUpdate(v, operations)})).filter(v => v.changed);
+      preparedUpdates.push({productId:product.id,productData,variantData});
+      if (input.prepareOnly) { updatedProductIds.push(product.id); continue; }
       await prisma.$transaction(async (tx) => {
         let primarySellPrice: Prisma.Decimal | undefined;
 
@@ -623,7 +637,6 @@ export async function applyBulkProductEdits(input: ApplyBulkProductEditsInput) {
             where: { id: product.id },
             data: {
               ...productData,
-              errorMessage: null,
             },
           });
         }
@@ -645,6 +658,7 @@ export async function applyBulkProductEdits(input: ApplyBulkProductEditsInput) {
     updatedVariants: updatedVariantCount,
     operationFields: Array.from(new Set(operations.map((operation) => operation.field))),
     skipped,
+    preparedUpdates,
   };
 }
 

@@ -40,6 +40,7 @@ function matches(where: Where) {
 }
 
 const prisma = {
+  async $transaction<T>(operation:(tx:unknown)=>Promise<T>):Promise<T>{return operation(prisma);},
   amazonPriceObservation: { async findFirst() { return newerObservation ? {id: "newer"} : null; } },
   ebayActionJob: {
     async findFirst({ where }: { where: Where }) {
@@ -63,7 +64,7 @@ const prisma = {
         await hook();
       }
       if (!matches(where)) return { count: 0 };
-      Object.assign(job, data);
+      const {completedProductIds,...rest}=data;Object.assign(job,rest);if(completedProductIds)job.completedProductIds=(completedProductIds as {set:string[]}).set;
       return { count: 1 };
     },
     async update({ data }: { data: Record<string, unknown> }) {

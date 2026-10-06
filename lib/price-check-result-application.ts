@@ -61,14 +61,14 @@ export async function runObservedPriceWrite<T extends { success: boolean; errorM
 }, write: () => Promise<T>): Promise<T> {
   await input.assertOwnership();
   await assertAmazonObservationCurrent(input);
+  const jobId = `price-observation:${input.observationKey}`;
+  const requestKey = `${jobId}:${input.productId}`;
   const uncertain = await prisma.listingOperation.findFirst({ where: {
     productId: input.productId, storeId: input.storeId,
     stage: { in: ["PRICE_SYNC", "RECONCILIATION"] },
-    requestKey: { startsWith: "price-observation:" },
+    requestKey: { startsWith: "price-observation:", not:requestKey },
   } });
   if (uncertain) throw new Error("A previous eBay price update has an uncertain outcome; reconcile before retry.");
-  const jobId = `price-observation:${input.observationKey}`;
-  const requestKey = `${jobId}:${input.productId}`;
   await recordListingOperation({ jobId, productId: input.productId, storeId: input.storeId,
     stage: "PRICE_SYNC", preparedPayload: { observedAt: input.observedAt.toISOString() } });
   try {

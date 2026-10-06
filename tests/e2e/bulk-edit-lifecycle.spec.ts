@@ -77,9 +77,13 @@ const makeJob = (overrides: Partial<BulkEditJob> = {}): BulkEditJob => ({
   id: "bulk-job-1", storeId: "store-a", type: "BULK_EDIT_REVISE", status: "QUEUED", total: 37,
   processed: 0, succeeded: 0, failed: 0, errors: [], completedAt: null, updatedAt: "2026-10-01T01:00:00Z", ...overrides,
 });
+const unexpectedByPage=new WeakMap<Page,string[]>();
+test.afterEach(async({page})=>{expect(unexpectedByPage.get(page)??[]).toEqual([]);});
 type Submission = { productIds: string[]; requestId: string; operations: unknown[] };
 async function start(page: Page, restored?: BulkEditJob, options: { holdRestore?: boolean; missingReference?: boolean } = {}) {
-  page.on("pageerror", error => console.error("Browser error:", error.message));
+  const unexpected:string[]=[];unexpectedByPage.set(page,unexpected);
+  page.on("pageerror",error=>unexpected.push("Runtime error: "+error.message));
+  await page.route("**/*",async route=>{unexpected.push("Unexpected external request: "+route.request().url());await route.abort();});
   await page.clock.install({ time: new Date("2026-10-01T01:00:00Z") });
   await page.clock.pauseAt(new Date("2026-10-01T01:00:01Z"));
   const jobs = new Map<string, BulkEditJob>();
@@ -119,7 +123,7 @@ async function start(page: Page, restored?: BulkEditJob, options: { holdRestore?
       const snapshot = jobs.get(id);
       if (controls.holdRestore && id === restored?.id) await new Promise<void>(resolve => { heldRestorations.push(resolve); });
       await route.fulfill({ status: snapshot ? 200 : 404, json: snapshot ? { job: snapshot } : { error: "Job not found" } }).catch(() => {});
-    } else await route.fulfill({ status: 404, json: {} });
+    } else {unexpected.push("Unexpected request: "+route.request().url());await route.abort();}
   });
   await page.goto("http://localhost/");
   if (restored) await page.evaluate(value => localStorage.setItem(`listflow:bulk-edit-job:${value.storeId}`, value.id), restored);
@@ -305,7 +309,7 @@ test("failed retry remains usable and an accepted retry gets a fresh five-second
   const backend = await start(page);
   await submit(page);
   await expect(page.getByRole("button", { name: "Bulk edit progress", exact: true })).toBeVisible();
-  await finish(page, backend.jobs);
+  await finish(page, backend.jobs, {errors:[{productId:"failed-product",title:"Temporary error",error:"eBay temporarily unavailable",retryEligible:true}]});
   await page.getByRole("button", { name: "Bulk edit results", exact: true }).click();
   backend.controls.retryError = "Worker unavailable; try again later";
   await page.getByRole("button", { name: "Retry 1 failed" }).click();
@@ -415,3 +419,30 @@ for (const width of [320, 390, 1600]) {
     await expect(page.locator("[data-bulk-edit-progress-card]")).toHaveCount(0);
   });
 }
+for(const width of [1440,390]){
+ test("variation results distinguish partial updates, verification and ended listings at "+width,async({page})=>{
+  const errors:string[]=[];page.on("pageerror",e=>errors.push(e.message));await page.setViewportSize({width,height:900});
+  const job=makeJob({status:"COMPLETED",total:411,processed:411,succeeded:405,failed:6,completedAt:"2026-10-01T01:02:00Z",errors:[
+   {productId:"baboni",title:"Baboni",error:"2 of 3 variations updated; Medium could not be updated.",outcomeUncertain:true,retryEligible:true,
+    variationResults:[{state:"CONFIRMED",target:{sku:"B09682CXNR"}},{state:"CONFIRMED",target:{sku:"B0CNCRBRM1"}},{state:"UNCERTAIN",target:{sku:"B0CNCP33BQ"},error:"Readback unavailable"}]},
+   {productId:"ended",title:"Ended listing",error:"This eBay listing has ended.",retryEligible:false},
+   ...Array.from({length:4},(_,i)=>({productId:"retry"+i,title:"Retry "+i,error:"Temporary failure",retryEligible:true}))
+  ]});
+  const backend=await start(page,job);
+  await expect(page.getByRole("button",{name:"Bulk edit results",exact:true})).toBeVisible();
+  await page.getByRole("button",{name:"Bulk edit results",exact:true}).click();
+  await expect(page.getByText("411/411 processed (405 succeeded, 5 failed, 1 need verification)")).toBeVisible();
+  await expect(page.getByText("Update result needs verification.",{exact:true})).toBeVisible();
+  await page.getByText("Variation details",{exact:true}).click();
+  await expect(page.getByText("B09682CXNR: confirmed")).toBeVisible();
+  await expect(page.getByText("This eBay listing has ended.",{exact:true})).toBeVisible();
+  await expect(page.getByRole("button",{name:"Verify pending updates"})).toBeEnabled();
+  await page.getByRole("button",{name:"Verify pending updates"}).dblclick();
+  expect(backend.controls.retries).toBe(1);expect(errors).toEqual([]);
+ });
+}
+test("ended listing alone has no retry control",async({page})=>{
+ const job=makeJob({status:"COMPLETED",processed:37,succeeded:36,failed:1,completedAt:"2026-10-01T01:02:00Z",errors:[{productId:"ended",title:"Ended",error:"This eBay listing has ended.",retryEligible:false}]});
+ const backend=await start(page,job);await page.getByRole("button",{name:"Bulk edit results",exact:true}).click();
+ await expect(page.getByRole("button",{name:/Retry .* failed|Verify pending/})).toHaveCount(0);expect(backend.controls.retries).toBe(0);
+});

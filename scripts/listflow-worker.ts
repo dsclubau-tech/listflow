@@ -316,7 +316,7 @@ const sendHeartbeat = createSingleFlightTask(async () => {
         startedAt,
         version: process.env.npm_package_version ?? null,
         revision: workerRevision,
-        capabilities: ["durable-bulk-edit-v1", "price-check-items-v2"],
+        capabilities: ["durable-bulk-edit-v1", "variation-inventory-v1", "price-check-items-v2"],
       })
     )
   );

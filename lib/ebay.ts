@@ -1,3 +1,4 @@
+import { parseInventoryResponse, type InventoryResponse } from "./ebay-inventory";
 /**
  * eBay API configuration — single source of truth for all eBay endpoints.
  * Import from `@/lib/ebay` in any API route that needs to call eBay.
@@ -1279,7 +1280,7 @@ export async function callEbayEndItem(
 export async function callEbayReviseItem(
   xmlBody: string,
   storeNumber: 1 | 2 | 3
-): Promise<{ success: boolean; errorMessage?: string }> {
+): Promise<InventoryResponse> {
   const creds = getStoreCredentials(storeNumber);
 
   let accessToken: string;
@@ -1320,37 +1321,13 @@ export async function callEbayReviseItem(
       httpStatus: response.status,
     });
 
-    const parser = new XMLParser({
-      ignoreAttributes: false,
-      removeNSPrefix: true,
-    });
-    const parsed = parser.parse(xmlText);
-
-    const reviseItemResponse = parsed.ReviseItemResponse;
-    if (!reviseItemResponse) {
-      return { success: false, errorMessage: "Invalid response from eBay API" };
-    }
-
-    const ack = reviseItemResponse.Ack;
-
-    if (ack === "Success" || ack === "Warning") {
-      return { success: true };
-    }
-
-    const errorMessage = formatEbayApiErrors(
-      reviseItemResponse.Errors,
-      reviseItemResponse.Message,
-    );
-    await recordStoreEbayBackoff(storeId, "TRADING", errorMessage);
-
-    return {
-      success: false,
-      errorMessage,
-    };
+    const result = parseInventoryResponse(xmlText.replaceAll("ReviseItemResponse", "ReviseInventoryStatusResponse"));
+    if (!result.success) await recordStoreEbayBackoff(storeId, "TRADING", result.errorMessage);
+    return result;
   } catch (err) {
     await recordStoreEbayBackoff(await getStoreIdForStoreNumber(storeNumber), "TRADING", err);
     const message = err instanceof Error ? err.message : "Unknown error";
-    return { success: false, errorMessage: message };
+    return { success: false, errorMessage: message, outcomeUncertain:true };
   }
 }
 
@@ -1361,7 +1338,7 @@ export async function callEbayReviseItem(
 export async function callEbayReviseInventoryStatus(
   xmlBody: string,
   storeNumber: 1 | 2 | 3
-): Promise<{ success: boolean; errorMessage?: string; outcomeUncertain?: boolean }> {
+): Promise<InventoryResponse> {
   const creds = getStoreCredentials(storeNumber);
 
   let accessToken: string;
@@ -1407,33 +1384,9 @@ export async function callEbayReviseInventoryStatus(
       }
     );
 
-    const parser = new XMLParser({
-      ignoreAttributes: false,
-      removeNSPrefix: true,
-    });
-    const parsed = parser.parse(xmlText);
-
-    const reviseInventoryStatusResponse = parsed.ReviseInventoryStatusResponse;
-    if (!reviseInventoryStatusResponse) {
-      return { success: false, errorMessage: "Invalid response from eBay API", outcomeUncertain: true };
-    }
-
-    const ack = reviseInventoryStatusResponse.Ack;
-
-    if (ack === "Success" || ack === "Warning") {
-      return { success: true };
-    }
-
-    const errorMessage = formatEbayApiErrors(
-      reviseInventoryStatusResponse.Errors,
-      reviseInventoryStatusResponse.Message,
-    );
-    await recordStoreEbayBackoff(storeId, "TRADING", errorMessage);
-
-    return {
-      success: false,
-      errorMessage,
-    };
+    const result = parseInventoryResponse(xmlText);
+    if (!result.success) await recordStoreEbayBackoff(storeId, "TRADING", result.errorMessage);
+    return result;
   } catch (err) {
     await recordStoreEbayBackoff(await getStoreIdForStoreNumber(storeNumber), "TRADING", err);
     const message = err instanceof Error ? err.message : "Unknown error";

@@ -43,6 +43,7 @@ type ReviseItemOptions = {
 };
 
 export type ReviseInventoryStatusInput = {
+  sku?: string;
   startPrice?: string | number;
   quantity?: number;
 };
@@ -454,6 +455,8 @@ export function buildGetSellerListXML(page: number): string {
     "ItemSpecifics",
     "SKU",
     "SellingStatus",
+    "InventoryTrackingMethod",
+    "Currency",
     "Variations",
     "ListingType",
     "ListingDetails",
@@ -534,6 +537,12 @@ export function buildGetItemXML(itemId: string): string {
     "ItemSpecifics",
     "SKU",
     "SellingStatus",
+    "InventoryTrackingMethod",
+    "Currency",
+    "Location",
+    "PostalCode",
+    "Country",
+    "DispatchTimeMax",
     "Variations",
     "ListingType",
     "ListingDetails",
@@ -683,6 +692,7 @@ function buildInventoryStatusXml(input: ReviseInventoryStatusItemInput): string 
 
   return `  <InventoryStatus>
     <ItemID>${escapeXml(ebayItemId)}</ItemID>
+${input.sku !== undefined ? `    <SKU>${escapeXml(input.sku)}</SKU>` : ""}
 ${startPrice ? `    <StartPrice>${startPrice}</StartPrice>` : ""}
 ${quantity !== null ? `    <Quantity>${quantity}</Quantity>` : ""}
   </InventoryStatus>`;

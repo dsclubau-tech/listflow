@@ -1,4 +1,5 @@
 "use client";
+import { inventoryJobCounts } from "@/lib/ebay-inventory-job-results";
 
 import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import ActionProgressBar from "@/components/ActionProgressBar";
@@ -997,7 +998,7 @@ export default function BulkEditModal({
                     : "Applying bulk edits"
                 }
                 percent={progressPercent}
-                detail={`${job.processed}/${job.total} processed (${job.succeeded} succeeded, ${job.failed} failed)`}
+                detail={`${job.processed}/${job.total} processed (${job.succeeded} succeeded, ${inventoryJobCounts(job).failed} failed${inventoryJobCounts(job).verification ? ", "+inventoryJobCounts(job).verification+" need verification" : ""})` }
                 tone="green"
               />
               {!terminalJob && job.queuePosition && job.queuePosition > 1 && (
@@ -1021,23 +1022,28 @@ export default function BulkEditModal({
               {job.errors.length > 0 && (
                 <div className="mt-3 max-h-28 overflow-y-auto rounded border border-red-200 bg-white p-2">
                   {job.errors.map((error) => (
-                    <div key={`${error.productId}-${error.error}`} className="text-xs text-red-700">
+                    <div key={`${error.productId}-${error.error}`} className={error.outcomeUncertain ? "text-xs text-amber-800" : "text-xs text-red-700"}>
                       <span className="font-semibold">{error.title || error.productId}:</span>{" "}
-                      {error.error}
+                      <span>{error.outcomeUncertain ? "Update result needs verification." : error.error}</span>
+                      {error.variationResults?.length ? <details className="my-1"><summary className="cursor-pointer">Variation details</summary>
+                        <ul className="mt-1 space-y-1">{error.variationResults.map((result,index)=><li key={result.target.sku??index}>
+                          {result.target.sku??"Listing"}: {result.state.toLowerCase()}{result.error ? " — "+result.error : ""}
+                        </li>)}</ul>
+                      </details> : null}
                     </div>
                   ))}
                 </div>
               )}
               {job.errorMessage && <p className="mt-2 text-sm text-red-700">{job.errorMessage}</p>}
               {retryError && <p className="mt-2 text-sm text-red-700" role="alert">{retryError}</p>}
-              {terminalJob && job.status !== "CANCELLED" && job.failed > 0 && (
+              {terminalJob && job.status !== "CANCELLED" && inventoryJobCounts(job).retryable > 0 && (
                 <button
                   type="button"
                   onClick={() => void retryFailedItems()}
                   disabled={submitting}
                   className="mt-3 rounded-md border border-red-300 bg-white px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-50 disabled:opacity-50"
                 >
-                  {submitting ? "Queuing retry..." : `Retry ${job.failed} failed`}
+                  {submitting ? "Queuing retry..." : inventoryJobCounts(job).verification ? "Verify pending updates" : `Retry ${inventoryJobCounts(job).retryable} failed`}
                 </button>
               )}
             </div>

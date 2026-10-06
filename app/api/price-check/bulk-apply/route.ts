@@ -1,3 +1,4 @@
+import { confirmInventoryPriceHistories } from "@/lib/price-checker";
 import { acquirePriceCheckResultLease, assertAmazonObservationCurrent, runObservedPriceWrite } from "@/lib/price-check-result-application";
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
@@ -15,6 +16,9 @@ interface ProductFailure {
   productId: string;
   title: string;
   error: string;
+  variationResults?:Awaited<ReturnType<typeof reviseProductPrice>>["variationResults"];
+  outcomeUncertain?:boolean;
+  retryEligible?:boolean;
 }
 
 function decimalToNumber(value: Prisma.Decimal | number | null | undefined) {
@@ -183,7 +187,8 @@ export async function POST(request: Request) {
       }
       await assertAmazonObservationCurrent({ storeId: product.storeId, productId: product.id,
         observedAt: new Date(newestCreatedAtMs) });
-      const reviewedAt = new Date();
+      const mayClearPriceError=(!product.priceCheckError&&!product.priceCheckFailureCode)||historyItems.some(h=>Boolean(h.errorMessage)&&(product.priceCheckError===h.errorMessage||product.priceCheckError==="Automatic price increase could not be applied to eBay: "+h.errorMessage));
+    const reviewedAt = new Date();
       const historyIds = historyItems.map((item) => item.id);
 
       // Revise eBay listing
@@ -199,7 +204,9 @@ export async function POST(request: Request) {
             ...product,
             price: primaryHistory!.newSellPrice,
           },
-          nextPrimarySellPrice
+          nextPrimarySellPrice,
+          {prices:variantsToUpdate.map(v=>({variantId:v.id,price:Number(historyByVariantId.get(v.id)!.newSellPrice),buyPrice:Number(historyByVariantId.get(v.id)!.newPrice)})),
+           requestKey:"inventory:review:"+product.id+":"+new Date(newestCreatedAtMs).toISOString(),assertCurrent:resultLease!.assertOwnership},
         ));
       } catch (error) {
         reviseResult = {
@@ -209,12 +216,13 @@ export async function POST(request: Request) {
       }
 
       if (!reviseResult.success) {
+        await confirmInventoryPriceHistories(reviseResult,product.id,historyItems,reviewedAt);
         const errorMessage =
           reviseResult.errorMessage || "Failed to revise eBay listing.";
 
         await prisma.$transaction(async (tx) => {
           await tx.priceHistory.updateMany({
-            where: { id: { in: historyIds } },
+            where: { id: { in: historyIds }, appliedAt:null },
             data: {
               ebayRevised: false,
               errorMessage,
@@ -222,16 +230,13 @@ export async function POST(request: Request) {
             },
           });
 
-          await tx.product.update({
-            where: { id: product.id },
-            data: { priceCheckError: errorMessage },
-          });
+          if(mayClearPriceError)await tx.product.update({where:{id:product.id},data:{priceCheckError:errorMessage}});
         });
 
         failures.push({
           productId: product.id,
           title: product.title,
-          error: errorMessage,
+          error: errorMessage,variationResults:reviseResult.variationResults,outcomeUncertain:reviseResult.outcomeUncertain,retryEligible:reviseResult.retryEligible,
         });
         failed += 1;
         continue;
@@ -252,9 +257,7 @@ export async function POST(request: Request) {
         await tx.product.update({
           where: { id: product.id },
           data: {
-            price: primaryHistory!.newSellPrice,
-            priceCheckError: null,
-            priceCheckFailureCode: null,
+            ...(mayClearPriceError?{priceCheckError:null,priceCheckFailureCode:null}:{}),
           },
         });
 
@@ -270,7 +273,7 @@ export async function POST(request: Request) {
 
         if (obsoleteHistoryIds.length > 0) {
           await tx.priceHistory.updateMany({
-            where: { id: { in: obsoleteHistoryIds }, appliedAt: null },
+            where: { id: { in: obsoleteHistoryIds }, variantId:{in:variantsToUpdate.map(v=>v.id)}, appliedAt: null },
             data: {
               appliedAt: reviewedAt,
               ebayRevised: false,
@@ -282,7 +285,7 @@ export async function POST(request: Request) {
 
         await tx.product.update({
           where: { id: product.id },
-          data: { priceCheckError: null, priceCheckFailureCode: null },
+          data: mayClearPriceError?{priceCheckError:null,priceCheckFailureCode:null}:{},
         });
       });
 

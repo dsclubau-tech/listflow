@@ -1,3 +1,4 @@
+import { XMLParser } from "fast-xml-parser";
 import { Prisma } from '@/app/generated/prisma/client';
 import assert from 'node:assert/strict';
 import test from 'node:test';
@@ -19,32 +20,34 @@ import type { POST } from '../app/api/upload/route';
 import type { DELETE } from '../app/api/upload/shipping-confirmation/route';
 
 type Row = Record<string, unknown>;
-type Query = {where?: Row;orderBy?: Row | Row[];select?: Row;take?: number};
+type Query = {where?: Row;orderBy?: Row | Row[];select?: Row;take?: number;include?:Row};
 const compiled = build({
-  stdin: {resolveDir: process.cwd() + '/lib', loader:'ts', contents: fs.readFileSync('lib/ebay-action-jobs.ts','utf8') + '\nexport {processProduct};\nexport {queueAmazonShippingHold} from "./price-check-auto-hold";\nexport {queuePriceCheckAutoResumeForRun} from "./price-check-auto-resume";\nexport {POST as requestUpload} from "../app/api/upload/route";\nexport {DELETE as cancelShippingConfirmation} from "../app/api/upload/shipping-confirmation/route";\nexport {guardAmazonUploadShipping} from "./amazon-upload-shipping";\nexport {uploadProductToEbay} from "./ebay-upload";'},
+  stdin: {resolveDir: process.cwd() + '/lib', loader:'ts', contents: fs.readFileSync('lib/ebay-action-jobs.ts','utf8') + '\nexport {processProduct,markProgress};\nexport {POST as approveSingle} from "../app/api/price-check/apply/route";\nexport {POST as approveBulk} from "../app/api/price-check/bulk-apply/route";\nexport {POST as retryBulk} from "../app/api/products/bulk-edit/jobs/[id]/retry/route";\nexport {queueAmazonShippingHold} from "./price-check-auto-hold";\nexport {queuePriceCheckAutoResumeForRun} from "./price-check-auto-resume";\nexport {POST as requestUpload} from "../app/api/upload/route";\nexport {DELETE as cancelShippingConfirmation} from "../app/api/upload/shipping-confirmation/route";\nexport {guardAmazonUploadShipping} from "./amazon-upload-shipping";\nexport {uploadProductToEbay} from "./ebay-upload";'},
   bundle:true,platform:'node',format:'cjs',write:false,packages:'external',
   plugins:[{name:'offline-shipping-services',setup(builder){
     builder.onResolve({filter:/^@\/app\/generated\/prisma\/client$/},()=>({path:'client',namespace:'fixture'}));
     const replacements:Record<string,string>={client:'export const Prisma=globalThis.Prisma;',
       'prisma':'export const prisma=globalThis.database;',
       'amazon-scraper':'export const scrapeAmazonPrice=(...args)=>globalThis.scrape(...args);',
-      'cache-tags':'export const invalidateProductCaches=()=>{};export const invalidateJobCaches=()=>{};',
+      'cache-tags':'export const invalidateProductCaches=()=>{};export const invalidateJobCaches=()=>{};export const invalidatePriceCaches=()=>{};',
       'logger':'export const logger={info(){},warn(){},error(){},debug(){}};export const createRequestLogger=()=>logger;',
       '@/auth':'export const auth=async()=>globalThis.authenticate();',
       'next/server':'export class NextResponse extends Response {static json(value,options){return Response.json(value,options);}}',
       'store-session':'export const getCurrentStoreSession=async()=>({storeId:globalThis.sessionStore()});export const getInternalUserId=async()=>"user";',
-      'worker-heartbeat':'export const assertWorkerOnlineForStore=async()=>{};',
+      'worker-heartbeat':'export const assertWorkerOnlineForStore=async()=>{};export const assertWorkerSupportsDurableBulkEdit=async()=>{};',
       'ebay':`export const getStoreNumber=async()=>{globalThis.beforeStoreNumber();return "1";};export const callEbayAddItem=(...args)=>globalThis.add(...args);export const callEbayReviseItem=(...args)=>globalThis.revise(...args);
-        export const callEbayEndItem=async()=>({success:true});export const callEbayReviseInventoryStatus=async()=>({success:true});
+        export const callEbayEndItem=async()=>({success:true});export const callEbayReviseInventoryStatus=(xml)=>globalThis.inventoryWrite(xml);export const callEbayGetItem=async()=>globalThis.inventoryRead();
         export const createEbayGeneralCampaign=async()=>({});export const createEbayPromotedAds=async()=>({});export const deleteEbayPromotedAds=async()=>({});
         export const getEbayGeneralCampaign=async()=>({});export const getEbayPromotedListingSync=async()=>({});export const getEbayPromotedListingsEligibility=async()=>({});export const updateEbayPromotedAdRates=async()=>({});`,
       'policy-defaults':'export const policyIdsMatch=()=>true;export const resolveProductPolicySelection=async()=>({shippingPolicyId:"shipping",paymentPolicyId:"payment",returnPolicyId:"returns"});',
+      'keyword-filter':'export const applyKeywordFilter=async(title,description)=>({title,description,removedKeywords:[]});',
+      'ebay-media':'export const createEbayImageFromUrl=async()=>({url:"https://i.ebayimg.com/images/g/fixture/s-l1600.jpg"});',
       'template-resolver':'export const resolveDescriptionTemplate=async()=>"Fixture description";',
       'ebay-required-specifics':'export const validateRequiredItemSpecifics=async()=>({decisions:[],addedItemSpecifics:{},missingItemSpecifics:[],requiredItemSpecifics:[],itemSpecifics:{Brand:"Acme",_PostalCode:"2217",_Country:"AU",_Location:"Kogarah"}});export const buildMissingItemSpecificsResponse=()=>({missingItemSpecifics:[]});',
       'package-data-sync':`export const canonicalizePackageItemSpecifics=value=>value;export const getStoredPackageDimensions=()=>({weightKg:1,lengthCm:10,widthCm:10,heightCm:10});
         export const compareEbayPackageDimensions=()=>({status:"MATCH",differences:[]});export const fetchEbayPackageItem=async()=>({});export const mergeEbayPackageItemSpecifics=()=>({});`,
       'amazon-direct-scraper':'export const scrapeAmazonPackageItemSpecificsDirect=async()=>({});',
-      'price-check-result-application':'export class SupersededAmazonObservation extends Error{};export const assertAmazonObservationCurrent=async()=>{};',
+      'price-check-result-application':'export class PriceCheckResultDeferred extends Error{};export class SupersededAmazonObservation extends Error{};export const assertAmazonObservationCurrent=async()=>{};export const acquirePriceCheckResultLease=async()=>({assertOwnership:async()=>{},release:async()=>{}});export const runObservedPriceWrite=async(input,write)=>write();',
       'listing-operations':'export const recordListingOperation=async(input)=>globalThis.operations.push(input);',
       'server-only':'',
     };
@@ -59,7 +62,8 @@ const compiled = build({
 function matches(row:Row,where:Row={}) : boolean {
   return Object.entries(where).every(([key,value])=>{
     if(key==='OR')return (value as Row[]).some(part=>matches(row,part));
-    if(key==='storeId_supplierName')return matches(row,value as Row);
+    if(key==='storeId_supplierName'||key==='jobId_productId')return matches(row,value as Row);
+    if(key==='product')return matches(row.product as Row??{},value as Row);
     const actual=row[key];
     if(value && typeof value==='object' && !(value instanceof Date)){
       const condition=value as Row;
@@ -81,23 +85,28 @@ async function fixture(arrivalText:string|null='delivery tomorrow') {
     quantity:1,ebayItemId:null,images:["https://example.test/image.jpg"],itemSpecifics:{Brand:'Acme',_PostalCode:'2217',_Country:'AU',_Location:'Kogarah'},store:{id:'store'},holdOrigin:null,holdSavedQuantity:null,
     variants:[],paymentPolicyId:'payment',shippingPolicyId:'shipping',returnPolicyId:'returns',amazonAvailability:'IN_STOCK',priceCheckError:null,priceCheckFailureCode:null};
   const settings:Row={storeId:'store',supplierName:'Amazon AU',maxShippingDays:25,scrapePostcode:'2217',minProductQuantity:2,autoHoldOnPriceCheckFailure:false};
-  const tables:Record<string,Row[]>={product:[product],supplierSettings:[settings],amazonPriceObservation:[],ebayActionJob:[],variant:[],uploadLog:[],ebayListingAsin:[],priceHistory:[]};
+  const tables:Record<string,Row[]>={product:[product],supplierSettings:[settings],amazonPriceObservation:[],ebayActionJob:[],variant:[],uploadLog:[],ebayListingAsin:[],priceHistory:[],listingOperation:[],bulkEditJobItem:[]};
   let id=0;
+  const applyMockData=(row:Row,data:Row)=>{for(const [key,value] of Object.entries(data)){
+    if(value&&typeof value==="object"&&"set" in value)row[key]=(value as Row).set;
+    else if(value&&typeof value==="object"&&"increment" in value)row[key]=Number(row[key]??0)+Number((value as Row).increment);
+    else row[key]=value;
+  }};
   const model=(name:string)=>{
     const rows=(query:Query={})=>tables[name].filter(row=>matches(row,query.where)).sort((a,b)=>{
       for(const order of [query.orderBy??{}].flat())for(const [key,direction]of Object.entries(order)){
         const left=a[key],right=b[key];const result=left!<right!?-1:left!>right!?1:0;if(result)return direction==='desc'?-result:result;
       }return 0;
     });
-    const project=(row:Row|undefined,query:Query)=>!row?null:query.select?Object.fromEntries(Object.keys(query.select).map(key=>[key,row[key]])):{...row};
+    const project=(row:Row|undefined,query:Query)=>!row?null:query.select?Object.fromEntries(Object.keys(query.select).map(key=>[key,row[key]])) : {...row,...(query.include?.bulkEditItems ? {bulkEditItems:tables.bulkEditJobItem.filter(item=>item.jobId===row.id&&item.status==="FAILED")}:{})};
     return {
       findFirst:async(query:Query)=>project(rows(query)[0],query),
       findUnique:async(query:Query)=>project(rows(query)[0],query),
       findFirstOrThrow:async(query:{where?:Row})=>{const row=rows(query)[0];assert.ok(row);return row;},
       findMany:async(query:Query={})=>rows(query).slice(0,query.take).map(row=>project(row,query)),
       create:async(query:{data:Row})=>{const row={id:`row-${++id}`,status:'QUEUED',errors:[],metadata:{},completedProductIds:[],processed:0,succeeded:0,failed:0,observedAt:new Date(),createdAt:new Date(),updatedAt:new Date(),startedAt:null,completedAt:null,dismissedAt:null,...query.data};tables[name].push(row);return row;},
-      update:async(query:{where:Row;data:Row})=>{const row=rows(query)[0];assert.ok(row);Object.assign(row,query.data);return row;},
-      updateMany:async(query:{where:Row;data:Row})=>{const found=rows(query);found.forEach(row=>Object.assign(row,query.data));return {count:found.length};},
+      update:async(query:{where:Row;data:Row})=>{const row=rows(query)[0];assert.ok(row);applyMockData(row,query.data);return row;},
+      updateMany:async(query:{where:Row;data:Row})=>{const found=rows(query);found.forEach(row=>applyMockData(row,query.data));return {count:found.length};},
       upsert:async(query:{where:Row;create:Row;update:Row})=>{let row=rows(query)[0];if(!row){row={id:`row-${++id}`,...query.create};tables[name].push(row);}else Object.assign(row,query.update);return row;},
     };
   };
@@ -115,6 +124,13 @@ async function fixture(arrivalText:string|null='delivery tomorrow') {
   let shippingHtml:string|null=null;
   let failScrape:Error|null=null;
   let reviseSuccess=true, addSuccess=true;
+  let remoteQuantity:number|null=null;
+  let remoteVariants:Array<{sku:string;price:number;quantity:number}>|null=null;
+  let remoteStatus="Active", partial=false;
+  let afterInventoryWrite=()=>{};
+  let listingXml="";
+  const listingRequests:string[]=[];
+  const inventoryRequests:string[]=[];
   const operations:Row[]=[];
   const observed=()=>{
     const at=new Date(), selected=shippingHtml ? extractAmazonPriceSnapshot(shippingHtml,'B0TEST1234').priceChoices.regular : null;
@@ -128,10 +144,26 @@ async function fixture(arrivalText:string|null='delivery tomorrow') {
   vm.runInNewContext(await compiled,{module:fixtureModule,exports:fixtureModule.exports,require:createRequire(import.meta.url),process,console,Buffer,URL,URLSearchParams,Date,Intl,Response,Request,AbortController,setTimeout,clearTimeout,setInterval,clearInterval,
     fetch:()=>{throw Error('Unexpected network call');},globalThis:{database,operations,Prisma,beforeStoreNumber:()=>beforeStoreNumber(),authenticate:()=>authenticated?{user:{id:"user"}}:null,sessionStore:()=>sessionStore,
       scrape:async()=>{scrapes++;if(failScrape)throw failScrape;return {...observed(),...scrapeOverrides};},
-      add:async()=>{adds++;return addSuccess?{success:true,itemId:'123456789012'}:{success:false,errorMessage:'Synthetic eBay failure'};},revise:async()=>{revisions++;return {success:reviseSuccess,errorMessage:reviseSuccess?undefined:'Synthetic eBay failure'};}}});
+      inventoryRead:()=>'<GetItemResponse><Ack>Success</Ack><Item><ItemID>'+product.ebayItemId+'</ItemID><StartPrice currencyID="AUD">125</StartPrice><Quantity>'+(remoteQuantity??product.quantity??1)+'</Quantity><SellingStatus><ListingStatus>'+remoteStatus+'</ListingStatus><QuantitySold>0</QuantitySold></SellingStatus>'+
+        (remoteVariants?'<Variations>'+remoteVariants.map(v=>'<Variation><SKU>'+v.sku+'</SKU><StartPrice currencyID="AUD">'+v.price+'</StartPrice><Quantity>'+v.quantity+'</Quantity><SellingStatus><QuantitySold>0</QuantitySold></SellingStatus></Variation>').join('')+'</Variations>':'')+listingXml+'</Item></GetItemResponse>',
+      inventoryWrite:async(xml:string)=>{
+        revisions++;inventoryRequests.push(xml);
+        const raw=new XMLParser({parseTagValue:false}).parse(xml).ReviseInventoryStatusRequest.InventoryStatus;
+        const entries=Array.isArray(raw)?raw:[raw];
+        if(reviseSuccess)entries.forEach((entry:Record<string,string>,i:number)=>{
+          if(partial&&i>0)return;
+          const target=remoteVariants?.find(v=>v.sku===entry.SKU);
+          if(target){if(entry.StartPrice!==undefined)target.price=Number(entry.StartPrice);if(entry.Quantity!==undefined)target.quantity=Number(entry.Quantity);}
+          else if(entry.Quantity!==undefined)remoteQuantity=Number(entry.Quantity);
+        });
+        afterInventoryWrite();
+        return reviseSuccess&&!partial?{success:true}:{success:false,errors:[{code:"219",severity:"Error",message:"Synthetic eBay failure",parameters:partial?{SKU:entries[1].SKU}:{},system:false}],errorMessage:"Synthetic eBay failure"};
+      },
+      add:async()=>{adds++;return addSuccess?{success:true,itemId:'123456789012'}:{success:false,errorMessage:'Synthetic eBay failure'};},revise:async(xml:string)=>{revisions++;listingRequests.push(xml);if(reviseSuccess)listingXml=xml.match(/<Item>([\s\S]*)<\/Item>/)?.[1].replace(/<ItemID>[\s\S]*?<\/ItemID>/,'')??'';return {success:reviseSuccess,errorMessage:reviseSuccess?undefined:'Synthetic eBay failure'};}}});
   const api=fixtureModule.exports as {guardAmazonUploadShipping:typeof guardAmazonUploadShipping;uploadProductToEbay:typeof uploadProductToEbay;createOrReuseEbayUploadJob:typeof createOrReuseEbayUploadJob;
-    queueAmazonShippingHold:typeof queueAmazonShippingHold;queuePriceCheckAutoResumeForRun:typeof queuePriceCheckAutoResumeForRun;requestUpload:typeof POST;cancelShippingConfirmation:typeof DELETE;getCurrentEbayActionJobs:(storeId:string)=>Promise<Array<{id:string;errors:Array<{shippingConfirmation?:unknown}>}>>;resolveShippingApproval:typeof resolveShippingApproval;processProduct:(job:Row,id:string)=>Promise<{ok:boolean;failure:Row|null}>};
-  return {api,product,settings,tables,operations,input:{product:product as unknown as Parameters<typeof guardAmazonUploadShipping>[0]['product'],userId:'user'},counts:()=>({scrapes,adds,revisions}),
+    queueAmazonShippingHold:typeof queueAmazonShippingHold;queuePriceCheckAutoResumeForRun:typeof queuePriceCheckAutoResumeForRun;requestUpload:typeof POST;cancelShippingConfirmation:typeof DELETE;getCurrentEbayActionJobs:(storeId:string)=>Promise<Array<{id:string;errors:Array<{shippingConfirmation?:unknown}>}>>;resolveShippingApproval:typeof resolveShippingApproval;processProduct:(job:Row,id:string)=>Promise<{ok:boolean;failure:Row|null}>;markProgress:(job:Row,id:string,succeeded:boolean,failure:Row|null)=>Promise<void>;approveSingle:(request:Request)=>Promise<Response>;approveBulk:(request:Request)=>Promise<Response>;retryBulk:(request:Request,params:{params:Promise<{id:string}>})=>Promise<Response>};
+  return {api,product,settings,tables,operations,inventoryRequests,listingRequests,afterInventoryWrite:(hook:()=>void)=>{afterInventoryWrite=hook;},setInventory:(values:Array<{sku:string;price:number;quantity:number}>)=>{remoteVariants=structuredClone(values);},
+    remoteInventory:()=>remoteVariants,setRemoteStatus:(status:string)=>{remoteStatus=status;},setPartial:()=>{partial=true;},input:{product:product as unknown as Parameters<typeof guardAmazonUploadShipping>[0]['product'],userId:'user'},counts:()=>({scrapes,adds,revisions}),
     beforeMarketplaceWrite:(callback:()=>void)=>{beforeStoreNumber=callback;},setAuthenticated:(value:boolean)=>{authenticated=value;},setStore:(value:string)=>{sessionStore=value;},setScrapeOverrides:(value:Row)=>{scrapeOverrides=value;},
     setHtml:(html:string)=>{shippingHtml=html.replaceAll('B0FPQNVHG8','B0TEST1234').replaceAll('B0FPKSQ4WW','B0TEST1234');},setArrival:(text:string|null)=>{currentArrival=text;},setScrapeError:(error:Error)=>{failScrape=error;},setAddSuccess:(value:boolean)=>{addSuccess=value;},setReviseSuccess:(value:boolean)=>{reviseSuccess=value;},
     commit(){const value=observed();const row={id:'committed',productId:'product',storeId:'store',requestedAsin:'B0TEST1234',selectedAsin:'B0TEST1234',verifiedPostcode:'2217',postcodeVerified:true,isSuccessful:true,priceMode:'REGULAR',stockLeft:4,identityOutcome:'MATCH',buyBoxOutcome:'AVAILABLE',observedAt:value.observedAt,shippingEvidence:value.shippingEvidence};tables.amazonPriceObservation.push(row);Object.assign(product,{holdLastObservationId:row.id,lastPriceCheck:row.observedAt,amazonPriceObservations:tables.amazonPriceObservation,_count:{priceHistory:0}});return row;},
@@ -385,4 +417,165 @@ test('quiet display of valid expired evidence cannot authorize either upload or 
       assert.equal(f.counts().revisions,0);assert.equal(f.product.status,'ON_HOLD');
     }
   }
+});
+
+function variationBulkFixture(f:Awaited<ReturnType<typeof fixture>>,count=3){
+ const skus=["B09682CXNR","B0CNCP33BQ","B0CNCRBRM1"].slice(0,count);
+ const variants=skus.map((sku,i)=>({id:"v"+i,productId:"product",sku,title:"Option "+i,buyPrice:new Prisma.Decimal(40+i*20),sellPrice:new Prisma.Decimal(50+i*20),
+  feesPercent:0,feesFixed:0,profitPercent:10,profitFixed:0,roundCents:null as number|null,quantity:i+1,createdAt:new Date(i)}));
+ f.tables.variant.push(...variants);f.product.variants=variants;Object.assign(f.product,{status:"IMPORTED",ebayItemId:count===1?"304997589004":"305059787257",quantity:1,price:new Prisma.Decimal(50)});
+ f.setInventory(variants.map(v=>({sku:v.sku,price:Number(v.sellPrice),quantity:v.quantity})));
+ const job={id:"bulk",status:"RUNNING",type:"BULK_EDIT_REVISE",storeId:"store",metadata:{fields:["feesPercent"],durable:true}};
+ f.tables.ebayActionJob.push(job);
+ f.tables.bulkEditJobItem.push({id:"item",jobId:"bulk",productId:"product",status:"PENDING",attempts:0,payload:{inventoryV1:{operations:[{field:"feesPercent",value:10}]}}});
+ return {job,variants};
+}
+test("actual bulk worker sends each Baboni price and fee-only edits preserve held quantities and independent errors",async()=>{
+ const f=await fixture();const {job,variants}=variationBulkFixture(f);
+ Object.assign(f.product,{status:"ON_HOLD",quantity:0,priceCheckError:"Independent identity issue",priceCheckFailureCode:"AMAZON_ASIN_REDIRECT",holdReason:"Identity"});
+ for(const v of variants)v.quantity=0;f.setInventory(variants.map(v=>({sku:v.sku,price:Number(v.sellPrice),quantity:0})));
+ const r=await f.api.processProduct(job,"product");assert.equal(r.ok,true,JSON.stringify(r));
+ assert.equal(new Set(f.remoteInventory()!.map(v=>v.price)).size,3);assert.ok(f.remoteInventory()!.every(v=>v.quantity===0));
+ assert.ok(f.inventoryRequests[0].includes("<SKU>B09682CXNR</SKU>"));assert.ok(!f.inventoryRequests[0].includes("<Quantity>"));
+ assert.equal(f.product.status,"ON_HOLD");assert.equal(f.product.priceCheckError,"Independent identity issue");assert.equal(f.product.holdReason,"Identity");
+ assert.equal(f.tables.bulkEditJobItem[0].status,"SUCCEEDED");
+});
+test("actual bulk worker preserves partial confirmations and reconciles without another request",async()=>{
+ const f=await fixture();const {job,variants}=variationBulkFixture(f);f.setPartial();
+ const r=await f.api.processProduct(job,"product");assert.equal(r.ok,false);assert.equal(Number(variants[0].sellPrice),f.remoteInventory()![0].price);assert.equal(Number(variants[1].sellPrice),70);
+ const before=f.inventoryRequests.length;await f.api.processProduct(job,"product");assert.equal(f.inventoryRequests.length,before);assert.equal(Number(variants[1].feesPercent),0);
+});
+test("actual quantity-only bulk worker does not reprice and targets every variation",async()=>{
+ const f=await fixture();const {job}=variationBulkFixture(f);job.metadata.fields=["quantity"];
+ f.tables.bulkEditJobItem[0].payload={inventoryV1:{operations:[{field:"quantity",value:4}]}};
+ assert.equal((await f.api.processProduct(job,"product")).ok,true);assert.ok(!f.inventoryRequests[0].includes("<StartPrice>"));assert.ok(f.remoteInventory()!.every(v=>v.quantity===4));
+ assert.deepEqual(f.remoteInventory()!.map(v=>v.price),[50,70,90]);
+});
+test("actual one-option variation update still supplies SKU and rejects ended eBay listing",async()=>{
+ const f=await fixture();const {job,variants}=variationBulkFixture(f,1);variants[0].sku="B07G5B97VD";
+ f.setInventory([{sku:"B07G5B97VD",price:50,quantity:1}]);
+ assert.equal((await f.api.processProduct(job,"product")).ok,true);assert.ok(f.inventoryRequests[0].includes("<SKU>B07G5B97VD</SKU>"));
+ const ended=await fixture();const fixtureJob=variationBulkFixture(ended).job;ended.setRemoteStatus("Completed");
+ const result=await ended.api.processProduct(fixtureJob,"product");assert.equal(result.ok,false);assert.equal(result.failure?.retryEligible,false);assert.equal(ended.inventoryRequests.length,0);assert.match(String(result.failure?.error),/listing has ended/);
+});
+test("actual hold zeros all live variations; recovery cannot resume several from one Amazon observation",async()=>{
+ const f=await fixture();const {variants}=variationBulkFixture(f);
+ assert.equal((await f.api.processProduct({id:"hold-vars",storeId:"store",type:"HOLD",metadata:{}},"product")).ok,true);
+ assert.equal(f.product.status,"ON_HOLD");assert.ok(f.remoteInventory()!.every(v=>v.quantity===0));
+ Object.assign(f.product,{holdOrigin:"AMAZON_SHIPPING_DELAY",priceCheckError:null,priceCheckFailureCode:null});f.commit();
+ const before=f.inventoryRequests.length;
+ const r=await f.api.processProduct({id:"resume-vars",storeId:"store",type:"RESUME",metadata:{kind:"price-check-auto-resume"}},"product");
+ assert.equal(r.ok,false);assert.equal(f.inventoryRequests.length,before);assert.equal(f.product.holdReason,"These variations need verification before stock can be restored.");
+ assert.equal(variants.length,3);
+});
+
+test("actual retry endpoint preserves 405 successes and skips the ended listing, including duplicate clicks",async()=>{
+ const f=await fixture(),now=new Date();
+ const ids=Array.from({length:411},(_,i)=>"p"+i);
+ const errors=ids.slice(405).map((productId,i)=>({productId,title:"Failure "+i,error:i===5?"This eBay listing has ended.":"Variation SKU required"}));
+ const job={id:"incident",storeId:"store",type:"BULK_EDIT_REVISE",status:"COMPLETED",total:411,processed:411,succeeded:405,failed:6,
+  productIds:ids,completedProductIds:ids,errors,metadata:{durable:true,fields:["feesPercent"]},createdAt:now,updatedAt:now,startedAt:now,completedAt:now,dismissedAt:null,errorMessage:null};
+ f.tables.ebayActionJob.push(job);
+ for(const productId of ids.slice(405))f.tables.bulkEditJobItem.push({id:productId,jobId:"incident",productId,status:"FAILED",payload:{operations:[{field:"feesPercent",value:10}]}});
+ const request=()=>new Request("http://localhost/api/products/bulk-edit/jobs/incident/retry",{method:"POST"});
+ const results=await Promise.all([f.api.retryBulk(request(),{params:Promise.resolve({id:"incident"})}),f.api.retryBulk(request(),{params:Promise.resolve({id:"incident"})})]);
+ assert.deepEqual(results.map(r=>r.status).sort(),[202,409]);
+ assert.equal(job.succeeded,405);assert.equal(job.failed,1);assert.equal(job.processed,406);
+ assert.equal(f.tables.bulkEditJobItem.filter(i=>i.status==="PENDING").length,5);assert.equal(f.tables.bulkEditJobItem.at(-1)!.status,"FAILED");
+ assert.equal(f.inventoryRequests.length,0);
+});
+
+
+test("actual mixed bulk edit preserves the title step when later inventory targets fail",async()=>{
+ const f=await fixture();const {job}=variationBulkFixture(f);job.metadata.fields=["title","feesPercent"];
+ f.tables.bulkEditJobItem[0].payload={inventoryV1:{operations:[{field:"title",mode:"set",value:"Updated Baboni door"},{field:"feesPercent",value:10}]}};
+ f.setPartial();
+ const result=await f.api.processProduct(job,"product");
+ assert.equal(result.ok,false,JSON.stringify(result));assert.equal(f.product.title,"Updated Baboni door");
+ assert.equal(f.listingRequests.length,1);assert.ok(!f.listingRequests[0].includes("<StartPrice>"));assert.ok(!f.listingRequests[0].includes("<Quantity>"));
+ await f.api.processProduct(job,"product");assert.equal(f.listingRequests.length,1);assert.equal(f.inventoryRequests.length,1);
+});
+
+test("actual individual revision addresses each variation independently and preserves independent errors",async()=>{
+ const f=await fixture();const {variants}=variationBulkFixture(f);f.product.images=["https://i.ebayimg.com/images/g/fixture/s-l1600.jpg"];f.product.errorMessage="Unresolved stock issue";
+ const result=await f.api.processProduct({id:"individual",storeId:"store",type:"REVISE_LISTING",metadata:{quantityChanged:false}},"product");
+ assert.equal(result.ok,true,JSON.stringify(result));assert.equal(f.listingRequests.length,1);
+ assert.ok(!f.listingRequests[0].includes("<StartPrice>"));assert.ok(!f.listingRequests[0].includes("<Quantity>"));
+ assert.deepEqual(f.remoteInventory()!.map(v=>v.price),variants.map(v=>Number(v.sellPrice)));
+ assert.equal(f.product.errorMessage,"Unresolved stock issue");
+});
+
+test("legacy applied bulk item reconciles the marketplace before preparing any resend",async()=>{
+ const f=await fixture();const {job,variants}=variationBulkFixture(f);
+ const snapshot={product:{...f.product,updatedAt:new Date().toISOString(),price:String(f.product.price)},variants:variants.map(v=>({...v,sellPrice:String(v.sellPrice)}))};
+ assert.equal((await f.api.processProduct(job,"product")).ok,true);
+ const before=f.inventoryRequests.length;
+ f.tables.listingOperation.length=0;
+ f.tables.bulkEditJobItem[0].status="APPLYING";
+ f.tables.bulkEditJobItem[0].payload={operations:[{field:"feesPercent",value:10}],snapshot};
+ assert.equal((await f.api.processProduct(job,"product")).ok,true);
+ assert.equal(f.inventoryRequests.length,before);
+});
+
+
+test("actual single and bulk approvals update only represented variation histories",async()=>{
+ for(const bulk of [false,true]){
+  const f=await fixture();const {variants}=variationBulkFixture(f);const at=new Date();f.product.lastPriceCheck=at;
+  f.product.priceCheckError="Independent identity warning";
+  f.tables.priceHistory.push({id:"approved",productId:"product",product:{storeId:"store"},variantId:"v1",createdAt:at,appliedAt:null,status:"PENDING",
+   newPrice:new Prisma.Decimal(62),newSellPrice:new Prisma.Decimal(88),oldPrice:new Prisma.Decimal(60),oldSellPrice:new Prisma.Decimal(70)});
+  const request=new Request("http://localhost/api/price-check/"+(bulk?"bulk-apply":"apply"),{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(bulk?{productIds:["product"]}:{priceHistoryId:"approved"})});
+  const response=await (bulk?f.api.approveBulk(request):f.api.approveSingle(request));
+  assert.equal(response.status,200,JSON.stringify(await response.clone().json()));
+  assert.equal(f.remoteInventory()![1].price,88);assert.deepEqual(f.remoteInventory()!.map(v=>v.quantity),[1,2,3]);
+  assert.equal(Number(variants[0].sellPrice),50);assert.equal(Number(variants[2].sellPrice),90);assert.equal(Number(f.product.price),50);
+  assert.equal(f.product.priceCheckError,"Independent identity warning");assert.equal(f.tables.priceHistory[0].status,"APPLIED");
+  assert.equal(f.inventoryRequests[0].match(/<InventoryStatus>/g)?.length,1);assert.ok(f.inventoryRequests[0].includes("<SKU>B0CNCP33BQ</SKU>"));
+ }
+});
+
+
+test("actual worker can clear rounding without changing held quantities",async()=>{
+ const f=await fixture();const {job,variants}=variationBulkFixture(f);for(const v of variants)v.roundCents=99;
+ job.metadata.fields=["roundCents"];f.tables.bulkEditJobItem[0].payload={inventoryV1:{operations:[{field:"roundCents",value:null}]}};
+ assert.equal((await f.api.processProduct(job,"product")).ok,true);assert.ok(variants.every(v=>v.roundCents===null));
+ assert.deepEqual(f.remoteInventory()!.map(v=>v.quantity),[1,2,3]);
+});
+test("context change during eBay confirmation preserves the checkpoint without overwriting a newer local edit",async()=>{
+ const f=await fixture();const {job,variants}=variationBulkFixture(f);f.afterInventoryWrite(()=>{variants[0].feesPercent=22;});
+ const result=await f.api.processProduct(job,"product");assert.equal(result.ok,false);
+ assert.ok((result.failure?.variationResults as Row[])?.some(t=>t.state==="CONFIRMED"&&!t.applied));
+ assert.equal(variants[0].feesPercent,22);assert.equal(Number(variants[0].sellPrice),50);
+ assert.equal(f.tables.listingOperation[0].stage,"PREPARED");
+ assert.equal((await f.api.processProduct(job,"product")).ok,false);assert.equal(f.inventoryRequests.length,1);
+});
+test("actual progress checkpoint counts each retried product once and produces 410 successes / 1 ended failure",async()=>{
+ const f=await fixture();const ids=Array.from({length:411},(_,i)=>"p"+i);
+ const job={id:"progress",storeId:"store",productIds:ids,completedProductIds:[...ids.slice(0,405),ids[410]],processed:406,succeeded:405,failed:1,errors:[{productId:ids[410],title:"Ended",error:"This eBay listing has ended."}]};
+ f.tables.ebayActionJob.push(job);
+ for(const id of ids.slice(405,410))await Promise.all([f.api.markProgress(job,id,true,null),f.api.markProgress(job,id,true,null)]);
+ assert.equal(job.succeeded,410);assert.equal(job.failed,1);assert.equal(job.processed,411);assert.equal(new Set(job.completedProductIds).size,411);
+ assert.equal(f.inventoryRequests.length,0);
+});
+
+
+test("ordinary listing price changed during confirmation is not overwritten",async()=>{
+ const f=await fixture();Object.assign(f.product,{status:"IMPORTED",ebayItemId:"ordinary",images:["https://i.ebayimg.com/images/g/fixture/s-l1600.jpg"]});
+ f.afterInventoryWrite(()=>{f.product.price=140;});
+ const result=await f.api.processProduct({id:"ordinary-edit",storeId:"store",type:"REVISE_LISTING",metadata:{}}, "product");
+ assert.equal(result.ok,false);assert.equal(f.product.price,140);assert.match(String(result.failure?.error),/price changed/);
+ assert.equal(f.tables.listingOperation[0].stage,"PREPARED");
+});
+test("successful approval preserves an independent failure code without a message",async()=>{
+ const f=await fixture();variationBulkFixture(f);const at=new Date();f.product.lastPriceCheck=at;f.product.priceCheckError=null;f.product.priceCheckFailureCode="AMAZON_ASIN_REDIRECT";
+ f.tables.priceHistory.push({id:"approve-code",productId:"product",product:{storeId:"store"},variantId:"v1",createdAt:at,appliedAt:null,status:"PENDING",newPrice:new Prisma.Decimal(60),newSellPrice:new Prisma.Decimal(88)});
+ const response=await f.api.approveSingle(new Request("http://localhost/apply",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({priceHistoryId:"approve-code"})}));
+ assert.equal(response.status,200);assert.equal(f.product.priceCheckFailureCode,"AMAZON_ASIN_REDIRECT");
+});
+
+
+test("workers reject an unsupported prepared bulk payload before any marketplace call",async()=>{
+ const f=await fixture();const {job}=variationBulkFixture(f);f.tables.bulkEditJobItem[0].payload={inventoryVersion:2,inventoryV1:{operations:[{field:"feesPercent",value:10}]}};
+ const result=await f.api.processProduct(job,"product");assert.equal(result.ok,false);assert.match(String(result.failure?.error),/Unsupported/);
+ assert.equal(f.inventoryRequests.length,0);assert.equal(f.listingRequests.length,0);
 });

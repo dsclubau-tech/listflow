@@ -1,3 +1,6 @@
+import { executeBulkInventoryEdit } from "./ebay-bulk-inventory";
+import { readEbayInventory, writeEbayInventory } from "./ebay-inventory-writer";
+import { inventorySummary, type InventoryPlan, type InventoryResult } from "./ebay-inventory";
 import { assertAmazonObservationCurrent, SupersededAmazonObservation } from "@/lib/price-check-result-application";
 import "server-only";
 
@@ -13,10 +16,7 @@ import {
 import { Prisma } from "@/app/generated/prisma/client";
 import {
   buildEndItemXML,
-  buildReviseInventoryStatusXML,
-  type ReviseInventoryStatusItemInput,
   buildReviseItemXML,
-  buildReviseQuantityXML,
 } from "@/lib/ebay-xml";
 import { getEbayCustomLabel } from "@/lib/sku";
 import {
@@ -25,7 +25,6 @@ import {
 } from "@/lib/product-images";
 import {
   callEbayEndItem,
-  callEbayReviseInventoryStatus,
   callEbayReviseItem,
   createEbayGeneralCampaign,
   createEbayPromotedAds,
@@ -51,24 +50,16 @@ import { logger } from "@/lib/logger";
 import {
   chunkInventoryReviseItems,
   getBulkEditQuantityStatus,
-  getReviseListingQuantityOptions,
   isReviseListingQuantityChanged,
-  shouldRetryInventoryBatchIndividually,
 } from "@/lib/ebay-action-job-helpers";
 import { getEbayActionQueuePositions } from "@/lib/ebay-action-queue";
 import {
   finishEbayActionCancellation,
   isEbayActionCancellationRequested,
 } from "@/lib/ebay-action-cancellation";
-import { policyIdsMatch, resolveProductPolicySelection } from "@/lib/policy-defaults";
+import { resolveProductPolicySelection } from "@/lib/policy-defaults";
 import { prisma } from "@/lib/prisma";
 import { invalidateJobCaches, invalidateProductCaches } from "@/lib/cache-tags";
-import {
-  applyBulkProductEdits,
-  captureBulkProductEditSnapshot,
-  restoreBulkProductEditSnapshot,
-  type BulkEditProductSnapshot,
-} from "@/lib/product-bulk-edit";
 import { resolveDescriptionTemplate } from "@/lib/template-resolver";
 import { deleteProductFromListflow } from "@/lib/product-removal";
 import { uploadProductToEbay } from "@/lib/ebay-upload";
@@ -112,6 +103,9 @@ const ACTIVE_ACTION_JOB_STATUSES: EbayActionJobStatus[] = [
 ];
 
 type ProductFailure = {
+  variationResults?: InventoryResult[];
+  outcomeUncertain?: boolean;
+  retryEligible?: boolean;
   shippingConfirmation?: UploadShippingConfirmation;
   productId: string;
   title: string;
@@ -168,24 +162,6 @@ type BulkEditRevisionProduct = {
   variants: Array<{ sellPrice: Prisma.Decimal }>;
 };
 
-type InventoryReviseBatchItem = {
-  product: BulkEditRevisionProduct & { ebayItemId: string };
-  input: ReviseInventoryStatusItemInput;
-  overrideStartPrice?: number;
-  quantityChanged: boolean;
-};
-
-const BULK_EDIT_PRICE_FIELDS = new Set([
-  "feesPercent",
-  "feesFixed",
-  "profitFixed",
-  "profitPercent",
-  "roundCents",
-]);
-const BULK_EDIT_INVENTORY_FIELDS = new Set([
-  ...BULK_EDIT_PRICE_FIELDS,
-  "quantity",
-]);
 
 function normalizeProductIds(productIds: unknown[]) {
   if (!Array.isArray(productIds)) {
@@ -214,6 +190,9 @@ function normalizeErrors(errors: Prisma.JsonValue): ProductFailure[] {
             productId: String(record.productId ?? ""),
             title: String(record.title ?? ""),
             error: String(record.error ?? ""),
+            ...(Array.isArray(record.variationResults)?{variationResults:record.variationResults as InventoryResult[]}:{}),
+            ...(typeof record.outcomeUncertain==="boolean"?{outcomeUncertain:record.outcomeUncertain}:{}),
+            ...(typeof record.retryEligible==="boolean"?{retryEligible:record.retryEligible}:{}),
             ...(readShippingConfirmation(record.shippingConfirmation) ? { shippingConfirmation: { ...readShippingConfirmation(record.shippingConfirmation)!, message: String(record.error ?? "") } } : {}),
           };
         })
@@ -239,252 +218,6 @@ function getBulkEditFields(job: EbayActionJobRecord) {
   );
 }
 
-function isDurableBulkEditJob(job: EbayActionJobRecord) {
-  return Boolean(
-    job.type === EbayActionJobType.BULK_EDIT_REVISE &&
-      job.metadata &&
-      typeof job.metadata === "object" &&
-      !Array.isArray(job.metadata) &&
-      (job.metadata as Record<string, unknown>).durable === true,
-  );
-}
-
-function readDurableBulkEditPayload(payload: Prisma.JsonValue) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-    throw new Error("Bulk-edit item payload is invalid.");
-  }
-  const record = payload as Record<string, unknown>;
-  if (!Array.isArray(record.operations)) {
-    throw new Error("Bulk-edit item operations are missing.");
-  }
-  return {
-    operations: record.operations,
-    snapshot: record.snapshot as BulkEditProductSnapshot | undefined,
-  };
-}
-
-function isTransientBulkEditFailure(message: string) {
-  return /timeout|timed out|429|rate limit|temporar|network|fetch failed|ECONN|socket|database server/i.test(
-    message,
-  );
-}
-
-async function processDurableBulkEditProduct(
-  job: EbayActionJobRecord,
-  productId: string,
-) {
-  const item = await prisma.bulkEditJobItem.findUnique({
-    where: { jobId_productId: { jobId: job.id, productId } },
-  });
-  if (!item) {
-    return {
-      ok: false,
-      failure: { productId, title: "(unknown)", error: "Bulk-edit checkpoint is missing." },
-    };
-  }
-
-  let payload = readDurableBulkEditPayload(item.payload);
-  if (item.status === "APPLYING" && payload.snapshot) {
-    await restoreBulkProductEditSnapshot(payload.snapshot, item.appliedAt);
-    await prisma.bulkEditJobItem.update({
-      where: { id: item.id },
-      data: { status: "PENDING", appliedAt: null },
-    });
-  }
-
-  for (let attempt = item.attempts + 1; attempt <= 3; attempt += 1) {
-    const snapshot = await captureBulkProductEditSnapshot(job.storeId, productId);
-    payload = { operations: payload.operations, snapshot };
-    await prisma.bulkEditJobItem.update({
-      where: { id: item.id },
-      data: {
-        status: "APPLYING",
-        attempts: attempt,
-        error: null,
-        originalProductUpdatedAt: new Date(snapshot.product.updatedAt),
-        appliedAt: null,
-        payload: payload as unknown as Prisma.InputJsonValue,
-      },
-    });
-
-    let appliedAt: Date | null = null;
-    let localApplied = false;
-    try {
-      const edit = await applyBulkProductEdits({
-        storeId: job.storeId,
-        productIds: [productId],
-        operations: payload.operations,
-      });
-      if (edit.productIds.length !== 1) {
-        throw new Error(edit.skipped[0]?.reason ?? "Product could not be prepared for bulk edit.");
-      }
-      localApplied = true;
-      const applied = await prisma.product.findUniqueOrThrow({
-        where: { id: productId },
-        select: { updatedAt: true },
-      });
-      appliedAt = applied.updatedAt;
-      await prisma.bulkEditJobItem.update({
-        where: { id: item.id },
-        data: { appliedAt },
-      });
-
-      const result = await processProduct(job, productId);
-      if (result.ok) {
-        await prisma.bulkEditJobItem.update({
-          where: { id: item.id },
-          data: { status: "SUCCEEDED", completedAt: new Date(), error: null },
-        });
-        return result;
-      }
-
-      const message = result.failure?.error ?? "Bulk edit failed.";
-      await restoreBulkProductEditSnapshot(snapshot, appliedAt);
-      if (attempt < 3 && isTransientBulkEditFailure(message)) {
-        await new Promise((resolve) => setTimeout(resolve, attempt * 500));
-        continue;
-      }
-      await prisma.bulkEditJobItem.update({
-        where: { id: item.id },
-        data: { status: "FAILED", completedAt: new Date(), error: message, appliedAt: null },
-      });
-      return result;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Bulk edit failed.";
-      if (localApplied) {
-        try {
-          await restoreBulkProductEditSnapshot(snapshot, appliedAt);
-        } catch (restoreError) {
-          const restoreMessage = restoreError instanceof Error ? restoreError.message : "Rollback failed.";
-          await prisma.bulkEditJobItem.update({
-            where: { id: item.id },
-            data: { status: "FAILED", completedAt: new Date(), error: restoreMessage },
-          });
-          return {
-            ok: false,
-            failure: { productId, title: snapshot.product.title, error: restoreMessage },
-          };
-        }
-      }
-      if (attempt < 3 && isTransientBulkEditFailure(message)) {
-        await new Promise((resolve) => setTimeout(resolve, attempt * 500));
-        continue;
-      }
-      await prisma.bulkEditJobItem.update({
-        where: { id: item.id },
-        data: { status: "FAILED", completedAt: new Date(), error: message, appliedAt: null },
-      });
-      return {
-        ok: false,
-        failure: { productId, title: snapshot.product.title, error: message },
-      };
-    }
-  }
-
-  await prisma.bulkEditJobItem.updateMany({
-    where: { jobId: job.id, productId },
-    data: {
-      status: "FAILED",
-      error: "Bulk edit exhausted retry attempts.",
-      completedAt: new Date(),
-      appliedAt: null,
-    },
-  });
-  return {
-    ok: false,
-    failure: { productId, title: "(unknown)", error: "Bulk edit exhausted retry attempts." },
-  };
-}
-
-type PreparedDurableBulkEditItem = {
-  itemId: string;
-  productId: string;
-  snapshot: BulkEditProductSnapshot;
-  appliedAt: Date;
-};
-
-async function prepareDurableBulkEditItem(
-  job: EbayActionJobRecord,
-  productId: string,
-): Promise<PreparedDurableBulkEditItem> {
-  const item = await prisma.bulkEditJobItem.findUniqueOrThrow({
-    where: { jobId_productId: { jobId: job.id, productId } },
-  });
-  let payload = readDurableBulkEditPayload(item.payload);
-  if (item.status === "APPLYING" && payload.snapshot) {
-    await restoreBulkProductEditSnapshot(payload.snapshot, item.appliedAt);
-  }
-  const snapshot = await captureBulkProductEditSnapshot(job.storeId, productId);
-  payload = { operations: payload.operations, snapshot };
-  await prisma.bulkEditJobItem.update({
-    where: { id: item.id },
-    data: {
-      status: "APPLYING",
-      attempts: item.attempts + 1,
-      error: null,
-      originalProductUpdatedAt: new Date(snapshot.product.updatedAt),
-      appliedAt: null,
-      payload: payload as unknown as Prisma.InputJsonValue,
-    },
-  });
-  const result = await applyBulkProductEdits({
-    storeId: job.storeId,
-    productIds: [productId],
-    operations: payload.operations,
-  });
-  if (result.productIds.length !== 1) {
-    throw new Error(result.skipped[0]?.reason ?? "Product could not be prepared for bulk edit.");
-  }
-  const product = await prisma.product.findUniqueOrThrow({
-    where: { id: productId },
-    select: { updatedAt: true },
-  });
-  await prisma.bulkEditJobItem.update({
-    where: { id: item.id },
-    data: { appliedAt: product.updatedAt },
-  });
-  return { itemId: item.id, productId, snapshot, appliedAt: product.updatedAt };
-}
-
-async function finishDurableBulkEditItem(
-  prepared: PreparedDurableBulkEditItem,
-  failure: ProductFailure | undefined,
-) {
-  if (failure) {
-    await restoreBulkProductEditSnapshot(prepared.snapshot, prepared.appliedAt);
-  }
-  await prisma.bulkEditJobItem.update({
-    where: { id: prepared.itemId },
-    data: {
-      status: failure ? "FAILED" : "SUCCEEDED",
-      error: failure?.error ?? null,
-      appliedAt: failure ? null : prepared.appliedAt,
-      completedAt: new Date(),
-    },
-  });
-}
-
-function hasAnyField(fields: Set<string>, candidates: Set<string> | string[]) {
-  for (const field of candidates) {
-    if (fields.has(field)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function hasOnlyInventoryFields(fields: Set<string>) {
-  return (
-    fields.size > 0 &&
-    Array.from(fields).every((field) => BULK_EDIT_INVENTORY_FIELDS.has(field))
-  );
-}
-
-function isInventoryOnlyBulkEdit(fields: Set<string>) {
-  return fields.size === 0 || hasOnlyInventoryFields(fields);
-}
-
 function getPrimarySellPrice(product: Pick<BulkEditRevisionProduct, "variants">) {
   const primarySellPrice =
     product.variants.length > 0 ? Number(product.variants[0].sellPrice) : null;
@@ -494,113 +227,6 @@ function getPrimarySellPrice(product: Pick<BulkEditRevisionProduct, "variants">)
     primarySellPrice > 0
     ? primarySellPrice
     : undefined;
-}
-
-function buildInventoryReviseBatchItem(
-  product: BulkEditRevisionProduct & { ebayItemId: string },
-  fields: Set<string>,
-): InventoryReviseBatchItem | null {
-  const priceChanged = fields.size === 0 || hasAnyField(fields, BULK_EDIT_PRICE_FIELDS);
-  const quantityChanged = fields.has("quantity");
-  const overrideStartPrice = getPrimarySellPrice(product);
-  const startPrice = priceChanged ? overrideStartPrice ?? Number(product.price) : undefined;
-  const quantity = quantityChanged ? Math.max(0, product.quantity) : undefined;
-
-  if (startPrice === undefined && quantity === undefined) {
-    return null;
-  }
-
-  return {
-    product,
-    input: {
-      ebayItemId: product.ebayItemId,
-      startPrice,
-      quantity,
-    },
-    overrideStartPrice,
-    quantityChanged,
-  };
-}
-
-type SuccessfulBulkEditRevisionInput = {
-  product: Pick<BulkEditRevisionProduct, "id" | "status" | "quantity">;
-  overrideStartPrice?: number;
-  quantityChanged: boolean;
-};
-
-function getSuccessfulBulkEditRevisionData(input: SuccessfulBulkEditRevisionInput) {
-  const status = getBulkEditQuantityStatus({
-    quantityChanged: input.quantityChanged,
-    quantity: input.product.quantity,
-    currentStatus: input.product.status,
-  });
-
-  return {
-    status,
-    ...(input.quantityChanged
-      ? { holdReason: status === ProductStatus.ON_HOLD ? "Listing quantity was set to 0." : null }
-      : {}),
-    errorMessage: null,
-    priceCheckError: null,
-    priceCheckFailureCode: null,
-    ...(input.overrideStartPrice !== undefined
-      ? { price: input.overrideStartPrice }
-      : {}),
-  };
-}
-
-async function applySuccessfulBulkEditRevisions(
-  inputs: SuccessfulBulkEditRevisionInput[],
-) {
-  const groupedStatusOnlyUpdates = new Map<ProductStatus, string[]>();
-  const priceUpdates: SuccessfulBulkEditRevisionInput[] = [];
-
-  for (const input of inputs) {
-    if (input.overrideStartPrice !== undefined) {
-      priceUpdates.push(input);
-      continue;
-    }
-
-    const status = getBulkEditQuantityStatus({
-      quantityChanged: input.quantityChanged,
-      quantity: input.product.quantity,
-      currentStatus: input.product.status,
-    });
-    const ids = groupedStatusOnlyUpdates.get(status) ?? [];
-    ids.push(input.product.id);
-    groupedStatusOnlyUpdates.set(status, ids);
-  }
-
-  await Promise.all([
-    ...Array.from(groupedStatusOnlyUpdates, ([status, ids]) =>
-      prisma.product.updateMany({
-        where: { id: { in: ids } },
-        data: {
-          status,
-          ...(status === ProductStatus.ON_HOLD
-            ? { holdReason: "Listing quantity was set to 0." }
-            : status === ProductStatus.IMPORTED
-              ? { holdReason: null }
-              : {}),
-          errorMessage: null,
-          priceCheckError: null,
-          priceCheckFailureCode: null,
-        },
-      }),
-    ),
-    ...priceUpdates.map((input) =>
-      prisma.product.update({
-        where: { id: input.product.id },
-        data: getSuccessfulBulkEditRevisionData(input),
-      }),
-    ),
-  ]);
-}
-
-async function applySuccessfulBulkEditRevision(
-  input: SuccessfulBulkEditRevisionInput,
-) {
-  await applySuccessfulBulkEditRevisions([input]);
 }
 
 function actionLabel(type: EbayActionJobType) {
@@ -1206,12 +832,17 @@ async function markProgressBatch(
     return;
   }
 
+  const updatedJob = await prisma.$transaction(async tx => {
+    const fresh=await tx.ebayActionJob.findUnique({where:{id:job.id}});
+    if(!fresh)throw new Error("Job no longer exists.");
+    Object.assign(job,fresh);
   const completed = new Set(job.completedProductIds);
   const errors = normalizeErrors(job.errors);
   let succeededCount = 0;
   let failedCount = 0;
 
   for (const update of updates) {
+    if (completed.has(update.productId)) continue;
     completed.add(update.productId);
 
     if (update.failure) {
@@ -1225,21 +856,44 @@ async function markProgressBatch(
     }
   }
 
-  const updated = await prisma.ebayActionJob.update({
-    where: { id: job.id },
+  const claimed = await tx.ebayActionJob.updateMany({
+    where: { id: job.id,processed:fresh.processed,succeeded:fresh.succeeded,failed:fresh.failed },
     data: {
       completedProductIds: { set: job.productIds.filter((id) => completed.has(id)) },
-      processed: Math.min(job.total, job.processed + updates.length),
+      processed: completed.size,
       succeeded: job.succeeded + succeededCount,
       failed: job.failed + failedCount,
       errors: errors as unknown as Prisma.InputJsonValue,
     },
   });
 
-  Object.assign(job, updated);
+  if(!claimed.count)throw new Error("Job progress changed; confirmed inventory checkpoints are preserved.");
+  return tx.ebayActionJob.findUnique({where:{id:job.id}});
+  });
+  Object.assign(job,updatedJob);
 }
 
-async function processProduct(job: EbayActionJobRecord, productId: string) {
+async function processVariationBulkProduct(job:EbayActionJobRecord,productId:string,worker?:WorkerContext) {
+ try {
+  const result=await executeBulkInventoryEdit({jobId:job.id,productId,storeId:job.storeId,fields:getBulkEditFields(job),assertCurrent:async()=>{
+   await assertEbayActionLeaseOwned(job,worker);
+   if(await isEbayActionCancellationRequested(job.id))throw new Error("Bulk edit cancelled. Confirmed variations are preserved.");
+  }});
+  return {ok:result.success,failure:result.success?null:{productId,title:(await prisma.product.findUnique({where:{id:productId},select:{title:true}}))?.title??"(missing)",
+   error:result.errorMessage??"Update failed.",variationResults:result.variationResults,outcomeUncertain:result.outcomeUncertain,retryEligible:result.retryEligible}};
+ }catch(error){
+  const message=error instanceof Error?error.message:"Bulk edit failed.";
+  const saved=await prisma.listingOperation.findUnique({where:{requestKey:"inventory:bulk:"+job.id+":"+productId}}).catch(()=>null);
+  const plan=saved?.preparedPayload as unknown as InventoryPlan|undefined;
+  const checkpoint=plan?.kind==="ebay-inventory"&&plan.version===1?inventorySummary(plan):undefined;
+  await prisma.bulkEditJobItem.updateMany({where:{jobId:job.id,productId},data:{status:"FAILED",error:message,completedAt:new Date()}});
+  return {ok:false,failure:{productId,title:(await prisma.product.findUnique({where:{id:productId},select:{title:true}}))?.title??"(missing)",error:message,...(checkpoint?{variationResults:checkpoint.variationResults,outcomeUncertain:checkpoint.outcomeUncertain}:{}),retryEligible:!(/ended|SKU|currency|Legacy|Unsupported/i.test(message))}};
+ }
+}
+
+async function processProduct(job: EbayActionJobRecord, productId: string, worker?:WorkerContext) {
+  if(job.type===EbayActionJobType.BULK_EDIT_REVISE&&!getBulkEditFields(job).has("sku")) return processVariationBulkProduct(job,productId,worker);
+  const assertActionCurrent=async()=>{await assertEbayActionLeaseOwned(job,worker);if(worker&&await isEbayActionCancellationRequested(job.id))throw new Error("Listing update cancelled.");};
   const automaticPriceCheckHold =
     job.type === EbayActionJobType.HOLD &&
     isPriceCheckAutoHoldMetadata(job.metadata);
@@ -1348,7 +1002,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
 
       await prisma.product.update({
         where: { id: product.id },
-        data: { itemSpecifics, errorMessage: null },
+        data: { itemSpecifics },
       });
 
       logger.info("ebay-action/jobs", "eBay package data synchronized", {
@@ -1483,10 +1137,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
 
     try {
       const quantityChanged = isReviseListingQuantityChanged(job.metadata);
-      const quantityOptions = getReviseListingQuantityOptions({
-        quantityChanged,
-        quantity: product.quantity,
-      });
+
       const policySelection = await resolveProductPolicySelection(
         product.storeId,
         {
@@ -1516,33 +1167,22 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
             storeNumber,
           }),
       });
-      const result = await callEbayReviseItem(
-        buildReviseItemXML(
-          {
-            ...productWithPolicies,
-            description: finalDescription,
-            images: preparedImages,
-          },
-          overrideStartPrice,
-          {
-            includePictures: true,
-            includeItemSpecifics: true,
-            includeShippingPackage: true,
-            ...quantityOptions,
-          },
-        ),
-        storeNumber,
-      );
+      const snapshot=await readEbayInventory(product.ebayItemId!,storeNumber);
+      const requests=product.variants.length?product.variants.map(v=>({variantId:v.id,price:Number(v.sellPrice),
+        ...(quantityChanged?{quantity:v.quantity}:{})})):[{price:Number(product.price),...(quantityChanged?{quantity:product.quantity}:{})}];
+      const result=await writeEbayInventory({productId,storeId:product.storeId,requestKey:"inventory:listing:"+job.id+":"+productId,snapshot,requests,assertCurrent:assertActionCurrent,
+        listingStep:{state:"PENDING",patch:{images:preparedImages,shippingPolicyId:policySelection.shippingPolicyId,returnPolicyId:policySelection.returnPolicyId,paymentPolicyId:policySelection.paymentPolicyId,policyTemplateId:policySelection.policyTemplateId},
+          xml:buildReviseItemXML({...productWithPolicies,description:finalDescription,images:preparedImages},undefined,{
+            includeStartPrice:false,includeQuantity:false,includePictures:true,includeItemSpecifics:true,includeShippingPackage:true
+          })}
+      });
 
       if (!result.success) {
         const errorMessage = result.errorMessage || "eBay listing update failed";
-        await prisma.product.update({
-          where: { id: product.id },
-          data: { errorMessage },
-        });
+        if(!product.errorMessage)await prisma.product.update({where:{id:product.id},data:{errorMessage}});
         return {
           ok: false,
-          failure: { productId, title: product.title, error: errorMessage },
+          failure: { productId, title: product.title, error: errorMessage, variationResults:result.variationResults,outcomeUncertain:result.outcomeUncertain,retryEligible:result.retryEligible },
         };
       }
 
@@ -1565,7 +1205,6 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
                     : null,
               }
             : {}),
-          errorMessage: null,
           shippingPolicyId: policySelection.shippingPolicyId,
           returnPolicyId: policySelection.returnPolicyId,
           paymentPolicyId: policySelection.paymentPolicyId,
@@ -1586,18 +1225,16 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
     } catch (error) {
       const errorMessage =
         error instanceof Error ? error.message : "eBay listing update failed";
-      await prisma.product.update({
-        where: { id: product.id },
-        data: { errorMessage },
-      });
+      if(!product.errorMessage)await prisma.product.update({where:{id:product.id},data:{errorMessage}});
       return {
         ok: false,
-        failure: { productId, title: product.title, error: errorMessage },
+        failure: { productId, title: product.title, error: errorMessage,retryEligible:!/ended|SKU|currency|context changed/i.test(errorMessage) },
       };
     }
   }
 
   if (job.type === EbayActionJobType.HOLD) {
+    if(product.status===ProductStatus.ON_HOLD&&product.holdSourceJobId===job.id){const completed=await prisma.listingOperation.findUnique({where:{requestKey:"inventory:hold:"+job.id+":"+productId}});if(completed?.stage==="COMPLETED")return {ok:true,failure:null};}
     if (!await automaticObservationIsCurrent()) return { ok: true, failure: null };
 
     const settings = await prisma.supplierSettings.findUnique({
@@ -1661,12 +1298,14 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       });
     }
 
-    const storeNumber = await getStoreNumber(product.storeId);
     if (!await automaticObservationIsCurrent()) return { ok: true, failure: null };
-    const result = await callEbayReviseItem(
-      buildReviseQuantityXML(product.ebayItemId, 0),
-      storeNumber
-    );
+    let result;
+    try { result = await writeEbayInventory({productId,storeId:product.storeId,requestKey:"inventory:hold:"+job.id+":"+productId,
+      requests:[{quantity:0}],allRemote:true,assertCurrent:async()=>{await assertActionCurrent();if(!await automaticObservationIsCurrent())throw new Error("Hold evidence changed.");}
+    }); }catch(error){
+      if(error instanceof Error&&error.message==="Hold evidence changed.")return {ok:true,failure:null};
+      return {ok:false,failure:{productId,title:product.title,error:error instanceof Error?error.message:"Hold failed."}};
+    }
 
     if (!result.success) {
       await recordListingOperation({
@@ -1706,9 +1345,10 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       existing: product.holdOrigin,
     });
 
+    await assertActionCurrent();
     await prisma.$transaction(async (tx) => {
-      await tx.product.update({
-        where: { id: product.id },
+      const changed=await tx.product.updateMany({
+        where: { id: product.id,storeId:job.storeId,holdGeneration:product.holdGeneration,status:product.status,ebayItemId:product.ebayItemId },
         data: {
           status: ProductStatus.ON_HOLD,
           quantity: 0,
@@ -1718,11 +1358,10 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
           holdSavedQuantity: saved.savedQuantity,
           holdSavedVariantQuantities: saved.savedVariants,
           holdSourceJobId: job.id,
-          ...(automaticPriceCheckHold || automaticShippingHold
-            ? {}
-            : { priceCheckError: null, priceCheckFailureCode: null }),
+
         },
       });
+      if(!changed.count)throw new Error("Hold context changed after marketplace confirmation.");
     });
     await recordListingOperation({
       jobId: job.id,
@@ -1738,6 +1377,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
   }
 
   if (job.type === EbayActionJobType.RESUME) {
+    if(product.status===ProductStatus.IMPORTED){const completed=await prisma.listingOperation.findUnique({where:{requestKey:"inventory:resume:"+job.id+":"+productId}});if(completed?.stage==="COMPLETED")return {ok:true,failure:null};}
     if (!await automaticObservationIsCurrent()) return { ok: true, failure: null };
     if (automaticPriceCheckResume) {
       const settings = await prisma.supplierSettings.findUnique({
@@ -1766,15 +1406,19 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       };
     }
 
-    const storeNumber = await getStoreNumber(product.storeId);
     // Manual and automatic restores always start at one, regardless of the
     // pre-hold snapshot. Older holds do not need a quantity snapshot to recover.
     const restoreQty = 1;
     if (!await automaticObservationIsCurrent()) return { ok: true, failure: null };
-    const result = await callEbayReviseItem(
-      buildReviseQuantityXML(product.ebayItemId, restoreQty),
-      storeNumber
-    );
+    let result;
+    try { result=await writeEbayInventory({productId,storeId:product.storeId,requestKey:"inventory:resume:"+job.id+":"+productId,
+      requests:product.variants.length?product.variants.map(v=>({variantId:v.id,quantity:restoreQty})):[{quantity:restoreQty}],
+      automaticRecovery:automaticPriceCheckResume,assertCurrent:async()=>{await assertActionCurrent();if(!await automaticObservationIsCurrent())throw new Error("Recovery evidence changed.");}
+    }); }catch(error){
+      const message=error instanceof Error?error.message:"Resume failed.";
+      if(message==="These variations need verification before stock can be restored.") await prisma.product.update({where:{id:productId},data:{holdReason:message}});
+      return {ok:false,failure:{productId,title:product.title,error:message,retryEligible:false}};
+    }
 
     if (!result.success) {
       await recordListingOperation({
@@ -1795,9 +1439,10 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       };
     }
 
+    await assertActionCurrent();
     await prisma.$transaction(async (tx) => {
-      await tx.product.update({
-        where: { id: product.id },
+      const changed=await tx.product.updateMany({
+        where: { id: product.id,storeId:job.storeId,holdGeneration:product.holdGeneration,status:product.status,ebayItemId:product.ebayItemId },
         data: {
           status: ProductStatus.IMPORTED,
           quantity: restoreQty,
@@ -1808,6 +1453,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
           holdSourceJobId: null,
         },
       });
+      if(!changed.count)throw new Error("Recovery context changed after marketplace confirmation.");
       await tx.variant.updateMany({
         where: { productId: product.id },
         data: { quantity: restoreQty },
@@ -1931,151 +1577,13 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
       await prisma.product.update({
         where: { id: product.id },
         data: {
-          errorMessage: null,
           ...(revisedImages ? { images: revisedImages } : {}),
         },
       });
       return { ok: true, failure: null };
     }
 
-    const policySelection = await resolveProductPolicySelection(
-      product.storeId,
-      {
-        shippingPolicyId: product.shippingPolicyId,
-        returnPolicyId: product.returnPolicyId,
-        paymentPolicyId: product.paymentPolicyId,
-      },
-      product.policyTemplateId
-    );
-    const productWithPolicies = {
-      ...product,
-      shippingPolicyId: policySelection.shippingPolicyId,
-      returnPolicyId: policySelection.returnPolicyId,
-      paymentPolicyId: policySelection.paymentPolicyId,
-      policyTemplateId: policySelection.policyTemplateId,
-    };
-
-    if (!policyIdsMatch(product, productWithPolicies)) {
-      await prisma.product.update({
-        where: { id: product.id },
-        data: {
-          shippingPolicyId: policySelection.shippingPolicyId,
-          returnPolicyId: policySelection.returnPolicyId,
-          paymentPolicyId: policySelection.paymentPolicyId,
-          policyTemplateId: policySelection.policyTemplateId,
-        },
-      });
-    }
-
-    const priceChanged =
-      bulkEditFields.size === 0 || hasAnyField(bulkEditFields, BULK_EDIT_PRICE_FIELDS);
-    const quantityChanged = bulkEditFields.has("quantity");
-    const descriptionChanged =
-      bulkEditFields.has("title") || bulkEditFields.has("templateId");
-    const policyChanged = hasAnyField(bulkEditFields, [
-      "shippingPolicyId",
-      "returnPolicyId",
-      "paymentPolicyId",
-      "policyTemplateId",
-    ]);
-    const overrideStartPrice = getPrimarySellPrice(product);
-    const storeNumber = await getStoreNumber(product.storeId);
-    let result: { success: boolean; errorMessage?: string };
-    const holdFromQuantity = quantityChanged && product.quantity <= 0;
-    const resumeFromQuantity =
-      quantityChanged &&
-      !holdFromQuantity &&
-      product.status === ProductStatus.ON_HOLD &&
-      product.quantity >= 1;
-
-    if (isInventoryOnlyBulkEdit(bulkEditFields)) {
-      const inventoryQuantity =
-        quantityChanged
-          ? Math.max(0, product.quantity)
-          : undefined;
-      const inventoryPrice =
-        priceChanged ? overrideStartPrice ?? Number(product.price) : undefined;
-
-      result =
-        inventoryPrice === undefined && inventoryQuantity === undefined
-          ? { success: true }
-          : await callEbayReviseInventoryStatus(
-              buildReviseInventoryStatusXML(product.ebayItemId, {
-                startPrice: inventoryPrice,
-                quantity: inventoryQuantity,
-              }),
-              storeNumber
-            );
-    } else {
-      const includeQuantity =
-        quantityChanged &&
-        !holdFromQuantity &&
-        !resumeFromQuantity &&
-        product.status !== ProductStatus.ON_HOLD &&
-        product.quantity >= 1;
-      const finalDescription = descriptionChanged
-        ? await resolveDescriptionTemplate(productWithPolicies)
-        : productWithPolicies.description;
-
-      result = await callEbayReviseItem(
-        buildReviseItemXML(
-          {
-            ...productWithPolicies,
-            description: finalDescription,
-          },
-          priceChanged ? overrideStartPrice : undefined,
-          {
-            customLabel,
-            includeSku: skuChanged,
-            includeTitle: bulkEditFields.has("title"),
-            includeDescription: descriptionChanged,
-            includeStartPrice: priceChanged,
-            includeDispatchTimeMax: bulkEditFields.has("dispatchTimeMax"),
-            includeQuantity,
-            quantityOverride: includeQuantity ? Math.max(1, product.quantity) : undefined,
-            includeSellerProfiles: policyChanged,
-            includeLocation: bulkEditFields.has("location"),
-            includeItemSpecifics: bulkEditFields.has("brand"),
-          }
-        ),
-        storeNumber
-      );
-
-      if (result.success && (holdFromQuantity || resumeFromQuantity)) {
-        result = await callEbayReviseInventoryStatus(
-          buildReviseInventoryStatusXML(product.ebayItemId, {
-            quantity: holdFromQuantity ? 0 : Math.max(1, product.quantity),
-          }),
-          storeNumber
-        );
-      }
-    }
-
-    if (!result.success) {
-      if (!isDurableBulkEditJob(job)) {
-        await prisma.product.update({
-          where: { id: product.id },
-          data: { errorMessage: result.errorMessage || "Bulk edit revise failed" },
-        });
-      }
-
-      return {
-        ok: false,
-        failure: {
-          productId,
-          title: product.title,
-          error: result.errorMessage || "Unknown eBay API error",
-        },
-      };
-    }
-
-    await applySuccessfulBulkEditRevision({
-      product,
-      overrideStartPrice,
-      quantityChanged,
-    });
-
-    return { ok: true, failure: null };
+    return {ok:false,failure:{productId,title:product.title,error:"SKU changes cannot be combined with inventory changes."}};
   }
 
   if (
@@ -2116,309 +1624,6 @@ async function processProduct(job: EbayActionJobRecord, productId: string) {
   return { ok: true, failure: null };
 }
 
-async function fallbackInventoryReviseBatch(
-  job: EbayActionJobRecord,
-  batch: InventoryReviseBatchItem[],
-  error?: unknown,
-  worker?: WorkerContext,
-) {
-  if (error) {
-    logger.warn("ebay-action/jobs", "Batch inventory revise failed; retrying individually", {
-      jobId: job.id,
-      itemCount: batch.length,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-
-  const progressUpdates: ProgressUpdate[] = [];
-
-  for (const item of batch) {
-    await assertEbayActionLeaseOwned(job, worker);
-    try {
-      if (isDurableBulkEditJob(job)) {
-        await prisma.bulkEditJobItem.updateMany({
-          where: { jobId: job.id, productId: item.product.id },
-          data: { attempts: 2 },
-        });
-      }
-      let result = await processProduct(job, item.product.id);
-      if (isDurableBulkEditJob(job)) {
-        for (let attempt = 3; !result.ok && attempt <= 3; attempt += 1) {
-          const message = result.failure?.error ?? "Bulk edit failed.";
-          if (!isTransientBulkEditFailure(message)) break;
-          await prisma.bulkEditJobItem.updateMany({
-            where: { jobId: job.id, productId: item.product.id },
-            data: { attempts: attempt },
-          });
-          await new Promise((resolve) => setTimeout(resolve, (attempt - 1) * 500));
-          result = await processProduct(job, item.product.id);
-        }
-      }
-      progressUpdates.push({
-        productId: item.product.id,
-        succeeded: result.ok,
-        failure: result.failure,
-      });
-    } catch (fallbackError) {
-      const message = fallbackError instanceof Error ? fallbackError.message : "Internal error";
-      logger.error("ebay-action/jobs", "eBay action product failed", fallbackError, {
-        jobId: job.id,
-        productId: item.product.id,
-      });
-      progressUpdates.push({
-        productId: item.product.id,
-        succeeded: false,
-        failure: {
-          productId: item.product.id,
-          title: item.product.title,
-          error: message,
-        },
-      });
-    }
-  }
-
-  await markProgressBatch(job, progressUpdates);
-}
-
-async function markInventoryReviseBatchFailure(
-  job: EbayActionJobRecord,
-  batch: InventoryReviseBatchItem[],
-  errorMessage: string,
-) {
-  if (!isDurableBulkEditJob(job)) {
-    await prisma.product.updateMany({
-      where: { id: { in: batch.map((item) => item.product.id) } },
-      data: { errorMessage },
-    });
-  }
-  await markProgressBatch(
-    job,
-    batch.map((item) => ({
-      productId: item.product.id,
-      succeeded: false,
-      failure: {
-        productId: item.product.id,
-        title: item.product.title,
-        error: errorMessage,
-      },
-    })),
-  );
-}
-
-async function markInventoryReviseBatchSuccess(
-  job: EbayActionJobRecord,
-  batch: InventoryReviseBatchItem[],
-) {
-  try {
-    await applySuccessfulBulkEditRevisions(
-      batch.map((item) => ({
-        product: item.product,
-        overrideStartPrice: item.overrideStartPrice,
-        quantityChanged: item.quantityChanged,
-      })),
-    );
-    await markProgressBatch(
-      job,
-      batch.map((item) => ({
-        productId: item.product.id,
-        succeeded: true,
-        failure: null,
-      })),
-    );
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Internal error";
-    logger.error("ebay-action/jobs", "Bulk inventory local update failed", error, {
-      jobId: job.id,
-      itemCount: batch.length,
-    });
-    await markProgressBatch(
-      job,
-      batch.map((item) => ({
-        productId: item.product.id,
-        succeeded: false,
-        failure: {
-          productId: item.product.id,
-          title: item.product.title,
-          error: message,
-        },
-      })),
-    );
-  }
-}
-
-async function processInventoryReviseBatch(
-  job: EbayActionJobRecord,
-  batch: InventoryReviseBatchItem[],
-  storeNumber: 1 | 2 | 3,
-  worker?: WorkerContext,
-) {
-  if (batch.length === 0) {
-    return;
-  }
-
-  let result: { success: boolean; errorMessage?: string };
-
-  try {
-    result = await callEbayReviseInventoryStatus(
-      buildReviseInventoryStatusXML(batch.map((item) => item.input)),
-      storeNumber,
-    );
-  } catch (error) {
-    await fallbackInventoryReviseBatch(job, batch, error, worker);
-    return;
-  }
-
-  await assertEbayActionLeaseOwned(job, worker);
-
-  if (result.success) {
-    await markInventoryReviseBatchSuccess(job, batch);
-    return;
-  }
-
-  if (
-    (isDurableBulkEditJob(job) &&
-      isTransientBulkEditFailure(result.errorMessage ?? "")) ||
-    shouldRetryInventoryBatchIndividually({
-      success: result.success,
-      itemCount: batch.length,
-    })
-  ) {
-    await fallbackInventoryReviseBatch(job, batch, new Error(result.errorMessage), worker);
-    return;
-  }
-
-  await markInventoryReviseBatchFailure(
-    job,
-    batch,
-    result.errorMessage || "Unknown eBay API error",
-  );
-}
-
-async function runBulkInventoryReviseJob(
-  job: EbayActionJobRecord,
-  requestedProductIds?: string[],
-  worker?: WorkerContext,
-) {
-  const fields = getBulkEditFields(job);
-  const quantityChanged = fields.has("quantity");
-  const completed = new Set(job.completedProductIds);
-  const remainingIds = (requestedProductIds ?? job.productIds).filter(
-    (productId) => !completed.has(productId),
-  );
-  const products = await prisma.product.findMany({
-    where: { id: { in: remainingIds }, storeId: job.storeId },
-    select: {
-      id: true,
-      storeId: true,
-      title: true,
-      status: true,
-      ebayItemId: true,
-      quantity: true,
-      price: true,
-      variants: {
-        orderBy: { createdAt: "asc" },
-        select: { sellPrice: true },
-      },
-    },
-  });
-  const productById = new Map(products.map((product) => [product.id, product]));
-  const batchItems: InventoryReviseBatchItem[] = [];
-  const preBatchProgressUpdates: ProgressUpdate[] = [];
-
-  for (const productId of remainingIds) {
-    if (!requestedProductIds && await isEbayActionCancellationRequested(job.id)) {
-      await markProgressBatch(job, preBatchProgressUpdates);
-      return;
-    }
-    const product = productById.get(productId);
-
-    if (!product) {
-      preBatchProgressUpdates.push({
-        productId,
-        succeeded: false,
-        failure: {
-          productId,
-          title: "(missing)",
-          error: "Product was not found",
-        },
-      });
-      continue;
-    }
-
-    if (
-      (product.status !== ProductStatus.IMPORTED &&
-        product.status !== ProductStatus.ON_HOLD) ||
-      !product.ebayItemId
-    ) {
-      preBatchProgressUpdates.push({
-        productId: product.id,
-        succeeded: false,
-        failure: {
-          productId: product.id,
-          title: product.title,
-          error: "Product is not imported/on hold or lacks an eBay Item ID",
-        },
-      });
-      continue;
-    }
-
-    const batchItem = buildInventoryReviseBatchItem(
-      { ...product, ebayItemId: product.ebayItemId },
-      fields,
-    );
-
-    if (!batchItem) {
-      try {
-        await applySuccessfulBulkEditRevision({
-          product,
-          quantityChanged,
-        });
-        preBatchProgressUpdates.push({
-          productId: product.id,
-          succeeded: true,
-          failure: null,
-        });
-      } catch (error) {
-        if (error instanceof JobConflictError) {
-          throw error;
-        }
-        const message = error instanceof Error ? error.message : "Internal error";
-        logger.error("ebay-action/jobs", "Bulk inventory local update failed", error, {
-          jobId: job.id,
-          productId: product.id,
-        });
-        preBatchProgressUpdates.push({
-          productId: product.id,
-          succeeded: false,
-          failure: {
-            productId: product.id,
-            title: product.title,
-            error: message,
-          },
-        });
-      }
-      continue;
-    }
-
-    batchItems.push(batchItem);
-  }
-
-  await markProgressBatch(job, preBatchProgressUpdates);
-
-  if (batchItems.length === 0) {
-    return;
-  }
-
-  const storeNumber = await getStoreNumber(job.storeId);
-
-  for (const batch of chunkInventoryReviseItems(batchItems)) {
-    // Durable items have already applied local edits. Finish that prepared
-    // batch before stopping; its caller checks cancellation before preparation.
-    if (!requestedProductIds && await isEbayActionCancellationRequested(job.id)) return;
-    await processInventoryReviseBatch(job, batch, storeNumber, worker);
-  }
-}
-
 async function assertEbayActionLeaseOwned(
   job: EbayActionJobRecord,
   worker?: WorkerContext,
@@ -2435,82 +1640,6 @@ async function assertEbayActionLeaseOwned(
   });
   if (owned === 0) {
     throw new JobConflictError("Worker lost ownership of the bulk-edit job.");
-  }
-}
-
-async function runDurableBulkInventoryReviseJob(
-  job: EbayActionJobRecord,
-  worker?: WorkerContext,
-) {
-  const errorsBefore = normalizeErrors(job.errors);
-  const completed = new Set(job.completedProductIds);
-  const checkpointed = await prisma.bulkEditJobItem.findMany({
-    where: { jobId: job.id, status: "APPLYING" },
-  });
-
-  // A worker can stop after durable job progress was saved but before its item
-  // checkpoint was finalized. Complete those checkpoints before resuming.
-  for (const item of checkpointed) {
-    if (!completed.has(item.productId)) continue;
-    const payload = readDurableBulkEditPayload(item.payload);
-    const failure = errorsBefore.find((entry) => entry.productId === item.productId);
-    if (failure && payload.snapshot && item.appliedAt) {
-      await restoreBulkProductEditSnapshot(payload.snapshot, item.appliedAt);
-    }
-    await prisma.bulkEditJobItem.update({
-      where: { id: item.id },
-      data: {
-        status: failure ? "FAILED" : "SUCCEEDED",
-        error: failure?.error ?? null,
-        completedAt: new Date(),
-        appliedAt: failure ? null : item.appliedAt,
-      },
-    });
-  }
-
-  const remainingIds = job.productIds.filter((id) => !completed.has(id));
-  for (const idBatch of chunkInventoryReviseItems(remainingIds)) {
-    if (await isEbayActionCancellationRequested(job.id)) return;
-    const prepared: PreparedDurableBulkEditItem[] = [];
-    for (const productId of idBatch) {
-      await assertEbayActionLeaseOwned(job, worker);
-      try {
-        prepared.push(await prepareDurableBulkEditItem(job, productId));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Bulk edit preparation failed.";
-        const failedItem = await prisma.bulkEditJobItem.findUnique({
-          where: { jobId_productId: { jobId: job.id, productId } },
-        });
-        if (failedItem?.status === "APPLYING") {
-          const failedPayload = readDurableBulkEditPayload(failedItem.payload);
-          if (failedPayload.snapshot) {
-            await restoreBulkProductEditSnapshot(failedPayload.snapshot, failedItem.appliedAt);
-          }
-        }
-        await prisma.bulkEditJobItem.updateMany({
-          where: { jobId: job.id, productId },
-          data: { status: "FAILED", error: message, completedAt: new Date() },
-        });
-        await markProgress(job, productId, false, {
-          productId,
-          title: "(unknown)",
-          error: message,
-        });
-      }
-    }
-    if (prepared.length > 0) {
-      await assertEbayActionLeaseOwned(job, worker);
-      await runBulkInventoryReviseJob(
-        job,
-        prepared.map((item) => item.productId),
-        worker,
-      );
-      const errorsAfter = normalizeErrors(job.errors);
-      for (const item of prepared) {
-        const failure = errorsAfter.find((entry) => entry.productId === item.productId);
-        await finishDurableBulkEditItem(item, failure);
-      }
-    }
   }
 }
 
@@ -2541,26 +1670,15 @@ async function runEbayActionJobClaimed(jobId: string, worker?: WorkerContext) {
 
   if (job.type === EbayActionJobType.MANAGE_PROMOTED_ADS) {
     await runPromotedAdsJob(job);
-  } else if (
-    isDurableBulkEditJob(job) &&
-    isInventoryOnlyBulkEdit(getBulkEditFields(job))
-  ) {
-    await runDurableBulkInventoryReviseJob(job, worker);
-  } else if (isDurableBulkEditJob(job)) {
-    const completed = new Set(job.completedProductIds);
-    const remaining = job.productIds.filter((productId) => !completed.has(productId));
-    for (const productId of remaining) {
-      if (await isEbayActionCancellationRequested(job.id)) break;
-      await assertEbayActionLeaseOwned(job, worker);
-      const result = await processDurableBulkEditProduct(job, productId);
-      await assertEbayActionLeaseOwned(job, worker);
-      await markProgress(job, productId, result.ok, result.failure);
+  } else if (job.type === EbayActionJobType.BULK_EDIT_REVISE && !getBulkEditFields(job).has("sku")) {
+    const completed=new Set(job.completedProductIds);
+    for(const productId of job.productIds.filter(id=>!completed.has(id))){
+      if(await isEbayActionCancellationRequested(job.id))break;
+      await assertEbayActionLeaseOwned(job,worker);
+      const result=await processVariationBulkProduct(job,productId,worker);
+      await assertEbayActionLeaseOwned(job,worker);
+      await markProgress(job,productId,result.ok,result.failure);
     }
-  } else if (
-    job.type === EbayActionJobType.BULK_EDIT_REVISE &&
-    isInventoryOnlyBulkEdit(getBulkEditFields(job))
-  ) {
-    await runBulkInventoryReviseJob(job);
   } else {
     const completed = new Set(job.completedProductIds);
     const remaining = job.productIds.filter((productId) => !completed.has(productId));
@@ -2569,7 +1687,7 @@ async function runEbayActionJobClaimed(jobId: string, worker?: WorkerContext) {
       if (await isEbayActionCancellationRequested(job.id)) break;
       try {
         await assertEbayActionLeaseOwned(job, worker);
-        const result = await processProduct(job, productId);
+        const result = await processProduct(job, productId,worker);
         await assertEbayActionLeaseOwned(job, worker);
         await markProgress(job, productId, result.ok, result.failure);
       } catch (error) {

@@ -26,8 +26,9 @@ import {
   launchScraperBrowser,
 } from "@/lib/scraper-browser";
 import { calculateSellPrice } from "@/lib/variant-pricing";
-import { buildReviseInventoryStatusXML } from "@/lib/ebay-xml";
-import { callEbayReviseInventoryStatus, getStoreNumber } from "@/lib/ebay";
+import { writeEbayInventory } from "./ebay-inventory-writer";
+import type { InventoryResult } from "./ebay-inventory";
+
 import { logger } from "@/lib/logger";
 import { invalidatePriceCaches } from "@/lib/cache-tags";
 import {
@@ -221,24 +222,29 @@ async function getSupplierSettings(storeId?: string) {
   );
 }
 
-export async function reviseProductPrice(
-  product: RevisableProduct,
-  overrideStartPrice?: number,
-) {
-  if (!product.ebayItemId) {
-    throw new Error("Product is missing an eBay item ID.");
-  }
-
-  const storeNumber = await getStoreNumber(product.storeId);
-  const startPrice = overrideStartPrice ?? decimalToNumber(product.price);
-
-  if (startPrice === null) {
-    throw new Error("Product is missing a valid eBay price.");
-  }
-
-  const xml = buildReviseInventoryStatusXML(product.ebayItemId, { startPrice });
-
-  return callEbayReviseInventoryStatus(xml, storeNumber);
+export type InventoryPriceOutcome = {success:boolean;errorMessage?:string;outcomeUncertain?:boolean;variationResults?:InventoryResult[];retryEligible?:boolean};
+export async function reviseProductPrice(product:RevisableProduct,overrideStartPrice?:number,
+ options?:{prices:Array<{variantId:string;price:number;buyPrice?:number}>;requestKey:string;assertCurrent?:()=>Promise<void>}):Promise<InventoryPriceOutcome> {
+ if(!product.ebayItemId)throw new Error("Product is missing an eBay item ID.");
+ const current=await prisma.product.findFirst({where:{id:product.id,storeId:product.storeId},include:{variants:{orderBy:{createdAt:"asc"}}}});
+ if(!current)throw new Error("Product not found.");
+ if(!options&&current.variants.length>1)throw new Error("An explicit price is required for each intended variation.");
+ const price=overrideStartPrice??decimalToNumber(product.price);
+ if(price===null)throw new Error("Product is missing a valid eBay price.");
+ const prices=options?.prices??(current.variants[0]?[{variantId:current.variants[0].id,price}]:[]);
+ return writeEbayInventory({productId:product.id,storeId:product.storeId,
+  requestKey:options?.requestKey??"inventory:price:"+product.id+":"+String(current.lastPriceCheck?.getTime()??current.updatedAt.getTime())+":"+price,
+  requests:prices.length?prices.map(p=>({variantId:p.variantId,price:p.price,localPatch:p.buyPrice!==undefined?{buyPrice:p.buyPrice}:undefined})):[{price}],
+  assertCurrent:options?.assertCurrent
+ });
+}
+export async function confirmInventoryPriceHistories(result:InventoryPriceOutcome,productId:string,
+ histories:Array<{id:string;variantId:string|null}>,appliedAt:Date) {
+ const confirmed=new Set(result.variationResults?.filter(t=>t.state==="CONFIRMED").map(t=>t.target.variantId));
+ const ids=histories.filter(h=>h.variantId&&confirmed.has(h.variantId)).map(h=>h.id);
+ if(ids.length)await prisma.priceHistory.updateMany({where:{productId,id:{in:ids},appliedAt:null},
+  data:{status:"APPLIED",ebayRevised:true,appliedAt,errorMessage:null}});
+ return ids;
 }
 
 async function automaticallyApplyPriceIncrease(input: {
@@ -285,7 +291,8 @@ async function automaticallyApplyPriceIncrease(input: {
         }
         await input.assertOwnership?.();
         await input.beforeExternalWrite?.();
-        return reviseProductPrice(input.product, input.nextPrimarySellPrice);
+        return reviseProductPrice(input.product,input.nextPrimarySellPrice,{prices:input.variants.map(v=>({variantId:v.id,price:v.nextSellPrice,buyPrice:v.nextBuyPrice})),
+          requestKey:"inventory:auto-price:"+input.product.id+":"+input.checkedAt.toISOString(),assertCurrent:input.assertOwnership});
       };
       return input.withExternalWrite ? input.withExternalWrite(write) : write();
     });
@@ -297,6 +304,8 @@ async function automaticallyApplyPriceIncrease(input: {
   }
 
   if (!reviseResult.success) {
+    const histories=await prisma.priceHistory.findMany({where:{productId:input.product.id,createdAt:input.checkedAt,appliedAt:null},select:{id:true,variantId:true}});
+    await confirmInventoryPriceHistories(reviseResult,input.product.id,histories,input.checkedAt);
     const errorMessage =
       reviseResult.errorMessage || "Failed to revise eBay listing.";
 
