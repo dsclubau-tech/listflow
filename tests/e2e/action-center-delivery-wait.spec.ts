@@ -125,3 +125,12 @@ for (const width of [1280, 390])
         await expect(page.getByText(/Retrying at/)).toHaveCount(0);
         expect(errors).toEqual([]);
     });
+
+for(const width of [1280,390])test("approved deferred prices persist in the actual Action Center at "+width,async({page})=>{
+ await page.setViewportSize({width,height:900});const errors:string[]=[];page.on("pageerror",e=>errors.push(e.message));
+ const data={worker:{online:false,currentJobs:[]},workers:[],summary:{pendingReviews:1,failedChecks:0,lowStock:0,onHold:0,runningJobs:0},queues:{pendingReviews:[{product:{id:"p",title:"Deferred variation",asin:"B07G5B97VD",ebayItemId:"304997589004"},priceHistoryId:"h",pendingCount:1,previousPrice:"150",newPrice:"160",previousSellPrice:"196.23",newSellPrice:"239.99",changeAmount:"10",profit:"20",createdAt:"2026-10-07T00:00:00Z",priceUpdateState:"AWAITING_RESTORATION"}],failedChecks:[],lowStock:[],onHold:[]},jobs:{priceChecks:[],ebayImports:[],ebayActions:[],ebayResearchBatches:[]}};
+ await page.route("**/*",async route=>{const url=new URL(route.request().url());if(url.origin==="http://listflow.test"&&url.pathname==="/action-center"){await route.fulfill({contentType:"text/html",body:'<html><head><style>'+await styles+'</style></head><body><div id="root"></div></body></html>'});return;}errors.push("Unexpected request: "+url.pathname);await route.abort();});
+ const open=async()=>{await page.goto("http://listflow.test/action-center");await page.evaluate(value=>{(window as unknown as {fixtureData:unknown}).fixtureData=value;},data);await page.addScriptTag({content:await bundle});};
+ await open();await expect(page.getByRole("button",{name:"Price update waiting for stock restoration",exact:true}).filter({visible:true})).toBeDisabled();
+ await open();await expect(page.getByRole("button",{name:"Price update waiting for stock restoration",exact:true}).filter({visible:true})).toBeDisabled();expect(errors).toEqual([]);
+});

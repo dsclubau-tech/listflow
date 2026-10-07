@@ -913,15 +913,16 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
 
   async function runAction(
     key: string,
-    task: () => Promise<string>,
+    task: () => Promise<string | { message: string; keepVisible?: boolean }>,
     variant: ToastVariant = "success",
     affectedProductIds?: string[]
   ) {
     setRunningAction(key);
 
     try {
-      const message = await task();
-      if (affectedProductIds && affectedProductIds.length > 0) {
+      const outcome = await task();
+      const message = typeof outcome === "string" ? outcome : outcome.message;
+      if ((typeof outcome === "string" || !outcome.keepVisible) && affectedProductIds && affectedProductIds.length > 0) {
         setDismissedProductIds((prev) => {
           const next = new Set(prev);
           for (const id of affectedProductIds) {
@@ -951,8 +952,8 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
     void runAction(
       `apply:${item.product.id}`,
       async () => {
-        await postJson("/api/price-check/apply", { productId: item.product.id });
-        return "Applied pending price change.";
+        const result = await postJson<{ actionRequired?: string; message?: string }>("/api/price-check/apply", { productId: item.product.id });
+        return result.actionRequired ? { message: result.message ?? "Price update waiting for stock restoration.", keepVisible: true } : "Applied pending price change.";
       },
       "success",
       [item.product.id]
@@ -988,12 +989,13 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
 
         const result = await postJson<{
           applied?: number;
+          awaitingRestoration?: unknown[];
           dismissed?: number;
           failed?: number;
         }>(endpoint, { productIds });
 
         if (action === "apply") {
-          return `Applied ${result.applied ?? 0} price change(s). ${result.failed ?? 0} failed.`;
+          return { message: `Applied ${result.applied ?? 0} price change(s). ${result.awaitingRestoration?.length ?? 0} waiting for stock restoration. ${result.failed ?? 0} failed.`, keepVisible: !!result.awaitingRestoration?.length };
         }
 
         return `Dismissed ${result.dismissed ?? 0} price change(s).`;
@@ -1666,11 +1668,11 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                       <div className="flex items-center gap-2 pt-1">
                         <ActionButton
                           onClick={() => applyReview(item)}
-                          disabled={runningAction === `apply:${item.product.id}`}
+                          disabled={runningAction === `apply:${item.product.id}` || item.priceUpdateState === "AWAITING_RESTORATION"}
                           tone="primary"
                           className="flex-1 justify-center py-2"
                         >
-                          {runningAction === `apply:${item.product.id}` ? "Applying..." : "Apply"}
+                          {runningAction === `apply:${item.product.id}` ? "Applying..." : item.priceUpdateState === "AWAITING_RESTORATION" ? "Price update waiting for stock restoration" : "Apply"}
                         </ActionButton>
                         <ActionButton
                           onClick={() => dismissReview(item)}
@@ -1779,10 +1781,10 @@ export default function ActionCenterClient({ data: initialData }: { data: Action
                           <div className="flex justify-end gap-2">
                             <ActionButton
                               onClick={() => applyReview(item)}
-                              disabled={runningAction === `apply:${item.product.id}`}
+                              disabled={runningAction === `apply:${item.product.id}` || item.priceUpdateState === "AWAITING_RESTORATION"}
                               tone="primary"
                             >
-                              {runningAction === `apply:${item.product.id}` ? "Applying..." : "Apply"}
+                              {runningAction === `apply:${item.product.id}` ? "Applying..." : item.priceUpdateState === "AWAITING_RESTORATION" ? "Price update waiting for stock restoration" : "Apply"}
                             </ActionButton>
                             <ActionButton
                               onClick={() => dismissReview(item)}

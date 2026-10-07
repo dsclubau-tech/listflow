@@ -1,10 +1,27 @@
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { buildReviseInventoryStatusXML } from "./ebay-xml";
-export const INVENTORY_OPERATION_VERSION = 1;
+export const INVENTORY_OPERATION_VERSION = 2;
+export const PARENT_SKU_COLLISION_MESSAGE = "This eBay listing uses the same SKU for the parent listing and a variation. Its parent label needs repair before this update can continue.";
+export const DEFERRED_PRICE_MESSAGE = "Price update waiting for stock restoration.";
+export class InventoryBlocker extends Error {
+    readonly retryEligible = false;
+    constructor(public readonly code: string, message: string) { super(message); }
+}
+export function assertDistinctParentSku(snapshot: InventorySnapshot, proposedSku = snapshot.sku) {
+    if (snapshot.variation && proposedSku && snapshot.entries.some(e => e.sku === proposedSku))
+        throw new InventoryBlocker("PARENT_VARIATION_SKU_COLLISION", PARENT_SKU_COLLISION_MESSAGE);
+}
+export function explainInventoryError(error: InventoryError) {
+    if (error.code === "21916735") return "Parent SKU repair required. eBay identified the supplied SKU as an item-level SKU.";
+    if (error.code === "21916736") return "The exact eBay variation SKU is required with the listing ItemID.";
+    return error.message;
+}
 export type InventoryError = {
     code: string;
     severity: string;
     message: string;
+    shortMessage?: string;
+    longMessage?: string;
     parameters: Record<string, string>;
     system: boolean;
 };
@@ -38,12 +55,17 @@ export type InventoryRequest = {
     price?: number;
     quantity?: number;
     localPatch?: Record<string, unknown>;
+    priceHistoryIds?: string[];
 };
+export type InventoryAuthorization = { source: "EXPLICIT_EDIT" | "PRICE_APPROVAL" | "AUTOMATIC_POLICY"; sourceJobId?: string; historyIds?: string[] };
 export type InventoryResult = {
     target: InventoryTarget;
     desired: InventoryRequest;
     before: InventoryValue;
-    state: "PENDING" | "CONFIRMED" | "REJECTED" | "UNCERTAIN";
+    state: "PENDING" | "CONFIRMED" | "REJECTED" | "UNCERTAIN" | "DEFERRED";
+    deferredReason?: "ZERO_STOCK";
+    resolvedBy?: string;
+    supersededBy?: string;
     error?: string;
     errors?: InventoryError[];
     retryEligible?: boolean;
@@ -51,7 +73,7 @@ export type InventoryResult = {
 };
 export type InventoryPlan = {
     kind: "ebay-inventory";
-    version: 1;
+    version: 1 | 2;
     storeId: string;
     productId: string;
     itemId: string;
@@ -104,6 +126,7 @@ function number(input: unknown, label: string): number {
 export function inventoryErrors(input: unknown): InventoryError[] {
     return list(input as Record<string, unknown>[] | undefined).map(e => ({
         code: value(e.ErrorCode), severity: value(e.SeverityCode), message: value(e.LongMessage) || value(e.ShortMessage),
+        shortMessage: value(e.ShortMessage) || undefined, longMessage: value(e.LongMessage) || undefined,
         system: value(e.ErrorClassification) === "SystemError",
         parameters: Object.fromEntries(list(e.ErrorParameters as Record<string, unknown>[] | undefined).map(p => [value(p["@_ParamID"]), value(p.Value)]))
     }));
@@ -119,7 +142,7 @@ export function parseInventoryResponse(xml: string): InventoryResponse {
     const errors = inventoryErrors(r.Errors), ack = value(r.Ack).trim();
     return { success: ack === "Success" || ack === "Warning", errors,
         results: list(r.InventoryStatus as Record<string, unknown>[] | undefined).map(e => ({ itemId: value(e.ItemID), ...(e.SKU !== undefined ? { sku: value(e.SKU) } : {}) })),
-        ...(ack !== "Success" && ack !== "Warning" ? { errorMessage: errors.map(e => e.message).join("; ") || "Unrecognized eBay response.", outcomeUncertain: !["Failure", "PartialFailure"].includes(ack) } : {}) };
+        ...(ack !== "Success" && ack !== "Warning" ? { errorMessage: errors.map(explainInventoryError).join("; ") || "Unrecognized eBay response.", outcomeUncertain: !["Failure", "PartialFailure"].includes(ack) } : {}) };
 }
 export function parseInventorySnapshot(xml: string, expectedItemId: string): InventorySnapshot {
     assertInventoryXml(xml);
@@ -174,6 +197,7 @@ export function planInventory(input: {
         throw new Error("This eBay listing has ended or changed.");
     if (s.currency !== input.currency)
         throw new Error("Unexpected eBay listing currency.");
+    assertDistinctParentSku(s);
     const seen = new Set<string>();
     for (const v of s.entries)
         if (s.variation) {
@@ -214,12 +238,21 @@ export function planInventory(input: {
         if (r.price === undefined && r.quantity === undefined)
             throw new Error("No inventory change requested.");
         return { target: { storeId: input.storeId, productId: input.productId, variantId: r.variantId, itemId: input.itemId, sku, variation: s.variation, currency: s.currency },
-            desired: { variantId: r.variantId, price: r.price, quantity: r.quantity, localPatch: r.localPatch }, before: { price: before.price, quantity: before.quantity }, state: "PENDING" as const };
+            desired: { variantId: r.variantId, price: r.price, quantity: r.quantity, localPatch: r.localPatch, priceHistoryIds: r.priceHistoryIds }, before: { price: before.price, quantity: before.quantity }, state: "PENDING" as InventoryResult["state"] };
     });
-    return { kind: "ebay-inventory", version: 1, storeId: input.storeId, productId: input.productId, itemId: input.itemId, context: { remoteSkus: s.entries.map(e => e.sku ?? null), inventoryTracking: s.tracking, itemSku: s.sku ?? null, ...input.context }, targets };
+    for (const target of targets) deferZeroStockPrice(target, s);
+    return { kind: "ebay-inventory", version: 2, storeId: input.storeId, productId: input.productId, itemId: input.itemId, context: { remoteSkus: s.entries.map(e => e.sku ?? null), inventoryTracking: s.tracking, inventoryCurrency: s.currency, itemSku: s.sku ?? null, ...input.context }, targets };
+}
+function deferZeroStockPrice(target: InventoryResult, snapshot: InventorySnapshot) {
+    const remote = snapshot.entries.find(e => snapshot.variation ? e.sku === target.target.sku : true);
+    if (snapshot.variation && remote?.quantity === 0 && target.desired.price !== undefined &&
+        Math.round(remote.price * 100) !== Math.round(target.desired.price * 100) && !(Number(target.desired.quantity) > 0)) {
+        target.state = "DEFERRED"; target.deferredReason = "ZERO_STOCK";
+        target.error = DEFERRED_PRICE_MESSAGE; target.retryEligible = false;
+    }
 }
 export function matchesInventory(result: InventoryResult, snapshot: InventorySnapshot) {
-    if (snapshot.itemId !== result.target.itemId || snapshot.currency !== result.target.currency || snapshot.variation !== result.target.variation)
+    if (snapshot.status !== "Active" || snapshot.itemId !== result.target.itemId || snapshot.currency !== result.target.currency || snapshot.variation !== result.target.variation)
         return false;
     const found = snapshot.entries.filter(e => result.target.variation ? e.sku === result.target.sku : true);
     if (found.length !== 1)
@@ -252,9 +285,10 @@ export function verifyListingStep(xml: string, snapshot: InventorySnapshot): boo
 export function inventorySummary(plan: InventoryPlan) {
     const confirmed = plan.targets.filter(t => t.state === "CONFIRMED").length, uncertain = plan.targets.some(t => t.state === "UNCERTAIN") || plan.listingStep?.state === "UNCERTAIN";
     const success = confirmed === plan.targets.length && (!plan.listingStep || plan.listingStep.state === "CONFIRMED");
-    return { success, outcomeUncertain: uncertain, variationResults: plan.targets,
+    const awaitingRestoration = plan.targets.filter(t => t.state === "DEFERRED" && !t.supersededBy).length;
+    return { success, outcomeUncertain: uncertain, variationResults: plan.targets, awaitingRestoration,
         retryEligible: uncertain || plan.listingStep?.state === "PENDING" || plan.listingStep?.retryEligible === true || plan.targets.some(t => t.state === "PENDING" || t.retryEligible === true),
-        errorMessage: success ? undefined : uncertain ? "Update result needs verification." : confirmed ? confirmed + " of " + plan.targets.length + " variations updated; remaining variations could not be updated." : plan.targets.find(t => t.error)?.error ?? plan.listingStep?.error ?? "Inventory update was not completed." };
+        errorMessage: success ? undefined : uncertain ? "Update result needs verification." : awaitingRestoration && !plan.targets.some(t => t.state === "REJECTED") ? DEFERRED_PRICE_MESSAGE : confirmed ? confirmed + " of " + plan.targets.length + " variations updated; remaining variations could not be updated." : plan.targets.find(t => t.error)?.error ?? plan.listingStep?.error ?? "Inventory update was not completed." };
 }
 export async function executeInventory(plan: InventoryPlan, io: {
     read: () => Promise<InventorySnapshot>;
@@ -266,7 +300,7 @@ export async function executeInventory(plan: InventoryPlan, io: {
     applyListing?: (patch: Record<string, unknown>) => Promise<void>;
     retryRejected?: boolean;
 }) {
-    if (plan.kind !== "ebay-inventory" || plan.version !== 1)
+    if (plan.kind !== "ebay-inventory" || ![1, 2].includes(plan.version))
         throw new Error("Unsupported inventory operation version.");
     const applyConfirmed = async () => { for (const t of plan.targets)
         if (t.state === "CONFIRMED" && !t.applied) {
@@ -277,8 +311,14 @@ export async function executeInventory(plan: InventoryPlan, io: {
     await io.assertCurrent();
     let current = await io.read();
     const structureMatches = (snapshot: InventorySnapshot) => snapshot.variation === plan.targets[0]?.target.variation || plan.targets.length === 0;
-    const sameStructure = (snapshot: InventorySnapshot) => structureMatches(snapshot) && snapshot.tracking === plan.context.inventoryTracking &&
+    const sameStructure = (snapshot: InventorySnapshot) => snapshot.status === "Active" && snapshot.itemId === plan.itemId && snapshot.currency === (plan.context.inventoryCurrency ?? plan.targets[0]?.target.currency ?? snapshot.currency) && structureMatches(snapshot) && snapshot.tracking === plan.context.inventoryTracking && (snapshot.sku ?? null) === (plan.context.itemSku ?? null) &&
         JSON.stringify(snapshot.entries.map(e => e.sku ?? null).sort()) === JSON.stringify([...(plan.context.remoteSkus as Array<string | null>)].sort());
+    for (const t of plan.targets.filter(t => t.state === "CONFIRMED")) {
+        if (!matchesInventory(t, current) || !sameStructure(current)) {
+            t.state = "UNCERTAIN";
+            t.error = "Confirmed inventory changed before completion. Verify the current marketplace state; no automatic resend.";
+        }
+    }
     for (const t of plan.targets)
         if (t.state === "UNCERTAIN") {
             if (matchesInventory(t, current) && sameStructure(current)) {
@@ -288,7 +328,7 @@ export async function executeInventory(plan: InventoryPlan, io: {
             else
                 t.error = "Update result needs verification. The current eBay value differs; no automatic resend.";
         }
-    if (plan.listingStep?.state === "UNCERTAIN" && verifyListingStep(plan.listingStep.xml, current)) {
+    if (plan.listingStep?.state === "UNCERTAIN" && sameStructure(current) && verifyListingStep(plan.listingStep.xml, current)) {
         plan.listingStep.state = "CONFIRMED";
         plan.listingStep.error = undefined;
     }
@@ -296,12 +336,26 @@ export async function executeInventory(plan: InventoryPlan, io: {
     await applyConfirmed();
     if (plan.targets.some(t => t.state === "UNCERTAIN") || plan.listingStep?.state === "UNCERTAIN")
         return inventorySummary(plan);
+    assertDistinctParentSku(current);
+    if (current.status !== "Active") throw new InventoryBlocker("LISTING_ENDED", "This eBay listing has ended.");
+    if (!sameStructure(current)) throw new Error("eBay variation structure changed before the inventory update.");
+    if (plan.version === 1) { plan.context.upgradedFromVersion = 1; plan.version = 2; }
+    for (const t of plan.targets.filter(t => t.state === "PENDING" || (t.state === "DEFERRED" && !t.supersededBy))) {
+        if (matchesInventory(t, current)) { t.state = "CONFIRMED"; t.error = undefined; }
+        else deferZeroStockPrice(t, current);
+    }
+    await io.save(plan);
+    await applyConfirmed();
     if (plan.listingStep && plan.listingStep.state !== "CONFIRMED") {
         if (plan.listingStep.state === "REJECTED" && (!io.retryRejected || !plan.listingStep.retryEligible))
             return inventorySummary(plan);
         if (!io.listingWrite)
             throw new Error("Missing listing update handler.");
         await io.assertCurrent();
+        current = await io.read();
+        if (current.status !== "Active") throw new InventoryBlocker("LISTING_ENDED", "This eBay listing has ended.");
+        assertDistinctParentSku(current);
+        if (!sameStructure(current)) throw new Error("eBay variation structure changed before the listing update.");
         plan.listingStep.state = "UNCERTAIN";
         await io.save(plan);
         let response: InventoryResponse;
@@ -314,7 +368,7 @@ export async function executeInventory(plan: InventoryPlan, io: {
         let verified = false;
         try {
             current = await io.read();
-            verified = verifyListingStep(plan.listingStep.xml, current);
+            verified = sameStructure(current) && verifyListingStep(plan.listingStep.xml, current);
         }
         catch { /* Keep uncertain listing writes for reconciliation. */ }
         plan.listingStep.state = verified ? "CONFIRMED" : response.outcomeUncertain || response.success ? "UNCERTAIN" : "REJECTED";
@@ -334,7 +388,15 @@ export async function executeInventory(plan: InventoryPlan, io: {
     const pending = plan.targets.filter(t => t.state === "PENDING" || (io.retryRejected && t.state === "REJECTED" && t.retryEligible));
     for (let offset = 0; offset < pending.length; offset += 4) {
         await io.assertCurrent();
-        const batch = pending.slice(offset, offset + 4);
+        current = await io.read();
+        if (current.status !== "Active") throw new InventoryBlocker("LISTING_ENDED", "This eBay listing has ended.");
+        assertDistinctParentSku(current);
+        if (!sameStructure(current)) throw new Error("eBay variation structure changed before the inventory update.");
+        const candidates = pending.slice(offset, offset + 4);
+        for (const t of candidates) deferZeroStockPrice(t, current);
+        const batch = candidates.filter(t => t.state !== "DEFERRED");
+        if (batch.length !== candidates.length) await io.save(plan);
+        if (!batch.length) continue;
         for (const t of batch) {
             if (current.variation !== t.target.variation || current.currency !== t.target.currency || current.itemId !== t.target.itemId || !current.entries.some(e => !t.target.variation || e.sku === t.target.sku))
                 throw new Error("eBay inventory mapping changed before the update.");
@@ -370,7 +432,7 @@ export async function executeInventory(plan: InventoryPlan, io: {
             else if (!response.outcomeUncertain && !response.success && errors?.length) {
                 t.state = "REJECTED";
                 t.errors = errors;
-                t.error = errors.map(e => e.message).join("; ");
+                t.error = errors.map(explainInventoryError).join("; ");
                 t.retryEligible = errors.every(e => e.system);
             }
             else {

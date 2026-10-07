@@ -1,5 +1,6 @@
 import "server-only";
 import { resolveCurrentHoldReason } from "@/lib/current-hold-reason";
+import { deferredPriceHistoryIds } from "./ebay-inventory-job-results";
 
 import {
   EbayActionJobStatus,
@@ -81,6 +82,7 @@ export interface ActionCenterProductSummary {
 }
 
 export interface PendingReviewActionItem {
+  priceUpdateState?: "AWAITING_RESTORATION";
   product: ActionCenterProductSummary;
   priceHistoryId: string;
   pendingCount: number;
@@ -401,6 +403,7 @@ async function getCachedActionCenterQueues(
                 ebayItemId: true,
                 promotedAdStatus: true,
                 promotedAdPercent: true,
+                listingOperations: { where: { stage: "FAILED", preparedPayload: { path: ["kind"], equals: "ebay-inventory" } }, select: { preparedPayload: true } },
               },
             },
             variant: {
@@ -423,7 +426,7 @@ async function getCachedActionCenterQueues(
   }
 
   const pendingReviews = visiblePendingProductIds
-    .map((productId) => {
+    .map((productId): PendingReviewActionItem | null => {
       const histories = visiblePendingByProduct.get(productId) ?? [];
       const latest = getLatestPendingReviewHistory(histories);
 
@@ -443,6 +446,7 @@ async function getCachedActionCenterQueues(
 
       return {
         product: serializeProduct(latest.product),
+        priceUpdateState: histories.every(h => deferredPriceHistoryIds(latest.product.listingOperations).has(h.id)) ? "AWAITING_RESTORATION" as const : undefined,
         priceHistoryId: latest.id,
         pendingCount: pendingGroupMap.get(productId)?._count._all ?? histories.length,
         previousPrice: money(latest.previousPrice) ?? "0.00",

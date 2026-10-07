@@ -26,7 +26,7 @@ export default function BulkEditProgressCard({ job, onClose, onView }: {
         <div className="min-w-0 flex-1">
           <ActionProgressBar label={job.status === "CANCELLING" ? "Cancelling bulk edit" : "Bulk edit in progress"}
             percent={job.total ? Math.min(100, Math.round(job.processed / job.total * 100)) : 0}
-            detail={`${job.processed}/${job.total} processed (${job.succeeded} succeeded, ${inventoryJobCounts(job).failed} failed${inventoryJobCounts(job).verification ? ", "+inventoryJobCounts(job).verification+" need verification" : ""})`} tone="green" />
+            detail={`${job.processed}/${job.total} processed (${job.succeeded} succeeded, ${inventoryJobCounts(job).failed} failed${inventoryJobCounts(job).awaitingRestoration ? ", "+inventoryJobCounts(job).awaitingRestoration+" awaiting restoration" : ""}${inventoryJobCounts(job).verification ? ", "+inventoryJobCounts(job).verification+" need verification" : ""})`} tone={inventoryJobCounts(job).awaitingRestoration ? "amber" : "green"} />
         </div>
         <button type="button" aria-label="Close progress notification" onClick={onClose}
           className="rounded p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700">

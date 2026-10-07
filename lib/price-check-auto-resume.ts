@@ -110,6 +110,9 @@ async function resolveCandidateIds(
     },
     select: {
       id: true,
+      storeId: true,
+      holdGeneration: true,
+      variants: { select: { id: true, sku: true, buyPrice: true, sellPrice: true, quantity: true, feesPercent: true, feesFixed: true, profitPercent: true, profitFixed: true, roundCents: true } },
       status: true,
       ebayItemId: true,
       amazonPriceTrackingMode: true,

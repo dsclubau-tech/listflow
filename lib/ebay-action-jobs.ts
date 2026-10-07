@@ -1,6 +1,7 @@
 import { executeBulkInventoryEdit } from "./ebay-bulk-inventory";
 import { readEbayInventory, writeEbayInventory } from "./ebay-inventory-writer";
-import { inventorySummary, type InventoryPlan, type InventoryResult } from "./ebay-inventory";
+import { assertDistinctParentSku, InventoryBlocker, inventorySummary, type InventoryPlan, type InventoryRequest, type InventoryResult } from "./ebay-inventory";
+import { resolveDeferredPricing } from "./ebay-deferred-pricing";
 import { assertAmazonObservationCurrent, SupersededAmazonObservation } from "@/lib/price-check-result-application";
 import "server-only";
 
@@ -105,6 +106,8 @@ const ACTIVE_ACTION_JOB_STATUSES: EbayActionJobStatus[] = [
 type ProductFailure = {
   variationResults?: InventoryResult[];
   outcomeUncertain?: boolean;
+  awaitingRestoration?: number;
+  blockerCode?: string;
   retryEligible?: boolean;
   shippingConfirmation?: UploadShippingConfirmation;
   productId: string;
@@ -843,6 +846,10 @@ async function markProgressBatch(
 
   for (const update of updates) {
     if (completed.has(update.productId)) continue;
+    if (job.type === EbayActionJobType.BULK_EDIT_REVISE && update.failure?.awaitingRestoration) {
+      const durable = await tx.bulkEditJobItem.findUnique({ where: { jobId_productId: { jobId: job.id, productId: update.productId } } });
+      if (durable?.status === "SUCCEEDED") { update.succeeded = true; update.failure = null; }
+    }
     completed.add(update.productId);
 
     if (update.failure) {
@@ -880,14 +887,14 @@ async function processVariationBulkProduct(job:EbayActionJobRecord,productId:str
    if(await isEbayActionCancellationRequested(job.id))throw new Error("Bulk edit cancelled. Confirmed variations are preserved.");
   }});
   return {ok:result.success,failure:result.success?null:{productId,title:(await prisma.product.findUnique({where:{id:productId},select:{title:true}}))?.title??"(missing)",
-   error:result.errorMessage??"Update failed.",variationResults:result.variationResults,outcomeUncertain:result.outcomeUncertain,retryEligible:result.retryEligible}};
+   error:result.errorMessage??"Update failed.",variationResults:result.variationResults,outcomeUncertain:result.outcomeUncertain,retryEligible:result.retryEligible,awaitingRestoration:result.awaitingRestoration}};
  }catch(error){
   const message=error instanceof Error?error.message:"Bulk edit failed.";
   const saved=await prisma.listingOperation.findUnique({where:{requestKey:"inventory:bulk:"+job.id+":"+productId}}).catch(()=>null);
   const plan=saved?.preparedPayload as unknown as InventoryPlan|undefined;
-  const checkpoint=plan?.kind==="ebay-inventory"&&plan.version===1?inventorySummary(plan):undefined;
+  const checkpoint=plan?.kind==="ebay-inventory"&&[1,2].includes(plan.version)?inventorySummary(plan):undefined;
   await prisma.bulkEditJobItem.updateMany({where:{jobId:job.id,productId},data:{status:"FAILED",error:message,completedAt:new Date()}});
-  return {ok:false,failure:{productId,title:(await prisma.product.findUnique({where:{id:productId},select:{title:true}}))?.title??"(missing)",error:message,...(checkpoint?{variationResults:checkpoint.variationResults,outcomeUncertain:checkpoint.outcomeUncertain}:{}),retryEligible:!(/ended|SKU|currency|Legacy|Unsupported/i.test(message))}};
+  return {ok:false,failure:{productId,title:(await prisma.product.findUnique({where:{id:productId},select:{title:true}}))?.title??"(missing)",error:message,...(checkpoint?{variationResults:checkpoint.variationResults,outcomeUncertain:checkpoint.outcomeUncertain,awaitingRestoration:checkpoint.awaitingRestoration}:{}),blockerCode:error instanceof InventoryBlocker?error.code:undefined,retryEligible:error instanceof InventoryBlocker?false:!(/ended|SKU|currency|Legacy|Unsupported/i.test(message))}};
  }
 }
 
@@ -911,7 +918,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string, worke
       variants: {
         orderBy: { createdAt: "asc" },
       },
-      ...(automaticPriceCheckResume || automaticPriceCheckHold || automaticLowStockHold || automaticShippingHold
+      ...(job.type === EbayActionJobType.RESUME || automaticPriceCheckHold || automaticLowStockHold || automaticShippingHold
         ? priceCheckRecoveryRelations : {}),
     },
   });
@@ -936,7 +943,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string, worke
       if (automaticShippingHold || automaticPriceCheckResume) {
         const [currentSettings, currentProduct] = await Promise.all([
           prisma.supplierSettings.findUnique({ where: { storeId_supplierName: { storeId: product.storeId, supplierName: "Amazon AU" } }, select: { minProductQuantity: true, maxShippingDays: true, scrapePostcode: true } }),
-          prisma.product.findFirst({ where: { id: productId, storeId: product.storeId }, include: priceCheckRecoveryRelations }),
+          prisma.product.findFirst({ where: { id: productId, storeId: product.storeId }, include: { ...priceCheckRecoveryRelations, variants: { orderBy: { createdAt: "asc" } } } }),
         ]);
         if (!currentProduct || currentProduct.ebayItemId !== product.ebayItemId || currentProduct.holdLastObservationId !== product.holdLastObservationId) return false;
         if (automaticShippingHold && (currentProduct.status !== ProductStatus.IMPORTED || currentProduct.holdOrigin === ProductHoldOrigin.MANUAL)) return false;
@@ -1179,10 +1186,10 @@ async function processProduct(job: EbayActionJobRecord, productId: string, worke
 
       if (!result.success) {
         const errorMessage = result.errorMessage || "eBay listing update failed";
-        if(!product.errorMessage)await prisma.product.update({where:{id:product.id},data:{errorMessage}});
+        if(!product.errorMessage && !result.awaitingRestoration)await prisma.product.update({where:{id:product.id},data:{errorMessage}});
         return {
           ok: false,
-          failure: { productId, title: product.title, error: errorMessage, variationResults:result.variationResults,outcomeUncertain:result.outcomeUncertain,retryEligible:result.retryEligible },
+          failure: { productId, title: product.title, error: errorMessage, variationResults:result.variationResults,outcomeUncertain:result.outcomeUncertain,retryEligible:result.retryEligible,awaitingRestoration:result.awaitingRestoration },
         };
       }
 
@@ -1228,7 +1235,7 @@ async function processProduct(job: EbayActionJobRecord, productId: string, worke
       if(!product.errorMessage)await prisma.product.update({where:{id:product.id},data:{errorMessage}});
       return {
         ok: false,
-        failure: { productId, title: product.title, error: errorMessage,retryEligible:!/ended|SKU|currency|context changed/i.test(errorMessage) },
+        failure: { productId, title: product.title, error: errorMessage,blockerCode:error instanceof InventoryBlocker?error.code:undefined,retryEligible:error instanceof InventoryBlocker?false:!/ended|SKU|currency|context changed/i.test(errorMessage) },
       };
     }
   }
@@ -1406,13 +1413,29 @@ async function processProduct(job: EbayActionJobRecord, productId: string, worke
       };
     }
 
+    const resumeSettings = await prisma.supplierSettings.findUnique({ where: { storeId_supplierName: { storeId: product.storeId, supplierName: "Amazon AU" } }, select: { minProductQuantity: true, maxShippingDays: true, scrapePostcode: true } });
+    const previousResume = await prisma.listingOperation.findUnique({ where: { requestKey: "inventory:resume:" + job.id + ":" + productId } });
+    const previousPlan = previousResume?.preparedPayload as unknown as InventoryPlan | undefined;
+    const previousIntent = previousPlan?.kind === "ebay-inventory" ? JSON.parse(String(previousPlan.context.intent)) as { requests: InventoryRequest[] } : undefined;
+    const deferred = resolveDeferredPricing(product, resumeSettings ?? undefined);
+    if (deferred.error || product._count.priceHistory > deferred.coveredHistoryIds.length)
+      return { ok: false, failure: { productId, title: product.title, error: deferred.error ?? "Price review required before restoration.", retryEligible: false } };
+    if (deferred.sources.length) {
+      if (!product.holdOrigin || product.holdOrigin === ProductHoldOrigin.UNKNOWN || product.holdOrigin === ProductHoldOrigin.PRICE_CHECK_UNSAFE_PRICE)
+        return { ok: false, failure: { productId, title: product.title, error: "This hold requires review before stock can be restored.", retryEligible: false } };
+      const evidence = getPriceCheckRecoveryEvidence(product, resumeSettings ?? { maxShippingDays: 25, scrapePostcode: "2217" });
+      if (product.priceCheckError || product.priceCheckFailureCode || product.amazonAvailability !== "IN_STOCK" ||
+          evidence.identityOutcome !== "MATCH" || evidence.buyBoxOutcome !== "AVAILABLE" || !evidence.postcodeVerified ||
+          evidence.hasUnappliedPriceChange || !evidence.shippingWithinLimit || evidence.verifiedStockLeft == null || isAmazonStockLow(evidence.verifiedStockLeft, getMinimumProductQuantity(resumeSettings?.minProductQuantity)))
+        return { ok: false, failure: { productId, title: product.title, error: "Fresh verified price, stock and delivery are required before the deferred price can be restored.", retryEligible: false } };
+    }
     // Manual and automatic restores always start at one, regardless of the
     // pre-hold snapshot. Older holds do not need a quantity snapshot to recover.
     const restoreQty = 1;
     if (!await automaticObservationIsCurrent()) return { ok: true, failure: null };
     let result;
     try { result=await writeEbayInventory({productId,storeId:product.storeId,requestKey:"inventory:resume:"+job.id+":"+productId,
-      requests:product.variants.length?product.variants.map(v=>({variantId:v.id,quantity:restoreQty})):[{quantity:restoreQty}],
+      requests:previousIntent?.requests ?? (product.variants.length?product.variants.map(v=>deferred.requests.find(r=>r.variantId===v.id)??({variantId:v.id,quantity:restoreQty})):[{quantity:restoreQty}]), deferredSources: deferred.sources,
       automaticRecovery:automaticPriceCheckResume,assertCurrent:async()=>{await assertActionCurrent();if(!await automaticObservationIsCurrent())throw new Error("Recovery evidence changed.");}
     }); }catch(error){
       const message=error instanceof Error?error.message:"Resume failed.";
@@ -1510,6 +1533,14 @@ async function processProduct(job: EbayActionJobRecord, productId: string, worke
       }
 
       const storeNumber = await getStoreNumber(product.storeId);
+      try {
+        const skuSnapshot = await readEbayInventory(product.ebayItemId, storeNumber);
+        assertDistinctParentSku(skuSnapshot, customLabel);
+        // Existing variation identifiers are not parent-label fill values.
+        if (skuSnapshot.variation) throw new InventoryBlocker("VARIATION_PARENT_LABEL_REVIEW", "Parent labels on variation listings require an explicit reviewed label edit.");
+      } catch (error) {
+        return { ok: false, failure: { productId, title: product.title, error: error instanceof Error ? error.message : "Parent label validation failed.", retryEligible: false, blockerCode: error instanceof InventoryBlocker ? error.code : undefined } };
+      }
       let result = await callEbayReviseItem(
         buildReviseItemXML(product, undefined, {
           customLabel,

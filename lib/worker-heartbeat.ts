@@ -12,7 +12,7 @@ export const WORKER_STALE_AFTER_MS = 60_000;
 export const WORKER_CLEANUP_AFTER_MS = 24 * 60 * 60 * 1000; // 24 hours — hide workers not seen since
 export const WORKER_OFFLINE_MESSAGE =
   "Worker offline. Open Start ListFlow Worker on a trusted PC to run price checks, imports, research batches, or quantity changes.";
-export const DURABLE_BULK_EDIT_CAPABILITY = "variation-inventory-v1";
+export const DURABLE_BULK_EDIT_CAPABILITY = "variation-inventory-v2";
 
 export type SerializedWorkerStatus = {
   online: boolean;

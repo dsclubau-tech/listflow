@@ -22,12 +22,12 @@ export async function executeBulkInventoryEdit(input: {
     const old = await prisma.listingOperation.findUnique({ where: { requestKey } });
     const item = await prisma.bulkEditJobItem.findUnique({ where: { jobId_productId: { jobId: input.jobId, productId: product.id } } });
     const payload = item?.payload as Record<string, unknown> | undefined;
-    if(payload?.inventoryVersion!==undefined&&payload.inventoryVersion!==1)throw new Error("Unsupported bulk inventory payload version.");
+    if(payload?.inventoryVersion!==undefined&&![1,2].includes(Number(payload.inventoryVersion)))throw new Error("Unsupported bulk inventory payload version.");
     // Legacy APPLYING payloads may have been written. Do not undo accepted values or blindly replay them.
     const legacySnapshot = !old && payload?.snapshot ? payload.snapshot as BulkEditProductSnapshot : undefined;
     if (legacySnapshot && legacySnapshot.product.id !== product.id)
         throw new Error("Legacy product identity cannot be verified.");
-    const versioned = payload?.inventoryV1 as Record<string, unknown> | undefined;
+    const versioned = (payload?.inventoryV2 ?? payload?.inventoryV1) as Record<string, unknown> | undefined;
     const operations = input.operations ?? versioned?.operations ?? payload?.operations;
     if(item&&!Array.isArray(operations))throw new Error("Unsupported prepared bulk inventory payload.");
     const preview = operations ? await applyBulkProductEdits({ storeId: input.storeId, productIds: [product.id], operations, prepareOnly: true, preparationSnapshot: legacySnapshot }) : null;
@@ -64,13 +64,13 @@ export async function executeBulkInventoryEdit(input: {
     await input.assertCurrent?.();
     const snapshot = old ? undefined : await readEbayInventory(product.ebayItemId, await getStoreNumber(input.storeId));
     if (item)
-        await prisma.bulkEditJobItem.update({ where: { id: item.id }, data: { status: "APPLYING", attempts: { increment: 1 }, payload: JSON.parse(JSON.stringify({ inventoryV1: { operations }, inventoryVersion: 1, inventoryRequestKey: requestKey })) } });
+        await prisma.bulkEditJobItem.update({ where: { id: item.id }, data: { status: "APPLYING", attempts: { increment: 1 }, payload: JSON.parse(JSON.stringify({ inventoryV2: { operations }, inventoryVersion: 2, inventoryRequestKey: requestKey })) } });
     const savedPlan = old?.preparedPayload as unknown as InventoryPlan | undefined;
     const savedIntent = savedPlan?.context.intent ? JSON.parse(String(savedPlan.context.intent)) as {
         requests: InventoryRequest[];
     } : null;
     const result = await writeEbayInventory({ productId: product.id, storeId: input.storeId, requestKey, requests: savedIntent?.requests ?? requests, snapshot, listingStep,
-        retryRejected: true, reconcileOnly: !!legacySnapshot, assertCurrent: input.assertCurrent });
+        retryRejected: true, reconcileOnly: !!legacySnapshot, assertCurrent: input.assertCurrent, authorization: { source: "EXPLICIT_EDIT", sourceJobId: input.jobId } });
     if (result.success && quantityChanged) {
         const quantity = Number(result.variationResults[0]?.desired.quantity ?? product.quantity);
         await prisma.product.update({ where: { id: product.id }, data: { quantity, status: quantity === 0 ? "ON_HOLD" : "IMPORTED",

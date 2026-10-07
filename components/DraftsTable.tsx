@@ -1610,6 +1610,9 @@ export default function DraftsTable({
       const data = (await res.json().catch(() => ({}))) as {
         total?: number;
         applied?: number;
+        awaitingRestoration?: unknown[];
+        actionRequired?: string;
+        message?: string;
         failed?: number;
         error?: string;
       };
@@ -1620,12 +1623,15 @@ export default function DraftsTable({
         return;
       }
 
+      const waitingCount = data.awaitingRestoration?.length ?? 0;
       const failureCount = data.failed ?? 0;
       const appliedCount = data.applied ?? 0;
       const totalCount = data.total ?? 0;
 
       onToast(
-        failureCount > 0
+        waitingCount > 0
+          ? `${waitingCount} price update(s) waiting for stock restoration. ${appliedCount} applied; ${failureCount} failed.`
+          : failureCount > 0
           ? `Applied ${appliedCount}/${totalCount} price change(s). ${failureCount} failed.`
           : `Applied all ${appliedCount} price change(s) successfully.`,
         failureCount > 0 ? "error" : "success"
@@ -2025,6 +2031,9 @@ export default function DraftsTable({
       const data = (await res.json().catch(() => ({}))) as {
         error?: string;
         applied?: number;
+        awaitingRestoration?: unknown[];
+        actionRequired?: string;
+        message?: string;
         dismissed?: number;
       };
 
@@ -2036,7 +2045,7 @@ export default function DraftsTable({
 
       onToast(
         action === "apply"
-          ? `Applied ${data.applied ?? 0} price change(s).`
+          ? (data.actionRequired ? (data.message ?? "Price update waiting for stock restoration.") : `Applied ${data.applied ?? 0} price change(s).`)
           : `Dismissed ${data.dismissed ?? 0} price change(s).`,
         "success"
       );

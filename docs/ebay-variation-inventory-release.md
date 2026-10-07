@@ -12,6 +12,8 @@ A whole-listing hold includes all verified live remote variations. Manual resume
 
 ## Persisted payload version 1
 
+This section describes the previous release. New operations use version 2, documented below; version-1 checkpoints remain readable and are reconciled before upgrade.
+
 ListingOperation.preparedPayload is an immutable plan with kind "ebay-inventory" and version 1. It contains store/product/item identity, original local context, inventory tracking mode, exact remote SKU structure, intended per-target values, original remote values and optional listing-level step.
 
 Target states are PENDING, CONFIRMED, REJECTED and UNCERTAIN. An applied flag checkpoints local acceptance separately from marketplace confirmation. The listing step also has an applied flag. COMPLETED is recorded only after all remote confirmations and local application checkpoints succeed.
@@ -91,3 +93,82 @@ There are no unresolved local validation failures. Real listing mappings and mar
 A read-only GetItem preflight for De’Longhi exposed the parser’s default 1,000-entity limit on a long, ordinarily escaped listing description. No marketplace update was made. Two new regressions failed before the correction and now pass. Inventory parsing rejects document-defined entities and responses larger than 8 MiB before parsing, while scaling predefined-reference limits to the bounded response length. Exact SKU decoding and listing-step comparisons remain unchanged.
 
 After this correction: 1,028 unit tests and 112 mocked browser tests passed (10 credential-dependent tests skipped). TypeScript, normal lint, production build and diff checks passed. The pre-existing worker-log build warning remains.
+
+
+## Version 2: parent collisions and deferred prices — 7 October 2026
+
+This implementation is local. No deployment, live repair, production retry, stock restoration or database migration was performed. The existing De’Longhi listing is not declared resolved.
+
+### Identity, authorization and durable execution
+
+The planner rejects an exact parent/variation SKU collision, including a sole variation, using PARENT_VARIATION_SKU_COLLISION. Fresh structure reads also check the parent label immediately before listing-level and inventory writes. Automatic parent-label filling cannot copy a variation SKU onto an existing variation listing. Codes 21916735 and 21916736 retain their distinct short messages and common long message in structured diagnostics.
+
+Inventory plans retain original local and remote values, authorization source (explicit edit, price approval or automatic policy), history IDs, supplier settings, tracking preference, committed evidence, hold generation and per-target checkpoints. Version 2 adds DEFERRED as a JSON target state, stored through the existing non-success database stage. A different requested price at zero variation stock is deferred unless an authorized positive quantity is already included. A matching remote price is a verified no-op. Price-only requests never add stock.
+
+Authorized deferred requests remain unapplied until confirmed. New explicitly represented authorized targets can supersede an older deferred intent; the older JSON intent is retained with supersededBy. Supersession does not claim pricing success. Uncertain operations cannot be superseded or blindly replayed. Object comparisons normalize JSON key order so PostgreSQL JSONB ordering cannot manufacture context changes.
+
+New bulk-item payloads use inventoryV2.operations and inventoryVersion 2 at creation. New jobs require a heartbeat advertising variation-inventory-v2. Version-1 plans reconcile first and upgrade before new writes; unknown versions are rejected. Older workers reject the new prepared payloads. This protection does not make a mixed fleet supported.
+
+### Restoration and settlement
+
+Recovery accounts for every unapplied history. Unapproved reviews, unexplained failures, changed inputs, changed evidence and uncertain writes remain blockers. A current authorized deferred price can join an otherwise eligible restoration: each exact ItemID/SKU entry includes its own StartPrice and Quantity 1. Current remote price/stock must match the source context or already match the complete desired result. Changed seller values require review.
+
+Identity, eligible offer, accepted Amazon cost, verified stock threshold, fresh shipping, hold-origin and pending-review checks remain mandatory. Manual holds require manual resume; unknown-origin and review-required holds retain review requirements. Multiple variations without sufficient individual evidence cannot recover automatically. No independent per-variation Amazon checker or timed waiting period was added.
+
+Readback must confirm both fields. Price-only or quantity-only application remains unresolved. Confirmed inventory checkpoints survive local failures, cancellation, restart and lost ownership. No compensating writes are issued. The restoration remains in RECONCILIATION until linked price histories, deferred source operations and any source bulk-item accounting settle. Each product is counted once; confirmed source counters settle under locks without replaying successful products. Changing or withdrawing approval during a write prevents a false resumed result.
+
+Existing progress and approval screens distinguish parent repair, awaiting restoration and needs-verification states. Approval accepted for later application is not displayed as an applied price. Action Center derives unresolved approved deferrals from stored operations on reopening; no new polling loop was added. Independent Amazon errors and hold reasons remain separate.
+
+### Restricted De’Longhi repair procedure
+
+The maintenance script is scripts/repair-delonghi-parent-sku.ts. Its default mode reads only and saves a redacted preview to scratch/delonghi-parent-sku-repair-preview.json. It is fixed to seed-store-1, product cmuo5d08u03sk5gvjwn9ldb7x, ItemID 304997589004 and SKU B07G5B97VD. It requires explicit ItemID tracking, one matching variation, active AUD listing status, zero available quantity and unchanged local identity.
+
+Read-only command:
+
+    node --conditions=react-server --import tsx scripts/repair-delonghi-parent-sku.ts
+
+Only --help was run during this implementation. A separately authorized operator must review the dry-run evidence and exact XML before using the script's explicit apply options. The write removes only Item.SKU through DeletedField. It sends no replacement label, price, quantity or variation changes.
+
+Apply acquires the normal listing-write lease, rejects unresolved operations, checkpoints before sending and verifies that the parent is absent while variation SKU, specifics, price, quantity, tracking and listing identity remain unchanged. Every existing potentially sent checkpoint, including PREPARED, is reconciled without resending. Unexpected state stops for review.
+
+Repair confirmation means identity repair only. It does not retry A$239.99, clear the manual hold or saved Amazon failure, restore stock or rewrite historical bulk-job success.
+
+### Coordinated rollout and rollback
+
+Keep the prior release and unresolved checkpoints. Gracefully stop web/worker writes, update web and all six workers together, and verify the same release plus fresh variation-inventory-v2 heartbeats. Perform the separately authorized and reviewed repair only afterward. Any later price/stock action requires current intended values and current eligibility; never replay an old price solely because the label was repaired.
+
+Rollback preserves version-2 records, uncertainty and partial confirmations. Older workers must remain unable to execute these operations. No automatic historical backfill is included.
+
+### Validation evidence and limits
+
+Five new regression cases failed against the unchanged implementation before the core fix (scratch/inventory-v2-before.log). Focused tests cover collisions at zero/positive stock, distinct error details, deferral/no-op, one-field remote application, fresh pre-write changes, changed authorization/context, JSONB ordering, actual single/bulk approval routes, worker restoration, restart, counters and narrow repair behavior. Browser tests mount the actual progress and Action Center components at desktop/mobile widths and reject unexpected requests/runtime errors.
+
+Sandbox configuration and credentials were unavailable. All marketplace and database boundaries in behavioral tests were mocked; no live listing was substituted for sandbox validation. The repair --help check passed.
+
+Final local gates:
+
+| Gate | Result |
+|---|---|
+| New regression baseline | Five cases failed before implementation |
+| Full unit suite | 1,048 passed, zero failed on final rerun |
+| Full browser suite | 116 passed; 10 credential-dependent cases skipped |
+| TypeScript | Passed after the production build |
+| Normal lint | Passed |
+| Production build | Passed; existing rotating-worker-log broad-pattern warning remains |
+| Full change review and git diff --check | Passed |
+| Isolated marketplace sandbox | Unavailable; no live substitute used |
+
+The preceding unit run had one transient EBUSY cleanup failure in the unchanged postcode-reuse-package test's Windows temporary folder; all 1,048 tests passed on rerun without changing that test. The first restricted build could not read an existing diagnostics directory; the normal build passed with local filesystem access. These environmental results are separate from the new behavior.
+
+The local implementation is ready for review with the sandbox limitation above. Production remains on its existing release. De’Longhi still needs its separately authorized identity repair and independently eligible price/stock operation; its manual hold and Amazon failure were not cleared.
+
+Changed files:
+
+- Inventory: lib/ebay-inventory.ts, lib/ebay-inventory-writer.ts, lib/ebay-deferred-pricing.ts, lib/ebay-deferred-settlement.ts, lib/ebay-bulk-inventory.ts, lib/ebay-inventory-job-results.ts.
+- Pricing/recovery: lib/price-checker.ts, lib/price-check-recovery-evidence.ts, lib/price-check-auto-resume.ts, lib/ebay-action-jobs.ts.
+- API: app/api/price-check/apply/route.ts, app/api/price-check/bulk-apply/route.ts, app/api/products/bulk-edit/route.ts.
+- Interface: lib/action-center.ts, components/ActionCenterClient.tsx, components/DraftsTable.tsx, components/BulkEditModal.tsx, components/BulkEditProgressCard.tsx.
+- Compatibility: lib/worker-heartbeat.ts, scripts/listflow-worker.ts.
+- Restricted repair: lib/ebay-parent-sku-repair.ts, scripts/repair-delonghi-parent-sku.ts.
+- Tests: lib/ebay-inventory-v2.test.ts, lib/ebay-parent-sku-repair.test.ts, lib/ebay-inventory-job-results.test.ts, lib/amazon-shipping-integration.test.ts, lib/amazon-delivery-cooldown.test.ts, tests/e2e/bulk-edit-lifecycle.spec.ts, tests/e2e/action-center-delivery-wait.spec.ts.
+- Runbook: docs/ebay-variation-inventory-release.md.

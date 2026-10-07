@@ -446,3 +446,19 @@ test("ended listing alone has no retry control",async({page})=>{
  const backend=await start(page,job);await page.getByRole("button",{name:"Bulk edit results",exact:true}).click();
  await expect(page.getByRole("button",{name:/Retry .* failed|Verify pending/})).toHaveCount(0);expect(backend.controls.retries).toBe(0);
 });
+
+for(const width of [1440,390])test("deferred pricing and parent repair remain action required at "+width,async({page})=>{
+ await page.setViewportSize({width,height:900});
+ const job=makeJob({status:"COMPLETED",total:411,processed:411,succeeded:409,failed:2,completedAt:"2026-10-07T01:00:00Z",errors:[
+  {productId:"waiting",title:"Zero-stock variation",error:"Price update waiting for stock restoration.",awaitingRestoration:1,retryEligible:false,variationResults:[{state:"DEFERRED",target:{sku:"EXACT-SKU"},error:"Price update waiting for stock restoration."}]},
+  {productId:"repair",title:"De’Longhi",error:"Parent SKU repair required.",retryEligible:false,blockerCode:"PARENT_VARIATION_SKU_COLLISION",variationResults:[{state:"REJECTED",target:{sku:"B07G5B97VD"},errors:[{code:"21916735",message:"Variation SKU required",shortMessage:"Item-level SKU supplied",longMessage:"Variation level SKU required"}]}]}
+ ]});
+ const backend=await start(page,job);await page.getByRole("button",{name:"Bulk edit results",exact:true}).click();
+ await expect(page.getByText("411/411 processed (409 succeeded, 1 failed, 1 awaiting restoration)")).toBeVisible();
+ await expect(page.getByText("Price update waiting for stock restoration.",{exact:true}).first()).toBeVisible();
+ await expect(page.getByRole("button",{name:/Retry .* failed|Verify pending/})).toHaveCount(0);
+ await page.getByText("Variation details",{exact:true}).last().click();await expect(page.getByText(/21916735.*Item-level SKU supplied/)).toBeVisible();
+ expect(backend.controls.retries).toBe(0);
+ await page.reload();await page.addScriptTag({content:await harness});await page.getByRole("button",{name:"Bulk edit results",exact:true}).click();
+ await expect(page.getByText("411/411 processed (409 succeeded, 1 failed, 1 awaiting restoration)")).toBeVisible();
+});

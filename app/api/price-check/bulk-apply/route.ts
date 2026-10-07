@@ -102,6 +102,7 @@ export async function POST(request: Request) {
 
   const productIds = [...productGroups.keys()];
   let applied = 0;
+  const awaitingRestoration: Array<{ productId: string; message: string }> = [];
   let failed = 0;
   let skipped = 0;
   const failures: ProductFailure[] = [];
@@ -205,7 +206,7 @@ export async function POST(request: Request) {
             price: primaryHistory!.newSellPrice,
           },
           nextPrimarySellPrice,
-          {prices:variantsToUpdate.map(v=>({variantId:v.id,price:Number(historyByVariantId.get(v.id)!.newSellPrice),buyPrice:Number(historyByVariantId.get(v.id)!.newPrice)})),
+          {prices:variantsToUpdate.map(v=>({variantId:v.id,price:Number(historyByVariantId.get(v.id)!.newSellPrice),buyPrice:Number(historyByVariantId.get(v.id)!.newPrice),priceHistoryIds:[historyByVariantId.get(v.id)!.id]})),authorization:{source:"PRICE_APPROVAL",historyIds},
            requestKey:"inventory:review:"+product.id+":"+new Date(newestCreatedAtMs).toISOString(),assertCurrent:resultLease!.assertOwnership},
         ));
       } catch (error) {
@@ -215,6 +216,11 @@ export async function POST(request: Request) {
         };
       }
 
+      if (!reviseResult.success && reviseResult.awaitingRestoration && !reviseResult.outcomeUncertain && !reviseResult.variationResults?.some(t => t.state === "REJECTED")) {
+        await confirmInventoryPriceHistories(reviseResult, product.id, historyItems, reviewedAt);
+        awaitingRestoration.push({ productId: product.id, message: "Price update waiting for stock restoration." });
+        continue;
+      }
       if (!reviseResult.success) {
         await confirmInventoryPriceHistories(reviseResult,product.id,historyItems,reviewedAt);
         const errorMessage =
@@ -311,7 +317,7 @@ export async function POST(request: Request) {
     skipped,
   });
 
-  if (applied > 0 || failed > 0 || skipped > 0) {
+  if (applied > 0 || failed > 0 || skipped > 0 || awaitingRestoration.length > 0) {
     invalidatePriceCaches(storeSession.storeId);
   }
 
@@ -321,5 +327,6 @@ export async function POST(request: Request) {
     failed,
     skipped,
     failures,
+    awaitingRestoration,
   });
 }

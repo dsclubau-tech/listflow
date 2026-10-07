@@ -992,14 +992,16 @@ export default function BulkEditModal({
                     : job.status === "FAILED"
                       ? "Bulk edit failed"
                     : terminalJob
-                    ? job.failed > 0
+                    ? inventoryJobCounts(job).awaitingRestoration > 0
+                      ? "Price updates awaiting restoration"
+                    : job.failed > 0
                       ? "Bulk edit completed with errors"
                       : "Bulk edit complete"
                     : "Applying bulk edits"
                 }
                 percent={progressPercent}
-                detail={`${job.processed}/${job.total} processed (${job.succeeded} succeeded, ${inventoryJobCounts(job).failed} failed${inventoryJobCounts(job).verification ? ", "+inventoryJobCounts(job).verification+" need verification" : ""})` }
-                tone="green"
+                detail={`${job.processed}/${job.total} processed (${job.succeeded} succeeded, ${inventoryJobCounts(job).failed} failed${inventoryJobCounts(job).awaitingRestoration ? ", "+inventoryJobCounts(job).awaitingRestoration+" awaiting restoration" : ""}${inventoryJobCounts(job).verification ? ", "+inventoryJobCounts(job).verification+" need verification" : ""})` }
+                tone={inventoryJobCounts(job).awaitingRestoration ? "amber" : "green"}
               />
               {!terminalJob && job.queuePosition && job.queuePosition > 1 && (
                 <div className="mt-2 text-xs text-gray-600">Queue position {job.queuePosition}</div>
@@ -1022,12 +1024,12 @@ export default function BulkEditModal({
               {job.errors.length > 0 && (
                 <div className="mt-3 max-h-28 overflow-y-auto rounded border border-red-200 bg-white p-2">
                   {job.errors.map((error) => (
-                    <div key={`${error.productId}-${error.error}`} className={error.outcomeUncertain ? "text-xs text-amber-800" : "text-xs text-red-700"}>
+                    <div key={`${error.productId}-${error.error}`} className={(error.outcomeUncertain || error.variationResults?.some(t=>t.state==="DEFERRED")) ? "text-xs text-amber-800" : "text-xs text-red-700"}>
                       <span className="font-semibold">{error.title || error.productId}:</span>{" "}
                       <span>{error.outcomeUncertain ? "Update result needs verification." : error.error}</span>
                       {error.variationResults?.length ? <details className="my-1"><summary className="cursor-pointer">Variation details</summary>
                         <ul className="mt-1 space-y-1">{error.variationResults.map((result,index)=><li key={result.target.sku??index}>
-                          {result.target.sku??"Listing"}: {result.state.toLowerCase()}{result.error ? " — "+result.error : ""}
+                          {result.target.sku??"Listing"}: {result.state.toLowerCase()}{result.error ? " — "+result.error : ""}{result.errors?.map(e=><div key={e.code}>{e.code}: {e.shortMessage??e.message}{e.longMessage ? " — "+e.longMessage : ""}</div>)}
                         </li>)}</ul>
                       </details> : null}
                     </div>

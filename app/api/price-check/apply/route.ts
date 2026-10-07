@@ -216,7 +216,7 @@ export async function POST(request: Request) {
           price: primaryHistory!.newSellPrice,
         },
         nextPrimarySellPrice,
-        {prices:variantsToUpdate.map(v=>({variantId:v.id,price:Number(historyByVariantId.get(v.id)!.newSellPrice),buyPrice:Number(historyByVariantId.get(v.id)!.newPrice)})),
+        {prices:variantsToUpdate.map(v=>({variantId:v.id,price:Number(historyByVariantId.get(v.id)!.newSellPrice),buyPrice:Number(historyByVariantId.get(v.id)!.newPrice),priceHistoryIds:[historyByVariantId.get(v.id)!.id]})),authorization:{source:"PRICE_APPROVAL",historyIds},
          requestKey:"inventory:review:"+product.id+":"+target.createdAt.toISOString(),assertCurrent:resultLease.assertOwnership},
       ));
     } catch (error) {
@@ -226,6 +226,11 @@ export async function POST(request: Request) {
       };
     }
 
+    if (!reviseResult.success && reviseResult.awaitingRestoration && !reviseResult.outcomeUncertain && !reviseResult.variationResults?.some(t => t.state === "REJECTED")) {
+      await confirmInventoryPriceHistories(reviseResult, product.id, historyItems, reviewedAt);
+      invalidatePriceCaches(storeSession.storeId);
+      return NextResponse.json({ actionRequired: "AWAITING_RESTORATION", message: "Price update waiting for stock restoration.", applied: 0, ebayRevised: false, awaitingRestoration: reviseResult.awaitingRestoration, variationResults: reviseResult.variationResults });
+    }
     if (!reviseResult.success) {
         const confirmedIds=await confirmInventoryPriceHistories(reviseResult,product.id,historyItems,reviewedAt);
       const errorMessage =

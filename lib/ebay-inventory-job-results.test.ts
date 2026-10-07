@@ -10,10 +10,15 @@ test("retry five variation failures preserves 405 successes and the ended failur
     assert.equal(result.completed.length, 406);
     assert.equal(result.succeeded + result.ids.length, 410);
 });
+test("deferred prices count products once and cannot enter a retry loop", () => {
+ const deferred={productId:"p",title:"P",error:"Price update waiting for stock restoration.",awaitingRestoration:3,variationResults:[{state:"DEFERRED",target:{sku:"a"}},{state:"DEFERRED",target:{sku:"b"}}]};
+ assert.deepEqual(inventoryJobCounts({failed:2,errors:[deferred,deferred,{productId:"failed",title:"F",error:"Rejected",retryEligible:false}]}),{verification:0,awaitingRestoration:1,failed:1,retryable:0});
+ const result=prepareInventoryJobRetry({completedProductIds:["p"],succeeded:405,failed:1,errors:[deferred]},["p"]);assert.deepEqual(result.ids,[]);assert.equal(result.failed,1);
+});
 test("job display counts each product once and older response fields still work", () => {
-    assert.deepEqual(inventoryJobCounts({ failed: 3, errors: [] }), { verification: 0, failed: 3, retryable: 3 });
+    assert.deepEqual(inventoryJobCounts({ failed: 3, errors: [] }), { verification: 0, awaitingRestoration: 0, failed: 3, retryable: 3 });
     const error = { productId: "p", title: "P", error: "Unknown", outcomeUncertain: true };
-    assert.deepEqual(inventoryJobCounts({ failed: 1, errors: [error, error] }), { verification: 1, failed: 0, retryable: 1 });
+    assert.deepEqual(inventoryJobCounts({ failed: 1, errors: [error, error] }), { verification: 1, awaitingRestoration: 0, failed: 0, retryable: 1 });
 });
 test("selected retry excludes unselected products and permanent mappings", () => {
     const errors = [{ productId: "a", title: "A", error: "Mapping missing", retryEligible: false }, { productId: "b", title: "B", error: "Temporary" }, { productId: "c", title: "C", error: "Unknown", outcomeUncertain: true }];

@@ -91,7 +91,7 @@ export async function POST(request: Request) {
         durable: true,
       },
       requestId: body.requestId.trim(),
-      itemPayload: { inventoryV1: { operations: editResult.operations } },
+      itemPayload: { inventoryV2: { operations: editResult.operations }, inventoryVersion: 2 },
     });
 
     invalidateJobCaches(storeSession.storeId);

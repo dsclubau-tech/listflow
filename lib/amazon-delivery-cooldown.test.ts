@@ -149,7 +149,7 @@ async function fixture(count = 809, version = 1, finished = 0) {
       };
       const before = clone(tables) as typeof tables;
       try { return await operation({ ...database, $queryRaw: async () => [] }); }
-      catch (error) { Object.assign(tables, before); throw error; }
+      catch (error) { Object.assign(tables, before); for (const product of tables.product) product.variants = (product.variants as Row[]).map(v => tables.variant.find(row => row.id === v.id) ?? v); throw error; }
       finally { release(); }
     },
   };
@@ -737,7 +737,7 @@ test("existing missing-deal holds queue recovery after verified Regular fallback
   assert.equal(product.status, "ON_HOLD", "only the resume worker may restore the listing");
   assert.equal(product.amazonPriceTrackingMode, "DEAL");
   const evidence = getPriceCheckRecoveryEvidence(product as unknown as Parameters<typeof getPriceCheckRecoveryEvidence>[0], {maxShippingDays:25,scrapePostcode:"2217"});
-  const candidate = { ...product, ...evidence } as Parameters<typeof isRecoveredPriceCheckAutoHold>[0];
+  const candidate = { ...product, ...evidence } as unknown as Parameters<typeof isRecoveredPriceCheckAutoHold>[0];
   assert.equal(isRecoveredPriceCheckAutoHold(candidate), true);
   assert.equal(isRecoveredPriceCheckAutoHold({ ...candidate, holdOrigin: "MANUAL" }), false);
   assert.equal(isRecoveredPriceCheckAutoHold({ ...candidate, holdOrigin: "PRICE_CHECK_UNSAFE_PRICE" }), false);

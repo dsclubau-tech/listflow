@@ -27,7 +27,7 @@ import {
 } from "@/lib/scraper-browser";
 import { calculateSellPrice } from "@/lib/variant-pricing";
 import { writeEbayInventory } from "./ebay-inventory-writer";
-import type { InventoryResult } from "./ebay-inventory";
+import type { InventoryAuthorization, InventoryResult } from "./ebay-inventory";
 
 import { logger } from "@/lib/logger";
 import { invalidatePriceCaches } from "@/lib/cache-tags";
@@ -222,9 +222,9 @@ async function getSupplierSettings(storeId?: string) {
   );
 }
 
-export type InventoryPriceOutcome = {success:boolean;errorMessage?:string;outcomeUncertain?:boolean;variationResults?:InventoryResult[];retryEligible?:boolean};
+export type InventoryPriceOutcome = {success:boolean;errorMessage?:string;outcomeUncertain?:boolean;variationResults?:InventoryResult[];retryEligible?:boolean;awaitingRestoration?:number};
 export async function reviseProductPrice(product:RevisableProduct,overrideStartPrice?:number,
- options?:{prices:Array<{variantId:string;price:number;buyPrice?:number}>;requestKey:string;assertCurrent?:()=>Promise<void>}):Promise<InventoryPriceOutcome> {
+ options?:{prices:Array<{variantId:string;price:number;buyPrice?:number;priceHistoryIds?:string[]}>;requestKey:string;assertCurrent?:()=>Promise<void>;authorization?:InventoryAuthorization}):Promise<InventoryPriceOutcome> {
  if(!product.ebayItemId)throw new Error("Product is missing an eBay item ID.");
  const current=await prisma.product.findFirst({where:{id:product.id,storeId:product.storeId},include:{variants:{orderBy:{createdAt:"asc"}}}});
  if(!current)throw new Error("Product not found.");
@@ -234,8 +234,8 @@ export async function reviseProductPrice(product:RevisableProduct,overrideStartP
  const prices=options?.prices??(current.variants[0]?[{variantId:current.variants[0].id,price}]:[]);
  return writeEbayInventory({productId:product.id,storeId:product.storeId,
   requestKey:options?.requestKey??"inventory:price:"+product.id+":"+String(current.lastPriceCheck?.getTime()??current.updatedAt.getTime())+":"+price,
-  requests:prices.length?prices.map(p=>({variantId:p.variantId,price:p.price,localPatch:p.buyPrice!==undefined?{buyPrice:p.buyPrice}:undefined})):[{price}],
-  assertCurrent:options?.assertCurrent
+  requests:prices.length?prices.map(p=>({variantId:p.variantId,price:p.price,priceHistoryIds:p.priceHistoryIds,localPatch:p.buyPrice!==undefined?{buyPrice:p.buyPrice}:undefined})):[{price}],
+  assertCurrent:options?.assertCurrent, authorization: options?.authorization
  });
 }
 export async function confirmInventoryPriceHistories(result:InventoryPriceOutcome,productId:string,
@@ -291,7 +291,8 @@ async function automaticallyApplyPriceIncrease(input: {
         }
         await input.assertOwnership?.();
         await input.beforeExternalWrite?.();
-        return reviseProductPrice(input.product,input.nextPrimarySellPrice,{prices:input.variants.map(v=>({variantId:v.id,price:v.nextSellPrice,buyPrice:v.nextBuyPrice})),
+        const history = await prisma.priceHistory.findMany({ where: { productId: input.product.id, createdAt: input.checkedAt, appliedAt: null }, select: { id: true, variantId: true } });
+        return reviseProductPrice(input.product,input.nextPrimarySellPrice,{prices:input.variants.map(v=>({variantId:v.id,price:v.nextSellPrice,buyPrice:v.nextBuyPrice,priceHistoryIds:history.filter(h=>h.variantId===v.id).map(h=>h.id)})), authorization:{source:"AUTOMATIC_POLICY",historyIds:history.map(h=>h.id)},
           requestKey:"inventory:auto-price:"+input.product.id+":"+input.checkedAt.toISOString(),assertCurrent:input.assertOwnership});
       };
       return input.withExternalWrite ? input.withExternalWrite(write) : write();
@@ -303,6 +304,11 @@ async function automaticallyApplyPriceIncrease(input: {
     };
   }
 
+  if (!reviseResult.success && reviseResult.awaitingRestoration && !reviseResult.outcomeUncertain && !reviseResult.variationResults?.some(t => t.state === "REJECTED")) {
+    const histories = await prisma.priceHistory.findMany({ where: { productId: input.product.id, createdAt: input.checkedAt, appliedAt: null }, select: { id: true, variantId: true } });
+    await confirmInventoryPriceHistories(reviseResult, input.product.id, histories, input.checkedAt);
+    return { success: false as const, errorMessage: reviseResult.errorMessage, deferred: true };
+  }
   if (!reviseResult.success) {
     const histories=await prisma.priceHistory.findMany({where:{productId:input.product.id,createdAt:input.checkedAt,appliedAt:null},select:{id:true,variantId:true}});
     await confirmInventoryPriceHistories(reviseResult,input.product.id,histories,input.checkedAt);
@@ -1394,11 +1400,11 @@ export async function runPriceCheck(
               );
             } else {
               result.pendingReview += 1;
-              result.failed += 1;
+              if (!("deferred" in automaticApplication && automaticApplication.deferred)) result.failed += 1;
 
               logger.warn(
                 "price-checker/run",
-                "Automatic BuyPrice increase application failed; review retained",
+                ("deferred" in automaticApplication && automaticApplication.deferred) ? "Authorized price waiting for stock restoration" : "Automatic BuyPrice increase application failed; review retained",
                 {
                   productId: product.id,
                   asin: product.asin,
@@ -1585,11 +1591,11 @@ export async function runPriceCheck(
             );
           } else {
             result.pendingReview += 1;
-            result.failed += 1;
+              if (!("deferred" in automaticApplication && automaticApplication.deferred)) result.failed += 1;
 
             logger.warn(
               "price-checker/run",
-              "Automatic price increase application failed; review retained",
+              ("deferred" in automaticApplication && automaticApplication.deferred) ? "Authorized price waiting for stock restoration" : "Automatic price increase application failed; review retained",
               {
                 productId: product.id,
                 asin: product.asin,
