@@ -31,3 +31,33 @@ export function newAndUsedShippingOffers(includeUsed = true) {
     ${includeUsed ? `<div id="usedAccordionRow">Used – Very Good ${price("192.28", "USED")}${deliveryBlock("FREE delivery Thursday, 15 October")}</div>` : ""}
     </div></div></div>`;
 }
+
+export const shippingIncidentProducts = [
+  { asin: "B0F9XQQ1GC", price: 89, title: "Sven's Island cream" },
+  { asin: "B09RGJY54D", price: 97.99, title: "Manuka Doctor honey" },
+  { asin: "B07FGW3YQT", price: 72.87, title: "New Zealand Honey Co honey" },
+  { asin: "B00D3VZ5FI", price: 85, title: "NatureBee pollen" },
+  { asin: "B0B5T85N8K", price: 119.45, title: "OMRON HEM7144T1" },
+] as const;
+
+// Minimal October 8 capture structures. Removing embedded styles when sanitizing
+// the OMRON fixture would conceal the dispatch-wrapper defect.
+export function shippingIncidentOffer(asin: string, arrival = "Saturday, 10 October", dispatch = "Usually dispatched within 2 to 3 days") {
+  const product = shippingIncidentProducts.find(product => product.asin === asin);
+  if (!product) throw new Error("Unknown shipping incident fixture");
+  const price = `<span class="a-price"><span class="a-offscreen">$${product.price.toFixed(2)}</span></span>`;
+  if (asin === "B0B5T85N8K") return `<input id="ASIN" value="${asin}"><div id="desktop_buybox"><div id="buybox">
+    ${price}${deliveryBlock(arrival === "Saturday, 10 October" ? "FREE delivery 14 - 15 October. Details" : `FREE delivery ${arrival}`, "")}
+    <div id="availabilityInsideBuyBox_feature_div"><style>.availabilityMoreDetailsIcon { width: 12px; }</style>
+      <div id="availability">${dispatch}</div></div><input id="add-to-cart-button">
+    </div></div>`;
+  return `<input id="ASIN" value="${asin}"><div id="desktop_buybox"><div id="buybox"><div id="buyBoxAccordion">
+    <div id="newAccordionRow_0">One-time purchase ${price}
+      <div id="deliveryBlockSmallMessage"><div id="mir-layout-DELIVERY_BLOCK-slot-PRIMARY_DELIVERY_MESSAGE_MEDIUM">FREE delivery ${arrival}</div></div>
+      ${deliveryBlock(`FREE delivery ${arrival}. Order within 1 hr 10 mins`, "")}
+      <div id="availability">In stock</div><input id="add-to-cart-button">
+    </div>
+    <div id="snsAccordionRowMiddle">Subscribe &amp; Save <span class="a-price"><span class="a-offscreen">$${(product.price * 0.9).toFixed(2)}</span></span>
+      ${deliveryBlock(`FREE delivery ${arrival}`, "")}</div>
+    </div></div></div>`;
+}

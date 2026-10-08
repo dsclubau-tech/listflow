@@ -10,7 +10,7 @@ import { getProductShippingPresentation, type ShippingDisplayObservation } from 
 import { parseAmazonShippingEvidence } from './amazon-shipping-evidence';
 import { extractAmazonShippingEvidenceFromHtml } from './amazon-shipping-extraction';
 import { extractAmazonPriceSnapshot } from './amazon-price-snapshot';
-import { normalShippingOffer, accordionShippingOffers, newAndUsedShippingOffers } from '../tests/fixtures/amazon-shipping-offers';
+import { normalShippingOffer, accordionShippingOffers, newAndUsedShippingOffers, shippingIncidentProducts, shippingIncidentOffer } from '../tests/fixtures/amazon-shipping-offers';
 import type { guardAmazonUploadShipping, resolveShippingApproval } from './amazon-upload-shipping';
 import type { uploadProductToEbay } from './ebay-upload';
 import type { createOrReuseEbayUploadJob } from './ebay-action-jobs';
@@ -647,4 +647,36 @@ test("withdrawn approval during readback cannot be settled as applied or resumed
  f.afterInventoryWrite(()=>{history.appliedAt=new Date();history.status="SUPERSEDED";});
  const result=await f.api.processProduct({id:"withdrawn-restore",storeId:"store",type:"RESUME",metadata:{}},"product");assert.equal(result.ok,false);assert.equal(history.ebayRevised,false);assert.equal(history.status,"SUPERSEDED");assert.equal(f.product.status,"ON_HOLD");
  assert.equal(f.inventoryRequests.length,1);assert.equal(f.remoteInventory()![0].quantity,1,"an applied but unresolved remote outcome must not trigger a compensating write");
+});
+
+for (const incident of shippingIncidentProducts) test(`real incident extraction permits direct and background upload: ${incident.title}`, async () => {
+  for (const background of [false, true]) {
+    const f = await fixture();
+    // Relative dates keep upload freshness deterministic against the live harness
+    // clock; extraction tests independently assert the exact October 8 bounds.
+    f.setHtml(shippingIncidentOffer(incident.asin, 'in 2 days').replaceAll(incident.asin, 'B0TEST1234'));
+    const result = background
+      ? await f.api.processProduct((await f.api.createOrReuseEbayUploadJob({ storeId: 'store', userId: 'user', productIds: ['product'] })).job, 'product')
+      : await f.api.uploadProductToEbay({ productId: 'product', storeId: 'store', userId: 'user' });
+    assert.equal(result.ok, true, JSON.stringify(result));
+    assert.equal(f.counts().adds, 1); assert.equal(f.counts().scrapes, 1);
+    assert.equal(f.product.status, 'IMPORTED');
+    assert.ok(f.tables.amazonPriceObservation.every(row => (row.shippingEvidence as Row).outcome === 'VERIFIED'));
+  }
+});
+
+test('cleaned incident dispatch still blocks slow shipping and genuine conflicts still request confirmation', async () => {
+  for (const scenario of ['slow-dispatch', 'conflict'] as const) {
+    const f = await fixture();
+    let html = scenario === 'slow-dispatch'
+      ? shippingIncidentOffer('B0B5T85N8K', 'in 2 days', 'Usually dispatched within 26 days')
+      : shippingIncidentOffer('B0F9XQQ1GC', 'in 2 days').replace('FREE delivery in 2 days. Order', 'FREE delivery in 26 days. Order');
+    html = html.replaceAll(scenario === 'slow-dispatch' ? 'B0B5T85N8K' : 'B0F9XQQ1GC', 'B0TEST1234');
+    f.setHtml(html);
+    const result = await f.api.uploadProductToEbay({ productId: 'product', storeId: 'store', userId: 'user' });
+    assert.equal(result.status, scenario === 'slow-dispatch' ? 422 : 409);
+    assert.equal(f.counts().adds, 0); assert.equal(f.product.status, 'DRAFT');
+    assert.equal(f.counts().scrapes, scenario === 'slow-dispatch' ? 1 : 2);
+    if (scenario === 'conflict') assert.ok(result.body.shippingConfirmation);
+  }
 });
