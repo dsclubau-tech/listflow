@@ -7,6 +7,7 @@ export const PRIVATE_APP_PATHS = [
   "/ebay-import",
   "/ebay-research",
   "/history",
+  "/orders",
   "/products",
   "/settings",
 ] as const;

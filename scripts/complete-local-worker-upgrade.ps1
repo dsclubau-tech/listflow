@@ -90,9 +90,21 @@ for($attempt=0;$attempt -lt 90;$attempt++) {
   Start-Sleep -Seconds 5
 }
 if (!$clear) { throw 'Worker heartbeats or leases did not clear; old source remains installed.' }
-foreach($file in $changes) { Copy-Item -LiteralPath (Join-Path $stage $file.path) -Destination (Join-Path $root $file.path) -Force }
+foreach($file in $changes) {
+  $destination=[IO.Path]::GetFullPath((Join-Path $root $file.path))
+  if (!$destination.StartsWith($root+'\',[StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe source overlay path.' }
+  [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($destination))|Out-Null
+  Copy-Item -LiteralPath (Join-Path $stage $file.path) -Destination $destination -Force
+}
 Copy-Item -LiteralPath (Join-Path $stage 'worker-release-manifest.json') -Destination $oldManifestPath -Force
 Write-Host 'Source overlay installed; private configuration, dependencies, logs, and installation ID preserved.'
+if (@($changes | Where-Object path -eq 'prisma/schema.prisma').Count) {
+  Push-Location -LiteralPath $root
+  try {
+    & npm.cmd exec prisma generate
+    if ($LASTEXITCODE -ne 0) { throw 'Prisma client generation failed; workers remain stopped.' }
+  } finally { Pop-Location }
+}
 & $shellExe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'worker-package\Manage.ps1') -Action Start
 if ($LASTEXITCODE -ne 0) { throw 'New supervisor did not pass startup verification. Workers were not restarted from the old release.' }
 Write-Host "Graceful upgrade completed at revision $($newManifest.revision)."

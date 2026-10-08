@@ -6,6 +6,8 @@ if ($LASTEXITCODE -ne 0 -or $dirty) { throw 'Commit and review all source change
 $revision = (& git -C $repo rev-parse HEAD | Out-String).Trim()
 if ($LASTEXITCODE -ne 0 -or $revision -notmatch '^[a-f0-9]{40}$') { throw 'Could not resolve release revision.' }
 $output = [IO.Path]::GetFullPath($OutputRoot)
+$allowedOutput=[IO.Path]::GetFullPath((Join-Path $repo 'scratch\local-worker-release')).TrimEnd('\')
+if (!$output.TrimEnd('\').Equals($allowedOutput,[StringComparison]::OrdinalIgnoreCase)) { throw 'Release output must stay inside the repository release directory.' }
 [IO.Directory]::CreateDirectory($output) | Out-Null
 $staging = Join-Path $output ('stage-' + $revision.Substring(0,12))
 if (Test-Path -LiteralPath $staging) { throw "Staging folder already exists: $staging" }

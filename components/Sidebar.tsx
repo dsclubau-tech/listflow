@@ -75,6 +75,15 @@ export default function Sidebar({
       ),
     },
     {
+      href: "/orders",
+      label: "Orders",
+      icon: (
+        <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5h6m-6 0H6a2 2 0 0 0-2 2v13h16V7a2 2 0 0 0-2-2h-3m-6 0V3h6v2M8 11h8m-8 4h8" />
+        </svg>
+      ),
+    },
+    {
       href: "/ebay-research",
       label: "eBay Research",
       icon: (

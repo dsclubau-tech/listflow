@@ -99,6 +99,7 @@ let localGuardPath: string | null = null;
 const loggedOnlineStoreIds = new Set<string>();
 let roundRobinStartIndex = 0;
 let heartbeatsPaused = false;
+let ordersLane: ReturnType<typeof import("../lib/ebay-orders-worker").createEbayOrdersWorker> | null = null;
 const databaseRecovery = new WorkerDatabaseRecovery();
 
 async function loadWorkerModules() {
@@ -116,6 +117,7 @@ async function loadWorkerModules() {
     automaticPriceCheck,
     ebaySoldSync,
     aaEntitlement,
+    ordersWorker,
   ] = await Promise.all([
     import("../lib/prisma"),
     import("../lib/amazon-import-jobs"),
@@ -130,9 +132,11 @@ async function loadWorkerModules() {
     import("../lib/automatic-price-check"),
     import("../lib/ebay-sold-sync"),
     import("../lib/aa-entitlement"),
+    import("../lib/ebay-orders-worker"),
   ]);
 
   return {
+    createEbayOrdersWorker: ordersWorker.createEbayOrdersWorker,
     prisma: prismaModule.prisma,
     getDatabaseConnectionDiagnostics: prismaModule.getDatabaseConnectionDiagnostics,
     getOrRefreshEntitlement: aaEntitlement.getOrRefreshEntitlement,
@@ -316,7 +320,7 @@ const sendHeartbeat = createSingleFlightTask(async () => {
         startedAt,
         version: process.env.npm_package_version ?? null,
         revision: workerRevision,
-        capabilities: ["durable-bulk-edit-v1", "variation-inventory-v1", "variation-inventory-v2", "price-check-items-v2"],
+        capabilities: ["durable-bulk-edit-v1", "variation-inventory-v1", "variation-inventory-v2", "price-check-items-v2", "ebay-orders-v1"],
       })
     )
   );
@@ -336,6 +340,7 @@ async function recoverDatabaseConnection() {
     // pool. Prisma creates a fresh pool on the next request.
     await Promise.all([
       sendHeartbeat().catch(() => undefined),
+      ordersLane?.drain(),
       modules.pauseDatabaseLogging(),
     ]);
     if (process.env.LISTFLOW_AMAZON_IMPORT_BROWSER_REUSE_ENABLED === "true") {
@@ -680,6 +685,13 @@ async function main() {
     stockReplenishIntervalMs: STOCK_REPLENISH_INTERVAL_MS,
   });
 
+  ordersLane = modules.createEbayOrdersWorker({
+    getStores: getActiveStores,
+    getWorker: getWorkerContext,
+    paused: () => stopping || heartbeatsPaused || hasWorkerStopRequest(),
+  });
+  ordersLane.start();
+
   const heartbeatTimer = setInterval(() => {
     void heartbeat().catch((error) => {
       console.error(
@@ -831,6 +843,7 @@ async function main() {
   } finally {
     clearInterval(heartbeatTimer);
     clearInterval(metricsTimer);
+    await ordersLane?.stop();
     modules.logger.info("worker/stop", "ListFlow Worker stopped", {
       workerId,
       workerName,
