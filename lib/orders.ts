@@ -1,3 +1,4 @@
+import { orderGroupKey } from "@/lib/order-notes";
 import { getVariantDisplayProfit } from "@/lib/product-profit";
 import { ORDER_STATUSES, type OrderStatus, type OrderRow } from "@/types/order";
 
@@ -50,12 +51,14 @@ export function orderAmounts(match: OrderMatch | null, sellTotal: number, quanti
 }
 
 export function toOrderRow(line: OrderIdentity & {
-  id: string; title: string; quantity: number; sellTotal: Money;
+  id: string; storeId: string; accountKey: string; ebayOrderId: string; title: string; quantity: number; sellTotal: Money;
   currency: string; status: OrderStatus; estimatedArrival: string | null;
-}, match: OrderMatch | null): OrderRow {
+}, match: OrderMatch | null, internalNote: string | null = null): OrderRow {
   const sellTotal = Number(line.sellTotal?.toString());
   return {
     id: line.id, title: line.title, quantity: line.quantity,
+    ebayOrderId: line.ebayOrderId, orderGroupKey: orderGroupKey(line), internalNote,
+    matchedProductId: match?.product.id ?? null,
     image: match?.variant?.images[0] ?? match?.product.images[0] ?? null,
     ...orderAmounts(match, sellTotal, line.quantity, line.currency),
     buyCurrency: "AUD", sellTotal, currency: line.currency,

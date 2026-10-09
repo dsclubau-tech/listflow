@@ -76,6 +76,7 @@ model Store {
   listingOperations       ListingOperation[]
   orderLines              EbayOrderLine[]
   orderSyncStates         EbayOrderSyncState[]
+  orderNotes              EbayOrderNote[]
 
   @@index([ownerUserId])
 }
@@ -1145,4 +1146,18 @@ model EbayOrderSyncState {
   store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
 
   @@unique([storeId, accountKey])
+}
+
+model EbayOrderNote {
+  id           String   @id @default(cuid())
+  storeId      String
+  accountKey   String
+  ebayOrderId  String
+  internalNote String?  @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  store Store @relation(fields: [storeId], references: [id], onDelete: Cascade)
+
+  @@unique([storeId, accountKey, ebayOrderId])
 }

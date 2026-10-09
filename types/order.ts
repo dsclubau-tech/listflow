@@ -20,6 +20,10 @@ export type OrderRow = {
   status: OrderStatus;
   estimatedArrival: string | null;
   matched: boolean;
+  matchedProductId: string | null;
+  ebayOrderId: string;
+  orderGroupKey: string;
+  internalNote: string | null;
 };
 
 export type OrdersPageData = {
@@ -30,3 +34,5 @@ export type OrdersPageData = {
   pageSize: number;
   sync: { activatedAt: string | null; lastSuccessAt: string | null; error: string | null };
 };
+
+export type OrderNoteSaveResult = { internalNote: string | null; orderGroupKey: string };

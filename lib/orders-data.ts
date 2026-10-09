@@ -1,5 +1,6 @@
 import "server-only";
 import { prisma } from "@/lib/prisma";
+import { orderGroupKey } from "@/lib/order-notes";
 import { matchOrderProduct, toOrderRow } from "@/lib/orders";
 import { getStoreNumber, ebayConfig } from "@/lib/ebay";
 import type { OrdersPageData } from "@/types/order";
@@ -45,9 +46,19 @@ export async function getOrdersPageData(storeId: string, requestedPage = 1, page
       where: { storeId_accountKey: { storeId, accountKey } },
     }) : Promise.resolve(null),
   ]);
-  const candidates = await loadOrderMatchProducts(storeId, lines.flatMap(line => line.ebayItemId ? [line.ebayItemId] : []));
+  const orders = Array.from(new Map(lines.map(line => [orderGroupKey(line), {
+    accountKey: line.accountKey, ebayOrderId: line.ebayOrderId,
+  }])).values());
+  const [candidates, notes] = await Promise.all([
+    loadOrderMatchProducts(storeId, lines.flatMap(line => line.ebayItemId ? [line.ebayItemId] : [])),
+    orders.length ? prisma.ebayOrderNote.findMany({
+      where: { storeId, OR: orders },
+      select: { accountKey: true, ebayOrderId: true, internalNote: true },
+    }) : Promise.resolve([]),
+  ]);
+  const noteByOrder = new Map(notes.map(note => [orderGroupKey({ storeId, ...note }), note.internalNote]));
   return {
-    storeId, rows: lines.map(line => toOrderRow(line, matchOrderProduct(storeId, line, candidates))),
+    storeId, rows: lines.map(line => toOrderRow(line, matchOrderProduct(storeId, line, candidates), noteByOrder.get(orderGroupKey(line)) ?? null)),
     totalCount, page, pageSize: size,
     sync: {
       activatedAt: state?.activatedAt.toISOString() ?? null,

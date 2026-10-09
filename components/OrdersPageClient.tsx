@@ -2,9 +2,11 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import OrderNoteDialog from "@/components/OrderNoteDialog";
+import OrderRowActions from "@/components/OrderRowActions";
 import AsinLink from "@/components/AsinLink";
 import { useAdaptivePolling } from "@/hooks/useAdaptivePolling";
-import { ORDER_STATUSES, ORDER_STATUS_LABELS, type OrdersPageData, type OrderStatus } from "@/types/order";
+import { ORDER_STATUSES, ORDER_STATUS_LABELS, type OrdersPageData, type OrderStatus, type OrderRow, type OrderNoteSaveResult } from "@/types/order";
 
 const STATUS_STYLES: Record<OrderStatus, string> = {
   PENDING: "border-amber-200 bg-amber-100 text-amber-800",
@@ -21,6 +23,7 @@ function money(value: number | null, currency: string) {
 
 export default function OrdersPageClient({ initialData }: { initialData: OrdersPageData }) {
   const [data, setData] = useState(initialData);
+  const [notingOrder, setNotingOrder] = useState<OrderRow | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [pending, setPending] = useState<Record<string, boolean>>({});
@@ -86,6 +89,28 @@ export default function OrdersPageClient({ initialData }: { initialData: OrdersP
       edits.current++;
       pendingIds.current.delete(id);
       setPending(current => ({ ...current, [id]: false }));
+      requestRefresh();
+    }
+  }
+
+  async function saveNote(row: OrderRow, internalNote: string): Promise<OrderNoteSaveResult> {
+    const key = "note:" + row.orderGroupKey;
+    if (pendingIds.current.has(key)) throw new Error("This order note is already saving.");
+    edits.current++;
+    pendingIds.current.add(key);
+    try {
+      const response = await fetch("/api/orders/" + encodeURIComponent(row.id) + "/note", {
+        method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ internalNote }),
+      });
+      const body = await response.json() as OrderNoteSaveResult & { error?: string };
+      if (!response.ok) throw new Error(body.error ?? "Could not save the order note.");
+      if (body.orderGroupKey !== row.orderGroupKey) throw new Error("The active store changed. Reload Orders before saving.");
+      setData(current => ({ ...current, rows: current.rows.map(line => line.orderGroupKey === body.orderGroupKey
+        ? { ...line, internalNote: body.internalNote } : line) }));
+      return body;
+    } finally {
+      edits.current++;
+      pendingIds.current.delete(key);
       requestRefresh();
     }
   }
@@ -157,9 +182,12 @@ export default function OrdersPageClient({ initialData }: { initialData: OrdersP
                     className={"mt-1 max-w-44 text-xs " + (feedback[row.id].error ? "text-red-600" : "text-gray-500")}>{feedback[row.id].text}</p>}
                 </td>
                 <td className="px-4 py-4">
+                  <div className="flex items-center gap-2">
                   <input type="date" aria-label={"Estimated arrival for " + row.title} value={row.estimatedArrival ?? ""} disabled={pending[row.id]}
                     onChange={event => void save(row.id, { estimatedArrival: event.target.value || null })}
                     className="w-36 rounded-md border border-gray-300 bg-white px-2 py-2 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-orange-400 disabled:opacity-60" />
+                  <OrderRowActions row={row} onNote={() => setNotingOrder(row)} />
+                  </div>
                 </td>
               </tr>
             ))}
@@ -184,6 +212,7 @@ export default function OrdersPageClient({ initialData }: { initialData: OrdersP
             className="rounded-md border border-gray-300 bg-white px-3 py-2 text-gray-700 disabled:opacity-40">Next</button>
         </div>
       </div>
+      {notingOrder && <OrderNoteDialog row={notingOrder} onSave={note => saveNote(notingOrder, note)} onClose={() => setNotingOrder(null)} />}
     </section>
   );
 }

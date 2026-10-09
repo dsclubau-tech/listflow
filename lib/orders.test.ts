@@ -38,7 +38,9 @@ test("zero costs stay valid; missing cost does not invent profit", () => {
 });
 
 test("row uses purchased title, matched image, and supplier identity", () => {
-  const row = toOrderRow({ ...line, id: "line", title: "Purchased title", quantity: 2, sellTotal: "50.00", currency: "AUD", status: "ORDERED", estimatedArrival: "2026-10-12" }, matchOrderProduct("store", line, [product]));
+  const row = toOrderRow({ ...line, storeId: "store", accountKey: "account", ebayOrderId: "order", id: "line", title: "Purchased title", quantity: 2, sellTotal: "50.00", currency: "AUD", status: "ORDERED", estimatedArrival: "2026-10-12" }, matchOrderProduct("store", line, [product]));
+  assert.equal(row.matchedProductId, "product");
+  assert.equal(row.internalNote, null);
   assert.equal(row.image, "variant.jpg");
   assert.equal(row.title, "Purchased title");
   assert.equal(row.buyItemId, "B012345678");
@@ -52,5 +54,5 @@ test("all five exact statuses and calendar dates can be edited independently", (
   for (const estimatedArrival of ["2026-02-29", "2026-02-30", "2026-13-01", "0000-01-01", "2026-10-08T12:00:00Z", "", 12]) {
     assert.throws(() => parseOrderEdit({ estimatedArrival }));
   }
-  for (const body of [{ status: "Unmonitored" }, { sellTotal: 1 }, { storeId: "other" }, {}, null, []]) assert.throws(() => parseOrderEdit(body));
+  for (const body of [{ status: "Unmonitored" }, { sellTotal: 1 }, { internalNote: "use note endpoint" }, { storeId: "other" }, {}, null, []]) assert.throws(() => parseOrderEdit(body));
 });
