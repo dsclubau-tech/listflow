@@ -61,3 +61,21 @@ export function shippingIncidentOffer(asin: string, arrival = "Saturday, 10 Octo
       ${deliveryBlock(`FREE delivery ${arrival}`, "")}</div>
     </div></div></div>`;
 }
+
+// Sanitized import buy boxes from the October 9 empty-delivery audits.
+export const emptyDeliveryProducts = [
+  { asin: "B0FQ2JCQBR", price: 182.76, arrival: "Sunday, 18 October 2026", days: 9 },
+  { asin: "B0GDYFMWYJ", price: 172.53, arrival: "Monday, 19 October 2026", days: 10 },
+] as const;
+export function emptyDeliveryOffer(asin: string, loaded: boolean) {
+  const product = emptyDeliveryProducts.find(product => product.asin === asin);
+  if (!product) throw new Error("Unknown empty delivery fixture");
+  const message = loaded ? `FREE International delivery ${product.arrival}. Details ${asin === "B0GDYFMWYJ" ? "Or fastest delivery Thursday, 15 October 2026. Order within 12 hrs 37 mins. Details" : ""}` : " ";
+  return `<html><head><title>Fixture import product</title></head><body>
+    <input id="ASIN" value="${asin}"><h1 id="productTitle">Fixture import product</h1>
+    <div id="glow-ingress-line2">Kogarah 2217</div>
+    <div id="buybox"><div id="corePrice_feature_div"><span class="a-price"><span class="a-offscreen">$${product.price.toFixed(2)}</span></span></div>
+    <div id="deliveryBlockMessage">${message}</div><div id="availability">In stock</div>
+    <button id="add-to-cart-button">Add to cart</button><div>Shipper / Seller Amazon UK</div></div>
+    </body></html>`;
+}

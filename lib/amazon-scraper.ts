@@ -1,4 +1,4 @@
-import type { Browser, Page } from "playwright-core";
+import type { Browser, Page, Route } from "playwright-core";
 import { applyAmazonDeliveryPostcode, AmazonDeliveryFailure, assertAmazonDeliveryPage, readAmazonDeliveryText, type DeliveryFailureDetails, type DeliverySetupDiagnostic } from "@/lib/amazon-delivery-recovery";
 import { load } from "cheerio";
 
@@ -6,8 +6,8 @@ import { extractLocalizedBuyboxPriceChoices, selectAmazonBuyboxPriceForMode, sel
 import { parseAmazonShippingFeeFromText } from "@/lib/amazon-shipping";
 import { extractAmazonNewOfferStockLeft } from "@/lib/amazon-stock";
 import { extractAmazonPriceSnapshot } from "@/lib/amazon-price-snapshot";
-import { extractAmazonShippingEvidenceFromHtml } from "./amazon-shipping-extraction";
-import type { AmazonShippingEvidence } from "./amazon-shipping-evidence";
+import { inspectAmazonShippingEvidenceFromHtml } from "./amazon-shipping-extraction";
+import { evaluateAmazonShipping, type AmazonShippingEvidence } from "./amazon-shipping-evidence";
 import { launchScraperBrowser } from "@/lib/scraper-browser";
 import { isUsefulItemSpecificCandidate } from "@/lib/item-specifics";
 import {
@@ -139,6 +139,8 @@ export type AmazonPriceScrapeOptions = {
   allowDealPriceFallback?: boolean;
   onTiming?: (stage: string, durationMs: number) => void;
   sharedSnapshot?: boolean;
+  /** Internal store limit used only to avoid retrying confirmed excessive dispatch. */
+  maxShippingDays?: number;
   deliveryState?: AmazonDeliveryStateSession;
   allowDeliveryStateReuse?: boolean;
   onDeliveryStateEvent?: (
@@ -191,20 +193,18 @@ async function createAmazonPricePage(
   });
   const page = await context.newPage();
 
-  await page.route("**/*", (route) => {
+  const resourceFilter = (route: Route) => {
     const type = route.request().resourceType();
     if (["image", "media", "font"].includes(type)) {
       return route.abort();
     }
     return route.continue();
-  });
-  await page.addInitScript(() => {
-    Object.defineProperty(navigator, "webdriver", {
-      get: () => false,
-    });
-  });
+  };
+  await page.route("**/*", resourceFilter);
+  // A literal script avoids transpiler helper references in the browser context.
+  await page.addInitScript("Object.defineProperty(navigator, 'webdriver', { get: function () { return false; } });");
 
-  return { context, page };
+  return { context, page, resourceFilter };
 }
 
 async function getAmazonDeliveryLocationText(page: Page) {
@@ -667,7 +667,7 @@ export async function scrapeAmazonPrice(
     (reusedDeliveryState ? deliveryState?.userAgent : null) ??
     deliveryState?.userAgent ??
     getRandomUserAgent();
-  let { context, page } = await createAmazonPricePage(
+  let { context, page, resourceFilter } = await createAmazonPricePage(
     ownedBrowser,
     userAgent,
     reusedDeliveryState ? deliveryState?.storageState ?? undefined : undefined,
@@ -695,8 +695,17 @@ export async function scrapeAmazonPrice(
           observedDeliveryText: await getAmazonDeliveryLocationText(page) });
     }
   };
-  const abortScrape = () => { void context.close().catch(() => {}); };
+  let abortClose: Promise<void> | undefined;
+  const abortScrape = () => { abortClose = context.close().catch(() => {}); };
   options?.signal?.addEventListener("abort", abortScrape, { once: true });
+
+  let emptyDeliveryRecoveryUsed = false;
+  let emptyDeliveryRecoveryReported = false;
+  const reportEmptyDeliveryRecovery = (stage: string) => {
+    if (stage !== "attempted") emptyDeliveryRecoveryReported = true;
+    console.info("[scrapeAmazonPrice] Empty delivery recovery", { asin: normalizedAsin, stage });
+    try { options?.onTiming?.(`empty-delivery-${stage}`, 0); } catch { /* Diagnostics cannot affect verification. */ }
+  };
 
   try {
     options?.signal?.throwIfAborted();
@@ -726,7 +735,7 @@ export async function scrapeAmazonPrice(
         freshContextRecoveryUsed = true;
         usedOriginalDeliverySetup = true;
         userAgent = getRandomUserAgent();
-        ({ context, page } = await createAmazonPricePage(
+        ({ context, page, resourceFilter } = await createAmazonPricePage(
           ownedBrowser,
           userAgent,
         ));
@@ -777,240 +786,301 @@ export async function scrapeAmazonPrice(
       }
     }
 
-    // Wait for Amazon's JS to render price elements into the DOM.
-    await measureAmazonPriceStage(options, "price-readiness", () =>
-      page
-        .waitForSelector(
-          "#corePrice_feature_div, .a-price, #priceblock_ourprice, #apex_desktop",
-          { timeout: 10000 },
-        )
-        .catch(() => {
-          // Price containers didn't appear — fall through and let
-          // extractAmazonPriceFromPage try its own selectors.
-        }),
-    );
-
-    // ── ASIN redirect detection ─────────────────────────────────────────
-    // Amazon silently redirects unavailable variant ASINs to an available
-    // sibling variant (different ASIN, different product). If the page
-    // ASIN doesn't match what we requested, the product is unavailable.
-    const pageAsinBeforeVariants = await extractPageAsin(page);
-    if (
-      pageAsinBeforeVariants &&
-      pageAsinBeforeVariants !== normalizedAsin
-    ) {
-      throw new PriceCheckFailure(
-        PriceCheckFailureCode.AMAZON_ASIN_REDIRECT,
-        `Amazon redirected ASIN ${normalizedAsin} to ${pageAsinBeforeVariants} — the original variant appears unavailable.`,
-        pageAsinBeforeVariants,
+    const selectPrice = options?.allowDealPriceFallback === true
+      ? selectAmazonBuyboxPriceForTracking : selectAmazonBuyboxPriceForMode;
+    let stockLeft: number | null = null;
+    let priceChoices: ReturnType<typeof extractAmazonPriceSnapshot>["priceChoices"];
+    let selectedPrice: ReturnType<typeof selectPrice> = null;
+    let price: number | null = null;
+    let variantSwatchSelected = false;
+    let finalPageAsin: string | null = null;
+    let observedAt = new Date();
+    let buyBoxOutcome: "AVAILABLE" | "UNAVAILABLE" | "UNKNOWN" = "UNKNOWN";
+    let finalHtml = "";
+    let shippingEvidence: AmazonShippingEvidence | undefined;
+    for (;;) {
+      options?.signal?.throwIfAborted();
+      // Wait for Amazon's JS to render price elements into the DOM.
+      await measureAmazonPriceStage(options, "price-readiness", () =>
+        page
+          .waitForSelector(
+            "#corePrice_feature_div, .a-price, #priceblock_ourprice, #apex_desktop",
+            { timeout: 10000 },
+          )
+          .catch(() => {
+            // Price containers didn't appear — fall through and let
+            // extractAmazonPriceFromPage try its own selectors.
+          }),
       );
-    }
 
-    // Detect out-of-stock before attempting price extraction
-    const stockStatus = await page
-      .evaluate(() => {
-        const elements = [
-          document.querySelector("#buybox"),
-          document.querySelector("#availability"),
-          document.querySelector("#outOfStock"),
-          document.querySelector("#availabilityInsideBuyBox_feature_div"),
-        ];
-        const text = elements
-          .map((el) => el?.textContent?.toLowerCase() ?? "")
-          .join(" ");
-        if (
-          text.includes("temporarily out of stock") ||
-          text.includes("currently unavailable") ||
-          text.includes("we don't know when or if this item will be back in stock")
-        ) {
-          return "out_of_stock";
-        }
-        return "available";
-      })
-      .catch(() => "unknown");
-
-    if (stockStatus === "out_of_stock") {
-      unavailableObservedAt = new Date();
-      await requireVerifiedPostcode();
-      // Check if the delivery location is still non-AU — that means
-      // the postcode setter failed and "out of stock" is a geo-location
-      // issue, not a real stock issue.
-      const deliveryLocation = await page
-        .evaluate(() => {
-          const el = document.querySelector("#glow-ingress-line2, #nav-global-location-data-modal-action");
-          return el?.textContent?.trim() ?? "";
-        })
-        .catch(() => "");
-
-      const isAuDelivery =
-        deliveryLocation.toLowerCase().includes("australia") ||
-        /\b\d{4}\b/.test(deliveryLocation); // AU postcodes are 4 digits
-
-      if (!isAuDelivery) {
-        throw new Error(
-          `Could not set delivery postcode to Australia for ${normalizedAsin}. ` +
-            `Amazon is delivering to "${deliveryLocation || "unknown location"}" — ` +
-            `the product may appear out of stock due to geo-location.`
+      // ── ASIN redirect detection ─────────────────────────────────────────
+      // Amazon silently redirects unavailable variant ASINs to an available
+      // sibling variant (different ASIN, different product). If the page
+      // ASIN doesn't match what we requested, the product is unavailable.
+      const pageAsinBeforeVariants = await extractPageAsin(page);
+      if (
+        pageAsinBeforeVariants &&
+        pageAsinBeforeVariants !== normalizedAsin
+      ) {
+        throw new PriceCheckFailure(
+          PriceCheckFailureCode.AMAZON_ASIN_REDIRECT,
+          `Amazon redirected ASIN ${normalizedAsin} to ${pageAsinBeforeVariants} — the original variant appears unavailable.`,
+          pageAsinBeforeVariants,
         );
       }
 
-      throw new PriceCheckFailure(
-        PriceCheckFailureCode.AMAZON_OUT_OF_STOCK,
-        `Product ${normalizedAsin} is temporarily out of stock on Amazon — no price available.`
-      );
-    }
-
-    let stockLeft: number | null;
-    let priceChoices: ReturnType<typeof extractAmazonPriceSnapshot>["priceChoices"];
-    if (options?.sharedSnapshot) {
-      await measureAmazonPriceStage(options, "delivery-readiness", () =>
-        waitForAmazonDeliveryContent(page),
-      );
-      const snapshot = await measureAmazonPriceStage(
-        options,
-        "snapshot-extraction",
-        () => captureAmazonPriceSnapshot(page, normalizedAsin),
-      );
-      stockLeft = snapshot.stockLeft;
-      priceChoices = snapshot.priceChoices;
-    } else {
-      stockLeft = await measureAmazonPriceStage(options, "stock-extraction", () =>
-        page
-          .content()
-          .then((html) => extractAmazonNewOfferStockLeft(load(html)))
-          .catch(() => null),
-      );
-      priceChoices = await measureAmazonPriceStage(
-        options,
-        "price-extraction",
-        () => extractAmazonBuyboxPriceChoicesFromPage(page, normalizedAsin),
-      );
-    }
-    const selectPrice = options?.allowDealPriceFallback === true
-      ? selectAmazonBuyboxPriceForTracking
-      : selectAmazonBuyboxPriceForMode;
-    let selectedPrice = selectPrice(priceChoices, priceTrackingMode);
-    let price = selectedPrice?.price ?? null;
-
-    let variantSwatchSelected = false;
-    let variantSelectionReason: string | undefined;
-
-    // Verify saved variations even when the initial page already has a price.
-    // Shipping and price must describe the same selected variant.
-    if (price === null || variantSelectionHints) {
-      const variantResult = await attemptVariantSelection(
-        page,
-        variantSelectionHints ?? null
-      );
-
-      if (variantResult.hasVariations) {
-        if (!variantResult.matched) {
-          variantSelectionReason = variantResult.reason ||
-            "Amazon presents product variations, but the saved colour/size could not be selected.";
-        } else if (variantResult.selected) {
-          variantSwatchSelected = true;
-          // Re-evaluate buybox price after variation selection
-          await page
-            .waitForSelector(
-              "#corePrice_feature_div, .a-price, #priceblock_ourprice, #apex_desktop",
-              { timeout: 8000 }
-            )
-            .catch(() => {});
-
-          if (options?.sharedSnapshot) {
-            await measureAmazonPriceStage(options, "delivery-readiness", () =>
-              waitForAmazonDeliveryContent(page),
-            );
-            const snapshot = await measureAmazonPriceStage(
-              options,
-              "snapshot-extraction",
-              () => captureAmazonPriceSnapshot(page, normalizedAsin),
-            );
-            stockLeft = snapshot.stockLeft;
-            priceChoices = snapshot.priceChoices;
-          } else {
-            priceChoices = await measureAmazonPriceStage(
-              options,
-              "price-extraction",
-              () => extractAmazonBuyboxPriceChoicesFromPage(page, normalizedAsin),
-            );
+      // Detect out-of-stock before attempting price extraction
+      const stockStatus = await page
+        .evaluate(() => {
+          const elements = [
+            document.querySelector("#buybox"),
+            document.querySelector("#availability"),
+            document.querySelector("#outOfStock"),
+            document.querySelector("#availabilityInsideBuyBox_feature_div"),
+          ];
+          const text = elements
+            .map((el) => el?.textContent?.toLowerCase() ?? "")
+            .join(" ");
+          if (
+            text.includes("temporarily out of stock") ||
+            text.includes("currently unavailable") ||
+            text.includes("we don't know when or if this item will be back in stock")
+          ) {
+            return "out_of_stock";
           }
-          selectedPrice = selectPrice(priceChoices, priceTrackingMode);
-          price = selectedPrice?.price ?? null;
+          return "available";
+        })
+        .catch(() => "unknown");
 
-          if (price !== null) {
-            if (!options?.sharedSnapshot) {
-              stockLeft = await measureAmazonPriceStage(
+      if (stockStatus === "out_of_stock") {
+        unavailableObservedAt = new Date();
+        await requireVerifiedPostcode();
+        // Check if the delivery location is still non-AU — that means
+        // the postcode setter failed and "out of stock" is a geo-location
+        // issue, not a real stock issue.
+        const deliveryLocation = await page
+          .evaluate(() => {
+            const el = document.querySelector("#glow-ingress-line2, #nav-global-location-data-modal-action");
+            return el?.textContent?.trim() ?? "";
+          })
+          .catch(() => "");
+
+        const isAuDelivery =
+          deliveryLocation.toLowerCase().includes("australia") ||
+          /\b\d{4}\b/.test(deliveryLocation); // AU postcodes are 4 digits
+
+        if (!isAuDelivery) {
+          throw new Error(
+            `Could not set delivery postcode to Australia for ${normalizedAsin}. ` +
+              `Amazon is delivering to "${deliveryLocation || "unknown location"}" — ` +
+              `the product may appear out of stock due to geo-location.`
+          );
+        }
+
+        throw new PriceCheckFailure(
+          PriceCheckFailureCode.AMAZON_OUT_OF_STOCK,
+          `Product ${normalizedAsin} is temporarily out of stock on Amazon — no price available.`
+        );
+      }
+
+      stockLeft = null;
+
+      if (options?.sharedSnapshot) {
+        await measureAmazonPriceStage(options, "delivery-readiness", () =>
+          waitForAmazonDeliveryContent(page),
+        );
+        const snapshot = await measureAmazonPriceStage(
+          options,
+          "snapshot-extraction",
+          () => captureAmazonPriceSnapshot(page, normalizedAsin),
+        );
+        stockLeft = snapshot.stockLeft;
+        priceChoices = snapshot.priceChoices;
+      } else {
+        stockLeft = await measureAmazonPriceStage(options, "stock-extraction", () =>
+          page
+            .content()
+            .then((html) => extractAmazonNewOfferStockLeft(load(html)))
+            .catch(() => null),
+        );
+        priceChoices = await measureAmazonPriceStage(
+          options,
+          "price-extraction",
+          () => extractAmazonBuyboxPriceChoicesFromPage(page, normalizedAsin),
+        );
+      }
+      selectedPrice = selectPrice(priceChoices, priceTrackingMode);
+      price = selectedPrice?.price ?? null;
+
+      variantSwatchSelected = false;
+      let variantSelectionReason: string | undefined;
+
+      // Verify saved variations even when the initial page already has a price.
+      // Shipping and price must describe the same selected variant.
+      if (price === null || variantSelectionHints) {
+        const variantResult = await attemptVariantSelection(
+          page,
+          variantSelectionHints ?? null
+        );
+
+        if (variantResult.hasVariations) {
+          if (!variantResult.matched) {
+            variantSelectionReason = variantResult.reason ||
+              "Amazon presents product variations, but the saved colour/size could not be selected.";
+          } else if (variantResult.selected) {
+            variantSwatchSelected = true;
+            // Re-evaluate buybox price after variation selection
+            await page
+              .waitForSelector(
+                "#corePrice_feature_div, .a-price, #priceblock_ourprice, #apex_desktop",
+                { timeout: 8000 }
+              )
+              .catch(() => {});
+
+            if (options?.sharedSnapshot) {
+              await measureAmazonPriceStage(options, "delivery-readiness", () =>
+                waitForAmazonDeliveryContent(page),
+              );
+              const snapshot = await measureAmazonPriceStage(
                 options,
-                "stock-extraction",
-                () =>
-                  page
-                    .content()
-                    .then((html) => extractAmazonNewOfferStockLeft(load(html)))
-                    .catch(() => null),
+                "snapshot-extraction",
+                () => captureAmazonPriceSnapshot(page, normalizedAsin),
+              );
+              stockLeft = snapshot.stockLeft;
+              priceChoices = snapshot.priceChoices;
+            } else {
+              priceChoices = await measureAmazonPriceStage(
+                options,
+                "price-extraction",
+                () => extractAmazonBuyboxPriceChoicesFromPage(page, normalizedAsin),
               );
             }
-          } else {
-            variantSelectionReason = `Selected variation (${variantResult.selectedDimensions?.join(", ") || "saved variant"}) on Amazon, but no buybox price became available.`;
+            selectedPrice = selectPrice(priceChoices, priceTrackingMode);
+            price = selectedPrice?.price ?? null;
+
+            if (price !== null) {
+              if (!options?.sharedSnapshot) {
+                stockLeft = await measureAmazonPriceStage(
+                  options,
+                  "stock-extraction",
+                  () =>
+                    page
+                      .content()
+                      .then((html) => extractAmazonNewOfferStockLeft(load(html)))
+                      .catch(() => null),
+                );
+              }
+            } else {
+              variantSelectionReason = `Selected variation (${variantResult.selectedDimensions?.join(", ") || "saved variant"}) on Amazon, but no buybox price became available.`;
+            }
           }
         }
       }
-    }
 
-    // Variant navigation may change delivery context. Verify it before
-    // returning price/stock or classifying a marketplace failure.
-    await requireVerifiedPostcode();
+      // Variant navigation may change delivery context. Verify it before
+      // returning price/stock or classifying a marketplace failure.
+      await requireVerifiedPostcode();
 
-    // ── Final ASIN integrity check ──────────────────────────────────────
-    // Always verify the page ASIN matches what we requested. If Amazon
-    // redirected us to a different variant without explicit variant selection,
-    // we must NOT return the wrong price.
-    const finalPageAsin = await extractPageAsin(page);
-    if (finalPageAsin && finalPageAsin !== normalizedAsin) {
-      throw new PriceCheckFailure(
-        PriceCheckFailureCode.AMAZON_ASIN_REDIRECT,
-        `Amazon redirected ASIN ${normalizedAsin} to ${finalPageAsin} — the original variant appears unavailable.`,
-        finalPageAsin,
-      );
-    }
-    if (!finalPageAsin) {
-      throw new PriceCheckFailure(
-        PriceCheckFailureCode.TECHNICAL_ERROR,
-        `Amazon did not expose a verifiable selected ASIN for ${normalizedAsin}.`,
-      );
-    }
+      // ── Final ASIN integrity check ──────────────────────────────────────
+      // Always verify the page ASIN matches what we requested. If Amazon
+      // redirected us to a different variant without explicit variant selection,
+      // we must NOT return the wrong price.
+      finalPageAsin = await extractPageAsin(page);
+      if (finalPageAsin && finalPageAsin !== normalizedAsin) {
+        throw new PriceCheckFailure(
+          PriceCheckFailureCode.AMAZON_ASIN_REDIRECT,
+          `Amazon redirected ASIN ${normalizedAsin} to ${finalPageAsin} — the original variant appears unavailable.`,
+          finalPageAsin,
+        );
+      }
+      if (!finalPageAsin) {
+        throw new PriceCheckFailure(
+          PriceCheckFailureCode.TECHNICAL_ERROR,
+          `Amazon did not expose a verifiable selected ASIN for ${normalizedAsin}.`,
+        );
+      }
 
-    if (variantSelectionReason) {
-      // A verified page can still lack the requested variation. Preserve that
-      // product failure without accepting another variation's offer or stock.
-      return {
-        price: null,
-        stockLeft: null,
-        priceMode: priceTrackingMode,
-        selectedPriceMode: null,
-        priceChoices: { regular: null, deal: null },
-        variantSelectionFailed: true,
-        variantSelectionReason,
-        detectedAsin: finalPageAsin,
-        identityOutcome: "MATCH",
-        postcodeVerified: exactPostcodeVerified,
-        observedAt: new Date(),
-        buyBoxOutcome: "UNKNOWN",
-      };
-    }
+      if (variantSelectionReason) {
+        if (emptyDeliveryRecoveryUsed) reportEmptyDeliveryRecovery("failed");
+        // A verified page can still lack the requested variation. Preserve that
+        // product failure without accepting another variation's offer or stock.
+        return {
+          price: null,
+          stockLeft: null,
+          priceMode: priceTrackingMode,
+          selectedPriceMode: null,
+          priceChoices: { regular: null, deal: null },
+          variantSelectionFailed: true,
+          variantSelectionReason,
+          detectedAsin: finalPageAsin,
+          identityOutcome: "MATCH",
+          postcodeVerified: exactPostcodeVerified,
+          observedAt: new Date(),
+          buyBoxOutcome: "UNKNOWN",
+        };
+      }
 
-    const observedBuyBoxOutcome = await getNormalBuyBoxOutcome(page);
-    const observedAt = new Date();
-    if (observedBuyBoxOutcome === "UNAVAILABLE") unavailableObservedAt = observedAt;
-    const buyBoxOutcome =
-      price !== null && observedBuyBoxOutcome !== "UNAVAILABLE"
-        ? "AVAILABLE"
-        : observedBuyBoxOutcome;
-    if (price !== null && observedBuyBoxOutcome === "UNAVAILABLE") {
-      throw new PriceCheckFailure(
-        PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE,
-        `The normal Amazon Buy Box is unavailable for ASIN ${normalizedAsin}.`,
-      );
+      // Final price, stock and shipping all describe this captured page.
+      finalHtml = await page.content();
+      priceChoices = options?.sharedSnapshot
+        ? extractAmazonPriceSnapshot(finalHtml, normalizedAsin).priceChoices
+        : extractLocalizedBuyboxPriceChoices(load(finalHtml), normalizedAsin);
+      selectedPrice = selectPrice(priceChoices, priceTrackingMode);
+      price = selectedPrice?.price ?? null;
+      stockLeft = extractAmazonNewOfferStockLeft(load(finalHtml));
+      const observedBuyBoxOutcome = await getNormalBuyBoxOutcome(page);
+      observedAt = new Date();
+      if (observedBuyBoxOutcome === "UNAVAILABLE") unavailableObservedAt = observedAt;
+      buyBoxOutcome =
+        price !== null && observedBuyBoxOutcome !== "UNAVAILABLE"
+          ? "AVAILABLE"
+          : observedBuyBoxOutcome;
+      if (price !== null && observedBuyBoxOutcome === "UNAVAILABLE") {
+        throw new PriceCheckFailure(
+          PriceCheckFailureCode.AMAZON_BUYBOX_UNAVAILABLE,
+          `The normal Amazon Buy Box is unavailable for ASIN ${normalizedAsin}.`,
+        );
+      }
+
+      const shipping = selectedPrice && exactPostcodeVerified && buyBoxOutcome === "AVAILABLE"
+        ? inspectAmazonShippingEvidenceFromHtml(finalHtml, selectedPrice, postcode ?? "", observedAt) : null;
+      shippingEvidence = shipping?.evidence;
+      const canRecover = shipping && shipping.diagnostics.associated && shipping.diagnostics.containerPresent &&
+        !shipping.diagnostics.hasOrdinaryText && !shipping.diagnostics.arrivalConflict && !shipping.diagnostics.dispatchConflict &&
+        evaluateAmazonShipping(shipping.evidence, options?.maxShippingDays ?? 25, observedAt).outcome !== "OVER_LIMIT";
+      if (emptyDeliveryRecoveryUsed || !canRecover) {
+        if (emptyDeliveryRecoveryUsed) reportEmptyDeliveryRecovery(shippingEvidence?.outcome === "VERIFIED"
+          ? "recovered" : shipping?.diagnostics.hasOrdinaryText ? "unresolved" : "still-empty");
+        options?.signal?.throwIfAborted();
+        break;
+      }
+      emptyDeliveryRecoveryUsed = true;
+      reportEmptyDeliveryRecovery("attempted");
+      try {
+        await page.unroute("**/*", resourceFilter);
+        options?.signal?.throwIfAborted();
+        const response = await measureAmazonPriceStage(options, "empty-delivery-navigation", () =>
+          page.reload({ waitUntil: "domcontentloaded", timeout: 20000 }));
+        if (postcode) await assertAmazonDeliveryPage(page, postcode, {
+          httpStatus: response?.status(), contentType: response?.headers()["content-type"],
+        });
+        await measureAmazonPriceStage(options, "empty-delivery-readiness", async () => {
+          const deadline = performance.now() + 8000;
+          while (performance.now() < deadline) {
+            options?.signal?.throwIfAborted();
+            const html = await page.content();
+            const choices = extractLocalizedBuyboxPriceChoices(load(html), normalizedAsin);
+            const offer = selectPrice(choices, priceTrackingMode);
+            if (offer && inspectAmazonShippingEvidenceFromHtml(html, offer, postcode ?? "", new Date()).diagnostics.hasOrdinaryText) break;
+            await page.waitForTimeout(Math.min(100, Math.max(0, deadline - performance.now())));
+          }
+        });
+        options?.signal?.throwIfAborted();
+      } catch (error) {
+        reportEmptyDeliveryRecovery("failed");
+        throw error;
+      }
+      // The next pass rebuilds the complete observation from the reloaded page.
     }
 
     if (
@@ -1113,9 +1183,7 @@ export async function scrapeAmazonPrice(
     return {
       price,
       observedAt,
-      shippingEvidence: selectedPrice && exactPostcodeVerified && finalPageAsin === normalizedAsin && buyBoxOutcome === "AVAILABLE"
-        ? extractAmazonShippingEvidenceFromHtml(await page.content(), selectedPrice, postcode ?? "", observedAt)
-        : undefined,
+      shippingEvidence,
       rawPrice: selectedPrice?.itemPrice ?? price,
       shippingPrice: selectedPrice?.shippingFee ?? null,
       stockLeft,
@@ -1135,9 +1203,10 @@ export async function scrapeAmazonPrice(
       buyBoxOutcome,
       postcodeVerified: exactPostcodeVerified,
       acceptedPriceSource: selectedPrice?.selector ?? null,
-      importPageHtml: options?.captureImportPage ? await page.content() : undefined,
+      importPageHtml: options?.captureImportPage ? finalHtml : undefined,
     };
   } catch (error) {
+    if (emptyDeliveryRecoveryUsed && !emptyDeliveryRecoveryReported) reportEmptyDeliveryRecovery("failed");
     if (!(error instanceof PriceCheckFailure)) {
       const failure = new PriceCheckFailure("TECHNICAL_ERROR", error instanceof Error ? error.message : "Amazon browser check failed.");
       failure.postcodeVerified = exactPostcodeVerified;
@@ -1155,6 +1224,7 @@ export async function scrapeAmazonPrice(
     throw error;
   } finally {
     options?.signal?.removeEventListener("abort", abortScrape);
+    await abortClose;
     await context.close().catch(() => {});
 
     if (!browser) {

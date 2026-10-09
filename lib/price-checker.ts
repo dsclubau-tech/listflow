@@ -743,6 +743,7 @@ export async function runPriceCheck(
         variantHints,
       {
           allowDealPriceFallback: true,
+          maxShippingDays: supplierSettings.maxShippingDays,
           signal,
           onDeliverySetupDiagnostic: details => logger.info("price-checker/delivery-setup", "Amazon delivery setup attempt", {
             jobId: options.jobId, storeId: options.storeId, productId, asin,

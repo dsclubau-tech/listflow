@@ -1,3 +1,7 @@
+import { chromium } from "playwright-core";
+import { scrapeAmazonPrice } from "./amazon-scraper";
+import { emptyDeliveryBrowser } from "../tests/helpers/amazon-empty-delivery-browser";
+import { emptyDeliveryProducts } from "../tests/fixtures/amazon-shipping-offers";
 import { XMLParser } from "fast-xml-parser";
 import { Prisma } from '@/app/generated/prisma/client';
 import assert from 'node:assert/strict';
@@ -129,6 +133,7 @@ async function fixture(arrivalText:string|null='delivery tomorrow') {
     try{return await operation(database);}finally{release();}
   }};
   let scrapes=0,adds=0,revisions=0;
+  const scrapeSignals: unknown[] = [], shippingDeadlines: number[] = [];
   let authenticated=true, sessionStore="store";
   let beforeStoreNumber:()=>void=()=>{};
   let scrapeOverrides:Row={};
@@ -153,9 +158,9 @@ async function fixture(arrivalText:string|null='delivery tomorrow') {
         parseAmazonShippingEvidence({asin:'B0TEST1234',mode:'REGULAR',postcode:'2217',observedAt:at,source:'fixture',arrivalText:currentArrival,associated:true})};
   };
   const fixtureModule={exports:{}};
-  vm.runInNewContext(await compiled,{module:fixtureModule,exports:fixtureModule.exports,require:createRequire(import.meta.url),process,console,Buffer,URL,URLSearchParams,Date,Intl,Response,Request,AbortController,setTimeout,clearTimeout,setInterval,clearInterval,
+  vm.runInNewContext(await compiled,{module:fixtureModule,exports:fixtureModule.exports,require:createRequire(import.meta.url),process,console,Buffer,URL,URLSearchParams,Date,Intl,Response,Request,AbortController,setTimeout:(callback:()=>void,delay:number)=>{if(delay===120_000)shippingDeadlines.push(delay);return setTimeout(callback,delay);},clearTimeout,setInterval,clearInterval,
     fetch:()=>{throw Error('Unexpected network call');},globalThis:{database,operations,Prisma,beforeStoreNumber:()=>beforeStoreNumber(),authenticate:()=>authenticated?{user:{id:"user"}}:null,sessionStore:()=>sessionStore,
-      scrape:async()=>{scrapes++;if(failScrape)throw failScrape;return {...observed(),...scrapeOverrides};},
+      scrape:async(...args:unknown[])=>{scrapeSignals.push((args[5] as {signal?:unknown})?.signal);scrapes++;if(failScrape)throw failScrape;return {...observed(),...scrapeOverrides};},
       inventoryRead:()=>'<GetItemResponse><Ack>Success</Ack><Item><ItemID>'+product.ebayItemId+'</ItemID><StartPrice currencyID="AUD">'+remotePrice+'</StartPrice><Quantity>'+(remoteQuantity??product.quantity??1)+'</Quantity><SellingStatus><ListingStatus>'+remoteStatus+'</ListingStatus><QuantitySold>0</QuantitySold></SellingStatus>'+
         (remoteVariants?'<Variations>'+remoteVariants.map(v=>'<Variation><SKU>'+v.sku+'</SKU><StartPrice currencyID="AUD">'+v.price+'</StartPrice><Quantity>'+v.quantity+'</Quantity><SellingStatus><QuantitySold>0</QuantitySold></SellingStatus></Variation>').join('')+'</Variations>':'')+listingXml+'</Item></GetItemResponse>',
       inventoryWrite:async(xml:string)=>{
@@ -175,7 +180,7 @@ async function fixture(arrivalText:string|null='delivery tomorrow') {
   const api=fixtureModule.exports as {guardAmazonUploadShipping:typeof guardAmazonUploadShipping;uploadProductToEbay:typeof uploadProductToEbay;createOrReuseEbayUploadJob:typeof createOrReuseEbayUploadJob;
     queueAmazonShippingHold:typeof queueAmazonShippingHold;queuePriceCheckAutoResumeForRun:typeof queuePriceCheckAutoResumeForRun;requestUpload:typeof POST;cancelShippingConfirmation:typeof DELETE;getCurrentEbayActionJobs:(storeId:string)=>Promise<Array<{id:string;errors:Array<{shippingConfirmation?:unknown}>}>>;resolveShippingApproval:typeof resolveShippingApproval;processProduct:(job:Row,id:string)=>Promise<{ok:boolean;failure:Row|null}>;markProgress:(job:Row,id:string,succeeded:boolean,failure:Row|null)=>Promise<void>;approveSingle:(request:Request)=>Promise<Response>;approveBulk:(request:Request)=>Promise<Response>;retryBulk:(request:Request,params:{params:Promise<{id:string}>})=>Promise<Response>};
   return {api,product,settings,tables,operations,inventoryRequests,listingRequests,afterInventoryWrite:(hook:()=>void)=>{afterInventoryWrite=hook;},setInventory:(values:Array<{sku:string;price:number;quantity:number}>)=>{remoteVariants=structuredClone(values);},
-    remoteInventory:()=>remoteVariants,setRemoteStatus:(status:string)=>{remoteStatus=status;},setPartial:()=>{partial=true;},input:{product:product as unknown as Parameters<typeof guardAmazonUploadShipping>[0]['product'],userId:'user'},counts:()=>({scrapes,adds,revisions}),
+    scrapeSignals,shippingDeadlines,remoteInventory:()=>remoteVariants,setRemoteStatus:(status:string)=>{remoteStatus=status;},setPartial:()=>{partial=true;},input:{product:product as unknown as Parameters<typeof guardAmazonUploadShipping>[0]['product'],userId:'user'},counts:()=>({scrapes,adds,revisions}),
     beforeMarketplaceWrite:(callback:()=>void)=>{beforeStoreNumber=callback;},setAuthenticated:(value:boolean)=>{authenticated=value;},setStore:(value:string)=>{sessionStore=value;},setScrapeOverrides:(value:Row)=>{scrapeOverrides=value;},
     setHtml:(html:string)=>{shippingHtml=html.replaceAll('B0FPQNVHG8','B0TEST1234').replaceAll('B0FPKSQ4WW','B0TEST1234');},setArrival:(text:string|null)=>{currentArrival=text;},setScrapeError:(error:Error)=>{failScrape=error;},setAddSuccess:(value:boolean)=>{addSuccess=value;},setReviseSuccess:(value:boolean)=>{reviseSuccess=value;},
     commit(){const value=observed();const row={id:'committed',productId:'product',storeId:'store',requestedAsin:'B0TEST1234',selectedAsin:'B0TEST1234',verifiedPostcode:'2217',postcodeVerified:true,isSuccessful:true,priceMode:'REGULAR',stockLeft:4,price:96.75,identityOutcome:'MATCH',buyBoxOutcome:'AVAILABLE',observedAt:value.observedAt,shippingEvidence:value.shippingEvidence};tables.amazonPriceObservation.push(row);Object.assign(product,{holdLastObservationId:row.id,lastPriceCheck:row.observedAt,amazonPriceObservations:tables.amazonPriceObservation,_count:{priceHistory:0}});return row;},
@@ -679,4 +684,48 @@ test('cleaned incident dispatch still blocks slow shipping and genuine conflicts
     assert.equal(f.counts().scrapes, scenario === 'slow-dispatch' ? 1 : 2);
     if (scenario === 'conflict') assert.ok(result.body.shippingConfirmation);
   }
+});
+
+test("real recovered import observations reach direct and worker uploads only through shipping safeguards", async () => {
+  const browser = await chromium.launch({ headless: true });
+  try {
+    for (const product of emptyDeliveryProducts) {
+      const offline = emptyDeliveryBrowser(browser, product.asin, html => html.replace(/18 October 2026|19 October 2026/g, 'in 2 days').replace('15 October 2026', 'tomorrow'));
+      const recovered = await scrapeAmazonPrice(product.asin, offline.browser, '2217', 'REGULAR');
+      assert.equal(recovered.shippingEvidence?.outcome, 'VERIFIED');
+      for (const background of [false, true]) {
+        const f = await fixture();
+        f.product.asin = product.asin;
+        f.setScrapeOverrides({ ...recovered });
+        const result = background
+          ? await f.api.processProduct((await f.api.createOrReuseEbayUploadJob({ storeId: 'store', userId: 'user', productIds: ['product'] })).job, 'product')
+          : await f.api.uploadProductToEbay({ productId: 'product', storeId: 'store', userId: 'user' });
+        assert.equal(result.ok, true, JSON.stringify(result));
+        assert.equal(f.counts().adds, 1);
+        assert.equal(f.counts().scrapes, 1);
+        assert.equal(f.product.status, 'IMPORTED');
+        assert.equal(f.tables.amazonPriceObservation[0].selectedAsin, product.asin);
+      }
+      const slow = await fixture();
+      slow.product.asin = product.asin;
+      slow.settings.maxShippingDays = 1;
+      slow.setScrapeOverrides({ ...recovered });
+      const blocked = await slow.api.uploadProductToEbay({ productId: 'product', storeId: 'store', userId: 'user' });
+      assert.equal(blocked.status, 422);
+      assert.equal(slow.counts().adds, 0);
+      assert.deepEqual(offline.state().errors, []);
+    }
+  } finally { await browser.close(); }
+});
+
+test("unknown shipping retries share one deadline and abort signal", async () => {
+  const f = await fixture(null);
+  const result = await f.api.guardAmazonUploadShipping(f.input);
+  assert.equal(result.allowed, false);
+  assert.equal(result.status, 409);
+  assert.deepEqual(f.shippingDeadlines, [120_000]);
+  assert.equal(f.scrapeSignals.length, 2);
+  assert.ok(f.scrapeSignals[0] instanceof AbortSignal);
+  assert.equal(f.scrapeSignals[0], f.scrapeSignals[1]);
+  assert.equal(f.counts().adds, 0);
 });

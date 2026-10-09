@@ -54,9 +54,9 @@ export async function guardAmazonUploadShipping(input: {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(new Error('Amazon upload shipping verification timed out. Retry the check.')), 120_000);
     try {
-      let result = await scrapeAmazonPrice(product.asin, undefined, postcode, mode, extractVariantSelectionHints(product), { signal: controller.signal });
+      let result = await scrapeAmazonPrice(product.asin, undefined, postcode, mode, extractVariantSelectionHints(product), { signal: controller.signal, maxShippingDays: maximum });
       if (result.price !== null && evaluateAmazonShipping(result.shippingEvidence, maximum).outcome === 'UNKNOWN') {
-        result = await scrapeAmazonPrice(product.asin, undefined, postcode, mode, extractVariantSelectionHints(product), { signal: controller.signal });
+        result = await scrapeAmazonPrice(product.asin, undefined, postcode, mode, extractVariantSelectionHints(product), { signal: controller.signal, maxShippingDays: maximum });
       }
       controller.signal.throwIfAborted();
       if (result.price === null || !Number.isFinite(result.price) || result.price <= 0 || result.stockLeft === 0 || result.variantSelectionFailed || result.detectedAsin !== product.asin || result.identityOutcome !== 'MATCH' || result.buyBoxOutcome !== 'AVAILABLE' || !result.postcodeVerified || result.selectedPriceMode !== mode) {

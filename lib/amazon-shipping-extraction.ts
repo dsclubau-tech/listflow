@@ -12,7 +12,7 @@ const cards = AMAZON_OFFER_CARDS;
 const hidden = AMAZON_HIDDEN_OFFER;
 
 /** Only the accepted offer's primary delivery promise can establish arrival. */
-export function extractAmazonShippingEvidence($: CheerioAPI, selected: AmazonBuyboxPriceResult, postcode: string, observedAt: Date) {
+export function inspectAmazonShippingEvidence($: CheerioAPI, selected: AmazonBuyboxPriceResult, postcode: string, observedAt: Date) {
   const roots = $('#buybox, #desktop_buybox, #buybox_feature_div, #buyBoxAccordion');
   let scope = roots;
   let associated = roots.length > 0;
@@ -66,6 +66,8 @@ export function extractAmazonShippingEvidence($: CheerioAPI, selected: AmazonBuy
     if (blocks.length) return ordinaryTexts(blocks);
     return ordinaryTexts(candidate.find('[data-csa-c-delivery-time]'));
   };
+  const deliveryCandidates = primary + ', ' + containers + ', [data-csa-c-delivery-time]';
+  let containerPresent = scope.find(deliveryCandidates).toArray().some(element => allowed(element) && !$(element).closest(secondary).length);
   let texts = deliveryTexts(scope);
   if (!hasCardContext && associated && texts.length === 0 &&
     !scope.find(primary + ', ' + containers + ', [data-csa-c-delivery-time]').filter((_, element) => allowed(element)).length) {
@@ -73,7 +75,9 @@ export function extractAmazonShippingEvidence($: CheerioAPI, selected: AmazonBuy
     const external = $(`${primary}, ${containers}`).filter((_, element) =>
       allowed(element) && !$(element).closest(`${cards}, ${secondary}`).length);
     const explicit = external.filter(primary);
-    texts = ordinaryTexts(explicit.length ? explicit : external);
+    const candidates = explicit.length ? explicit : external;
+    containerPresent = candidates.length > 0;
+    texts = ordinaryTexts(candidates);
   }
   const arrivalText = texts.length === 1 ? texts[0] : null;
   const dispatchNodes = scope.find('#availability, #availabilityInsideBuyBox_feature_div, [data-csa-c-availability]');
@@ -90,7 +94,21 @@ export function extractAmazonShippingEvidence($: CheerioAPI, selected: AmazonBuy
   // Keep association failures distinct from conflicting promises inside a verified offer.
   if (associated && texts.length > 1) evidence.reason = "Conflicting ordinary delivery messages were found for the selected offer.";
   else if (associated && dispatchTexts.length > 1) evidence.reason = "Conflicting dispatch messages were found for the selected offer.";
-  return evidence;
+  return { evidence, diagnostics: {
+    associated,
+    containerPresent,
+    hasOrdinaryText: texts.length > 0,
+    arrivalConflict: texts.length > 1,
+    dispatchConflict: dispatchTexts.length > 1,
+  } };
+}
+
+export function extractAmazonShippingEvidence($: CheerioAPI, selected: AmazonBuyboxPriceResult, postcode: string, observedAt: Date) {
+  return inspectAmazonShippingEvidence($, selected, postcode, observedAt).evidence;
+}
+
+export function inspectAmazonShippingEvidenceFromHtml(html: string, selected: AmazonBuyboxPriceResult, postcode: string, observedAt: Date) {
+  return inspectAmazonShippingEvidence(load(html), selected, postcode, observedAt);
 }
 
 export function extractAmazonShippingEvidenceFromHtml(html: string, selected: AmazonBuyboxPriceResult, postcode: string, observedAt: Date) {

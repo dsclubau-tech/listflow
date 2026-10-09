@@ -112,7 +112,11 @@ test("30 product checks seed once and reuse location with fresh prices and ident
     const after = await scrapeAmazonPrice(asin, experiment.browser, "2217", mode, null, {
       deliveryState: state, onDeliveryStateEvent: event => events.push(event),
     });
-    assert.deepEqual(after, before);
+    // Separate observations have different timestamps; compare their meaning.
+    assert.deepEqual({ ...after, observedAt: before.observedAt,
+      shippingEvidence: after.shippingEvidence ? { ...after.shippingEvidence, observedAt: before.shippingEvidence?.observedAt } : undefined }, before);
+    assert.equal(after.shippingEvidence?.observedAt, after.observedAt?.toISOString());
+    assert.ok(after.observedAt! >= before.observedAt!);
     assert.equal(after.rawPrice, mode === "DEAL" ? 80 : 100);
     assert.equal(after.shippingPrice, 5);
     assert.equal(after.price, mode === "DEAL" ? 85 : 105);

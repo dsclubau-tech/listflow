@@ -3,9 +3,9 @@ import test from "node:test";
 import { load } from "cheerio";
 import { extractLocalizedBuyboxPriceChoices, selectAmazonBuyboxPriceForTracking } from "./amazon-buybox-price";
 import { extractAmazonPriceSnapshot } from "./amazon-price-snapshot";
-import { extractAmazonShippingEvidence, extractAmazonShippingEvidenceFromHtml } from "./amazon-shipping-extraction";
+import { extractAmazonShippingEvidence, extractAmazonShippingEvidenceFromHtml, inspectAmazonShippingEvidenceFromHtml } from "./amazon-shipping-extraction";
 import { evaluateAmazonShipping } from "./amazon-shipping-evidence";
-import { accordionShippingOffers, deliveryBlock, normalShippingOffer, newAndUsedShippingOffers, shippingIncidentProducts, shippingIncidentOffer } from "../tests/fixtures/amazon-shipping-offers";
+import { accordionShippingOffers, deliveryBlock, normalShippingOffer, newAndUsedShippingOffers, shippingIncidentProducts, shippingIncidentOffer, emptyDeliveryProducts, emptyDeliveryOffer } from "../tests/fixtures/amazon-shipping-offers";
 
 const now = new Date("2026-10-05T01:00:00Z");
 function extract(html: string, mode: "REGULAR" | "DEAL" = "REGULAR", shared = false) {
@@ -238,4 +238,20 @@ test("non-visible candidate nodes inside templates cannot establish arrival or d
   assert.equal(extract(valid).evidence.dispatchText, null);
   const onlyHidden = '<div id="buybox"><span class="a-price"><span class="a-offscreen">$20</span></span>' + hiddenCandidates + '</div>';
   assert.equal(extract(onlyHidden).evidence.outcome, "UNKNOWN");
+});
+
+test("empty delivery diagnostics share the accepted offer and cleaning rules", () => {
+  for (const product of emptyDeliveryProducts) {
+    for (const loaded of [false, true]) {
+      const html = emptyDeliveryOffer(product.asin, loaded);
+      const selected = selectAmazonBuyboxPriceForTracking(extractLocalizedBuyboxPriceChoices(load(html), product.asin), "REGULAR");
+      assert.ok(selected);
+      const before = load(html).html();
+      const result = inspectAmazonShippingEvidenceFromHtml(html, selected, "2217", new Date("2026-10-09T01:00:00Z"));
+      assert.deepEqual(result.diagnostics, { associated: true, containerPresent: true, hasOrdinaryText: loaded, arrivalConflict: false, dispatchConflict: false });
+      assert.equal(result.evidence.outcome, loaded ? "VERIFIED" : "UNKNOWN");
+      if (loaded) assert.equal(evaluateAmazonShipping(result.evidence, 25, new Date("2026-10-09T01:00:00Z")).arrivalDays, product.days);
+      assert.equal(load(html).html(), before);
+    }
+  }
 });
