@@ -26,7 +26,7 @@ test.describe("Products selection and Action Center ownership", () => {
 
     const pageCheckbox = page.getByRole("checkbox", {
       name: "Select all listings on this page",
-    });
+    }).filter({ visible: true }).first();
 
     await pageCheckbox.check();
     const selectAllListings = page.getByRole("button", {
@@ -40,7 +40,7 @@ test.describe("Products selection and Action Center ownership", () => {
     const label = await selectAllListings.innerText();
     const totalCount = Number(label.match(/\d+/)?.[0] ?? 0);
     const selectionSummary = page
-      .getByText("25 selected", { exact: true })
+      .getByText("25 selected · 25 on this page", { exact: true }).filter({ visible: true }).first()
       .locator("..");
     await expect(selectionSummary).toBeVisible();
     await expect(
@@ -51,7 +51,7 @@ test.describe("Products selection and Action Center ownership", () => {
     await selectAllListings.click();
     await expect(page.getByText(`All ${totalCount} selected`, { exact: true })).toBeVisible();
     await expect(
-      page.getByText(`${totalCount} product(s) selected`, { exact: true }),
+      page.getByText(String(totalCount) + " selected · 25 on this page", { exact: true }).filter({ visible: true }).first(),
     ).toBeVisible();
   });
 

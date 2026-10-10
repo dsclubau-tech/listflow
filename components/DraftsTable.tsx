@@ -11,6 +11,8 @@ import AmazonPriceTrackingLabel from "@/components/AmazonPriceTrackingLabel";
 import {
   Fragment,
   type MouseEvent,
+  type Dispatch,
+  type SetStateAction,
   useCallback,
   useEffect,
   useMemo,
@@ -56,7 +58,12 @@ type RemovalAction = "listflow-only" | "end-ebay";
 interface DraftsTableProps {
   products: SerializedProductRow[];
   totalListingCount?: number;
-  allSelectionProducts?: ProductSelectionSummary[] | null;
+  allSelectionProducts?: SelectionProduct[] | null;
+  hasCompleteSelection?: boolean;
+  selectedProductIds?: string[];
+  onSelectedProductIdsChange?: Dispatch<SetStateAction<string[]>>;
+  selectionReady?: boolean;
+  onBulkActionClearanceChange?: (height: number) => void;
   selectionScopeKey?: string;
   onSelectAllListings?: () => Promise<ProductSelectionSummary[]>;
   isSelectAllListingsLoading?: boolean;
@@ -71,7 +78,7 @@ interface DraftsTableProps {
   ) => void;
   autoExpandProductId?: string | null;
   onSelectionChange?: (selectedIds: string[]) => void;
-  onPriceCheckSelected?: (productIds: string[]) => Promise<void>;
+  onPriceCheckSelected?: (productIds: string[]) => Promise<{ accepted: boolean }>;
   onSyncSelectedEbayAds?: (productIds: string[]) => Promise<void>;
   isEbayAdsSyncing?: boolean;
   onManagePromotionsSelected?: (productIds: string[]) => void;
@@ -665,6 +672,11 @@ export default function DraftsTable({
   products,
   totalListingCount = products.length,
   allSelectionProducts = null,
+  hasCompleteSelection = false,
+  selectedProductIds,
+  onSelectedProductIdsChange,
+  selectionReady = true,
+  onBulkActionClearanceChange,
   selectionScopeKey = "",
   onSelectAllListings,
   isSelectAllListingsLoading = false,
@@ -703,7 +715,17 @@ export default function DraftsTable({
   const productDetailRequests = useRef<Map<string, Promise<void>>>(new Map());
   const selectAllCheckboxRef = useRef<HTMLInputElement | null>(null);
   const previousSelectionScopeKey = useRef(selectionScopeKey);
-  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [internalSelectedIds, setInternalSelectedIds] = useState<string[]>([]);
+  const selectedIds = selectedProductIds ?? internalSelectedIds;
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+  const selectionChangeVersion = useRef(0);
+  const setSelectedIds: Dispatch<SetStateAction<string[]>> = useCallback(update => {
+    selectionChangeVersion.current++;
+    (onSelectedProductIdsChange ?? setInternalSelectedIds)(update);
+  }, [onSelectedProductIdsChange]);
+  const desktopActionsRef = useRef<HTMLDivElement | null>(null);
+  const mobileActionsRef = useRef<HTMLDivElement | null>(null);
+  const mobileSelectAllRef = useRef<HTMLInputElement | null>(null);
   const [isSelectingAllListings, setIsSelectingAllListings] = useState(false);
   const [isMobileActionsOpen, setIsMobileActionsOpen] = useState(false);
 
@@ -712,6 +734,22 @@ export default function DraftsTable({
       setIsMobileActionsOpen(false);
     }
   }, [selectedIds.length]);
+  const hasSelectedProducts = selectedIds.length > 0;
+  useEffect(() => {
+    if (!onBulkActionClearanceChange) return;
+    const measure = () => {
+      const clearance = Math.max(0, ...[desktopActionsRef.current, mobileActionsRef.current].map(element => {
+        const rect = element?.getBoundingClientRect();
+        return rect && rect.height > 0 ? Math.ceil(window.innerHeight - rect.top) : 0;
+      }));
+      onBulkActionClearanceChange(clearance);
+    };
+    const observer = new ResizeObserver(measure);
+    for (const element of [desktopActionsRef.current, mobileActionsRef.current]) if (element) observer.observe(element);
+    window.addEventListener("resize", measure);
+    measure();
+    return () => { observer.disconnect(); window.removeEventListener("resize", measure); onBulkActionClearanceChange(0); };
+  }, [hasSelectedProducts, isMobileActionsOpen, onBulkActionClearanceChange]);
   const tableScrollContainerRef = useRef<HTMLDivElement | null>(null);
   const [isTableDragging, setIsTableDragging] = useState(false);
   const dragScrollState = useRef({
@@ -939,8 +977,8 @@ export default function DraftsTable({
   }, []);
 
   useEffect(() => {
-    onSelectionChange?.(selectedIds);
-  }, [onSelectionChange, selectedIds]);
+    if (selectedProductIds === undefined) onSelectionChange?.(selectedIds);
+  }, [onSelectionChange, selectedIds, selectedProductIds]);
 
   const loadUploadJobs = useCallback(async () => {
     const request = ++uploadJobsRequest.current;
@@ -1455,12 +1493,13 @@ export default function DraftsTable({
         : pageSelectableIds,
     [allSelectionProducts, isProductsView, pageSelectableIds],
   );
+  const selectedOnPageCount = pageSelectableIds.filter(id => selectedIdSet.has(id)).length;
   const allPageSelected = hasEverySelected(selectedIds, pageSelectableIds);
   const somePageSelected =
-    pageSelectableIds.some((id) => selectedIds.includes(id)) && !allPageSelected;
+    pageSelectableIds.some((id) => selectedIdSet.has(id)) && !allPageSelected;
   const allMatchingSelected =
     isProductsView &&
-    allSelectionProducts !== null &&
+    hasCompleteSelection && allSelectionProducts !== null &&
     hasEverySelected(selectedIds, allMatchingIds);
 
   useEffect(() => {
@@ -1473,7 +1512,7 @@ export default function DraftsTable({
       const nextIds = currentIds.filter((id) => selectableIdSet.has(id));
       return nextIds.length === currentIds.length ? currentIds : nextIds;
     });
-  }, [isProductsView, pageSelectableIds]);
+  }, [isProductsView, pageSelectableIds, setSelectedIds]);
 
   useEffect(() => {
     if (!isProductsView) {
@@ -1482,13 +1521,14 @@ export default function DraftsTable({
 
     if (previousSelectionScopeKey.current !== selectionScopeKey) {
       previousSelectionScopeKey.current = selectionScopeKey;
-      setSelectedIds([]);
+      selectionChangeVersion.current++;
+      if (selectedProductIds === undefined) setSelectedIds([]);
     }
-  }, [isProductsView, selectionScopeKey]);
+  }, [isProductsView, selectionScopeKey, selectedProductIds, setSelectedIds]);
 
   useEffect(() => {
-    if (selectAllCheckboxRef.current) {
-      selectAllCheckboxRef.current.indeterminate = somePageSelected;
+    for (const checkbox of [selectAllCheckboxRef.current, mobileSelectAllRef.current]) {
+      if (checkbox) checkbox.indeterminate = somePageSelected;
     }
   }, [somePageSelected]);
 
@@ -1515,13 +1555,16 @@ export default function DraftsTable({
       return;
     }
 
+    const version = selectionChangeVersion.current;
     setIsSelectingAllListings(true);
 
     try {
       const completeSelection =
-        allSelectionProducts ?? (await onSelectAllListings());
+        hasCompleteSelection && allSelectionProducts ? allSelectionProducts : await onSelectAllListings();
+      if (selectionChangeVersion.current !== version) return;
       setSelectedIds(completeSelection.map((product) => product.id));
     } catch (error) {
+      if (selectionChangeVersion.current !== version || (error instanceof Error && error.name === "AbortError")) return;
       onToast(
         error instanceof Error
           ? error.message
@@ -1540,10 +1583,10 @@ export default function DraftsTable({
 
     return selectionProducts.filter(
       (product) =>
-        selectedIds.includes(product.id) &&
+        selectedIdSet.has(product.id) &&
         hasPendingPriceChange(product)
     ).length;
-  }, [isProductsView, selectedIds, selectionProducts]);
+  }, [isProductsView, selectedIdSet, selectionProducts]);
 
   const selectedOnHoldCount = useMemo(() => {
     if (!isProductsView) {
@@ -1552,9 +1595,9 @@ export default function DraftsTable({
 
     return selectionProducts.filter(
       (product) =>
-        selectedIds.includes(product.id) && product.status === "ON_HOLD"
+        selectedIdSet.has(product.id) && product.status === "ON_HOLD"
     ).length;
-  }, [isProductsView, selectedIds, selectionProducts]);
+  }, [isProductsView, selectedIdSet, selectionProducts]);
 
   const selectedImportedCount = useMemo(() => {
     if (!isProductsView) {
@@ -1563,9 +1606,9 @@ export default function DraftsTable({
 
     return selectionProducts.filter(
       (product) =>
-        selectedIds.includes(product.id) && product.status === "IMPORTED"
+        selectedIdSet.has(product.id) && product.status === "IMPORTED"
     ).length;
-  }, [isProductsView, selectedIds, selectionProducts]);
+  }, [isProductsView, selectedIdSet, selectionProducts]);
 
   const selectedListedCount = selectedImportedCount + selectedOnHoldCount;
 
@@ -1578,10 +1621,11 @@ export default function DraftsTable({
   );
 
   async function handleBulkApplySelected() {
+    if (isProductsView && !selectionReady) return;
     const idsWithPending = selectionProducts
       .filter(
         (product) =>
-          selectedIds.includes(product.id) &&
+          selectedIdSet.has(product.id) &&
           hasPendingPriceChange(product)
       )
       .map((product) => product.id);
@@ -1646,10 +1690,11 @@ export default function DraftsTable({
   }
 
   async function handleBulkDismissSelected() {
+    if (isProductsView && !selectionReady) return;
     const idsWithPending = selectionProducts
       .filter(
         (product) =>
-          selectedIds.includes(product.id) &&
+          selectedIdSet.has(product.id) &&
           hasPendingPriceChange(product)
       )
       .map((product) => product.id);
@@ -1700,6 +1745,7 @@ export default function DraftsTable({
   }
 
   async function handleBulkPriceCheck() {
+    if (isProductsView && !selectionReady) return;
     const idsToCheck =
       selectedPriceCheckSummary?.eligibleIds ??
       selectedIds.filter((id) => {
@@ -1720,8 +1766,9 @@ export default function DraftsTable({
 
     try {
       if (onPriceCheckSelected) {
-        await onPriceCheckSelected(selectedIds);
-        setSelectedIds([]);
+        const submittedIds = [...selectedIds];
+        const result = await onPriceCheckSelected(submittedIds);
+        if (result.accepted) setSelectedIds(current => current.filter(id => !submittedIds.includes(id)));
         return;
       }
 
@@ -1762,8 +1809,9 @@ export default function DraftsTable({
   }
 
   async function handleBulkResumeSelected() {
+    if (isProductsView && !selectionReady) return;
     const onHoldIds = selectionProducts
-      .filter((product) => selectedIds.includes(product.id) && product.status === "ON_HOLD")
+      .filter((product) => selectedIdSet.has(product.id) && product.status === "ON_HOLD")
       .map((product) => product.id);
 
     if (onHoldIds.length === 0) {
@@ -1827,10 +1875,11 @@ export default function DraftsTable({
   }
 
   async function handleBulkHoldSelected() {
+    if (isProductsView && !selectionReady) return;
     const importedIds = selectionProducts
       .filter(
         (product) =>
-          selectedIds.includes(product.id) && product.status === "IMPORTED"
+          selectedIdSet.has(product.id) && product.status === "IMPORTED"
       )
       .map((product) => product.id);
 
@@ -1895,10 +1944,11 @@ export default function DraftsTable({
   }
 
   async function handleBulkRemoveFromListflowSelected() {
+    if (isProductsView && !selectionReady) return;
     const listedIds = selectionProducts
       .filter(
         (product) =>
-          selectedIds.includes(product.id) &&
+          selectedIdSet.has(product.id) &&
           (product.status === "IMPORTED" || product.status === "ON_HOLD")
       )
       .map((product) => product.id);
@@ -1949,10 +1999,11 @@ export default function DraftsTable({
   }
 
   async function handleBulkEndAndRemoveSelected() {
+    if (isProductsView && !selectionReady) return;
     const listedIds = selectionProducts
       .filter(
         (product) =>
-          selectedIds.includes(product.id) &&
+          selectedIdSet.has(product.id) &&
           (product.status === "IMPORTED" || product.status === "ON_HOLD")
       )
       .map((product) => product.id);
@@ -2058,7 +2109,7 @@ export default function DraftsTable({
   }
 
   async function handleBulkImport() {
-    const selected = products.filter((product) => selectedIds.includes(product.id));
+    const selected = products.filter((product) => selectedIdSet.has(product.id));
 
     for (const product of selected) {
       const categoryId = (product.category || "").trim();
@@ -2294,11 +2345,12 @@ export default function DraftsTable({
         <div className="mb-3 flex items-center justify-between rounded-xl border border-blue-200/80 bg-blue-50/60 px-3 py-2 text-sm xl:hidden shadow-xs">
           <label className="inline-flex items-center gap-2.5 cursor-pointer select-none font-medium text-gray-800">
             <input
+              ref={mobileSelectAllRef}
               type="checkbox"
               checked={allPageSelected}
               onChange={toggleSelectAll}
               className="h-4 w-4 rounded border-gray-300 text-orange-500 focus:ring-orange-500"
-              aria-label={`Select all ${pageSelectableIds.length} listings on this page`}
+              aria-label="Select all listings on this page"
             />
             <span className="text-xs font-semibold">Select all {pageSelectableIds.length}</span>
           </label>
@@ -2306,7 +2358,7 @@ export default function DraftsTable({
             {selectedIds.length > 0 ? (
               <>
                 <span className="font-semibold text-blue-900">
-                  {selectedIds.length} selected
+                  {selectedIds.length} selected{isProductsView ? " · " + selectedOnPageCount + " on this page" : ""}
                 </span>
                 {isProductsView && totalListingCount > pageSelectableIds.length && !allMatchingSelected && (
                   <button
@@ -2584,7 +2636,7 @@ export default function DraftsTable({
               const isLoadingProductDetails =
                 loadingProductDetailIds.includes(product.id);
               const productDetailError = productDetailErrors[product.id] ?? null;
-              const isSelected = selectedIds.includes(product.id);
+              const isSelected = selectedIdSet.has(product.id);
               const isSelectable = pageSelectableIdSet.has(product.id);
               const uploadJob = uploadJobByProductId.get(product.id) ?? null;
               const isUploadQueued = Boolean(uploadJob);
@@ -3600,6 +3652,8 @@ export default function DraftsTable({
       {/* Desktop Floating Bulk Actions Bar */}
       {selectedIds.length > 0 && (
         <div
+          ref={desktopActionsRef}
+          data-testid="products-bulk-actions"
           className={
             isDraftsView
               ? "fixed bottom-4 left-[17rem] right-4 z-30 hidden xl:flex flex-col gap-3 rounded-2xl border border-gray-200 bg-white/95 p-4 shadow-2xl backdrop-blur md:left-[17.5rem] md:right-6 xl:flex-row xl:items-center xl:justify-between"
@@ -3609,7 +3663,7 @@ export default function DraftsTable({
         >
           <div className="min-w-0">
             <div className="text-sm text-gray-500">
-              {selectedIds.length} product(s) selected
+              {selectedIds.length}{isProductsView ? " selected · " + selectedOnPageCount + " on this page" : " product(s) selected"}
             </div>
             {isProductsView &&
               selectedPriceCheckSummary &&
@@ -3645,7 +3699,7 @@ export default function DraftsTable({
               <>
                 <Button
                   onClick={handleBulkImport}
-                  disabled={bulkImporting || isBulkDeleting}
+                  disabled={!selectionReady || bulkImporting || isBulkDeleting}
                   pending={bulkImporting}
                   pendingLabel="Queueing…"
                   variant="primary"
@@ -3656,7 +3710,7 @@ export default function DraftsTable({
                 </Button>
                 <Button
                   onClick={handleBulkDelete}
-                  disabled={isBulkDeleting || bulkImporting}
+                  disabled={!selectionReady || isBulkDeleting || bulkImporting}
                   pending={isBulkDeleting}
                   pendingLabel="Deleting…"
                   variant="danger"
@@ -3672,7 +3726,7 @@ export default function DraftsTable({
                   <button
                     type="button"
                     onClick={() => onManagePromotionsSelected(selectedIds)}
-                    disabled={selectedIds.length === 0}
+                    disabled={!selectionReady || selectedIds.length === 0}
                     className="flex items-center gap-2 rounded-md border border-violet-200 px-4 py-2 text-sm font-medium text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-60"
                   >
                     Manage Promotions
@@ -3681,7 +3735,7 @@ export default function DraftsTable({
                 {onSyncSelectedEbayAds && (
                   <button
                     onClick={() => void onSyncSelectedEbayAds(selectedIds)}
-                    disabled={isEbayAdsSyncing || selectedIds.length === 0}
+                    disabled={!selectionReady || isEbayAdsSyncing || selectedIds.length === 0}
                     className="px-4 py-2 border border-blue-200 text-blue-700 text-sm font-medium rounded-md hover:bg-blue-50 transition-colors disabled:opacity-60 flex items-center gap-2"
                   >
                     {isEbayAdsSyncing ? (
@@ -3716,7 +3770,7 @@ export default function DraftsTable({
                 {onBulkEditSelected && (
                   <button
                     onClick={() => onBulkEditSelected(selectedIds)}
-                    disabled={selectedIds.length === 0}
+                    disabled={!selectionReady || selectedIds.length === 0}
                     className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 transition-colors disabled:opacity-60 flex items-center gap-2"
                   >
                     <svg
@@ -3744,7 +3798,7 @@ export default function DraftsTable({
                 {selectedImportedCount > 0 && (
                   <button
                     onClick={handleBulkHoldSelected}
-                    disabled={isBulkHolding}
+                    disabled={!selectionReady || isBulkHolding}
                     className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
                   >
                     {isBulkHolding ? (
@@ -3763,7 +3817,7 @@ export default function DraftsTable({
                 {selectedOnHoldCount > 0 && (
                   <button
                     onClick={handleBulkResumeSelected}
-                    disabled={isBulkResuming}
+                    disabled={!selectionReady || isBulkResuming}
                     className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
                   >
                     {isBulkResuming ? (
@@ -3782,7 +3836,7 @@ export default function DraftsTable({
                 {selectedListedCount > 0 && (
                   <button
                     onClick={handleBulkRemoveFromListflowSelected}
-                    disabled={isBulkRemovingListflow || isBulkEnding}
+                    disabled={!selectionReady || isBulkRemovingListflow || isBulkEnding}
                     className="flex items-center gap-2 rounded-md border border-quaternary px-4 py-2 text-sm font-medium text-quaternary transition-colors hover:bg-quaternary-soft disabled:opacity-60"
                   >
                     {isBulkRemovingListflow ? (
@@ -3801,7 +3855,7 @@ export default function DraftsTable({
                 {selectedListedCount > 0 && (
                   <button
                     onClick={handleBulkEndAndRemoveSelected}
-                    disabled={isBulkEnding || isBulkRemovingListflow}
+                    disabled={!selectionReady || isBulkEnding || isBulkRemovingListflow}
                     className="flex items-center gap-2 rounded-md bg-quaternary px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-quaternary-hover disabled:opacity-60"
                   >
                     {isBulkEnding ? (
@@ -3819,7 +3873,7 @@ export default function DraftsTable({
                 )}
                 <button
                   onClick={handleBulkPriceCheck}
-                  disabled={isBulkPriceChecking}
+                  disabled={!selectionReady || isBulkPriceChecking}
                   title={selectedPriceCheckSummary?.message}
                   className="px-4 py-2 bg-gray-900 hover:bg-gray-700 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
                 >
@@ -3846,7 +3900,7 @@ export default function DraftsTable({
                   <>
                     <button
                       onClick={handleBulkApplySelected}
-                      disabled={isBulkApplying || isBulkDismissing}
+                      disabled={!selectionReady || isBulkApplying || isBulkDismissing}
                       className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-md transition-colors disabled:opacity-60 flex items-center gap-2"
                     >
                       {isBulkApplying ? (
@@ -3863,7 +3917,7 @@ export default function DraftsTable({
                     </button>
                     <button
                       onClick={handleBulkDismissSelected}
-                      disabled={isBulkApplying || isBulkDismissing}
+                      disabled={!selectionReady || isBulkApplying || isBulkDismissing}
                       className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-md hover:bg-gray-50 transition-colors disabled:opacity-60 flex items-center gap-2"
                     >
                       {isBulkDismissing ? (
@@ -3888,7 +3942,7 @@ export default function DraftsTable({
 
       {/* Mobile Collapsed Floating Action Pill */}
       {selectedIds.length > 0 && !isMobileActionsOpen && (
-        <div className="fixed bottom-5 inset-x-0 z-30 flex justify-center px-4 xl:hidden pointer-events-none">
+        <div ref={mobileActionsRef} className="fixed bottom-5 inset-x-0 z-30 flex justify-center px-4 xl:hidden pointer-events-none">
           <button
             type="button"
             onClick={() => setIsMobileActionsOpen(true)}
@@ -3939,7 +3993,7 @@ export default function DraftsTable({
           <div className="flex items-center justify-between border-b border-gray-100 pb-2.5">
             <div className="min-w-0">
               <div className="text-sm font-bold text-gray-900">
-                {selectedIds.length} product{selectedIds.length === 1 ? "" : "s"} selected
+                {selectedIds.length} selected{isProductsView ? " · " + selectedOnPageCount + " on this page" : ""}
               </div>
               {isProductsView && selectedPriceCheckSummary && selectedPriceCheckSummary.ineligibleCount > 0 && (
                 <div className="mt-0.5 text-xs text-amber-700 truncate max-w-xs" title={selectedPriceCheckSummary.message}>
@@ -3979,7 +4033,7 @@ export default function DraftsTable({
                     handleBulkImport();
                     setIsMobileActionsOpen(false);
                   }}
-                  disabled={bulkImporting || isBulkDeleting}
+                  disabled={!selectionReady || bulkImporting || isBulkDeleting}
                   pending={bulkImporting}
                   pendingLabel="Queueing…"
                   variant="primary"
@@ -3993,7 +4047,7 @@ export default function DraftsTable({
                     handleBulkDelete();
                     setIsMobileActionsOpen(false);
                   }}
-                  disabled={isBulkDeleting || bulkImporting}
+                  disabled={!selectionReady || isBulkDeleting || bulkImporting}
                   pending={isBulkDeleting}
                   pendingLabel="Deleting…"
                   variant="danger"
@@ -4013,7 +4067,7 @@ export default function DraftsTable({
                     handleBulkPriceCheck();
                     setIsMobileActionsOpen(false);
                   }}
-                  disabled={isBulkPriceChecking}
+                  disabled={!selectionReady || isBulkPriceChecking}
                   title={selectedPriceCheckSummary?.message}
                   className="w-full py-2.5 px-3 bg-gray-900 hover:bg-gray-800 text-white text-xs font-semibold rounded-lg transition-colors disabled:opacity-60 flex items-center justify-center gap-1.5"
                 >
@@ -4033,7 +4087,7 @@ export default function DraftsTable({
                       onBulkEditSelected(selectedIds);
                       setIsMobileActionsOpen(false);
                     }}
-                    disabled={selectedIds.length === 0}
+                    disabled={!selectionReady || selectedIds.length === 0}
                     className="w-full py-2.5 px-3 border border-gray-300 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-60 flex items-center justify-center gap-1.5"
                   >
                     <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.8}>
@@ -4051,7 +4105,7 @@ export default function DraftsTable({
                       onManagePromotionsSelected(selectedIds);
                       setIsMobileActionsOpen(false);
                     }}
-                    disabled={selectedIds.length === 0}
+                    disabled={!selectionReady || selectedIds.length === 0}
                     className="w-full py-2.5 px-3 rounded-lg border border-violet-200 text-xs font-medium text-violet-700 transition-colors hover:bg-violet-50 disabled:opacity-60 flex items-center justify-center gap-1.5"
                   >
                     Manage Promotions
@@ -4065,7 +4119,7 @@ export default function DraftsTable({
                       void onSyncSelectedEbayAds(selectedIds);
                       setIsMobileActionsOpen(false);
                     }}
-                    disabled={isEbayAdsSyncing || selectedIds.length === 0}
+                    disabled={!selectionReady || isEbayAdsSyncing || selectedIds.length === 0}
                     className="w-full py-2.5 px-3 border border-blue-200 text-blue-700 text-xs font-medium rounded-lg hover:bg-blue-50 transition-colors disabled:opacity-60 flex items-center justify-center gap-1.5"
                   >
                     <svg className="h-3.5 w-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={1.8}>
@@ -4082,7 +4136,7 @@ export default function DraftsTable({
                       handleBulkHoldSelected();
                       setIsMobileActionsOpen(false);
                     }}
-                    disabled={isBulkHolding}
+                    disabled={!selectionReady || isBulkHolding}
                     className="w-full py-2.5 px-3 bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-60 flex items-center justify-center gap-1.5"
                   >
                     {isBulkHolding ? "Holding..." : `Put ${selectedImportedCount} On Hold`}
@@ -4096,7 +4150,7 @@ export default function DraftsTable({
                       handleBulkResumeSelected();
                       setIsMobileActionsOpen(false);
                     }}
-                    disabled={isBulkResuming}
+                    disabled={!selectionReady || isBulkResuming}
                     className="w-full py-2.5 px-3 bg-amber-600 hover:bg-amber-700 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-60 flex items-center justify-center gap-1.5"
                   >
                     {isBulkResuming ? "Resuming..." : `Resume ${selectedOnHoldCount} On Hold`}
@@ -4110,7 +4164,7 @@ export default function DraftsTable({
                       handleBulkRemoveFromListflowSelected();
                       setIsMobileActionsOpen(false);
                     }}
-                    disabled={isBulkRemovingListflow || isBulkEnding}
+                    disabled={!selectionReady || isBulkRemovingListflow || isBulkEnding}
                     className="w-full py-2.5 px-3 rounded-lg border border-quaternary text-xs font-medium text-quaternary transition-colors hover:bg-quaternary-soft disabled:opacity-60 flex items-center justify-center gap-1.5"
                   >
                     {isBulkRemovingListflow ? "Removing..." : "Remove from ListFlow"}
@@ -4124,7 +4178,7 @@ export default function DraftsTable({
                       handleBulkEndAndRemoveSelected();
                       setIsMobileActionsOpen(false);
                     }}
-                    disabled={isBulkEnding || isBulkRemovingListflow}
+                    disabled={!selectionReady || isBulkEnding || isBulkRemovingListflow}
                     className="w-full py-2.5 px-3 rounded-lg bg-quaternary text-xs font-medium text-white transition-colors hover:bg-quaternary-hover disabled:opacity-60 flex items-center justify-center gap-1.5 col-span-2"
                   >
                     {isBulkEnding ? "Queueing..." : "End on eBay & Remove"}
@@ -4139,7 +4193,7 @@ export default function DraftsTable({
                         handleBulkApplySelected();
                         setIsMobileActionsOpen(false);
                       }}
-                      disabled={isBulkApplying || isBulkDismissing}
+                      disabled={!selectionReady || isBulkApplying || isBulkDismissing}
                       className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium rounded-lg transition-colors disabled:opacity-60 flex items-center justify-center gap-1.5"
                     >
                       {isBulkApplying ? "Applying..." : `Apply ${selectedPendingCount} Pending`}
@@ -4150,7 +4204,7 @@ export default function DraftsTable({
                         handleBulkDismissSelected();
                         setIsMobileActionsOpen(false);
                       }}
-                      disabled={isBulkApplying || isBulkDismissing}
+                      disabled={!selectionReady || isBulkApplying || isBulkDismissing}
                       className="w-full py-2.5 px-3 border border-gray-300 text-gray-700 text-xs font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-60 flex items-center justify-center gap-1.5"
                     >
                       {isBulkDismissing ? "Dismissing..." : `Dismiss ${selectedPendingCount} Pending`}

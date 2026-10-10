@@ -37,10 +37,11 @@ import {
 import { getProductSelectionScopeKey } from "@/lib/product-selection";
 import type { ProductSortField, ProductSortOrder } from "@/lib/product-sort";
 import { getProductRangeFilterValidationError } from "@/lib/product-filter-ranges";
-import type { ProductSelectionSummary } from "@/types/product-selection";
+import { useProductSelection } from "@/hooks/useProductSelection";
 import type { SerializedProductRow } from "@/types/product-row";
 
 interface ProductsPageClientProps {
+  storeId: string;
   products: SerializedProductRow[];
   totalCount: number;
   page: number;
@@ -399,6 +400,7 @@ function getPriceCheckJobStatusText(job: PriceCheckJob) {
 }
 
 export default function ProductsPageClient({
+  storeId,
   products,
   totalCount,
   page,
@@ -430,11 +432,7 @@ export default function ProductsPageClient({
     useState(false);
   const [isResumingPriceCheckJob, setIsResumingPriceCheckJob] = useState(false);
   const [priceCheckJob, setPriceCheckJob] = useState<PriceCheckJob | null>(null);
-  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
-  const [allSelectionProducts, setAllSelectionProducts] = useState<
-    ProductSelectionSummary[] | null
-  >(null);
-  const [isLoadingAllSelection, setIsLoadingAllSelection] = useState(false);
+  const [bulkActionClearance, setBulkActionClearance] = useState(0);
   const [isCopyingTitles, setIsCopyingTitles] = useState(false);
   const [isBulkEditOpen, setIsBulkEditOpen] = useState(false);
   const [bulkEditView, setBulkEditView] = useState<"editor" | "job">("editor");
@@ -469,8 +467,6 @@ export default function ProductsPageClient({
   const notifiedTerminalJobIds = useRef<Set<string>>(new Set());
   const notifiedPromotionJobIds = useRef<Set<string>>(new Set());
   const refreshPriceCheckRef = useRef<() => void>(() => {});
-  const failedSelectionScopeRef = useRef<string | null>(null);
-  const selectionLoadRequestIdRef = useRef(0);
   const searchContainerRef = useRef<HTMLDivElement | null>(null);
   const searchInputRef = useRef<HTMLInputElement | null>(null);
   const filterMenuRef = useRef<HTMLDivElement | null>(null);
@@ -506,12 +502,10 @@ export default function ProductsPageClient({
     () => getProductSelectionScopeKey(searchParamsString),
     [searchParamsString],
   );
-  const selectionProducts = useMemo<
-    Array<SerializedProductRow | ProductSelectionSummary>
-  >(
-    () => allSelectionProducts ?? products,
-    [allSelectionProducts, products],
-  );
+  const { selectedIds: selectedProductIds, setSelectedIds: setSelectedProductIds,
+    selectionProducts, allProducts: allSelectionProducts, loading: isLoadingAllSelection,
+    error: selectionError, ready: isSelectionReady, loadAll: loadAllSelectionProducts,
+  } = useProductSelection(storeId, selectionScopeKey, products);
   const selectedPriceCheckSummary = useMemo(
     () => getSelectedPriceCheckSummary(selectionProducts, selectedProductIds),
     [selectionProducts, selectedProductIds]
@@ -538,76 +532,6 @@ export default function ProductsPageClient({
     totalCount === 0 ? 0 : Math.min(totalCount, (page - 1) * pageSize + 1);
   const lastVisibleProduct =
     totalCount === 0 ? 0 : Math.min(totalCount, page * pageSize);
-
-  const loadAllSelectionProducts = useCallback(async () => {
-    const requestId = selectionLoadRequestIdRef.current + 1;
-    selectionLoadRequestIdRef.current = requestId;
-    setIsLoadingAllSelection(true);
-
-    try {
-      const query = selectionScopeKey ? `?${selectionScopeKey}` : "";
-      const response = await fetch(`/api/products/selection${query}`, {
-        cache: "no-store",
-      });
-      const data = (await response.json().catch(() => ({}))) as {
-        products?: ProductSelectionSummary[];
-        totalCount?: number;
-        error?: string;
-      };
-
-      if (!response.ok || !Array.isArray(data.products)) {
-        throw new Error(data.error || "Unable to select all listings.");
-      }
-
-      if (selectionLoadRequestIdRef.current !== requestId) {
-        return [];
-      }
-
-      failedSelectionScopeRef.current = null;
-      setAllSelectionProducts(data.products);
-      return data.products;
-    } finally {
-      if (selectionLoadRequestIdRef.current === requestId) {
-        setIsLoadingAllSelection(false);
-      }
-    }
-  }, [selectionScopeKey]);
-
-  useEffect(() => {
-    selectionLoadRequestIdRef.current += 1;
-    setIsLoadingAllSelection(false);
-    setSelectedProductIds([]);
-    setAllSelectionProducts(null);
-    failedSelectionScopeRef.current = null;
-  }, [selectionScopeKey]);
-
-  useEffect(() => {
-    if (
-      selectedProductIds.length === 0 ||
-      allSelectionProducts ||
-      isLoadingAllSelection ||
-      failedSelectionScopeRef.current === selectionScopeKey
-    ) {
-      return;
-    }
-
-    void loadAllSelectionProducts().catch((error) => {
-      failedSelectionScopeRef.current = selectionScopeKey;
-      showToast(
-        error instanceof Error
-          ? error.message
-          : "Unable to load the complete selection.",
-        "error",
-      );
-    });
-  }, [
-    allSelectionProducts,
-    isLoadingAllSelection,
-    loadAllSelectionProducts,
-    selectionScopeKey,
-    selectedProductIds.length,
-    showToast,
-  ]);
 
   useEffect(() => {
     const savedPageSize = window.localStorage.getItem(PAGE_SIZE_STORAGE_KEY);
@@ -1524,7 +1448,7 @@ export default function ProductsPageClient({
   };
 
   const handleCopyTitles = async () => {
-    if (selectedProductIds.length === 0) return;
+    if (selectedProductIds.length === 0 || !isSelectionReady) return;
 
     const selectedSet = new Set(selectedProductIds);
     const titles = selectionProducts
@@ -1723,7 +1647,8 @@ export default function ProductsPageClient({
   };
 
   const startPriceCheckJob = useCallback(
-    async (productIds?: string[]) => {
+    async (productIds?: string[]): Promise<{ accepted: boolean }> => {
+      if (productIds !== undefined && (!isSelectionReady || productIds.length === 0)) return { accepted: false };
       setIsStartingPriceCheckJob(true);
 
       try {
@@ -1731,11 +1656,11 @@ export default function ProductsPageClient({
         let skippedSelectedMessage: string | null = null;
 
         if (selectedIds.length > 0) {
-          const selection = getSelectedPriceCheckSummary(products, selectedIds);
+          const selection = getSelectedPriceCheckSummary(selectionProducts, selectedIds);
 
           if (selection.eligibleCount === 0) {
             showToast(selection.message, "error");
-            return;
+            return { accepted: false };
           }
 
           selectedIds = selection.eligibleIds;
@@ -1751,7 +1676,7 @@ export default function ProductsPageClient({
             "Content-Type": "application/json",
           },
           body: JSON.stringify(
-            selectedIds.length > 0 ? { productIds: selectedIds } : { all: true }
+            productIds !== undefined ? { productIds: selectedIds } : { all: true }
           ),
         });
         const data = (await response.json().catch(() => ({}))) as {
@@ -1779,21 +1704,24 @@ export default function ProductsPageClient({
             "success"
           );
         }
+        return { accepted: true };
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Failed to start price check job";
         showToast(message, "error");
+        return { accepted: false };
       } finally {
         setIsStartingPriceCheckJob(false);
       }
     },
-    [applyPriceCheckJob, products, showToast]
+    [applyPriceCheckJob, selectionProducts, isSelectionReady, showToast]
   );
 
   const handleCheckPrices = () => {
-    void startPriceCheckJob(
-      selectedHasNoEligiblePriceChecks ? undefined : selectedProductIds
-    );
+    const ids = selectedProductIds.length > 0 ? [...selectedProductIds] : undefined;
+    void startPriceCheckJob(ids).then(result => {
+      if (result.accepted && ids) setSelectedProductIds(current => current.filter(id => !ids.includes(id)));
+    });
   };
   const isPriceCheckJobStopping = isCancellingPriceCheckJob;
   const isPriceCheckJobResumable = isResumablePriceCheckJob(priceCheckJob);
@@ -2304,10 +2232,10 @@ export default function ProductsPageClient({
 
           <button
             onClick={handleCheckPrices}
-            disabled={isStartingPriceCheckJob}
+            disabled={isStartingPriceCheckJob || (selectedProductIds.length > 0 && (!isSelectionReady || selectedHasNoEligiblePriceChecks))}
             title={
               selectedHasNoEligiblePriceChecks
-                ? `${selectedPriceCheckSummary.message} This button will check all other trackable products.`
+                ? selectedPriceCheckSummary.message
                 : selectedProductIds.length > 0
                 ? selectedPriceCheckSummary.message
                 : "Check prices for all tracked products"
@@ -2333,7 +2261,7 @@ export default function ProductsPageClient({
               : isPriceCheckJobStopping
                 ? "Queue Price Check"
               : selectedHasNoEligiblePriceChecks
-                ? "Check All Trackable"
+                ? "Check Selected"
               : selectedProductIds.length > 0
                 ? selectedPriceCheckSummary.eligibleCount > 0
                   ? `Check ${selectedPriceCheckSummary.eligibleCount} Selected`
@@ -2344,7 +2272,7 @@ export default function ProductsPageClient({
             <button
               type="button"
               onClick={() => void handleCopyTitles()}
-              disabled={isCopyingTitles}
+              disabled={isCopyingTitles || !isSelectionReady}
               title="Copy selected product titles to clipboard for eBay Research"
               className="inline-flex items-center gap-2 rounded-md border border-violet-300 bg-white px-3 py-2 text-sm font-medium text-violet-700 transition-colors hover:bg-violet-50 disabled:cursor-not-allowed disabled:opacity-50"
             >
@@ -2473,10 +2401,21 @@ export default function ProductsPageClient({
         </div>
       )}
 
+      {selectedProductIds.length > 0 && (isLoadingAllSelection || selectionError || !isSelectionReady) && (
+        <div role="status" className="flex flex-wrap items-center gap-3 text-sm text-gray-600">
+          <span>{isLoadingAllSelection ? "Loading selected product details…" : selectionError || "Some selected product details are unavailable."}</span>
+          {!isLoadingAllSelection && <button type="button" className="font-medium text-blue-700 underline" onClick={() => void loadAllSelectionProducts().catch(() => {})}>Retry selection details</button>}
+        </div>
+      )}
       <DraftsTable
         products={products}
+        selectedProductIds={selectedProductIds}
+        onSelectedProductIdsChange={setSelectedProductIds}
+        selectionReady={isSelectionReady}
+        onBulkActionClearanceChange={setBulkActionClearance}
         totalListingCount={totalCount}
-        allSelectionProducts={allSelectionProducts}
+        allSelectionProducts={selectionProducts}
+        hasCompleteSelection={allSelectionProducts !== null}
         selectionScopeKey={selectionScopeKey}
         onSelectAllListings={loadAllSelectionProducts}
         isSelectAllListingsLoading={isLoadingAllSelection}
@@ -2487,7 +2426,6 @@ export default function ProductsPageClient({
         isSortPending={isProductSortPending}
         onSortChange={handleProductSortChange}
         autoExpandProductId={focusedProductId}
-        onSelectionChange={setSelectedProductIds}
         onPriceCheckSelected={startPriceCheckJob}
         onSyncSelectedEbayAds={handleSyncEbayAds}
         isEbayAdsSyncing={isSyncingEbayAds}
@@ -2523,7 +2461,7 @@ export default function ProductsPageClient({
         onToast={showToast}
       />}
 
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-gray-600">
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-gray-600" style={{ marginBottom: bulkActionClearance ? bulkActionClearance + 16 : undefined }}>
         <span>
           {firstVisibleProduct}-{lastVisibleProduct} of {totalCount}
         </span>

@@ -4,6 +4,7 @@ import {
   getProductSelectionScopeKey,
   hasEverySelected,
   setPageSelection,
+  mergeSelectionProducts,
 } from "./product-selection";
 
 test("selection scope ignores pagination but changes with filters", () => {
@@ -32,4 +33,18 @@ test("all-selected checks the complete candidate set", () => {
   assert.equal(hasEverySelected(["a", "b", "c"], ["a", "b"]), true);
   assert.equal(hasEverySelected(["a"], ["a", "b"]), false);
   assert.equal(hasEverySelected([], []), false);
+});
+
+test("sorting, page size and editor focus preserve the filter selection scope", () => {
+  assert.equal(getProductSelectionScopeKey("q=mic&sortBy=price&sortOrder=desc&page=4&pageSize=100&productId=x"),
+    getProductSelectionScopeKey("q=mic&sortBy=profit&sortOrder=asc&page=1&pageSize=20"));
+  assert.notEqual(getProductSelectionScopeKey("q=mic&filter=all"), getProductSelectionScopeKey("q=mic&filter=failed-on-hold"));
+});
+test("overlapping pages do not duplicate selection IDs", () => {
+  assert.deepEqual(setPageSelection(["a", "b"], ["b", "c", "c"], true), ["a", "b", "c"]);
+  assert.deepEqual(setPageSelection(["a", "b", "c"], ["b", "c"], false), ["a"]);
+});
+test("refreshed visible records replace cached records while retaining other pages", () => {
+  assert.deepEqual(mergeSelectionProducts([{id:"a",status:"IMPORTED"},{id:"b",status:"IMPORTED"}],
+    [{id:"a",status:"ON_HOLD"}]), [{id:"a",status:"ON_HOLD"},{id:"b",status:"IMPORTED"}]);
 });

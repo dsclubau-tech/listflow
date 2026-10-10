@@ -7,6 +7,8 @@ export function getProductSelectionScopeKey(value: string | URLSearchParams) {
   params.delete("page");
   params.delete("pageSize");
   params.delete("productId");
+  params.delete("sortBy");
+  params.delete("sortOrder");
   params.sort();
 
   return params.toString();
@@ -33,4 +35,10 @@ export function setPageSelection(
   }
 
   return Array.from(new Set([...selectedIds, ...pageIds]));
+}
+
+export function mergeSelectionProducts<T extends { id: string }>(...groups: T[][]): T[] {
+  const byId = new Map<string, T>();
+  for (const group of groups) for (const product of group) byId.set(product.id, product);
+  return [...byId.values()];
 }

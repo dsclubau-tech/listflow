@@ -55,6 +55,8 @@ export default async function ProductsPage({
   return (
     <div className="w-full">
       <ProductsPageClient
+        key={storeSession.storeId}
+        storeId={storeSession.storeId}
         products={data.products}
         totalCount={data.totalCount}
         page={data.page}
